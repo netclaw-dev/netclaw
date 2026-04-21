@@ -81,7 +81,32 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         _client = extension.CreateClient(new ReminderEntity(ShardRegionName, EntityId));
         _log.Info("ReminderManagerActor started");
 
+        EmitDroppedInvalidDefinitionAlerts();
+
         Self.Tell(ReconcileReminders.Instance);
+    }
+
+    private void EmitDroppedInvalidDefinitionAlerts()
+    {
+        var dropped = _definitionStore.ConsumeDroppedInvalidDefinitions();
+        if (dropped.Count == 0)
+            return;
+
+        var droppedIds = string.Join(", ", dropped.Select(x => x.ReminderId));
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.schema.invalid_dropped",
+            AlertType.ReminderSchemaDropped,
+            $"Dropped {dropped.Count} invalid reminder definition(s) during startup. Re-create reminder IDs: {droppedIds}.",
+            AlertSeverity.Warning,
+            source: "startup",
+            context: new Dictionary<string, string>
+            {
+                ["droppedCount"] = dropped.Count.ToString(),
+                ["droppedIds"] = droppedIds
+            }));
+
+        _log.Warning("Dropped {0} invalid reminder definition(s) during startup: {1}", dropped.Count, droppedIds);
     }
 
     private async Task HandleSaveAsync(SaveReminderCommand cmd)

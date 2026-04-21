@@ -31,8 +31,8 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string ScheduleType,
         [property: Description("Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression.")]
         string Schedule,
-        [property: Description("How to deliver results: 'current_session' (reply in this conversation), 'channel' (post to a specific target), or 'none' (silent execution).")]
-        string DeliveryKind,
+        [property: Description("How to deliver results: 'current_session' (reply in this conversation), 'channel' (post to a specific target), or 'none' (silent execution). Required unless `delivery.kind` is provided.")]
+        string? DeliveryKind = null,
         [property: Description("Transport for channel delivery (e.g., 'slack'). Required when delivery_kind='channel'.")]
         string? DeliveryTransport = null,
         [property: Description("Target for channel delivery (e.g., '#general', '@user', channel ID). Required when delivery_kind='channel'.")]
@@ -77,12 +77,16 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             return "Error: 'prompt' is required.";
         if (string.IsNullOrWhiteSpace(args.Schedule))
             return "Error: 'schedule' is required.";
-        if (string.IsNullOrWhiteSpace(args.DeliveryKind))
+        var rawDeliveryKind = args.DeliveryKind;
+        var rawDeliveryTransport = args.DeliveryTransport;
+        var rawDeliveryAddress = args.DeliveryAddress;
+
+        if (string.IsNullOrWhiteSpace(rawDeliveryKind))
             return "Error: 'delivery_kind' is required. Use 'current_session', 'channel', or 'none'.";
 
         // Parse delivery kind
-        if (!Enum.TryParse<DeliveryKind>(args.DeliveryKind.Replace("_", "", StringComparison.Ordinal), ignoreCase: true, out var deliveryKind))
-            return $"Error: Invalid delivery_kind '{args.DeliveryKind}'. Use 'current_session', 'channel', or 'none'.";
+        if (!Enum.TryParse<DeliveryKind>(rawDeliveryKind.Replace("_", "", StringComparison.Ordinal), ignoreCase: true, out var deliveryKind))
+            return $"Error: Invalid delivery_kind '{rawDeliveryKind}'. Use 'current_session', 'channel', or 'none'.";
 
         // Normalize ID at the tool boundary: lowercase, kebab-case, length cap
         var normalizedId = ReminderIdGenerator.Normalize(args.Id);
@@ -105,7 +109,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             case DeliveryKind.CurrentSession:
             {
                 // Reject if transport or address supplied
-                if (!string.IsNullOrWhiteSpace(args.DeliveryTransport) || !string.IsNullOrWhiteSpace(args.DeliveryAddress))
+                if (!string.IsNullOrWhiteSpace(rawDeliveryTransport) || !string.IsNullOrWhiteSpace(rawDeliveryAddress))
                     return "Error: delivery_transport and delivery_address are invalid for current_session delivery. Omit them.";
 
                 // Require addressable session context
@@ -130,12 +134,16 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             case DeliveryKind.Channel:
             {
                 // Require both transport and address
-                if (string.IsNullOrWhiteSpace(args.DeliveryTransport))
+                if (string.IsNullOrWhiteSpace(rawDeliveryTransport))
                     return "Error: delivery_transport is required for channel delivery (e.g., 'slack').";
-                if (string.IsNullOrWhiteSpace(args.DeliveryAddress))
+                if (string.IsNullOrWhiteSpace(rawDeliveryAddress))
                     return "Error: delivery_address is required for channel delivery (e.g., '#general', '@user').";
 
-                var transport = args.DeliveryTransport.Trim().ToLowerInvariant();
+                var transport = rawDeliveryTransport.Trim().ToLowerInvariant();
+
+                // Reject session-only transports (SignalR/TUI don't have channel notification tools)
+                if (transport == ChannelType.SignalR.ToWireValue() || transport == ChannelType.Tui.ToWireValue())
+                    return $"Error: Transport '{transport}' does not support channel delivery. Use current_session instead.";
 
                 // Look up resolver by transport
                 if (!_resolversByTransport.TryGetValue(transport, out var resolver))
@@ -146,20 +154,16 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                     return $"Error: Unknown transport '{transport}'. Available transports: [{available}].";
                 }
 
-                // Reject session-only transports (SignalR/TUI don't have channel notification tools)
-                if (transport == ChannelType.SignalR.ToWireValue() || transport == ChannelType.Tui.ToWireValue())
-                    return $"Error: Transport '{transport}' does not support channel delivery. Use current_session instead.";
-
                 // Resolve address to canonical ID
-                var resolution = await resolver.ResolveAsync(args.DeliveryAddress, ct);
+                var resolution = await resolver.ResolveAsync(rawDeliveryAddress, ct);
                 if (!resolution.Success)
                 {
                     var detail = resolution.ErrorMessage ?? "unresolvable target";
-                    return $"Error: Could not resolve delivery_address '{args.DeliveryAddress}': {detail}. Use #channel, @user, or a valid channel ID.";
+                    return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': {detail}. Use #channel, @user, or a valid channel ID.";
                 }
 
                 if (string.IsNullOrWhiteSpace(resolution.ResolvedId))
-                    return $"Error: Could not resolve delivery_address '{args.DeliveryAddress}': resolver returned an empty canonical target ID.";
+                    return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': resolver returned an empty canonical target ID.";
 
                 delivery = new ReminderDelivery
                 {
@@ -173,7 +177,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             case DeliveryKind.None:
             {
                 // Reject if transport or address supplied
-                if (!string.IsNullOrWhiteSpace(args.DeliveryTransport) || !string.IsNullOrWhiteSpace(args.DeliveryAddress))
+                if (!string.IsNullOrWhiteSpace(rawDeliveryTransport) || !string.IsNullOrWhiteSpace(rawDeliveryAddress))
                     return "Error: delivery_transport and delivery_address are invalid for none delivery. Omit them.";
 
                 delivery = new ReminderDelivery

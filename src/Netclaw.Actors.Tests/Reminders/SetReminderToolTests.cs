@@ -622,6 +622,28 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
+    public async Task Rejects_channel_delivery_for_signalr_transport_with_actionable_error()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "signalr-channel-delivery",
+            ["Name"] = "signalr-channel-delivery",
+            ["Prompt"] = "Post status",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "30m",
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "signalr",
+            ["DeliveryAddress"] = "signalr/ops"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("Error: Transport 'signalr' does not support channel delivery. Use current_session instead.", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Mode_B_session_reentry_skips_resolver()
     {
         var probe = CreateTestProbe();

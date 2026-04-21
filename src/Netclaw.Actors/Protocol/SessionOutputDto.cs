@@ -77,6 +77,7 @@ public sealed record SessionOutputDto
     // Turn Completed
     public int? TurnNumber { get; init; }
     public string? TurnOutcome { get; init; }
+    public string? SourceReminderId { get; init; }
 
     // Error
     public string? ErrorMessage { get; init; }

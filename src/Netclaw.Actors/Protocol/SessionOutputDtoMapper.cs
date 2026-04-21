@@ -82,7 +82,8 @@ public static class SessionOutputDtoMapper
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             TurnNumber = msg.TurnNumber,
-            TurnOutcome = msg.Outcome.ToString().ToLowerInvariant()
+            TurnOutcome = msg.Outcome.ToString().ToLowerInvariant(),
+            SourceReminderId = msg.SourceReminderId
         },
 
         SessionTitleOutput msg => new SessionOutputDto
@@ -251,7 +252,8 @@ public static class SessionOutputDtoMapper
                 TurnNumber = dto.TurnNumber ?? 0,
                 Outcome = Enum.TryParse<TurnOutcome>(dto.TurnOutcome, ignoreCase: true, out var outcome)
                     ? outcome
-                    : TurnOutcome.Completed
+                    : TurnOutcome.Completed,
+                SourceReminderId = dto.SourceReminderId
             },
             SessionOutputTypes.SessionTitle => new SessionTitleOutput
             {

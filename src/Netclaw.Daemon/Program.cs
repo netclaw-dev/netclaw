@@ -1219,6 +1219,10 @@ static void MapReminderEndpoints(WebApplication app)
             ? request.Id
             : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
 
+        var deliveryKind = request.Delivery?.Kind ?? request.DeliveryKind;
+        var deliveryTransport = request.Delivery?.Transport ?? request.DeliveryTransport;
+        var deliveryAddress = request.Delivery?.Address ?? request.DeliveryAddress;
+
         var reminderResolvers = serviceProvider.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
         var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolvers);
         var toolContext = new Netclaw.Tools.ToolExecutionContext(sessionId: null, sessionDirectory: null);
@@ -1232,9 +1236,9 @@ static void MapReminderEndpoints(WebApplication app)
                 ["Prompt"] = request.Prompt,
                 ["ScheduleType"] = request.ScheduleType,
                 ["Schedule"] = request.Schedule,
-                ["DeliveryKind"] = request.DeliveryKind,
-                ["DeliveryTransport"] = request.DeliveryTransport,
-                ["DeliveryAddress"] = request.DeliveryAddress,
+                ["DeliveryKind"] = deliveryKind,
+                ["DeliveryTransport"] = deliveryTransport,
+                ["DeliveryAddress"] = deliveryAddress,
                 ["DeliveryRequired"] = request.DeliveryRequired,
                 ["DeliveryInstructions"] = request.DeliveryInstructions,
                 ["Audience"] = request.Audience
@@ -1434,12 +1438,20 @@ sealed record CreateReminderRequest
     public required string Prompt { get; init; }
     public required string ScheduleType { get; init; }
     public required string Schedule { get; init; }
-    public required string DeliveryKind { get; init; }
+    public string? DeliveryKind { get; init; }
     public string? DeliveryTransport { get; init; }
     public string? DeliveryAddress { get; init; }
     public bool DeliveryRequired { get; init; } = true;
     public string? DeliveryInstructions { get; init; }
+    public ReminderDeliveryRequest? Delivery { get; init; }
     public string? Audience { get; init; }
+}
+
+sealed record ReminderDeliveryRequest
+{
+    public string? Kind { get; init; }
+    public string? Transport { get; init; }
+    public string? Address { get; init; }
 }
 
 sealed record ImportReminderRequest

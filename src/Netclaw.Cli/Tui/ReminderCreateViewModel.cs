@@ -86,14 +86,14 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
 
         Instructions = value.Trim();
         CurrentState.Value = ReminderCreateState.NotifyInstructions;
-        StatusMessage.Value = "Enter notification instructions.";
+        StatusMessage.Value = "Enter delivery instructions.";
         NotifyChanged();
     }
 
     public void SetNotifyInstructions(string value)
     {
         NotifyInstructions = string.IsNullOrWhiteSpace(value)
-            ? "Reply in the originating session thread with a concise result."
+            ? "Summarize the key result in one or two sentences."
             : value.Trim();
 
         CurrentState.Value = ReminderCreateState.Confirm;
@@ -118,7 +118,8 @@ public sealed class ReminderCreateViewModel : ReactiveViewModel
                 prompt = Instructions,
                 scheduleType = ScheduleType,
                 schedule = Schedule,
-                notifyInstructions = NotifyInstructions
+                deliveryKind = "none",
+                deliveryInstructions = NotifyInstructions
             };
 
             using var validate = await _api.ValidateReminderAsync(payload, ct);

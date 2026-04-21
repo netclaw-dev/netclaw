@@ -2360,7 +2360,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 {
                     SessionId = _sessionId,
                     TurnNumber = _state.TurnCount,
-                    Outcome = TurnOutcome.Skipped
+                    Outcome = TurnOutcome.Skipped,
+                    SourceReminderId = _currentTurnSource?.ReminderId
                 });
                 TryReplyAck();
                 return true;
@@ -2381,7 +2382,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         EmitOutput(new TextOutput { SessionId = _sessionId, Text = errorMsg.TrimEnd() }, OutputFilter.Text);
-        EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
+        EmitOutput(new TurnCompleted
+        {
+            SessionId = _sessionId,
+            TurnNumber = _state.TurnCount,
+            Outcome = TurnOutcome.Skipped,
+            SourceReminderId = _currentTurnSource?.ReminderId
+        });
         TryReplyAck();
         return true;
     }
@@ -2403,7 +2410,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
             }, OutputFilter.Text);
-            EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount,
+                Outcome = TurnOutcome.Skipped,
+                SourceReminderId = _currentTurnSource?.ReminderId
+            });
             TryReplyAck();
             return true;
         }
@@ -2439,7 +2452,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 SessionId = _sessionId,
                 TurnNumber = _state.TurnCount,
-                Outcome = TurnOutcome.Skipped
+                Outcome = TurnOutcome.Skipped,
+                SourceReminderId = _currentTurnSource?.ReminderId
             });
             TryReplyAck();
             return true;
@@ -2457,7 +2471,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 SessionId = _sessionId,
                 TurnNumber = _state.TurnCount,
-                Outcome = TurnOutcome.Skipped
+                Outcome = TurnOutcome.Skipped,
+                SourceReminderId = _currentTurnSource?.ReminderId
             });
             TryReplyAck();
             return true;
@@ -2474,7 +2489,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 SessionId = _sessionId,
                 TurnNumber = _state.TurnCount,
-                Outcome = TurnOutcome.Skipped
+                Outcome = TurnOutcome.Skipped,
+                SourceReminderId = _currentTurnSource?.ReminderId
             });
             TryReplyAck();
             return true;
@@ -2495,7 +2511,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
             }, OutputFilter.Text);
-            EmitOutput(new TurnCompleted { SessionId = _sessionId, TurnNumber = _state.TurnCount, Outcome = TurnOutcome.Skipped });
+            EmitOutput(new TurnCompleted
+            {
+                SessionId = _sessionId,
+                TurnNumber = _state.TurnCount,
+                Outcome = TurnOutcome.Skipped,
+                SourceReminderId = _currentTurnSource?.ReminderId
+            });
             TryReplyAck();
             return true;
         }
@@ -2626,7 +2648,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 SessionId = _sessionId,
                 TurnNumber = _state.TurnCount,
-                Outcome = TurnOutcome.Completed
+                Outcome = TurnOutcome.Completed,
+                SourceReminderId = _currentTurnSource?.ReminderId
             });
 
             MaybeSnapshot();
@@ -2781,7 +2804,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         EmitOutput(new TurnCompleted
         {
             SessionId = _sessionId,
-            TurnNumber = _state.TurnCount
+            TurnNumber = _state.TurnCount,
+            SourceReminderId = _currentTurnSource?.ReminderId
         });
     }
 
@@ -2870,7 +2894,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId,
             TurnNumber = _state.TurnCount,
-            Outcome = TurnOutcome.Failed
+            Outcome = TurnOutcome.Failed,
+            SourceReminderId = _currentTurnSource?.ReminderId
         });
 
         DrainBufferedMessagesOrBecomeReady();

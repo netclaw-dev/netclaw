@@ -336,7 +336,7 @@ internal sealed record ReminderExecutionCompleted(
 /// <param name="ObservedAtMs">
 /// Optional timestamp when the outbound delivery was observed.
 /// </param>
-internal sealed record ReminderDeliveryObserved(
+public sealed record ReminderDeliveryObserved(
     string ReminderDeliveryKey,
     Channels.ChannelType ChannelType,
     long? ObservedAtMs = null);

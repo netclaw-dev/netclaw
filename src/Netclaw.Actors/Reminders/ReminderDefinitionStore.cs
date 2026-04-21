@@ -21,11 +21,29 @@ public sealed class ReminderDefinitionStore
 
     private readonly string _directory;
     private readonly object _sync = new();
+    private readonly List<DroppedInvalidReminderDefinition> _droppedInvalidDefinitions = [];
 
     public ReminderDefinitionStore(NetclawPaths paths)
     {
         _directory = paths.RemindersDirectory;
         Directory.CreateDirectory(_directory);
+        PruneInvalidDefinitions();
+    }
+
+    /// <summary>
+    /// Returns and clears reminder definitions dropped due to invalid schema.
+    /// </summary>
+    public IReadOnlyList<DroppedInvalidReminderDefinition> ConsumeDroppedInvalidDefinitions()
+    {
+        lock (_sync)
+        {
+            if (_droppedInvalidDefinitions.Count == 0)
+                return [];
+
+            var snapshot = _droppedInvalidDefinitions.ToArray();
+            _droppedInvalidDefinitions.Clear();
+            return snapshot;
+        }
     }
 
     public bool Exists(ReminderId id)
@@ -42,7 +60,14 @@ public sealed class ReminderDefinitionStore
             if (!File.Exists(path))
                 return null;
 
-            return ReadDefinition(path);
+            var result = TryReadDefinition(path);
+            if (result.Definition is not null)
+                return result.Definition;
+
+            if (result.ShouldDelete)
+                DeleteInvalidDefinition(path, result.ErrorMessage ?? "invalid reminder definition");
+
+            return null;
         }
     }
 
@@ -53,9 +78,15 @@ public sealed class ReminderDefinitionStore
             var list = new List<ReminderDefinition>();
             foreach (var file in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
             {
-                var definition = ReadDefinition(file);
-                if (definition is not null)
-                    list.Add(definition);
+                var result = TryReadDefinition(file);
+                if (result.Definition is not null)
+                {
+                    list.Add(result.Definition);
+                    continue;
+                }
+
+                if (result.ShouldDelete)
+                    DeleteInvalidDefinition(file, result.ErrorMessage ?? "invalid reminder definition");
             }
 
             return list;
@@ -94,13 +125,84 @@ public sealed class ReminderDefinitionStore
         return Path.Combine(_directory, $"{encoded}.json");
     }
 
-    private static ReminderDefinition? ReadDefinition(string path)
+    private void PruneInvalidDefinitions()
     {
-        var text = File.ReadAllText(path);
-        var definition = JsonSerializer.Deserialize<ReminderDefinition>(text, JsonOptions);
-        if (definition is null || string.IsNullOrWhiteSpace(definition.Id))
-            return null;
+        lock (_sync)
+        {
+            foreach (var file in Directory.EnumerateFiles(_directory, "*.json", SearchOption.TopDirectoryOnly))
+            {
+                var result = TryReadDefinition(file);
+                if (result.Definition is not null || !result.ShouldDelete)
+                    continue;
 
-        return definition;
+                DeleteInvalidDefinition(file, result.ErrorMessage ?? "invalid reminder definition");
+            }
+        }
     }
+
+    private void DeleteInvalidDefinition(string path, string reason)
+    {
+        var reminderId = DecodeReminderIdFromPath(path);
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch (Exception ex)
+        {
+            reason = $"{reason}; failed to delete file: {ex.Message}";
+        }
+
+        _droppedInvalidDefinitions.Add(new DroppedInvalidReminderDefinition(reminderId, reason));
+    }
+
+    private static string DecodeReminderIdFromPath(string path)
+    {
+        var encoded = Path.GetFileNameWithoutExtension(path);
+        if (string.IsNullOrWhiteSpace(encoded))
+            return "unknown";
+
+        try
+        {
+            return Uri.UnescapeDataString(encoded);
+        }
+        catch
+        {
+            return encoded;
+        }
+    }
+
+    private static ReadResult TryReadDefinition(string path)
+    {
+        try
+        {
+            var text = File.ReadAllText(path);
+            var definition = JsonSerializer.Deserialize<ReminderDefinition>(text, JsonOptions);
+            if (definition is null || string.IsNullOrWhiteSpace(definition.Id))
+            {
+                return new ReadResult(
+                    null,
+                    "reminder definition is missing required field 'id'",
+                    ShouldDelete: true);
+            }
+
+            return new ReadResult(definition, null, ShouldDelete: false);
+        }
+        catch (JsonException ex)
+        {
+            return new ReadResult(null, ex.Message, ShouldDelete: true);
+        }
+        catch (NotSupportedException ex)
+        {
+            return new ReadResult(null, ex.Message, ShouldDelete: true);
+        }
+        catch
+        {
+            return new ReadResult(null, null, ShouldDelete: false);
+        }
+    }
+
+    private sealed record ReadResult(ReminderDefinition? Definition, string? ErrorMessage, bool ShouldDelete);
 }
+
+public sealed record DroppedInvalidReminderDefinition(string ReminderId, string Reason);
