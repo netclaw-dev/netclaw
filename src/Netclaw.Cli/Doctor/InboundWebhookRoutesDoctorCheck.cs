@@ -28,7 +28,7 @@ public sealed class InboundWebhookRoutesDoctorCheck(NetclawPaths paths) : IDocto
                 var route = JsonSerializer.Deserialize<WebhookRouteConfig>(File.ReadAllText(filePath), JsonDefaults.ConfigRead)
                     ?? throw new InvalidOperationException($"Webhook route '{routeName}' could not be parsed.");
 
-                ValidateRoute(routeName, route);
+                WebhookRouteValidator.ValidateOrThrow(routeName, route);
             }
             catch (Exception ex)
             {
@@ -47,41 +47,5 @@ public sealed class InboundWebhookRoutesDoctorCheck(NetclawPaths paths) : IDocto
             CheckName,
             $"Invalid inbound webhook route files: {string.Join("; ", invalidRoutes)}",
             $"Fix or remove invalid files under {paths.WebhooksDirectory}. Netclaw fails these routes closed at runtime."));
-    }
-
-    private static void ValidateRoute(string routeName, WebhookRouteConfig route)
-    {
-        if (string.IsNullOrWhiteSpace(routeName))
-            throw new InvalidOperationException("Webhook route filename must not be empty.");
-
-        if (string.IsNullOrWhiteSpace(route.Prompt))
-            throw new InvalidOperationException($"Webhook route '{routeName}' is missing a Prompt.");
-
-        if (route.Verification.Secret is null || string.IsNullOrWhiteSpace(route.Verification.Secret.Value))
-            throw new InvalidOperationException($"Webhook route '{routeName}' is missing a verification secret.");
-
-        if (route.MaxBodyBytes < 1)
-            throw new InvalidOperationException($"Webhook route '{routeName}' must set MaxBodyBytes >= 1.");
-
-        if (route.RateLimitPerMinute < 1)
-            throw new InvalidOperationException($"Webhook route '{routeName}' must set RateLimitPerMinute >= 1.");
-
-        if (route.Events.Any(string.IsNullOrWhiteSpace))
-            throw new InvalidOperationException($"Webhook route '{routeName}' contains a blank event filter.");
-
-        if (route.DeliveryRequired
-            && route.NotificationTarget is null
-            && !string.IsNullOrWhiteSpace(route.NotifyInstructions))
-        {
-            throw new InvalidOperationException(
-                $"Webhook route '{routeName}' must set NotificationTarget when DeliveryRequired is true and NotifyInstructions are provided.");
-        }
-
-        if (route.NotificationTarget is { Kind: NotificationTargetKind.Slack } target
-            && string.IsNullOrWhiteSpace(target.ChannelId))
-        {
-            throw new InvalidOperationException(
-                $"Webhook route '{routeName}' must set NotificationTarget.ChannelId for Slack targets.");
-        }
     }
 }

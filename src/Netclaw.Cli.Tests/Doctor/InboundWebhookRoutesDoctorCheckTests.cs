@@ -85,7 +85,52 @@ public sealed class InboundWebhookRoutesDoctorCheckTests : IDisposable
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("missing a Prompt", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Prompt is required", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenRouteNameIsInvalid()
+    {
+        File.WriteAllText(Path.Combine(_paths.WebhooksDirectory, "Bad_Route.json"), """
+{
+  "prompt": "triage this event",
+  "verification": {
+    "kind": "Hmac",
+    "secret": "secret"
+  }
+}
+""");
+
+        var check = new InboundWebhookRoutesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("lowercase kebab-case", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenVerificationIsNull()
+    {
+        File.WriteAllText(Path.Combine(_paths.WebhooksDirectory, "github-issues.json"), """
+{
+  "enabled": true,
+  "verification": null,
+  "events": [],
+  "audience": "Public",
+  "prompt": "triage",
+  "notifyInstructions": "",
+  "deliveryRequired": true,
+  "notificationTarget": null,
+  "maxBodyBytes": 1024,
+  "rateLimitPerMinute": 1
+}
+""");
+
+        var check = new InboundWebhookRoutesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Verification settings are required", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private void WriteRouteFile(string routeName, WebhookRouteConfig route)

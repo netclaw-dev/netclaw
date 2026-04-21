@@ -48,6 +48,8 @@ public sealed class CliArgsParserTests
     [InlineData("update")]
     [InlineData("init")]
     [InlineData("pair")]
+    [InlineData("skill")]
+    [InlineData("webhooks")]
     public void Parse_known_commands_returns_Known_with_mode(string command)
     {
         var result = CliArgsParser.Parse([command]);
@@ -82,7 +84,7 @@ public sealed class CliArgsParserTests
         {
             "chat", "sessions", "init", "doctor", "status", "stats",
             "daemon", "mcp", "provider", "model", "reminder",
-            "secrets", "config", "update", "pair", "skill",
+            "secrets", "config", "update", "pair", "skill", "webhooks",
         };
 
         Assert.Equal(expected, CliArgsParser.KnownCommands);

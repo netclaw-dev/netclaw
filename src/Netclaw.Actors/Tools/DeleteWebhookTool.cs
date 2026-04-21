@@ -22,14 +22,11 @@ public sealed partial class DeleteWebhookTool : NetclawTool<DeleteWebhookTool.Pa
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(args.RouteName))
-            return Task.FromResult("Error: 'routeName' is required.");
+        if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
+            return Task.FromResult($"Error: {routeError}");
 
-        return Task.FromResult(_store.Delete(NormalizeRouteName(args.RouteName))
-            ? $"Webhook route '{NormalizeRouteName(args.RouteName)}' deleted."
-            : $"Webhook route '{NormalizeRouteName(args.RouteName)}' not found.");
+        return Task.FromResult(_store.Delete(routeName)
+            ? $"Webhook route '{routeName}' deleted."
+            : $"Webhook route '{routeName}' not found.");
     }
-
-    private static string NormalizeRouteName(string value)
-        => value.Trim().ToLowerInvariant();
 }
