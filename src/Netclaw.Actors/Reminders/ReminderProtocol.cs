@@ -88,6 +88,7 @@ public sealed class ReminderDelivery
         ? Transport?.ToLowerInvariant() switch
         {
             "slack" => "send_slack_message",
+            "discord" => "send_discord_message",
             _ => null
         }
         : null;

@@ -396,6 +396,62 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
+    public async Task Mode_B_discord_reminder_dispatches_to_resolved_gateway_and_completes_on_CommandAck()
+    {
+        var manager = await GetManagerAsync();
+
+        var gatewayProbe = CreateTestProbe("fake-discord-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-discord-gateway");
+        ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
+
+        var now = TimeProvider.System.GetUtcNow();
+        var definition = new ReminderDefinition
+        {
+            Id = "mode-b-discord-anchor",
+            Title = "Mode B Discord Anchor",
+            Instructions = "Check incident status",
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "129847561203948576/130111223344556677",
+                OriginChannelType = ChannelType.Discord
+            },
+            DeliveryInstructions = "Reply in this session with the result.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddHours(1)
+            },
+            Audience = TrustAudience.Team,
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _definitionStore.Save(definition);
+
+        var envelope = new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(definition.Id),
+            dueTimeUtc: now,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = new ReminderId(definition.Id) });
+
+        manager.Tell(envelope);
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("129847561203948576/130111223344556677", delivered.SessionId.Value);
+        Assert.Contains("Check incident status", delivered.Content);
+        Assert.Equal(ChannelType.Discord, delivered.Source.ChannelType);
+        Assert.Equal(TrustAudience.Team, delivered.Source.Audience);
+        Assert.Equal(SecurityPolicyDefaults.TrustedInstanceBoundary, delivered.Source.Boundary);
+        Assert.NotNull(delivered.Source.ReminderId);
+    }
+
+    [Fact]
     public async Task CurrentSession_delivery_required_fails_when_delivery_is_not_observed()
     {
         var manager = await GetManagerAsync();
@@ -664,6 +720,108 @@ public class ReminderManagerActorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task CurrentSession_discord_delivery_required_fails_when_delivery_is_not_observed()
+    {
+        var manager = await GetManagerAsync();
+
+        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
+        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
+        try
+        {
+            var gatewayProbe = CreateTestProbe("discord-current-session-timeout-gateway");
+            var autoAckRef = Sys.ActorOf(
+                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+                "auto-ack-discord-current-session-timeout");
+            ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
+
+            var definition = CreateCurrentSessionDefinition(
+                "discord-current-session-timeout",
+                deliveryRequired: true,
+                originChannelType: ChannelType.Discord,
+                sessionId: "129847561203948576/130111223344556677");
+            _definitionStore.Save(definition);
+
+            manager.Tell(CreateEnvelope(definition.Id));
+
+            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.ReminderId);
+
+            await AwaitAssertAsync(async () =>
+            {
+                var health = await manager.Ask<ReminderHealthResponse>(
+                    GetReminderHealthQuery.Instance,
+                    TimeSpan.FromSeconds(3),
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal(0, health.ActiveExecutions);
+                Assert.Contains(_notificationSink.Alerts, alert =>
+                    alert.Category == AlertType.ReminderExecutionFailed
+                    && alert.Source == definition.Id
+                    && alert.Summary.Contains("delivery not observed", StringComparison.OrdinalIgnoreCase));
+            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task CurrentSession_discord_delivery_required_succeeds_when_delivery_is_observed()
+    {
+        var manager = await GetManagerAsync();
+
+        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
+        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
+        try
+        {
+            var gatewayProbe = CreateTestProbe("discord-current-session-observed-gateway");
+            var autoAckRef = Sys.ActorOf(
+                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+                "auto-ack-discord-current-session-observed");
+            ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
+
+            var definition = CreateCurrentSessionDefinition(
+                "discord-current-session-observed",
+                deliveryRequired: true,
+                originChannelType: ChannelType.Discord,
+                sessionId: "129847561203948576/130111223344556677");
+            _definitionStore.Save(definition);
+
+            manager.Tell(CreateEnvelope(definition.Id));
+
+            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.ReminderId);
+
+            Sys.EventStream.Publish(new ReminderDeliveryObserved(
+                delivered.Source.ReminderId!,
+                ChannelType.Discord,
+                TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+
+            await AwaitAssertAsync(async () =>
+            {
+                var health = await manager.Ask<ReminderHealthResponse>(
+                    GetReminderHealthQuery.Instance,
+                    TimeSpan.FromSeconds(3),
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal(0, health.FailedCount);
+                Assert.DoesNotContain(_notificationSink.Alerts, alert =>
+                    alert.Category == AlertType.ReminderExecutionFailed
+                    && alert.Source == definition.Id);
+            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
+        }
+    }
+
     /// <summary>
     /// Test-only gateway stub: handles <see cref="DeliverTrustedSessionTurn"/>
     /// by forwarding to a probe for assertions and immediately replying
@@ -707,7 +865,11 @@ public class ReminderManagerActorTests : TestKit
         };
     }
 
-    private static ReminderDefinition CreateCurrentSessionDefinition(string id, bool deliveryRequired)
+    private static ReminderDefinition CreateCurrentSessionDefinition(
+        string id,
+        bool deliveryRequired,
+        ChannelType originChannelType = ChannelType.Slack,
+        string? sessionId = null)
     {
         var now = TimeProvider.System.GetUtcNow();
         return new ReminderDefinition
@@ -718,8 +880,8 @@ public class ReminderManagerActorTests : TestKit
             Delivery = new ReminderDelivery
             {
                 Kind = DeliveryKind.CurrentSession,
-                SessionId = "C0123ABC/1712000000.000001",
-                OriginChannelType = ChannelType.Slack
+                SessionId = sessionId ?? "C0123ABC/1712000000.000001",
+                OriginChannelType = originChannelType
             },
             DeliveryRequired = deliveryRequired,
             DeliveryInstructions = "Reply in this session with the result.",

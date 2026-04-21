@@ -243,6 +243,48 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
+    public async Task Mode_B_discord_self_targeting_persists_session_and_origin_channel_type()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider);
+        var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
+        {
+            Audience = "team",
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "discord"
+        };
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "discord-self-target",
+                ["Name"] = "discord-self-target",
+                ["Prompt"] = "Check weather",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "5m",
+                ["DeliveryKind"] = "current_session"
+            }, context);
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(DeliveryKind.CurrentSession, cmd.Definition.Delivery.Kind);
+        Assert.Equal("129847561203948576/130111223344556677", cmd.Definition.Delivery.SessionId);
+        Assert.Equal(ChannelType.Discord, cmd.Definition.Delivery.OriginChannelType);
+        Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
+        Assert.Equal(SecurityPolicyDefaults.TrustedInstanceBoundary, cmd.Definition.Boundary);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
+
+        await execution;
+    }
+
+    [Fact]
     public async Task Mode_B_rejected_for_unsupported_origin_channel_type()
     {
         var probe = CreateTestProbe();
@@ -528,6 +570,48 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
+    public async Task Manager_validation_failure_returns_error_prefix_for_discord_source()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider);
+        var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
+        {
+            Audience = "public",
+            ChannelType = "discord"
+        };
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "discord-manager-validation-failure",
+                ["Name"] = "discord-manager-validation-failure",
+                ["Prompt"] = "Check something",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "1h",
+                ["Audience"] = "team",
+                ["DeliveryKind"] = "current_session"
+            }, context);
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TrustAudience.Public, cmd.Authorization?.SourceAudience);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: false,
+            NextFire: null,
+            Error: ReminderSaveError.Validation,
+            ErrorMessage: "Requested audience 'team' exceeds creator authority '129847561203948576/130111223344556677' (public)."));
+
+        var result = await execution;
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("exceeds creator authority", result);
+    }
+
+    [Fact]
     public async Task Resolves_hash_channel_name_to_canonical_id()
     {
         var probe = CreateTestProbe();
@@ -718,6 +802,49 @@ public class SetReminderToolTests : TestKit
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
         Assert.Equal("U0456XYZ", cmd.Definition.Delivery.Address);
+        Assert.Equal(1, resolver.CallCount);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(15)));
+
+        await execution;
+    }
+
+    [Fact]
+    public async Task Resolves_discord_user_target_with_discord_transport()
+    {
+        var probe = CreateTestProbe();
+        var resolver = new TestResolver
+        {
+            Transport = "discord",
+            ResultFor = (input) => input == "<@129847561203948576>"
+                ? new ReminderTargetResolution(true, "129847561203948576", ReminderTargetKind.User, null)
+                : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
+        };
+        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+
+        var execution = Task.Run(async () =>
+        {
+            return await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "discord-user-target",
+                ["Name"] = "discord-user-target",
+                ["Prompt"] = "Send results",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "15m",
+                ["DeliveryKind"] = "channel",
+                ["DeliveryTransport"] = "discord",
+                ["DeliveryAddress"] = "<@129847561203948576>"
+            });
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
+        Assert.Equal("discord", cmd.Definition.Delivery.Transport);
+        Assert.Equal("129847561203948576", cmd.Definition.Delivery.Address);
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(

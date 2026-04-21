@@ -107,4 +107,27 @@ public sealed class ChannelsStepViewModelTests : IDisposable
         Assert.Equal(ChannelType.Slack, step.GetSource(slackEntry));
         Assert.Equal(ChannelType.Tui, step.GetSource(discordEntry));
     }
+
+    [Fact]
+    public void GetPreferredAddSource_ReturnsOnlyConfiguredSource()
+    {
+        _context.ChannelEntries[ChannelType.Discord] = [new ChannelEntry("Discord DMs", "dm", TrustAudience.Team, true)];
+
+        using var step = new ChannelsStepViewModel();
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        Assert.Equal(ChannelType.Discord, step.GetPreferredAddSource());
+    }
+
+    [Fact]
+    public void GetPreferredAddSource_PrefersSlack_WhenMultipleSourcesExist()
+    {
+        _context.ChannelEntries[ChannelType.Discord] = [new ChannelEntry("Discord DMs", "dm", TrustAudience.Team, true)];
+        _context.ChannelEntries[ChannelType.Slack] = [new ChannelEntry("DMs", "dm", TrustAudience.Team, true)];
+
+        using var step = new ChannelsStepViewModel();
+        step.OnEnter(_context, NavigationDirection.Forward);
+
+        Assert.Equal(ChannelType.Slack, step.GetPreferredAddSource());
+    }
 }

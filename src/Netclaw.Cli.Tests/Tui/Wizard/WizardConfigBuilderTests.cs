@@ -136,6 +136,45 @@ public sealed class WizardConfigBuilderTests : IDisposable
     }
 
     [Fact]
+    public void BuildConfigDictionary_IncludesDiscordSection_WhenEnabled()
+    {
+        var builder = new WizardConfigBuilder(_paths)
+        {
+            Discord = new DiscordConfigSection
+            {
+                Enabled = true,
+                DefaultChannelId = "129847561203948576",
+                AllowedChannelIds = ["129847561203948576"],
+                AllowDirectMessages = true,
+                AllowedUserIds = ["130111223344556677"],
+                ChannelAudiences = new Dictionary<string, string> { ["dm"] = "team" }
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var discord = (Dictionary<string, object>)config["Discord"];
+        Assert.Equal(true, discord["Enabled"]);
+        Assert.Equal("129847561203948576", discord["DefaultChannelId"]);
+        Assert.Equal(true, discord["AllowDirectMessages"]);
+        Assert.Equal("129847561203948576", ((string[])discord["AllowedChannelIds"])[0]);
+        Assert.Equal("130111223344556677", ((string[])discord["AllowedUserIds"])[0]);
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_OmitsDiscord_WhenNotEnabled()
+    {
+        var builder = new WizardConfigBuilder(_paths)
+        {
+            Discord = new DiscordConfigSection { Enabled = false }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.False(config.ContainsKey("Discord"));
+    }
+
+    [Fact]
     public void BuildConfigDictionary_IncludesSecuritySection()
     {
         var builder = new WizardConfigBuilder(_paths)

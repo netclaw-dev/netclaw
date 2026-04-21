@@ -40,4 +40,16 @@ public sealed class GatewayActorKeyTests : TestKit
         var resolved = registry.Get<SignalRGatewayActorKey>();
         Assert.Same(probe.Ref, resolved);
     }
+
+    [Fact]
+    public void DiscordGatewayActorKey_can_be_registered_and_resolved()
+    {
+        var probe = CreateTestProbe("discord-gateway-stub");
+        var registry = ActorRegistry.For(Sys);
+
+        registry.Register<DiscordGatewayActorKey>(probe.Ref);
+
+        var resolved = registry.Get<DiscordGatewayActorKey>();
+        Assert.Same(probe.Ref, resolved);
+    }
 }

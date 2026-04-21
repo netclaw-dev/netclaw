@@ -350,6 +350,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         return originChannelType switch
         {
             ChannelType.Slack => registry.TryGet<SlackGatewayActorKey>(out var slack) ? slack : null,
+            ChannelType.Discord => registry.TryGet<DiscordGatewayActorKey>(out var discord) ? discord : null,
             ChannelType.Tui => registry.TryGet<SignalRGatewayActorKey>(out var signalr) ? signalr : null,
             ChannelType.SignalR => registry.TryGet<SignalRGatewayActorKey>(out var signalr2) ? signalr2 : null,
             _ => null

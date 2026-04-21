@@ -33,9 +33,9 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string Schedule,
         [property: Description("How to deliver results: 'current_session' (reply in this conversation), 'channel' (post to a specific target), or 'none' (silent execution). Required unless `delivery.kind` is provided.")]
         string? DeliveryKind = null,
-        [property: Description("Transport for channel delivery (e.g., 'slack'). Required when delivery_kind='channel'.")]
+        [property: Description("Transport for channel delivery (e.g., 'slack' or 'discord'). Required when delivery_kind='channel'.")]
         string? DeliveryTransport = null,
-        [property: Description("Target for channel delivery (e.g., '#general', '@user', channel ID). Required when delivery_kind='channel'.")]
+        [property: Description("Target for channel delivery (e.g., '#general', '@user', '<@discordUserId>', channel ID). Required when delivery_kind='channel'.")]
         string? DeliveryAddress = null,
         [property: Description("Fail execution if delivery doesn't succeed. Default true. Set false for audit/cleanup tasks.")]
         bool DeliveryRequired = true,
@@ -119,10 +119,10 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                     return "Error: current_session delivery requires an active session context.";
 
                 if (!ChannelTypeExtensions.TryFromWireValue(context.ChannelType, out var parsedChannelType))
-                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
+                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Discord, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
 
-                if (parsedChannelType is not (ChannelType.Slack or ChannelType.Tui or ChannelType.SignalR))
-                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Tui, SignalR). Current channel type: {parsedChannelType}.";
+                if (parsedChannelType is not (ChannelType.Slack or ChannelType.Discord or ChannelType.Tui or ChannelType.SignalR))
+                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Discord, Tui, SignalR). Current channel type: {parsedChannelType}.";
 
                 delivery = new ReminderDelivery
                 {

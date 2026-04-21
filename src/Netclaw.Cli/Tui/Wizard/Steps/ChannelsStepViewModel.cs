@@ -110,5 +110,27 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
         return null;
     }
 
+    /// <summary>
+    /// Preferred source for new entries added from the Channels view.
+    /// When a single chat source is configured, additions go to that source.
+    /// When multiple sources exist, prefer Slack for compatibility.
+    /// </summary>
+    public ChannelType GetPreferredAddSource()
+    {
+        if (_context is null || _context.ChannelEntries.Count == 0)
+            return ChannelType.Slack;
+
+        if (_context.ChannelEntries.Count == 1)
+            return _context.ChannelEntries.Keys.First();
+
+        if (_context.ChannelEntries.ContainsKey(ChannelType.Slack))
+            return ChannelType.Slack;
+
+        if (_context.ChannelEntries.ContainsKey(ChannelType.Discord))
+            return ChannelType.Discord;
+
+        return _context.ChannelEntries.Keys.First();
+    }
+
     public void Dispose() { }
 }

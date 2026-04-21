@@ -1,8 +1,10 @@
 using Akka.Actor;
+using Akka.Hosting;
 using Akka.Pattern;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
 using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Discord;
@@ -83,6 +85,8 @@ public sealed class DiscordChannel : IChannel
                         : null,
                     ReplyClient: _replyClient)),
                 "discord-gateway");
+
+            ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);
 
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;

@@ -116,10 +116,11 @@ public sealed class InitWizardPageTests : IDisposable
         // Make Channels step applicable
         vm.Context.AnyChatServicesEnabled = true;
 
-        // Skip: provider → security-posture → slack → channels
+        // Skip: provider -> security-posture -> slack -> discord -> channels
         vm.Orchestrator.GoNext(); // provider → security-posture
         vm.Orchestrator.GoNext(); // security-posture → slack
-        vm.Orchestrator.GoNext(); // slack → channels (Slack.OnLeave clears entries)
+        vm.Orchestrator.GoNext(); // slack -> discord
+        vm.Orchestrator.GoNext(); // discord -> channels (Slack/Discord OnLeave can clear entries)
 
         Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
 
@@ -155,6 +156,7 @@ public sealed class InitWizardPageTests : IDisposable
         vm.Context.AnyChatServicesEnabled = true;
 
         // Skip to channels
+        vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();

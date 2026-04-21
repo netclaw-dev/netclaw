@@ -49,3 +49,11 @@ public sealed class SlackGatewayActorKey;
 /// background job manager singleton actor.
 /// </summary>
 public sealed class BackgroundJobManagerActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// Discord gateway parent actor (DiscordGatewayActor -> DiscordSessionBindingActor).
+/// Resolved by the reminder dispatcher to deliver Mode B reminder turns through
+/// the Discord channel's existing routing hierarchy.
+/// </summary>
+public sealed class DiscordGatewayActorKey;

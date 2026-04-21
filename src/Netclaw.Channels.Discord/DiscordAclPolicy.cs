@@ -13,11 +13,11 @@ public static class DiscordAclPolicy
         if (string.IsNullOrWhiteSpace(message.SenderId.Value))
             return DiscordAclDecision.Deny("missing_user_id");
 
-        var isConversationAllowed = message.IsDirectMessage
-            ? options.AllowDirectMessages
-            : IsAllowedChannel(message.ChannelId, options, defaultChannelId);
+        if (message.IsDirectMessage && !options.AllowDirectMessages)
+            return DiscordAclDecision.Deny("direct_messages_disabled");
 
-        if (!isConversationAllowed)
+        if (!message.IsDirectMessage
+            && !IsAllowedChannel(message.ChannelId, options, defaultChannelId))
             return DiscordAclDecision.Deny("channel_not_allowed");
 
         if (!IsAllowedUser(message.SenderId, options))

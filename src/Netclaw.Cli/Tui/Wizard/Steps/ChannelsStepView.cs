@@ -68,7 +68,7 @@ public sealed class ChannelsStepView : IWizardStepView
         if (_cursorIndex < 0) _cursorIndex = 0;
 
         var layout = Layouts.Vertical()
-            .WithChild(new TextNode("  Slack channels:").WithForeground(Color.White))
+            .WithChild(new TextNode("  Chat channels:").WithForeground(Color.White))
             .WithSpacing(1);
 
         for (var i = 0; i < entries.Count; i++)
@@ -126,9 +126,8 @@ public sealed class ChannelsStepView : IWizardStepView
                         if (!entries.Any(e =>
                             e.DisplayName.Equals($"#{text}", StringComparison.OrdinalIgnoreCase)))
                         {
-                            // Add to Slack by default — when Discord is added,
-                            // the add UI will need a source selector
-                            _vm.AddEntry(ChannelType.Slack, new ChannelEntry($"#{text}", text, audience));
+                            var source = _vm.GetPreferredAddSource();
+                            _vm.AddEntry(source, new ChannelEntry($"#{text}", text, audience));
                         }
                     }
 

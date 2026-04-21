@@ -1,3 +1,4 @@
+using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
 
@@ -20,6 +21,7 @@ public static class DiscordChannelRegistrationExtensions
 
         services.AddSingleton<IDiscordGatewayClient, UnconfiguredDiscordGatewayClient>();
         services.AddSingleton<IDiscordReplyClient, UnconfiguredDiscordReplyClient>();
+        services.AddSingleton<IReminderTargetResolver, DiscordReminderTargetResolver>();
 
         services.AddKeyedSingleton<IChannel, DiscordChannel>(DiscordChannelKey);
         services.AddSingleton<IChannel>(sp =>

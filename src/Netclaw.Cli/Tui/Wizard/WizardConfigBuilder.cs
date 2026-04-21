@@ -25,6 +25,7 @@ public sealed class WizardConfigBuilder
     public ProviderConfigSection? Provider { get; set; }
     public ModelConfigSection? Model { get; set; }
     public SlackConfigSection? Slack { get; set; }
+    public DiscordConfigSection? Discord { get; set; }
     public SecurityConfigSection Security { get; set; } = new();
     public SearchConfigSection? Search { get; set; }
     public ToolConfig? Tools { get; set; }
@@ -120,6 +121,37 @@ public sealed class WizardConfigBuilder
                 slackSection["ChannelAudiences"] = new Dictionary<string, string>(Slack.ChannelAudiences);
 
             config["Slack"] = slackSection;
+        }
+
+        // Search section
+        if (Discord is { Enabled: true })
+        {
+            var discordSection = new Dictionary<string, object>
+            {
+                ["Enabled"] = true
+            };
+
+            if (!string.IsNullOrWhiteSpace(Discord.DefaultChannelId))
+                discordSection["DefaultChannelId"] = Discord.DefaultChannelId;
+
+            if (Discord.AllowedChannelIds is { Count: > 0 })
+            {
+                discordSection["AllowedChannelIds"] = Discord.AllowedChannelIds.ToArray();
+
+                if (!discordSection.ContainsKey("DefaultChannelId"))
+                    discordSection["DefaultChannelId"] = Discord.AllowedChannelIds[0];
+            }
+
+            if (Discord.AllowDirectMessages)
+                discordSection["AllowDirectMessages"] = true;
+
+            if (Discord.AllowedUserIds is { Count: > 0 })
+                discordSection["AllowedUserIds"] = Discord.AllowedUserIds.ToArray();
+
+            if (Discord.ChannelAudiences is { Count: > 0 })
+                discordSection["ChannelAudiences"] = new Dictionary<string, string>(Discord.ChannelAudiences);
+
+            config["Discord"] = discordSection;
         }
 
         // Search section
@@ -302,6 +334,16 @@ public sealed class SlackConfigSection
     public Dictionary<string, string>? ChannelAudiences { get; init; }
 }
 
+public sealed class DiscordConfigSection
+{
+    public bool Enabled { get; init; }
+    public string? DefaultChannelId { get; init; }
+    public List<string>? AllowedChannelIds { get; init; }
+    public bool AllowDirectMessages { get; init; }
+    public List<string>? AllowedUserIds { get; init; }
+    public Dictionary<string, string>? ChannelAudiences { get; init; }
+}
+
 public sealed class SecurityConfigSection
 {
     public DeploymentPosture DeploymentPosture { get; set; } = DeploymentPosture.Personal;
@@ -347,4 +389,3 @@ public sealed class WebhooksConfigSection
 {
     public bool Enabled { get; init; }
 }
-
