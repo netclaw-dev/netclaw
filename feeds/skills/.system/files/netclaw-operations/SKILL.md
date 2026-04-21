@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about Netclaw capabilities, scheduling, diagnostics, identity updates, or self-maintenance. Read this first — it routes you to the right detail file."
 metadata:
   author: netclaw
-  version: "1.15.0"
+  version: "1.15.1"
 ---
 
 # Netclaw Operations
@@ -212,6 +212,9 @@ Use the dedicated tools instead of generic file tools when available:
 - `set_webhook`
 - `list_webhooks`
 - `delete_webhook`
+
+When using `set_webhook`, use `delivery_required` (bool, default `true`) to
+control required notification behavior. `notify_policy` is deprecated.
 
 Route files are secret-bearing config because they may contain inline
 verification secrets. Treat `config/webhooks` like `secrets.json` and avoid

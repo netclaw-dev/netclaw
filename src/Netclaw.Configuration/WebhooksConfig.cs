@@ -34,7 +34,7 @@ public sealed class WebhookRouteConfig
 
     public string NotifyInstructions { get; set; } = string.Empty;
 
-    public NotificationPolicy NotifyPolicy { get; set; } = NotificationPolicy.Conditional;
+    public bool DeliveryRequired { get; set; } = true;
 
     public NotificationTargetConfig? NotificationTarget { get; set; }
 

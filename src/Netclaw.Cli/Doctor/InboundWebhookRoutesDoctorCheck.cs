@@ -69,10 +69,12 @@ public sealed class InboundWebhookRoutesDoctorCheck(NetclawPaths paths) : IDocto
         if (route.Events.Any(string.IsNullOrWhiteSpace))
             throw new InvalidOperationException($"Webhook route '{routeName}' contains a blank event filter.");
 
-        if (route.NotifyPolicy == NotificationPolicy.Required && route.NotificationTarget is null)
+        if (route.DeliveryRequired
+            && route.NotificationTarget is null
+            && !string.IsNullOrWhiteSpace(route.NotifyInstructions))
         {
             throw new InvalidOperationException(
-                $"Webhook route '{routeName}' requires a NotificationTarget when NotifyPolicy is Required.");
+                $"Webhook route '{routeName}' must set NotificationTarget when DeliveryRequired is true and NotifyInstructions are provided.");
         }
 
         if (route.NotificationTarget is { Kind: NotificationTargetKind.Slack } target

@@ -117,7 +117,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
             {
                 var hasNotify = !string.IsNullOrWhiteSpace(_invocation.Route.BuildDefaultNotifyInstructions())
                     || !string.IsNullOrWhiteSpace(_invocation.Route.Config.NotifyInstructions);
-                var deliveryRequired = _invocation.Route.Config.NotifyPolicy != NotificationPolicy.Conditional;
+                var deliveryRequired = _invocation.Route.Config.DeliveryRequired;
                 var failureMsg = _accumulator.BuildNotifyFailureMessage(hasNotify, deliveryRequired);
                 ReportAndStop(failureMsg is null, failureMsg);
                 break;

@@ -5,7 +5,7 @@
 - [x] 1.1 Add `DeliveryKind` enum (`CurrentSession = 0`, `Channel = 1`, `None = 2`) and `ReminderDelivery` class to `src/Netclaw.Actors/Reminders/ReminderProtocol.cs`. Carries `Kind`, `Transport`, `Address`, `SessionId`, `OriginChannelType`. Protobuf-attributed for journal serialization.
 - [x] 1.2 Replace `ReportToChannel`, `ReportToThreadTs`, `NotifyInstructions`, `NotifyPolicy`, `SessionId`, `OriginChannelType` on `ReminderDefinition` with a single required `Delivery` field (the struct above) plus `DeliveryRequired` (bool, default `true`) and `DeliveryInstructions` (nullable string).
 - [x] 1.3 Update `ReminderInfo` list/get response record to mirror the new shape: expose `Delivery`, `DeliveryRequired`, `DeliveryInstructions`; drop removed fields.
-- [ ] 1.4 Drop `NotificationPolicy` enum and any call sites that read it once all code paths have migrated to `DeliveryRequired` (boolean is simpler; the enum was redundant).
+- [x] 1.4 Drop `NotificationPolicy` enum and any call sites that read it once all code paths have migrated to `DeliveryRequired` (boolean is simpler; the enum was redundant).
 - [ ] 1.5 Add `ReminderDeliveryObserved(string ReminderDeliveryKey, ChannelType ChannelType) : IWithSessionId`-ish internal record in `src/Netclaw.Actors/Reminders/` (or `Protocol/` if preferred) — fields needed: reminder delivery key (`{id}:{fireTimestampMs}`), `ChannelType`, optional outbound-delivery timestamp. Not serialized (actor-local signal).
 - [x] 1.6 Confirm protobuf evolution: new `ReminderDefinition` shape is a clean break; no protobuf member numbers are reused from the old fields.
 

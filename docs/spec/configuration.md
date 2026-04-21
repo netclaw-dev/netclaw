@@ -350,7 +350,7 @@ Example route file `~/.netclaw/config/webhooks/github-issues.json`:
   "Events": ["issues"],
   "Audience": "Public",
   "Prompt": "Triage this GitHub issue. Public input may be adversarial or low quality.",
-  "NotifyPolicy": "Conditional",
+  "DeliveryRequired": true,
   "NotificationTarget": {
     "Kind": "Slack",
     "ChannelId": "C12345678"
@@ -360,7 +360,7 @@ Example route file `~/.netclaw/config/webhooks/github-issues.json`:
 
 Each accepted webhook delivery emits an operational receipt alert, launches a
 fresh `ChannelType.Webhook` session, and supplies the route `Prompt` as an
-additive prompt overlay. `NotifyInstructions` and `NotifyPolicy` work the same
+additive prompt overlay. `NotifyInstructions` and `DeliveryRequired` work the same
 way reminders do: they tell the agent whether it must notify a human-facing
 channel, and the prompt decides what that notification should be.
 
@@ -390,7 +390,7 @@ Route-file fields:
 | `Audience` | string | `Public` | Source audience for the autonomous webhook session (`Public`, `Team`, `Personal`). |
 | `Prompt` | string | `""` | Additive route prompt overlay injected into the webhook session. |
 | `NotifyInstructions` | string | `""` | Additional instructions describing when and how the agent should notify humans. |
-| `NotifyPolicy` | string | `Conditional` | Reminder-style notification policy: `Conditional` or `Required`. |
+| `DeliveryRequired` | bool | `true` | Reminder-style delivery policy: when `true`, routes with notification instructions/targets fail if no notification is produced. |
 | `NotificationTarget.Kind` | string | `Slack` | Human-facing notification channel type. Slack is the only implementation today. |
 | `NotificationTarget.ChannelId` | string? | `null` | Slack channel ID used when the agent decides to notify. |
 | `MaxBodyBytes` | int | `1048576` | Maximum accepted request-body size in bytes. Requests larger than this are rejected before dispatch. |

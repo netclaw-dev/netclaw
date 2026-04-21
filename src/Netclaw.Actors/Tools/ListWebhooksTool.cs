@@ -40,7 +40,7 @@ public sealed partial class ListWebhooksTool : NetclawTool<ListWebhooksTool.Para
             {
                 sb.AppendLine($"  Audience: {definition.Audience}");
                 sb.AppendLine($"  Verification: {definition.Verification.Kind}");
-                sb.AppendLine($"  NotifyPolicy: {definition.NotifyPolicy}");
+                sb.AppendLine($"  DeliveryRequired: {definition.DeliveryRequired}");
             }
 
             sb.AppendLine();

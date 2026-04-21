@@ -61,10 +61,9 @@
       "type": "string",
       "default": ""
     },
-    "NotifyPolicy": {
-      "type": "string",
-      "enum": ["Required", "Conditional"],
-      "default": "Conditional"
+    "DeliveryRequired": {
+      "type": "boolean",
+      "default": true
     },
     "NotificationTarget": {
       "type": ["object", "null"],

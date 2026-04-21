@@ -17,9 +17,9 @@ public static class WebhookPromptBuilder
 
         if (!string.IsNullOrWhiteSpace(notifyInstructions))
         {
-            var notifyHeader = route.Config.NotifyPolicy == NotificationPolicy.Conditional
-                ? "Notification instructions (only notify if results warrant it — it is OK to skip notification if there is nothing actionable):"
-                : "Notification instructions:";
+            var notifyHeader = route.Config.DeliveryRequired
+                ? "Notification instructions:"
+                : "Notification instructions (only notify if results warrant it — it is OK to skip notification if there is nothing actionable):";
 
             parts.Add($"{notifyHeader}\n{notifyInstructions}");
         }

@@ -36,8 +36,8 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         string? Audience = null,
         [property: Description("Optional notification instructions appended to the route overlay.")]
         string? NotifyInstructions = null,
-        [property: Description("Notification policy: 'Conditional' (default) or 'Required'.")]
-        string? NotifyPolicy = null,
+        [property: Description("Whether notification delivery is required when notification instructions are present. Defaults to true.")]
+        bool? DeliveryRequired = null,
         [property: Description("Optional Slack channel ID for human-facing notifications.")]
         string? NotificationChannelId = null,
         [property: Description("Maximum accepted request body size in bytes.")]
@@ -67,9 +67,6 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (!TryParseAudience(args.Audience, out var audience, out var audienceError))
             return Task.FromResult(audienceError!);
 
-        if (!TryParseNotifyPolicy(args.NotifyPolicy, out var notifyPolicy, out var notifyError))
-            return Task.FromResult(notifyError!);
-
         var routeName = NormalizeRouteName(args.RouteName);
         var definition = new WebhookRouteConfig
         {
@@ -78,7 +75,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
             Events = ParseEvents(args.Events),
             Audience = audience,
             NotifyInstructions = args.NotifyInstructions?.Trim() ?? string.Empty,
-            NotifyPolicy = notifyPolicy,
+            DeliveryRequired = args.DeliveryRequired ?? true,
             MaxBodyBytes = args.MaxBodyBytes ?? 1024 * 1024,
             RateLimitPerMinute = args.RateLimitPerMinute ?? 30,
             Verification = new WebhookVerificationConfig
@@ -126,26 +123,6 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
 
         audience = TrustAudience.Public;
         error = "Error: 'audience' must be Public, Team, or Personal.";
-        return false;
-    }
-
-    private static bool TryParseNotifyPolicy(string? value, out NotificationPolicy policy, out string? error)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            policy = NotificationPolicy.Conditional;
-            error = null;
-            return true;
-        }
-
-        if (Enum.TryParse<NotificationPolicy>(value, ignoreCase: true, out policy))
-        {
-            error = null;
-            return true;
-        }
-
-        policy = NotificationPolicy.Conditional;
-        error = "Error: 'notifyPolicy' must be Required or Conditional.";
         return false;
     }
 
