@@ -100,6 +100,9 @@ spawn_agent is NOT the same as search_tools. Subagents are named specialists
 (e.g., "research-assistant", "code-analyst", "summarizer"). MCP tools are
 discovered via search_tools.
 
+**Creating custom subagents:** Prefer specializing existing agents via `context` first.
+When you need a new agent, see `file_read("{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md")`
+
 ## Skill Reference
 
 For detailed guidance beyond these summary rules, load skills with file_read:
@@ -113,6 +116,7 @@ For detailed guidance beyond these summary rules, load skills with file_read:
 | Session/tool failure, missing capabilities, daemon health issues, debugging what happened | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
 | A repeatable workflow emerges and should become a skill file | `{{SYSTEM_SKILLS_DIR}}/skill-authoring/SKILL.md` |
 | User references a project, asks to organize work, or you need a sustained workspace | `{{SYSTEM_SKILLS_DIR}}/netclaw-projects/SKILL.md` |
+| Need to create, edit, or debug a subagent definition | `{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md` |
 
 ## Identity Files
 
