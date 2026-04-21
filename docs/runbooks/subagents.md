@@ -168,7 +168,7 @@ findings into clear, well-organized summaries.
 |-------|----------|---------|-------------|
 | `name` | Yes | — | Unique identifier. Used in `spawn_agent(agent: "<name>")`. Duplicate names across files are rejected with a warning. |
 | `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
-| `tools` | Yes | — | List of tool names the subagent can use. For user-facing agents, only `web_search`, `web_fetch`, `file_read`, and `attach_file` are allowed. |
+| `tools` | No | (inherit all) | List of tool names. When omitted, inherits all session tools including MCP tools. When specified, acts as a whitelist to limit access. |
 | `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
 | `timeoutSeconds` | No | `60` | Wall-clock timeout in seconds. |
 | `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
@@ -209,20 +209,15 @@ ignored at the glob layer and never logged.
   parameter on `spawn_agent` is for — don't bake transient details into the
   agent file.
 
-### Available tool names
+### Tool access
 
-These are the built-in tool names you can reference in agent definitions:
+When `tools` is omitted from the frontmatter, the subagent inherits all session
+tools including MCP tools. This is the recommended default — it matches Claude
+Code's agent format and lets subagents use whatever capabilities the session has.
 
-| Tool | Description |
-|------|-------------|
-| `web_search` | Search the web (requires Brave API key) |
-| `web_fetch` | Fetch and parse web page content |
-| `file_read` | Read file contents |
-| `attach_file` | Attach a file to the response |
-
-User-facing file-defined agents cannot request `shell_execute`, `file_write`,
-`search_tools`, or raw MCP tool names. Those remain available to
-platform-owned/internal subagents.
+When `tools` is specified, it acts as a whitelist limiting which tools the
+subagent can access. Use this when you want to restrict a subagent to specific
+capabilities (e.g., read-only access via `tools: [file_read, web_search]`).
 
 ## Built-in agents
 

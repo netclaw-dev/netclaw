@@ -233,23 +233,23 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
             ---
             """);
 
-        // Empty tools list.
+        // Empty tools list — valid, inherits all session tools at spawn time.
         WriteAgent("no-tools.md", """
             ---
             name: no-tools
-            description: Has no tools
+            description: Has no tools specified
             tools: []
             ---
 
             body
             """);
 
-        // Tool not allowed for user-facing agents (file_write, shell_execute).
-        WriteAgent("bad-tools.md", """
+        // Tools including MCP tools — valid, no allowlist restriction.
+        WriteAgent("mcp-tools.md", """
             ---
-            name: bad-tools
-            description: Uses disallowed tools
-            tools: [web_search, file_write, shell_execute]
+            name: mcp-tools
+            description: Uses MCP tools
+            tools: [web_search, notion/notion-search, shell_execute]
             ---
 
             body
@@ -261,10 +261,12 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
 
         var results = _loader.LoadAll();
 
-        // Positive: the valid agent survived despite every sibling being broken.
-        var profile = Assert.Single(results);
-        Assert.Equal("valid", profile.Name);
-        Assert.Contains("You are the only valid agent", profile.SystemPrompt);
+        // Three valid agents: valid, no-tools, mcp-tools
+        // (tools are now optional and there's no allowlist)
+        Assert.Equal(3, results.Count);
+        Assert.Contains(results, p => p.Name == "valid");
+        Assert.Contains(results, p => p.Name == "no-tools");
+        Assert.Contains(results, p => p.Name == "mcp-tools");
 
         // Negative: every invalid sibling produced a specific warning that names the file
         // AND points at the reason. This is the "fail loud" contract — without log checks,
@@ -288,16 +290,6 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
         Assert.Contains(_logger.Warnings, w =>
             w.Contains("empty-body.md", StringComparison.Ordinal)
             && w.Contains("system prompt body", StringComparison.OrdinalIgnoreCase));
-
-        Assert.Contains(_logger.Warnings, w =>
-            w.Contains("no-tools.md", StringComparison.Ordinal)
-            && w.Contains("no tools", StringComparison.OrdinalIgnoreCase));
-
-        Assert.Contains(_logger.Warnings, w =>
-            w.Contains("bad-tools.md", StringComparison.Ordinal)
-            && w.Contains("disallowed tools", StringComparison.OrdinalIgnoreCase)
-            && w.Contains("file_write", StringComparison.Ordinal)
-            && w.Contains("shell_execute", StringComparison.Ordinal));
 
         // The .json and .txt files must not have produced any warning at all — they should be
         // ignored at the Directory.GetFiles("*.md") pattern layer, never reaching the parser.

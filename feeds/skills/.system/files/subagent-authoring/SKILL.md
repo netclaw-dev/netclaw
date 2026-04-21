@@ -31,9 +31,20 @@ Minimal shape:
 
 ```markdown
 ---
+name: my-agent
+description: What this agent does
+---
+
+You are a specialist assistant. Your job is to...
+```
+
+With tools restricted to a specific set:
+
+```markdown
+---
 name: research-assistant
 description: Deep web research with search and citation
-tools: [web_search, web_fetch, file_read, attach_file]
+tools: [web_search, web_fetch, file_read]
 ---
 
 You are a research assistant.
@@ -44,7 +55,6 @@ You are a research assistant.
 These are required for a file to load:
 - `name` (string, non-empty)
 - `description` (string, non-empty)
-- `tools` (non-empty list)
 
 The markdown body below the closing `---` must also be non-empty.
 
@@ -52,6 +62,7 @@ The markdown body below the closing `---` must also be non-empty.
 
 | Field | Default | Notes |
 |------|---------|-------|
+| `tools` | (inherit all) | List of tool names. When omitted, the subagent inherits all session tools including MCP tools. When specified, acts as a whitelist to limit access. |
 | `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values fall back to `Compaction`. |
 | `timeoutSeconds` | `60` | Wall-clock timeout for subagent execution. |
 | `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values fall back to `user-facing`. |
@@ -59,55 +70,37 @@ The markdown body below the closing `---` must also be non-empty.
 
 Unknown fields are ignored.
 
-## Tool policy for file-defined agents
-
-File-defined subagents are validated against a conservative allowlist:
-- `attach_file`
-- `file_read`
-- `web_fetch`
-- `web_search`
-
-If any other tool appears in `tools`, the file is rejected.
-
-Important: this allowlist applies to file-defined agents in `~/.netclaw/agents`.
-Platform-owned internal subagents with broader tools are code-registered, not
-loaded from this directory.
-
 ## Example: valid subagent definition
 
 ```markdown
 ---
-name: release-notes
-description: Draft concise release notes from local changes
-tools: [file_read]
-modelRole: Compaction
-timeoutSeconds: 90
-visibility: user-facing
-emitStructuredFindings: false
+name: notion-planner
+description: Automates daily planning workflow in Notion
+timeoutSeconds: 120
 ---
 
-You are a release-notes assistant.
+You are a planning assistant that works with Notion.
 
 ## Goal
 
-Summarize user-visible changes from local project files.
+Create and update daily plans in the user's Notion workspace.
 
-## Rules
+## Guidelines
 
-- Use file_read to inspect release notes, changelogs, and docs.
-- Keep output concise and structured with markdown headings.
-- Include file paths for each notable change.
-- Do not invent changes that are not in source files.
+- Use Notion MCP tools to search, fetch, and create/update pages
+- If you encounter connectivity issues, report them clearly
+- Follow the user's existing plan format and structure
 ```
+
+This agent inherits all session tools (including Notion MCP tools) because no
+`tools` field is specified.
 
 ## Fail-loud loader behavior
 
 At startup, invalid files are skipped with warnings. Common rejection reasons:
 - missing or unparseable YAML frontmatter
-- missing required fields (`name`, `description`, `tools`)
+- missing required fields (`name`, `description`)
 - empty markdown body
-- empty `tools` list
-- disallowed tool names
 - duplicate `name` across files (first file in stable sorted order wins)
 
 Non-`.md` files in `~/.netclaw/agents` are ignored.
