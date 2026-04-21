@@ -287,7 +287,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             DeliveryKind.Channel => $"\n\nPost the result to {definition.Delivery.Transport} target {definition.Delivery.Address}." +
                 (string.IsNullOrWhiteSpace(definition.DeliveryInstructions) ? "" : $"\n{definition.DeliveryInstructions}"),
             DeliveryKind.None => "",
-            _ => ""
+            _ => throw new ArgumentOutOfRangeException(nameof(definition.Delivery.Kind), definition.Delivery.Kind, "Unexpected DeliveryKind")
         };
 
         return $"{definition.Instructions}{deliverySection}";
