@@ -142,7 +142,7 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: false, NotificationPolicy.Required);
+        var result = acc.BuildNotifyFailureMessage(requiresChannelDelivery: false, deliveryRequired: true);
 
         Assert.Null(result);
     }
@@ -152,7 +152,7 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: true, NotificationPolicy.Required);
+        var result = acc.BuildNotifyFailureMessage(requiresChannelDelivery: true, deliveryRequired: true);
 
         Assert.Contains("no notification tool was invoked", result);
     }
@@ -162,7 +162,7 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: true, NotificationPolicy.Conditional);
+        var result = acc.BuildNotifyFailureMessage(requiresChannelDelivery: true, deliveryRequired: false);
 
         Assert.Null(result);
     }
@@ -179,7 +179,7 @@ public sealed class ExecutionOutputAccumulatorTests
             Result = "Message sent."
         });
 
-        var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: true, NotificationPolicy.Required);
+        var result = acc.BuildNotifyFailureMessage(requiresChannelDelivery: true, deliveryRequired: true);
 
         Assert.Null(result);
     }
@@ -196,7 +196,7 @@ public sealed class ExecutionOutputAccumulatorTests
             Result = "Error: channel not found"
         });
 
-        var result = acc.BuildNotifyFailureMessage(hasNotifyInstructions: true, NotificationPolicy.Conditional);
+        var result = acc.BuildNotifyFailureMessage(requiresChannelDelivery: true, deliveryRequired: false);
 
         Assert.Contains("channel not found", result);
     }

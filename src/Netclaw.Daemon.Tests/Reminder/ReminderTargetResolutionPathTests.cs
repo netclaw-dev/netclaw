@@ -17,7 +17,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
     }
 
     [Fact]
-    public async Task ReportTarget_alias_flows_through_tool_path_and_returns_resolution_error()
+    public async Task Channel_delivery_returns_resolution_error_when_resolver_fails()
     {
         var capture = new CaptureSink();
         var probe = _system.ActorOf(Props.Create(() => new CapturingReminderActor(capture, success: true)));
@@ -26,26 +26,23 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
 
         var tool = CreateTool(probe, resolver);
 
-        string? reportToChannel = null;
-        const string reportTarget = "#nope";
-        if (!string.IsNullOrWhiteSpace(reportTarget))
-            reportToChannel = reportTarget;
-
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
-            ["Id"] = "report-target-error",
-            ["Name"] = "report-target-error",
+            ["Id"] = "channel-delivery-error",
+            ["Name"] = "channel-delivery-error",
             ["Prompt"] = "check status",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["ReportToChannel"] = reportToChannel
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "slack",
+            ["DeliveryAddress"] = "#nope"
         }, BuildManualToolContext(), TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("Error: Could not resolve reportToChannel '#nope'", result);
+        Assert.StartsWith("Error: Could not resolve delivery_address '#nope'", result);
     }
 
     [Fact]
-    public async Task ReportTarget_alias_overrides_report_to_channel()
+    public async Task Channel_delivery_resolves_address_to_canonical_id()
     {
         var capture = new CaptureSink();
         var probe = _system.ActorOf(Props.Create(() => new CapturingReminderActor(capture, success: true)));
@@ -56,28 +53,27 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
 
         var tool = CreateTool(probe, resolver);
 
-        string? reportToChannel = "C0123ABC";
-        const string reportTarget = "#ops";
-        if (!string.IsNullOrWhiteSpace(reportTarget))
-            reportToChannel = reportTarget;
-
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
-            ["Id"] = "report-target-overrides",
-            ["Name"] = "report-target-overrides",
+            ["Id"] = "channel-delivery-resolve",
+            ["Name"] = "channel-delivery-resolve",
             ["Prompt"] = "check status",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["ReportToChannel"] = reportToChannel
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "slack",
+            ["DeliveryAddress"] = "#ops"
         }, BuildManualToolContext(), TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("Reminder 'report-target-overrides' scheduled.", result);
+        Assert.StartsWith("Reminder 'channel-delivery-resolve' scheduled.", result);
         Assert.NotNull(capture.LastSavedDefinition);
-        Assert.Equal("C0999OPS", capture.LastSavedDefinition!.ReportToChannel);
+        Assert.Equal(DeliveryKind.Channel, capture.LastSavedDefinition!.Delivery.Kind);
+        Assert.Equal("slack", capture.LastSavedDefinition.Delivery.Transport);
+        Assert.Equal("C0999OPS", capture.LastSavedDefinition.Delivery.Address);
     }
 
     [Fact]
-    public async Task ReportTarget_user_alias_generates_dm_notify_instructions()
+    public async Task Channel_delivery_to_user_resolves_address()
     {
         var capture = new CaptureSink();
         var probe = _system.ActorOf(Props.Create(() => new CapturingReminderActor(capture, success: true)));
@@ -88,27 +84,22 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
 
         var tool = CreateTool(probe, resolver);
 
-        string? reportToChannel = null;
-        const string reportTarget = "@aaron";
-        if (!string.IsNullOrWhiteSpace(reportTarget))
-            reportToChannel = reportTarget;
-
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
-            ["Id"] = "report-target-user",
-            ["Name"] = "report-target-user",
+            ["Id"] = "channel-delivery-user",
+            ["Name"] = "channel-delivery-user",
             ["Prompt"] = "check status",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["ReportToChannel"] = reportToChannel
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "slack",
+            ["DeliveryAddress"] = "@aaron"
         }, BuildManualToolContext(), TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("Reminder 'report-target-user' scheduled.", result);
+        Assert.StartsWith("Reminder 'channel-delivery-user' scheduled.", result);
         Assert.NotNull(capture.LastSavedDefinition);
-        Assert.Equal("U0456XYZ", capture.LastSavedDefinition!.ReportToChannel);
-        Assert.Equal(
-            "Send a direct message to user U0456XYZ with your findings, or lack thereof.",
-            capture.LastSavedDefinition.NotifyInstructions);
+        Assert.Equal(DeliveryKind.Channel, capture.LastSavedDefinition!.Delivery.Kind);
+        Assert.Equal("U0456XYZ", capture.LastSavedDefinition.Delivery.Address);
     }
 
     public void Dispose()
@@ -117,7 +108,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
     }
 
     private SetReminderTool CreateTool(IActorRef reminderManager, IReminderTargetResolver resolver)
-        => new(reminderManager, _timeProvider, resolver);
+        => new(reminderManager, _timeProvider, [resolver]);
 
     private static ToolExecutionContext BuildManualToolContext() => new(sessionId: null, sessionDirectory: null)
     {
@@ -126,6 +117,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
 
     private sealed class StubReminderTargetResolver(Func<string, ReminderTargetResolution> resolve) : IReminderTargetResolver
     {
+        public string Transport { get; init; } = "slack";
         public Task<ReminderTargetResolution> ResolveAsync(string target, CancellationToken ct = default)
             => Task.FromResult(resolve(target));
     }

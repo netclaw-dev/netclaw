@@ -23,6 +23,7 @@ public enum AlertType
     ProviderUnreachable,
     ReminderExecutionFailed,
     ReminderAutoDisabled,
+    ReminderSchemaDropped,
     WebhookReceived,
     WebhookRouteInvalid,
     DaemonStarted,

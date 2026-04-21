@@ -953,8 +953,8 @@ static void ConfigureDaemonServices(
             var reminderManager = registry.Get<Netclaw.Actors.Hosting.ReminderManagerActorKey>();
             var tp = sp.GetRequiredService<TimeProvider>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
-            var targetResolver = sp.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
-            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, targetResolver);
+            var targetResolvers = sp.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, targetResolvers);
 
             // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
@@ -1215,19 +1215,16 @@ static void MapReminderEndpoints(WebApplication app)
         var manager = await actor.GetAsync(ct);
         var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
 
-        string? reportToChannel = request.ReportToChannel;
-        string? notifyInstructions = request.NotifyInstructions;
-
-        if (!string.IsNullOrWhiteSpace(request.ReportTarget))
-            reportToChannel = request.ReportTarget;
-
-        // Use caller-provided ID if available, otherwise auto-generate for backward compatibility
         var effectiveId = !string.IsNullOrWhiteSpace(request.Id)
             ? request.Id
             : Netclaw.Actors.Reminders.ReminderIdGenerator.Generate(request.Name).Value;
 
-        var reminderResolver = serviceProvider.GetService<Netclaw.Actors.Reminders.IReminderTargetResolver>();
-        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolver);
+        var deliveryKind = request.Delivery?.Kind ?? request.DeliveryKind;
+        var deliveryTransport = request.Delivery?.Transport ?? request.DeliveryTransport;
+        var deliveryAddress = request.Delivery?.Address ?? request.DeliveryAddress;
+
+        var reminderResolvers = serviceProvider.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
+        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolvers);
         var toolContext = new Netclaw.Tools.ToolExecutionContext(sessionId: null, sessionDirectory: null);
         toolContext.Audience = authorization?.SourceAudience?.ToWireValue();
         toolContext.ChannelType = "manual";
@@ -1239,9 +1236,11 @@ static void MapReminderEndpoints(WebApplication app)
                 ["Prompt"] = request.Prompt,
                 ["ScheduleType"] = request.ScheduleType,
                 ["Schedule"] = request.Schedule,
-                ["ReportToChannel"] = reportToChannel,
-                ["NotifyInstructions"] = notifyInstructions,
-                ["NotifyPolicy"] = request.NotifyPolicy,
+                ["DeliveryKind"] = deliveryKind,
+                ["DeliveryTransport"] = deliveryTransport,
+                ["DeliveryAddress"] = deliveryAddress,
+                ["DeliveryRequired"] = request.DeliveryRequired,
+                ["DeliveryInstructions"] = request.DeliveryInstructions,
                 ["Audience"] = request.Audience
             }, toolContext, ct);
 
@@ -1391,10 +1390,11 @@ static void MapReminderEndpoints(WebApplication app)
             schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
             nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
             instructions = r.Instructions,
-            notifyInstructions = r.NotifyInstructions,
-            notifyPolicy = r.NotifyPolicy.ToString().ToLowerInvariant(),
-            sessionId = r.SessionId,
-            reportToChannel = r.ReportToChannel,
+            deliveryKind = r.Delivery.Kind.ToString().ToLowerInvariant(),
+            deliveryTransport = r.Delivery.Transport,
+            deliveryAddress = r.Delivery.Address,
+            deliveryRequired = r.DeliveryRequired,
+            deliveryInstructions = r.DeliveryInstructions,
             audience = r.Audience?.ToWireValue(),
         });
     });
@@ -1438,11 +1438,20 @@ sealed record CreateReminderRequest
     public required string Prompt { get; init; }
     public required string ScheduleType { get; init; }
     public required string Schedule { get; init; }
-    public string? ReportToChannel { get; init; }
-    public string? ReportTarget { get; init; }
-    public string? NotifyInstructions { get; init; }
-    public string? NotifyPolicy { get; init; }
+    public string? DeliveryKind { get; init; }
+    public string? DeliveryTransport { get; init; }
+    public string? DeliveryAddress { get; init; }
+    public bool DeliveryRequired { get; init; } = true;
+    public string? DeliveryInstructions { get; init; }
+    public ReminderDeliveryRequest? Delivery { get; init; }
     public string? Audience { get; init; }
+}
+
+sealed record ReminderDeliveryRequest
+{
+    public string? Kind { get; init; }
+    public string? Transport { get; init; }
+    public string? Address { get; init; }
 }
 
 sealed record ImportReminderRequest

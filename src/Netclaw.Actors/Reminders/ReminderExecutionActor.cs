@@ -24,6 +24,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// </summary>
     internal const int ExecutionTimeoutSeconds = 300;
 
+    /// <summary>
+    /// How long CurrentSession reminders with <c>DeliveryRequired=true</c>
+    /// wait for outbound delivery observation after session <see cref="CommandAck"/>.
+    /// Must remain strictly greater than <see cref="ReminderSettings.DefaultAckTimeout"/>.
+    /// </summary>
+    internal static TimeSpan DeliveryObservedTimeout = TimeSpan.FromSeconds(30);
+
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
     private readonly ReminderHistoryStore _historyStore;
@@ -38,8 +45,11 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private bool _completed;
     private string? _sessionIdValue;
     private HistoryRecord? _pendingHistory;
+    private TaskCompletionSource<ReminderDeliveryObserved>? _deliveryObservedTcs;
+    private string? _expectedReminderDeliveryKey;
+    private ChannelType? _expectedDeliveryChannel;
 
-    private bool IsModeB => _envelope is not null;
+    private bool RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession;
 
     public static Props CreateProps(
         Guid executionId,
@@ -66,20 +76,25 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         _dispatchedAt = timeProvider.GetUtcNow();
         _log = Context.GetLogger();
         _handle = new SessionPipelineHandle(pipeline, _log, "reminder-exec");
-        _accumulator = new ExecutionOutputAccumulator(new ToolName("send_slack_message"), (tool, callId, succeeded) =>
-        {
-            if (succeeded)
-                _log.Info("ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
-                    _executionId, _definition.Id, tool, callId);
-            else
-                _log.Warning("ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3}",
-                    _executionId, _definition.Id, tool, callId);
-        });
+
+        var notificationToolName = definition.Delivery.GetNotificationToolName();
+        _accumulator = new ExecutionOutputAccumulator(
+            notificationToolName is not null ? new ToolName(notificationToolName) : new ToolName("__none__"),
+            (tool, callId, succeeded) =>
+            {
+                if (succeeded)
+                    _log.Info("ReminderExecution NotifySucceeded: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+                        _executionId, _definition.Id, tool, callId);
+                else
+                    _log.Warning("ReminderExecution NotifyFailed: execution_id={0} reminder_id={1} tool={2} call_id={3}",
+                        _executionId, _definition.Id, tool, callId);
+            });
 
         Context.SetReceiveTimeout(TimeSpan.FromSeconds(ExecutionTimeoutSeconds));
 
         Receive<ExecutionOutput>(HandleOutput);
         Receive<ExecutionStarted>(_ => { });
+        Receive<ReminderDeliveryObserved>(HandleDeliveryObserved);
         Receive<ReceiveTimeout>(_ =>
         {
             var elapsed = (int)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalSeconds;
@@ -92,24 +107,24 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     protected override void PreStart()
     {
         _log.Info(
-            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt} mode={(IsModeB ? "B" : "A")}");
+            $"ReminderExecution Dispatched: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} schedule_type={_definition.Schedule.Type} dispatched_at={_dispatchedAt} delivery_kind={_definition.Delivery.Kind}");
 
-        if (IsModeB)
+        if (RoutesBackToOriginSession)
         {
             _reminderClient = ReminderClientExtension.Get(Context.System)
                 .CreateClient(new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId));
         }
 
         Self.Tell(new ExecutionStarted());
-        RunTask(IsModeB ? InitializeModeBAsync : InitializeAsync);
+        RunTask(RoutesBackToOriginSession ? InitializeCurrentSessionAsync : InitializeAsync);
     }
 
     private async Task InitializeAsync()
     {
         try
         {
-            var sessionId = !string.IsNullOrWhiteSpace(_definition.SessionId)
-                ? new SessionId(_definition.SessionId)
+            var sessionId = !string.IsNullOrWhiteSpace(_definition.Delivery.SessionId)
+                ? new SessionId(_definition.Delivery.SessionId)
                 : new SessionId($"reminder/{_definition.Id}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
             _sessionIdValue = sessionId.Value;
@@ -144,7 +159,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             await inputQueue.OfferAsync(new ChannelInput
             {
                 SenderId = "reminder-system",
-                ChannelId = _definition.ReportToChannel,
+                ChannelId = _definition.Delivery.Address,
                 Contents = [new TextContent(prompt)],
                 ReceivedAt = _timeProvider.GetUtcNow()
             });
@@ -167,13 +182,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// timeout, <c>CommandNack</c>, or any exception, <c>AckAsync</c> is
     /// NOT called and Akka.Reminders redelivers per its built-in policy.
     /// </summary>
-    private async Task InitializeModeBAsync()
+    private async Task InitializeCurrentSessionAsync()
     {
         try
         {
-            var sessionId = new SessionId(_definition.SessionId!);
+            var sessionId = new SessionId(_definition.Delivery.SessionId!);
             _sessionIdValue = sessionId.Value;
-            var originChannelType = _definition.OriginChannelType!.Value;
+            var originChannelType = _definition.Delivery.OriginChannelType!.Value;
 
             if (_definition.Audience is not { } audience)
                 throw new InvalidOperationException($"Reminder '{_definition.Id}' is missing a persisted execution audience.");
@@ -181,7 +196,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             var reminderDeliveryKey = $"{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}";
 
             _log.Info(
-                "ReminderExecution ModeB Initialized: execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} origin={Origin} audience={Audience}",
+                "ReminderExecution CurrentSession Initialized: execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} origin={Origin} audience={Audience}",
                 _executionId, _definition.Id, sessionId.Value, originChannelType, audience);
 
             var source = new MessageSource
@@ -223,28 +238,33 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 {
                     case CommandAck:
                         _log.Info(
-                            "reminder_mode_b_dispatch_acked execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId}",
+                            "reminder_current_session_dispatch_acked execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId}",
                             _executionId, _definition.Id, sessionId.Value);
-                        var ackResponse = await _reminderClient!.AckAsync(_envelope!);
-                        if (ackResponse.ResponseCode != ReminderAckResponseCode.Success)
+
+                        if (_definition.DeliveryRequired)
                         {
-                            _log.Warning(
-                                "reminder_ack_non_success execution_id={ExecutionId} reminder_id={ReminderId} response={ResponseCode} message={Message}",
-                                _executionId, _definition.Id, ackResponse.ResponseCode, ackResponse.Message);
+                            var observed = await WaitForDeliveryObservationAsync(reminderDeliveryKey, originChannelType);
+                            if (!observed)
+                            {
+                                ReportAndStop(false, $"delivery not observed within {DeliveryObservedTimeout}");
+                                break;
+                            }
                         }
+
+                        await TryAckEnvelopeAsync();
                         ReportAndStop(true);
                         break;
 
                     case CommandNack nack:
                         _log.Warning(
-                            "reminder_mode_b_session_nack execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} reason={Reason}",
+                            "reminder_current_session_nack execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} reason={Reason}",
                             _executionId, _definition.Id, sessionId.Value, nack.Reason);
                         ReportAndStop(false, $"Session rejected reminder delivery: {nack.Reason}");
                         break;
 
                     default:
                         _log.Warning(
-                            "reminder_mode_b_unexpected_reply execution_id={ExecutionId} reminder_id={ReminderId} reply_type={ReplyType}",
+                            "reminder_current_session_unexpected_reply execution_id={ExecutionId} reminder_id={ReminderId} reply_type={ReplyType}",
                             _executionId, _definition.Id, ack?.GetType().FullName ?? "null");
                         ReportAndStop(false, "Unexpected reply from channel gateway");
                         break;
@@ -253,15 +273,73 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             catch (AskTimeoutException)
             {
                 _log.Warning(
-                    "reminder_mode_b_timeout execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} timeout={Timeout}",
+                    "reminder_current_session_timeout execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} timeout={Timeout}",
                     _executionId, _definition.Id, sessionId.Value, ReminderSettings.DefaultAckTimeout);
                 ReportAndStop(false, "Timed out waiting for session ack");
             }
         }
         catch (Exception ex)
         {
-            LogFullException(ex, "ReminderExecution ModeB InitializationFailed");
+            LogFullException(ex, "ReminderExecution CurrentSession InitializationFailed");
             ReportAndStop(false, ex.Message);
+        }
+    }
+
+    private void HandleDeliveryObserved(ReminderDeliveryObserved observed)
+    {
+        if (_deliveryObservedTcs is null || _expectedReminderDeliveryKey is null)
+            return;
+
+        if (!string.Equals(observed.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+            return;
+
+        if (_expectedDeliveryChannel is { } expectedChannel && observed.ChannelType != expectedChannel)
+            return;
+
+        _deliveryObservedTcs.TrySetResult(observed);
+    }
+
+    private async Task<bool> WaitForDeliveryObservationAsync(string reminderDeliveryKey, ChannelType channelType)
+    {
+        _expectedReminderDeliveryKey = reminderDeliveryKey;
+        _expectedDeliveryChannel = channelType;
+        _deliveryObservedTcs = new TaskCompletionSource<ReminderDeliveryObserved>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Context.System.EventStream.Subscribe(Self, typeof(ReminderDeliveryObserved));
+
+        try
+        {
+            var completed = await Task.WhenAny(_deliveryObservedTcs.Task, Task.Delay(DeliveryObservedTimeout));
+            if (completed != _deliveryObservedTcs.Task)
+            {
+                _log.Warning(
+                    "reminder_delivery_observation_timeout execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} timeout={Timeout}",
+                    _executionId, _definition.Id, reminderDeliveryKey, DeliveryObservedTimeout);
+                return false;
+            }
+
+            var observed = await _deliveryObservedTcs.Task;
+            _log.Info(
+                "reminder_delivery_observed execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} channel={ChannelType}",
+                _executionId, _definition.Id, observed.ReminderDeliveryKey, observed.ChannelType);
+            return true;
+        }
+        finally
+        {
+            Context.System.EventStream.Unsubscribe(Self, typeof(ReminderDeliveryObserved));
+            _deliveryObservedTcs = null;
+            _expectedReminderDeliveryKey = null;
+            _expectedDeliveryChannel = null;
+        }
+    }
+
+    private async Task TryAckEnvelopeAsync()
+    {
+        var ackResponse = await _reminderClient!.AckAsync(_envelope!);
+        if (ackResponse.ResponseCode != ReminderAckResponseCode.Success)
+        {
+            _log.Warning(
+                "reminder_ack_non_success execution_id={ExecutionId} reminder_id={ReminderId} response={ResponseCode} message={Message}",
+                _executionId, _definition.Id, ackResponse.ResponseCode, ackResponse.Message);
         }
     }
 
@@ -279,14 +357,18 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private static string BuildPrompt(ReminderDefinition definition)
     {
-        var notifyHeader = definition.NotifyPolicy == NotificationPolicy.Conditional
-            ? "Notification instructions (only notify if results warrant it — it is OK to skip notification if there is nothing actionable):"
-            : "Notification instructions:";
+        var deliverySection = definition.Delivery.Kind switch
+        {
+            DeliveryKind.CurrentSession => string.IsNullOrWhiteSpace(definition.DeliveryInstructions)
+                ? ""
+                : $"\n\nDelivery guidance:\n{definition.DeliveryInstructions}",
+            DeliveryKind.Channel => $"\n\nPost the result to {definition.Delivery.Transport} target {definition.Delivery.Address}." +
+                (string.IsNullOrWhiteSpace(definition.DeliveryInstructions) ? "" : $"\n{definition.DeliveryInstructions}"),
+            DeliveryKind.None => "",
+            _ => throw new ArgumentOutOfRangeException(nameof(definition.Delivery.Kind), definition.Delivery.Kind, "Unexpected DeliveryKind")
+        };
 
-        return
-            $"{definition.Instructions}\n\n" +
-            $"{notifyHeader}\n" +
-            definition.NotifyInstructions;
+        return $"{definition.Instructions}{deliverySection}";
     }
 
     private void HandleOutput(ExecutionOutput wrapper)
@@ -298,8 +380,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             {
                 var result = _accumulator.GetAccumulatedText();
                 var notifyFailureMessage = _accumulator.BuildNotifyFailureMessage(
-                    !string.IsNullOrWhiteSpace(_definition.NotifyInstructions),
-                    _definition.NotifyPolicy);
+                    _definition.Delivery.Kind == DeliveryKind.Channel,
+                    _definition.DeliveryRequired);
                 var success = notifyFailureMessage is null;
                 _log.Info(
                     $"ReminderExecution Completed: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} success={success} output_length={result.Length} notify_attempted={_accumulator.NotifyAttempted} notify_failed={_accumulator.NotifyFailed} dispatched_at={_dispatchedAt} completed_at={_timeProvider.GetUtcNow()}");

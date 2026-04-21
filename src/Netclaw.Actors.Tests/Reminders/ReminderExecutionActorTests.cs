@@ -147,7 +147,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         var definition = CreateDefinition("conditional-no-notify") with
         {
-            NotifyPolicy = NotificationPolicy.Conditional
+            DeliveryRequired = false
         };
         var probe = CreateTestProbe();
         Sys.ActorOf(
@@ -199,7 +199,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         var definition = CreateDefinition("conditional-notify-error") with
         {
-            NotifyPolicy = NotificationPolicy.Conditional
+            DeliveryRequired = false
         };
         var probe = CreateTestProbe();
         Sys.ActorOf(
@@ -221,7 +221,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
-        var definition = CreateDefinition("filter-check") with { NotifyInstructions = string.Empty };
+        var definition = CreateDefinition("filter-check") with { DeliveryInstructions = string.Empty };
         var probe = CreateTestProbe();
         Sys.ActorOf(
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
@@ -242,7 +242,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             Id = id,
             Title = $"Test Reminder {id}",
             Instructions = "Do something.",
-            NotifyInstructions = "Reply with result.",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },
+            DeliveryInstructions = "Reply with result.",
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
@@ -337,7 +338,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         var definition = CreateDefinition("audience-override") with
         {
             Audience = TrustAudience.Personal,
-            NotifyInstructions = string.Empty
+            DeliveryInstructions = string.Empty
         };
         var probe = CreateTestProbe();
         Sys.ActorOf(
@@ -360,7 +361,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         var definition = CreateDefinition("audience-fallback") with
         {
-            NotifyInstructions = string.Empty,
+            DeliveryInstructions = string.Empty,
             Audience = null
         };
         var probe = CreateTestProbe();
@@ -385,7 +386,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         var definition = CreateDefinition("audience-team-default") with
         {
-            NotifyInstructions = string.Empty,
+            DeliveryInstructions = string.Empty,
             Audience = TrustAudience.Team
         };
         var probe = CreateTestProbe();
@@ -409,8 +410,11 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
-        // Use empty NotifyInstructions so success is not gated on send_slack_message
-        var definition = CreateDefinition("history-success-test") with { NotifyInstructions = string.Empty };
+        // Use Kind = None so success is not gated on send_slack_message
+        var definition = CreateDefinition("history-success-test") with
+        {
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None }
+        };
         var probe = CreateTestProbe();
         Sys.ActorOf(
             Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),

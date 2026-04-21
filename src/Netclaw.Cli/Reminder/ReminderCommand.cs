@@ -90,14 +90,20 @@ internal static class ReminderCommand
 
     private static async Task<int> RunCreateAsync(DaemonApi api, string[] args)
     {
-        // netclaw reminder create <id> <scheduleType> <schedule> "<prompt>" [--name <title>] [--target <#channel|@user|id>] [--channel <id>]
+        // netclaw reminder create <id> <scheduleType> <schedule> "<prompt>" [--name <title>] [--delivery <kind>] [--transport <slack>] [--address <target>]
         if (args.Length < 6)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder create <id> <scheduleType> <schedule> \"<prompt>\" [--name <title>] [--target <#channel|@user|id>] [--channel <id>]");
+            Console.Error.WriteLine("Usage: netclaw reminder create <id> <scheduleType> <schedule> \"<prompt>\" [options]");
             Console.Error.WriteLine();
             Console.Error.WriteLine("  id:           Stable reminder identifier (kebab-case slug, e.g. 'daily-standup')");
             Console.Error.WriteLine("  scheduleType: once, interval, cron");
             Console.Error.WriteLine("  schedule:     '30m', '2h', '0 */6 * * *', etc.");
+            Console.Error.WriteLine();
+            Console.Error.WriteLine("Options:");
+            Console.Error.WriteLine("  --name <title>           Human-readable title (defaults to id)");
+            Console.Error.WriteLine("  --delivery <kind>        Delivery kind: none, channel (default: none)");
+            Console.Error.WriteLine("  --transport <transport>  Transport for channel delivery (e.g. 'slack')");
+            Console.Error.WriteLine("  --address <target>       Target for channel delivery (#channel, @user, ID)");
             Console.Error.WriteLine();
             Console.Error.WriteLine("If a reminder with the given ID already exists, it will be updated.");
             return 1;
@@ -108,8 +114,9 @@ internal static class ReminderCommand
         var schedule = args[4];
         var prompt = args[5];
         string? name = null;
-        string? channel = null;
-        string? reportTarget = null;
+        string deliveryKind = "none";
+        string? deliveryTransport = null;
+        string? deliveryAddress = null;
 
         for (var i = 6; i < args.Length; i++)
         {
@@ -117,18 +124,21 @@ internal static class ReminderCommand
             {
                 name = args[++i];
             }
-            else if (args[i] is "--channel" && i + 1 < args.Length)
+            else if (args[i] is "--delivery" && i + 1 < args.Length)
             {
-                channel = args[++i];
+                deliveryKind = args[++i];
             }
-            else if (args[i] is "--target" && i + 1 < args.Length)
+            else if (args[i] is "--transport" && i + 1 < args.Length)
             {
-                reportTarget = args[++i];
+                deliveryTransport = args[++i];
+            }
+            else if (args[i] is "--address" && i + 1 < args.Length)
+            {
+                deliveryAddress = args[++i];
             }
         }
 
         name ??= id;
-        reportTarget ??= channel;
 
         var body = new
         {
@@ -137,8 +147,9 @@ internal static class ReminderCommand
             prompt,
             scheduleType,
             schedule,
-            reportToChannel = channel,
-            reportTarget
+            deliveryKind,
+            deliveryTransport,
+            deliveryAddress
         };
 
         try
@@ -390,8 +401,8 @@ internal static class ReminderCommand
             return "Reminder title is required.";
         if (string.IsNullOrWhiteSpace(definition.Instructions))
             return "Reminder instructions are required.";
-        if (string.IsNullOrWhiteSpace(definition.NotifyInstructions))
-            return "Reminder notifyInstructions is required.";
+        if (definition.Delivery is null)
+            return "Reminder delivery is required.";
         if (definition.Schedule is null)
             return "Reminder schedule is required.";
 
@@ -529,9 +540,10 @@ internal static class ReminderCommand
         Console.WriteLine("  history <id> [--last N]                       Show recent execution history (default: 20)");
         Console.WriteLine();
         Console.WriteLine("Create options:");
-        Console.WriteLine("  --name    <title>                              Human-readable title (defaults to <id>)");
-        Console.WriteLine("  --target  <#channel|@user|C...|U...>          Human-friendly or canonical Slack target");
-        Console.WriteLine("  --channel <id>                                 Back-compat alias (channel id or name)");
+        Console.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");
+        Console.WriteLine("  --delivery <kind>        Delivery kind: none, channel (default: none)");
+        Console.WriteLine("  --transport <transport>  Transport for channel delivery (e.g. 'slack')");
+        Console.WriteLine("  --address <target>       Target for channel delivery (#channel, @user, ID)");
         Console.WriteLine();
         Console.WriteLine("If a reminder with the given ID already exists, it will be updated (upsert).");
         Console.WriteLine();

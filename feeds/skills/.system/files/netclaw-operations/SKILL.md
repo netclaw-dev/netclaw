@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about Netclaw capabilities, scheduling, diagnostics, identity updates, or self-maintenance. Read this first — it routes you to the right detail file."
 metadata:
   author: netclaw
-  version: "1.14.0"
+  version: "1.15.0"
 ---
 
 # Netclaw Operations
@@ -36,27 +36,26 @@ problems, how to update preferences, or how to maintain itself.
 | `interval` | `"30m"`, `"6h"`, `"1d"` |
 | `cron` | `"0 */6 * * *"`, `"0 9 * * MON-FRI"` |
 
-Parameters: `name` (human-readable), `prompt` (what to execute),
-`schedule_type`, `schedule`, `report_to_channel` (optional notification
-target), `notify_instructions` (optional formatting), `audience` (optional
-execution audience: `public`, `team`, or `personal`).
+Delivery contract parameters:
 
-`report_to_channel` accepts a `#channel-name`, an `@username`, or a raw
-channel/user ID. Names are resolved to canonical IDs at reminder creation
-time — you do not need to look up internal Slack IDs first. If the target
-cannot be resolved (typo, missing channel, wrong workspace), `set_reminder`
-returns an error immediately instead of silently saving a broken reminder.
+- `delivery_kind`: required, one of `current_session`, `channel`, `none`
+- `delivery_transport`: required when `delivery_kind=channel` (e.g. `slack`)
+- `delivery_address`: required when `delivery_kind=channel` (`#channel`, `@user`, or canonical ID)
+- `delivery_required`: optional bool, default `true`; set `false` only for audit/cleanup tasks
+- `delivery_instructions`: optional content guidance only (never routing)
 
-**Omit `report_to_channel` to use session check-back (Mode B):** the
-reminder will deposit its result as a new turn in the originating
-Slack thread or TUI session when it fires, regardless of whether that
-session is still active. The session rehydrates from persistence if it
-passivated between scheduling and firing, then processes the reminder
-prompt just like a normal user message. This is the preferred mode for
-deferred work — "in 5 minutes, check PR #123 again" — because the agent
-yields its context window until the reminder fires. Mode B is only
-available from Slack and TUI sessions; headless/webhook contexts require
-an explicit `report_to_channel`.
+You may also pass the structured form `delivery: { kind, transport?, address? }`
+instead of the three flat delivery fields.
+
+Rules:
+
+- Always choose `delivery_kind` explicitly.
+- Do not try to route via `delivery_instructions`.
+- `current_session` is the session check-back path and should be preferred for
+  conversational follow-ups in Slack/TUI/SignalR sessions.
+- `channel` requires both transport + address and resolves names/handles to
+  canonical IDs at set time; unresolved targets fail loud.
+- `none` runs silently (history still records execution).
 
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be

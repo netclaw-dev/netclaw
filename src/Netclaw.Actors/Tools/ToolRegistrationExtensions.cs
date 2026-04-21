@@ -81,9 +81,9 @@ public static class ToolRegistrationExtensions
         IActorRef reminderManager,
         TimeProvider timeProvider,
         ReminderHistoryStore historyStore,
-        IReminderTargetResolver? targetResolver = null)
+        IEnumerable<IReminderTargetResolver>? targetResolvers = null)
     {
-        registry.Register(new SetReminderTool(reminderManager, timeProvider, targetResolver));
+        registry.Register(new SetReminderTool(reminderManager, timeProvider, targetResolvers));
         registry.Register(new CancelReminderTool(reminderManager));
         registry.Register(new ListRemindersTool(reminderManager));
         registry.Register(new GetReminderHistoryTool(historyStore));

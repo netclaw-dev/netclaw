@@ -15,6 +15,85 @@ public readonly record struct ReminderId(
 }
 
 /// <summary>
+/// How reminder results are delivered.
+/// </summary>
+[ProtoContract]
+public enum DeliveryKind
+{
+    /// <summary>
+    /// Re-enter the originating session. The reminder turn is delivered
+    /// through the session's existing channel pipeline.
+    /// </summary>
+    CurrentSession = 0,
+
+    /// <summary>
+    /// Post to a specific channel/user via the transport's notification tool.
+    /// Requires <see cref="ReminderDelivery.Transport"/> and
+    /// <see cref="ReminderDelivery.Address"/> to be set.
+    /// </summary>
+    Channel = 1,
+
+    /// <summary>
+    /// Silent execution. Task runs and history is recorded, but no
+    /// external notification is sent.
+    /// </summary>
+    None = 2
+}
+
+/// <summary>
+/// Structured delivery target for a reminder.
+/// </summary>
+[ProtoContract]
+public sealed class ReminderDelivery
+{
+    /// <summary>
+    /// How results are delivered.
+    /// </summary>
+    [ProtoMember(1)]
+    public DeliveryKind Kind { get; set; }
+
+    /// <summary>
+    /// Transport identifier for Channel delivery (e.g., "slack").
+    /// Null for CurrentSession and None.
+    /// </summary>
+    [ProtoMember(2)]
+    public string? Transport { get; set; }
+
+    /// <summary>
+    /// Canonical target address for Channel delivery (e.g., "C0123ABC").
+    /// Resolved and validated at set time. Null for CurrentSession and None.
+    /// </summary>
+    [ProtoMember(3)]
+    public string? Address { get; set; }
+
+    /// <summary>
+    /// Session ID for CurrentSession delivery. Null for Channel and None.
+    /// </summary>
+    [ProtoMember(4)]
+    public string? SessionId { get; set; }
+
+    /// <summary>
+    /// Channel type of the originating session for CurrentSession delivery.
+    /// Used to route DeliverTrustedSessionTurn to the correct gateway.
+    /// Null for Channel and None.
+    /// </summary>
+    [ProtoMember(5)]
+    public Channels.ChannelType? OriginChannelType { get; set; }
+
+    /// <summary>
+    /// Gets the notification tool name for Channel delivery based on the transport.
+    /// Returns null for non-Channel delivery kinds or unknown transports.
+    /// </summary>
+    public string? GetNotificationToolName() => Kind == DeliveryKind.Channel
+        ? Transport?.ToLowerInvariant() switch
+        {
+            "slack" => "send_slack_message",
+            _ => null
+        }
+        : null;
+}
+
+/// <summary>
 /// The type of schedule for a reminder.
 /// </summary>
 [ProtoContract]
@@ -84,27 +163,29 @@ public sealed record ReminderDefinition
     public required string Title { get; init; }
     public required ReminderSchedule Schedule { get; init; }
     public required string Instructions { get; init; }
-    public required string NotifyInstructions { get; init; }
-    public NotificationPolicy NotifyPolicy { get; init; } = NotificationPolicy.Required;
+
+    /// <summary>
+    /// Structured delivery target. Determines execution mode and routing.
+    /// </summary>
+    public required ReminderDelivery Delivery { get; init; }
+
+    /// <summary>
+    /// When true, a missed delivery fails the execution and emits
+    /// <see cref="OperationalAlert.ReminderExecutionFailed"/>. For
+    /// <see cref="DeliveryKind.CurrentSession"/>, this gates envelope ack
+    /// on the <see cref="ReminderDeliveryObserved"/> signal. For
+    /// <see cref="DeliveryKind.Channel"/>, this gates success on the
+    /// notification tool being called. Ignored for <see cref="DeliveryKind.None"/>.
+    /// </summary>
+    public bool DeliveryRequired { get; init; } = true;
+
+    /// <summary>
+    /// Optional guidance for what to include in the delivery to the user.
+    /// Content guidance only — never affects routing.
+    /// </summary>
+    public string? DeliveryInstructions { get; init; }
+
     public bool Enabled { get; set; } = true;
-
-    /// <summary>
-    /// Optional session to resume when running this reminder.
-    /// Useful for routing responses back to the originating Slack thread.
-    /// </summary>
-    public string? SessionId { get; init; }
-
-    /// <summary>
-    /// Channel type of the originating session for Mode B (session check-back)
-    /// reminders. Populated when <see cref="SessionId"/> is set and
-    /// <see cref="ReportToChannel"/> is null. The reminder dispatcher uses
-    /// this to route <c>DeliverTrustedSessionTurn</c> to the correct gateway
-    /// (Slack vs. SignalR/TUI). Null for Mode A reminders.
-    /// </summary>
-    public Channels.ChannelType? OriginChannelType { get; init; }
-
-    public string? ReportToChannel { get; init; }
-    public string? ReportToThreadTs { get; init; }
 
     /// <summary>
     /// Deferred shadow field for selecting specialized agent behavior.
@@ -218,14 +299,12 @@ public sealed record ReminderInfo(
     ReminderId Id,
     string Title,
     string Instructions,
-    string NotifyInstructions,
-    NotificationPolicy NotifyPolicy,
+    ReminderDelivery Delivery,
+    bool DeliveryRequired,
+    string? DeliveryInstructions,
     ReminderSchedule Schedule,
     DateTimeOffset? NextFire,
     bool Enabled,
-    string? SessionId,
-    string? ReportToChannel,
-    string? ReportToThreadTs,
     string? AgentDefinitionId,
     TrustAudience? Audience);
 
@@ -239,6 +318,28 @@ internal sealed record ReminderExecutionCompleted(
     ReminderId Id,
     bool Success,
     string? ErrorMessage = null);
+
+/// <summary>
+/// Signal emitted by the outbound channel pipeline when a reminder-sourced
+/// turn's assistant reply actually flows out through the channel's subscriber
+/// sink (e.g., Slack post API returns 200). Used by
+/// <see cref="ReminderExecutionActor"/> for <see cref="DeliveryKind.CurrentSession"/>
+/// with <see cref="ReminderDefinition.DeliveryRequired"/> = true to gate
+/// envelope ack on actual delivery observation.
+/// </summary>
+/// <param name="ReminderDeliveryKey">
+/// Composite key in format "{reminderId}:{fireTimestampMs}".
+/// </param>
+/// <param name="ChannelType">
+/// The channel through which the delivery was observed.
+/// </param>
+/// <param name="ObservedAtMs">
+/// Optional timestamp when the outbound delivery was observed.
+/// </param>
+public sealed record ReminderDeliveryObserved(
+    string ReminderDeliveryKey,
+    Channels.ChannelType ChannelType,
+    long? ObservedAtMs = null);
 
 // ── Health query ──
 

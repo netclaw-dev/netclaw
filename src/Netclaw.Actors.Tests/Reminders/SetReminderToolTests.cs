@@ -38,7 +38,8 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "test-reminder",
                 ["Prompt"] = "Check the server",
                 ["ScheduleType"] = "once",
-                ["Schedule"] = "30m"
+                ["Schedule"] = "30m",
+                ["DeliveryKind"] = "none"
             });
             return result;
         });
@@ -77,7 +78,8 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "interval-check",
                 ["Prompt"] = "Run diagnostics",
                 ["ScheduleType"] = "interval",
-                ["Schedule"] = "2h"
+                ["Schedule"] = "2h",
+                ["DeliveryKind"] = "none"
             });
             return result;
         });
@@ -111,7 +113,8 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "cron-check",
                 ["Prompt"] = "Periodic scan",
                 ["ScheduleType"] = "cron",
-                ["Schedule"] = "0 */6 * * *"
+                ["Schedule"] = "0 */6 * * *",
+                ["DeliveryKind"] = "none"
             });
             return result;
         });
@@ -143,7 +146,8 @@ public class SetReminderToolTests : TestKit
             ["Name"] = "bad-cron",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "cron",
-            ["Schedule"] = "not valid cron"
+            ["Schedule"] = "not valid cron",
+            ["DeliveryKind"] = "none"
         }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
@@ -163,7 +167,8 @@ public class SetReminderToolTests : TestKit
             ["Name"] = "bad-type",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "weekly",
-            ["Schedule"] = "1h"
+            ["Schedule"] = "1h",
+            ["DeliveryKind"] = "none"
         }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
@@ -182,7 +187,8 @@ public class SetReminderToolTests : TestKit
             ["Name"] = "too-fast",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "interval",
-            ["Schedule"] = "10s"
+            ["Schedule"] = "10s",
+            ["DeliveryKind"] = "none"
         }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
@@ -209,20 +215,19 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "self-target",
                 ["Prompt"] = "Check weather",
                 ["ScheduleType"] = "once",
-                ["Schedule"] = "5m"
+                ["Schedule"] = "5m",
+                ["DeliveryKind"] = "current_session"
             }, context);
             return result;
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("self-target", cmd.Definition.Id);
-        // Mode B: SessionId + OriginChannelType populated; no synthetic
-        // ReportToChannel extraction.
-        Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.SessionId);
-        Assert.Equal(ChannelType.Slack, cmd.Definition.OriginChannelType);
-        Assert.Null(cmd.Definition.ReportToChannel);
-        Assert.Null(cmd.Definition.ReportToThreadTs);
-        Assert.Equal("Reply in this session with the result.", cmd.Definition.NotifyInstructions);
+        // CurrentSession delivery: SessionId + OriginChannelType populated in Delivery struct.
+        Assert.Equal(DeliveryKind.CurrentSession, cmd.Definition.Delivery.Kind);
+        Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.Delivery.SessionId);
+        Assert.Equal(ChannelType.Slack, cmd.Definition.Delivery.OriginChannelType);
+        Assert.Null(cmd.Definition.Delivery.Address);
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
         Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, cmd.Definition.Boundary);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
@@ -253,11 +258,12 @@ public class SetReminderToolTests : TestKit
             ["Name"] = "mode-b-bad-channel",
             ["Prompt"] = "Check weather",
             ["ScheduleType"] = "once",
-            ["Schedule"] = "5m"
+            ["Schedule"] = "5m",
+            ["DeliveryKind"] = "current_session"
         }, context, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
-        Assert.Contains("Mode B reminders require an origin channel", result);
+        Assert.Contains("current_session delivery requires a channel with a gateway", result);
         await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
@@ -277,11 +283,12 @@ public class SetReminderToolTests : TestKit
             ["Name"] = "mode-b-no-channel",
             ["Prompt"] = "check",
             ["ScheduleType"] = "once",
-            ["Schedule"] = "5m"
+            ["Schedule"] = "5m",
+            ["DeliveryKind"] = "current_session"
         }, context, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
-        Assert.Contains("Mode B reminders require an origin channel", result);
+        Assert.Contains("current_session delivery requires a channel with a gateway", result);
         await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
@@ -289,7 +296,7 @@ public class SetReminderToolTests : TestKit
     public async Task Headless_reminder_with_no_session_and_no_target_persists_with_both_null()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider, targetResolver: null);
+        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
 
         var execution = Task.Run(async () =>
         {
@@ -299,15 +306,15 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "headless-task",
                 ["Prompt"] = "Run the scan",
                 ["ScheduleType"] = "once",
-                ["Schedule"] = "10m"
+                ["Schedule"] = "10m",
+                ["DeliveryKind"] = "none"
             }, ToolExecutionContext.Empty);
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Null(cmd.Definition.SessionId);
-        Assert.Null(cmd.Definition.OriginChannelType);
-        Assert.Null(cmd.Definition.ReportToChannel);
-        Assert.Null(cmd.Definition.ReportToThreadTs);
+        Assert.Null(cmd.Definition.Delivery.SessionId);
+        Assert.Null(cmd.Definition.Delivery.OriginChannelType);
+        Assert.Null(cmd.Definition.Delivery.Address);
         Assert.Null(cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
@@ -333,7 +340,8 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "RAM Price Tracking",
                 ["Prompt"] = "Check prices",
                 ["ScheduleType"] = "interval",
-                ["Schedule"] = "24h"
+                ["Schedule"] = "24h",
+                ["DeliveryKind"] = "none"
             });
             return result;
         });
@@ -372,7 +380,8 @@ public class SetReminderToolTests : TestKit
                 ["Prompt"] = "Search the web",
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "30m",
-                ["Audience"] = "personal"
+                ["Audience"] = "personal",
+                ["DeliveryKind"] = "current_session"
             }, context);
             return result;
         });
@@ -403,7 +412,8 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Test",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["Audience"] = "superadmin"
+            ["Audience"] = "superadmin",
+            ["DeliveryKind"] = "none"
         }, TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
@@ -430,7 +440,8 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "no-audience",
                 ["Prompt"] = "Check something",
                 ["ScheduleType"] = "once",
-                ["Schedule"] = "1h"
+                ["Schedule"] = "1h",
+                ["DeliveryKind"] = "current_session"
             }, context);
             return result;
         });
@@ -465,7 +476,8 @@ public class SetReminderToolTests : TestKit
             ["Name"] = "bad-source-audience",
             ["Prompt"] = "Test",
             ["ScheduleType"] = "once",
-            ["Schedule"] = "1h"
+            ["Schedule"] = "1h",
+            ["DeliveryKind"] = "current_session"
         }, context, TestContext.Current.CancellationToken);
 
         Assert.Contains("Invalid source audience", result);
@@ -492,7 +504,8 @@ public class SetReminderToolTests : TestKit
                 ["Prompt"] = "Check something",
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "1h",
-                ["Audience"] = "personal"
+                ["Audience"] = "personal",
+                ["DeliveryKind"] = "current_session"
             }, context);
             return result;
         });
@@ -523,7 +536,7 @@ public class SetReminderToolTests : TestKit
                 ? new ReminderTargetResolution(true, "C0123ABC", ReminderTargetKind.Channel, null)
                 : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, resolver);
+        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
 
         var execution = Task.Run(async () =>
         {
@@ -534,13 +547,15 @@ public class SetReminderToolTests : TestKit
                 ["Prompt"] = "Post status",
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "30m",
-                ["ReportToChannel"] = "#general"
+                ["DeliveryKind"] = "channel",
+                ["DeliveryTransport"] = "slack",
+                ["DeliveryAddress"] = "#general"
             });
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("C0123ABC", cmd.Definition.ReportToChannel);
-        Assert.Null(cmd.Definition.ReportToThreadTs);
+        Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
+        Assert.Equal("C0123ABC", cmd.Definition.Delivery.Address);
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
@@ -564,7 +579,7 @@ public class SetReminderToolTests : TestKit
                 ReminderTargetKind.Unknown,
                 "Could not resolve Slack target '#nope'. Use #channel, @user, or a Slack ID (C..., G..., U...).")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, resolver);
+        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -573,10 +588,12 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Post status",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["ReportToChannel"] = "#nope"
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "slack",
+            ["DeliveryAddress"] = "#nope"
         }, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("Error: Could not resolve reportToChannel '#nope'", result);
+        Assert.StartsWith("Error: Could not resolve delivery_address '#nope'", result);
         Assert.Contains("Could not resolve Slack target", result);
         Assert.Equal(1, resolver.CallCount);
         await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
@@ -586,7 +603,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_report_to_channel_when_no_resolver_registered()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider, targetResolver: null);
+        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -595,11 +612,34 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Post status",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["ReportToChannel"] = "C0123ABC"
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "slack",
+            ["DeliveryAddress"] = "C0123ABC"
         }, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("Error: No notification channel transport is configured", result);
-        Assert.Contains("C0123ABC", result);
+        Assert.StartsWith("Error: Unknown transport 'slack'", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Rejects_channel_delivery_for_signalr_transport_with_actionable_error()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "signalr-channel-delivery",
+            ["Name"] = "signalr-channel-delivery",
+            ["Prompt"] = "Post status",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "30m",
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "signalr",
+            ["DeliveryAddress"] = "signalr/ops"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal("Error: Transport 'signalr' does not support channel delivery. Use current_session instead.", result);
         await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
@@ -611,7 +651,7 @@ public class SetReminderToolTests : TestKit
         {
             ResultFor = (_) => throw new InvalidOperationException("resolver must not be invoked for Mode B session re-entry")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, resolver);
+        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
             Audience = "team",
@@ -626,15 +666,16 @@ public class SetReminderToolTests : TestKit
                 ["Name"] = "mode-b-resolver-skip",
                 ["Prompt"] = "Check something",
                 ["ScheduleType"] = "once",
-                ["Schedule"] = "5m"
+                ["Schedule"] = "5m",
+                ["DeliveryKind"] = "current_session"
             }, context);
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.SessionId);
-        Assert.Equal(ChannelType.Slack, cmd.Definition.OriginChannelType);
-        Assert.Null(cmd.Definition.ReportToChannel);
-        Assert.Null(cmd.Definition.ReportToThreadTs);
+        Assert.Equal(DeliveryKind.CurrentSession, cmd.Definition.Delivery.Kind);
+        Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.Delivery.SessionId);
+        Assert.Equal(ChannelType.Slack, cmd.Definition.Delivery.OriginChannelType);
+        Assert.Null(cmd.Definition.Delivery.Address);
         Assert.Equal(0, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
@@ -656,7 +697,7 @@ public class SetReminderToolTests : TestKit
                 ? new ReminderTargetResolution(true, "U0456XYZ", ReminderTargetKind.User, null)
                 : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, resolver);
+        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
 
         var execution = Task.Run(async () =>
         {
@@ -667,13 +708,15 @@ public class SetReminderToolTests : TestKit
                 ["Prompt"] = "Send results",
                 ["ScheduleType"] = "once",
                 ["Schedule"] = "15m",
-                ["ReportToChannel"] = "@aaron"
+                ["DeliveryKind"] = "channel",
+                ["DeliveryTransport"] = "slack",
+                ["DeliveryAddress"] = "@aaron"
             });
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("U0456XYZ", cmd.Definition.ReportToChannel);
-        Assert.Equal("Send a direct message to user U0456XYZ with your findings, or lack thereof.", cmd.Definition.NotifyInstructions);
+        Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
+        Assert.Equal("U0456XYZ", cmd.Definition.Delivery.Address);
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
@@ -693,7 +736,7 @@ public class SetReminderToolTests : TestKit
         {
             ResultFor = (_) => new ReminderTargetResolution(true, null, ReminderTargetKind.Channel, null)
         };
-        var tool = new SetReminderTool(probe, _timeProvider, resolver);
+        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -702,7 +745,9 @@ public class SetReminderToolTests : TestKit
             ["Prompt"] = "Send status",
             ["ScheduleType"] = "once",
             ["Schedule"] = "30m",
-            ["ReportToChannel"] = "#general"
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "slack",
+            ["DeliveryAddress"] = "#general"
         }, TestContext.Current.CancellationToken);
 
         Assert.Contains("resolver returned an empty canonical target ID", result);
@@ -713,6 +758,7 @@ public class SetReminderToolTests : TestKit
     private sealed class TestResolver : IReminderTargetResolver
     {
         public required Func<string, ReminderTargetResolution> ResultFor { get; init; }
+        public string Transport { get; init; } = "slack";
         public int CallCount { get; private set; }
 
         public Task<ReminderTargetResolution> ResolveAsync(string target, CancellationToken ct = default)

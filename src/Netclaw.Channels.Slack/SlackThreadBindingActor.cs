@@ -7,6 +7,7 @@ using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -1065,6 +1066,14 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 break;
 
             case TurnCompleted completed:
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && (_postedThisTurn || _uploadedFileThisTurn))
+                {
+                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                        completed.SourceReminderId,
+                        ChannelType.Slack,
+                        _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
+                }
+
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
                 {
                     if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })

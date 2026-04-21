@@ -9,6 +9,8 @@ namespace Netclaw.Channels.Slack;
 /// </summary>
 public sealed class SlackReminderTargetResolver(ISlackTargetResolver slackResolver) : IReminderTargetResolver
 {
+    public string Transport => "slack";
+
     public async Task<ReminderTargetResolution> ResolveAsync(string target, CancellationToken ct = default)
     {
         var result = await slackResolver.ResolveAsync(target, ct);

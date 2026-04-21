@@ -4,6 +4,7 @@ using Akka.Event;
 using Microsoft.AspNetCore.SignalR;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Gateway;
@@ -23,6 +24,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     private readonly SessionPipelineHandle _handle;
     private SignalRConnectionId _currentConnectionId;
     private Actors.Channels.ChannelType _channelType = Actors.Channels.ChannelType.Tui;
+    private bool _deliveredThisTurn;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly object ReinitializeTimerKey = new();
@@ -136,23 +138,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             }
         });
 
-        Receive<OutputReceived>(msg =>
-        {
-            if (_currentConnectionId == default)
-                return;
-
-            var dto = SessionOutputDtoMapper.ToDto(msg.Output);
-            _hubContext.Clients.Client(_currentConnectionId.Value)
-                .ReceiveOutput(dto)
-                .ContinueWith(t =>
-                {
-                    if (t.IsFaulted)
-                    {
-                        _log.Debug(t.Exception,
-                            "Failed to deliver output to connection {ConnectionId}", _currentConnectionId.Value);
-                    }
-                }, TaskContinuationOptions.OnlyOnFaulted);
-        });
+        ReceiveAsync<OutputReceived>(HandleOutputReceivedAsync);
 
         Receive<OutputStreamTerminated>(msg =>
         {
@@ -248,6 +234,49 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             output => self.Tell(new OutputReceived(output)),
             (gen, cause) => self.Tell(new OutputStreamTerminated(gen, cause)),
             initCts.Token);
+    }
+
+    private async Task HandleOutputReceivedAsync(OutputReceived msg)
+    {
+        try
+        {
+            if (_currentConnectionId == default)
+            {
+                if (msg.Output is TurnCompleted)
+                    _deliveredThisTurn = false;
+                return;
+            }
+
+            var dto = SessionOutputDtoMapper.ToDto(msg.Output);
+            await _hubContext.Clients.Client(_currentConnectionId.Value).ReceiveOutput(dto);
+
+            if (msg.Output is TextOutput or ErrorOutput or FileOutput)
+            {
+                _deliveredThisTurn = true;
+                return;
+            }
+
+            if (msg.Output is TurnCompleted completed)
+            {
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
+                {
+                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                        completed.SourceReminderId,
+                        _channelType,
+                        completed.TimestampMs));
+                }
+
+                _deliveredThisTurn = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex,
+                "Failed to deliver output to connection {ConnectionId}", _currentConnectionId.Value);
+
+            if (msg.Output is TurnCompleted)
+                _deliveredThisTurn = false;
+        }
     }
 
     protected override void PostStop()

@@ -240,10 +240,10 @@ public sealed class ReminderCreatePage : ReactivePage<ReminderCreateViewModel>
     {
         _notifyInput.OnFocused();
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Step 5 of 6: Notify instructions").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode("  Explain how and when Netclaw should notify you.").WithForeground(Color.Gray))
+            .WithChild(new TextNode("  Step 5 of 6: Delivery guidance").WithForeground(Color.White).Bold())
+            .WithChild(new TextNode("  Optional guidance for what to include in the reminder result.").WithForeground(Color.Gray))
             .WithChild(new PanelNode()
-                .WithTitle("Notify Instructions")
+                .WithTitle("Delivery Guidance")
                 .WithBorder(BorderStyle.Rounded)
                 .WithBorderColor(Color.Gray)
                 .WithContent(_notifyInput)
@@ -261,7 +261,7 @@ public sealed class ReminderCreatePage : ReactivePage<ReminderCreateViewModel>
             .WithChild(new TextNode($"  Schedule: {ViewModel.Schedule}").WithForeground(Color.White))
             .WithChild(new TextNode("  Instructions:").WithForeground(Color.Gray))
             .WithChild(new TextNode($"    {TrimForPreview(ViewModel.Instructions)}").WithForeground(Color.White))
-            .WithChild(new TextNode("  Notify Instructions:").WithForeground(Color.Gray))
+            .WithChild(new TextNode("  Delivery Guidance:").WithForeground(Color.Gray))
             .WithChild(new TextNode($"    {TrimForPreview(ViewModel.NotifyInstructions)}").WithForeground(Color.White))
             .WithChild(new TextNode("").Height(1))
             .WithChild(_confirmList);

@@ -17,6 +17,7 @@ public class ReminderManagerActorTests : TestKit
 {
     private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-tests-{Guid.NewGuid():N}");
     private ReminderDefinitionStore _definitionStore = null!;
+    private TestNotificationSink _notificationSink = null!;
 
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
@@ -29,6 +30,7 @@ public class ReminderManagerActorTests : TestKit
         var paths = new NetclawPaths(_basePath);
         paths.EnsureDirectoriesExist();
         _definitionStore = new ReminderDefinitionStore(paths);
+        _notificationSink = new TestNotificationSink();
         var definitionStore = _definitionStore;
         var historyStore = new ReminderHistoryStore(paths);
 
@@ -60,7 +62,7 @@ public class ReminderManagerActorTests : TestKit
                     TimeProvider.System,
                     definitionStore,
                     historyStore,
-                    NullNotificationSink.Instance)),
+                    _notificationSink)),
                 "reminder-manager-test");
 
             registry.Register<ReminderManagerActorKey>(reminderManager);
@@ -180,7 +182,7 @@ public class ReminderManagerActorTests : TestKit
             Id = "zombie-oneshot",
             Title = "Expired one-shot",
             Instructions = "This already fired",
-            NotifyInstructions = "n/a",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
@@ -308,15 +310,19 @@ public class ReminderManagerActorTests : TestKit
             Id = "mode-b-anchor",
             Title = "Mode B Anchor",
             Instructions = "Check PR #123",
-            NotifyInstructions = "Reply in this session with the result.",
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "C0123ABC/1712000000.000001",
+                OriginChannelType = ChannelType.Slack
+            },
+            DeliveryInstructions = "Reply in this session with the result.",
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
-            SessionId = "C0123ABC/1712000000.000001",
-            OriginChannelType = ChannelType.Slack,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -362,6 +368,100 @@ public class ReminderManagerActorTests : TestKit
         // see on the next Ask to the manager if it happened.
     }
 
+    [Fact]
+    public async Task CurrentSession_delivery_required_fails_when_delivery_is_not_observed()
+    {
+        var manager = await GetManagerAsync();
+
+        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
+        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
+        try
+        {
+            var gatewayProbe = CreateTestProbe("current-session-timeout-gateway");
+            var autoAckRef = Sys.ActorOf(
+                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+                "auto-ack-current-session-timeout");
+            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+            var definition = CreateCurrentSessionDefinition("current-session-timeout", deliveryRequired: true);
+            _definitionStore.Save(definition);
+
+            manager.Tell(CreateEnvelope(definition.Id));
+
+            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.ReminderId);
+
+            await AwaitAssertAsync(async () =>
+            {
+                var health = await manager.Ask<ReminderHealthResponse>(
+                    GetReminderHealthQuery.Instance,
+                    TimeSpan.FromSeconds(3),
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal(0, health.ActiveExecutions);
+                Assert.Contains(_notificationSink.Alerts, alert =>
+                    alert.Category == AlertType.ReminderExecutionFailed
+                    && alert.Source == definition.Id
+                    && alert.Summary.Contains("delivery not observed", StringComparison.OrdinalIgnoreCase));
+            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
+        }
+    }
+
+    [Fact]
+    public async Task CurrentSession_delivery_required_succeeds_when_delivery_is_observed()
+    {
+        var manager = await GetManagerAsync();
+
+        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
+        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
+        try
+        {
+            var gatewayProbe = CreateTestProbe("current-session-observed-gateway");
+            var autoAckRef = Sys.ActorOf(
+                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+                "auto-ack-current-session-observed");
+            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+            var definition = CreateCurrentSessionDefinition("current-session-observed", deliveryRequired: true);
+            _definitionStore.Save(definition);
+
+            manager.Tell(CreateEnvelope(definition.Id));
+
+            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.ReminderId);
+
+            Sys.EventStream.Publish(new ReminderDeliveryObserved(
+                delivered.Source.ReminderId!,
+                ChannelType.Slack,
+                TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+
+            await AwaitAssertAsync(async () =>
+            {
+                var health = await manager.Ask<ReminderHealthResponse>(
+                    GetReminderHealthQuery.Instance,
+                    TimeSpan.FromSeconds(3),
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal(0, health.FailedCount);
+                Assert.DoesNotContain(_notificationSink.Alerts, alert =>
+                    alert.Category == AlertType.ReminderExecutionFailed
+                    && alert.Source == definition.Id);
+            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
+        }
+    }
+
     /// <summary>
     /// Test-only gateway stub: handles <see cref="DeliverTrustedSessionTurn"/>
     /// by forwarding to a probe for assertions and immediately replying
@@ -391,7 +491,8 @@ public class ReminderManagerActorTests : TestKit
             Id = id.Value,
             Title = name,
             Instructions = instructions,
-            NotifyInstructions = "Reply in-thread with concise status.",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },
+            DeliveryInstructions = "Reply in-thread with concise status.",
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.OneShot,
@@ -402,5 +503,66 @@ public class ReminderManagerActorTests : TestKit
             CreatedAt = now,
             UpdatedAt = now
         };
+    }
+
+    private static ReminderDefinition CreateCurrentSessionDefinition(string id, bool deliveryRequired)
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        return new ReminderDefinition
+        {
+            Id = id,
+            Title = id,
+            Instructions = "Check status",
+            Delivery = new ReminderDelivery
+            {
+                Kind = DeliveryKind.CurrentSession,
+                SessionId = "C0123ABC/1712000000.000001",
+                OriginChannelType = ChannelType.Slack
+            },
+            DeliveryRequired = deliveryRequired,
+            DeliveryInstructions = "Reply in this session with the result.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = now.AddMinutes(5)
+            },
+            Audience = TrustAudience.Team,
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+    }
+
+    private static ReminderEnvelope<ReminderPayload> CreateEnvelope(string reminderId)
+    {
+        var now = TimeProvider.System.GetUtcNow();
+        return new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(reminderId),
+            dueTimeUtc: now,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = new ReminderId(reminderId) });
+    }
+
+    private sealed class TestNotificationSink : IOperationalNotificationSink
+    {
+        private readonly object _sync = new();
+        private readonly List<OperationalAlert> _alerts = [];
+
+        public IReadOnlyList<OperationalAlert> Alerts
+        {
+            get
+            {
+                lock (_sync)
+                    return _alerts.ToArray();
+            }
+        }
+
+        public void Emit(OperationalAlert alert)
+        {
+            lock (_sync)
+                _alerts.Add(alert);
+        }
     }
 }

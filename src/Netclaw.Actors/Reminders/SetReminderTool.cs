@@ -18,7 +18,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 {
     private readonly IActorRef _reminderManager;
     private readonly TimeProvider _timeProvider;
-    private readonly IReminderTargetResolver? _targetResolver;
+    private readonly IReadOnlyDictionary<string, IReminderTargetResolver> _resolversByTransport;
 
     public record Params(
         [property: Description("Stable identifier for this reminder (kebab-case slug, e.g. 'daily-standup'). If a reminder with this ID exists it will be updated.")]
@@ -31,23 +31,37 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string ScheduleType,
         [property: Description("Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression.")]
         string Schedule,
-        [property: Description("Optional notification target. Accepts raw channel/user IDs, '#channel-name', or '@username'. Omit for current-session targeting.")]
-        string? ReportToChannel = null,
-        [property: Description("Optional notify instructions describing how Netclaw should report results.")]
-        string? NotifyInstructions = null,
-        [property: Description("Notification policy: 'required' (default, fail if no notification sent) or 'conditional' (OK to skip notification if nothing actionable).")]
-        string? NotifyPolicy = null,
+        [property: Description("How to deliver results: 'current_session' (reply in this conversation), 'channel' (post to a specific target), or 'none' (silent execution). Required unless `delivery.kind` is provided.")]
+        string? DeliveryKind = null,
+        [property: Description("Transport for channel delivery (e.g., 'slack'). Required when delivery_kind='channel'.")]
+        string? DeliveryTransport = null,
+        [property: Description("Target for channel delivery (e.g., '#general', '@user', channel ID). Required when delivery_kind='channel'.")]
+        string? DeliveryAddress = null,
+        [property: Description("Fail execution if delivery doesn't succeed. Default true. Set false for audit/cleanup tasks.")]
+        bool DeliveryRequired = true,
+        [property: Description("Optional guidance for what to include in the delivery to the user. Content guidance only.")]
+        string? DeliveryInstructions = null,
         [property: Description("Trust audience for this reminder's execution: 'personal' (all tools including web_search, shell), 'team' (restricted tools), or 'public' (minimal tools). Omit to inherit the creating session/channel audience.")]
         string? Audience = null);
 
     public SetReminderTool(
         IActorRef reminderManager,
         TimeProvider timeProvider,
-        IReminderTargetResolver? targetResolver = null)
+        IEnumerable<IReminderTargetResolver>? targetResolvers = null)
     {
         _reminderManager = reminderManager;
         _timeProvider = timeProvider;
-        _targetResolver = targetResolver;
+
+        // Build transport -> resolver dictionary, detecting duplicates
+        var resolvers = new Dictionary<string, IReminderTargetResolver>(StringComparer.OrdinalIgnoreCase);
+        foreach (var resolver in targetResolvers ?? [])
+        {
+            if (!resolvers.TryAdd(resolver.Transport, resolver))
+                throw new InvalidOperationException(
+                    $"Duplicate IReminderTargetResolver registration for transport '{resolver.Transport}'. " +
+                    "Each transport may only have one resolver.");
+        }
+        _resolversByTransport = resolvers;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -63,6 +77,16 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             return "Error: 'prompt' is required.";
         if (string.IsNullOrWhiteSpace(args.Schedule))
             return "Error: 'schedule' is required.";
+        var rawDeliveryKind = args.DeliveryKind;
+        var rawDeliveryTransport = args.DeliveryTransport;
+        var rawDeliveryAddress = args.DeliveryAddress;
+
+        if (string.IsNullOrWhiteSpace(rawDeliveryKind))
+            return "Error: 'delivery_kind' is required. Use 'current_session', 'channel', or 'none'.";
+
+        // Parse delivery kind
+        if (!Enum.TryParse<DeliveryKind>(rawDeliveryKind.Replace("_", "", StringComparison.Ordinal), ignoreCase: true, out var deliveryKind))
+            return $"Error: Invalid delivery_kind '{rawDeliveryKind}'. Use 'current_session', 'channel', or 'none'.";
 
         // Normalize ID at the tool boundary: lowercase, kebab-case, length cap
         var normalizedId = ReminderIdGenerator.Normalize(args.Id);
@@ -78,69 +102,94 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         var id = new ReminderId(normalizedId);
         var now = _timeProvider.GetUtcNow();
 
-        string? sessionId = null;
-        string? reportToChannel = args.ReportToChannel;
-        string? reportToThreadTs = null;
-        ChannelType? originChannelType = null;
-        var resolvedTargetKind = ReminderTargetKind.Unknown;
-
-        if (!string.IsNullOrWhiteSpace(reportToChannel))
+        // Build delivery struct based on kind
+        ReminderDelivery delivery;
+        switch (deliveryKind)
         {
-            // Mode A: explicit notification target. Resolved and persisted
-            // as a canonical identifier.
-            if (_targetResolver is null)
-                return $"Error: No notification channel transport is configured; cannot target '{reportToChannel}'.";
-
-            var resolution = await _targetResolver.ResolveAsync(reportToChannel, ct);
-            if (!resolution.Success)
+            case DeliveryKind.CurrentSession:
             {
-                var detail = resolution.ErrorMessage ?? "unresolvable target";
-                return $"Error: Could not resolve reportToChannel '{reportToChannel}': {detail}. Use #channel, @user, or a valid channel ID.";
-            }
+                // Reject if transport or address supplied
+                if (!string.IsNullOrWhiteSpace(rawDeliveryTransport) || !string.IsNullOrWhiteSpace(rawDeliveryAddress))
+                    return "Error: delivery_transport and delivery_address are invalid for current_session delivery. Omit them.";
 
-            if (string.IsNullOrWhiteSpace(resolution.ResolvedId))
-                return $"Error: Could not resolve reportToChannel '{reportToChannel}': resolver returned an empty canonical target ID.";
+                // Require addressable session context
+                if (string.IsNullOrWhiteSpace(context.SessionId))
+                    return "Error: current_session delivery requires an active session context.";
 
-            reportToChannel = resolution.ResolvedId;
-            resolvedTargetKind = resolution.Kind;
-        }
-        else if (context.SessionId is not null)
-        {
-            // Mode B: session check-back. Persist the originating session
-            // and its channel type so the reminder dispatcher can route a
-            // DeliverTrustedSessionTurn through the right gateway when it
-            // fires. Mode B is only supported for channels with a trusted
-            // delivery gateway — reject anything else loudly.
-            if (!ChannelTypeExtensions.TryFromWireValue(context.ChannelType, out var parsedChannelType))
-            {
-                return $"Error: Mode B reminders require an origin channel with a gateway (Slack, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
-            }
+                if (!ChannelTypeExtensions.TryFromWireValue(context.ChannelType, out var parsedChannelType))
+                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Tui, SignalR). Current channel type: {context.ChannelType ?? "unknown"}.";
 
-            if (parsedChannelType is not (ChannelType.Slack or ChannelType.Tui or ChannelType.SignalR))
-            {
-                return $"Error: Mode B reminders require an origin channel with a gateway (Slack, Tui, SignalR). Current channel type: {parsedChannelType}.";
-            }
+                if (parsedChannelType is not (ChannelType.Slack or ChannelType.Tui or ChannelType.SignalR))
+                    return $"Error: current_session delivery requires a channel with a gateway (Slack, Tui, SignalR). Current channel type: {parsedChannelType}.";
 
-            sessionId = context.SessionId;
-            originChannelType = parsedChannelType;
-        }
-
-        var notifyInstructions = args.NotifyInstructions;
-        if (string.IsNullOrWhiteSpace(notifyInstructions))
-        {
-            notifyInstructions = reportToChannel is null
-                ? "Reply in this session with the result."
-                : resolvedTargetKind switch
+                delivery = new ReminderDelivery
                 {
-                    ReminderTargetKind.User => $"Send a direct message to user {reportToChannel} with your findings, or lack thereof.",
-                    ReminderTargetKind.Channel => $"Post the result to channel {reportToChannel}.",
-                    _ => $"Send the result to target {reportToChannel}."
+                    Kind = DeliveryKind.CurrentSession,
+                    SessionId = context.SessionId,
+                    OriginChannelType = parsedChannelType
                 };
-        }
+                break;
+            }
 
-        var notifyPolicy = Enum.TryParse<NotificationPolicy>(args.NotifyPolicy, ignoreCase: true, out var parsed)
-            ? parsed
-            : NotificationPolicy.Required;
+            case DeliveryKind.Channel:
+            {
+                // Require both transport and address
+                if (string.IsNullOrWhiteSpace(rawDeliveryTransport))
+                    return "Error: delivery_transport is required for channel delivery (e.g., 'slack').";
+                if (string.IsNullOrWhiteSpace(rawDeliveryAddress))
+                    return "Error: delivery_address is required for channel delivery (e.g., '#general', '@user').";
+
+                var transport = rawDeliveryTransport.Trim().ToLowerInvariant();
+
+                // Reject session-only transports (SignalR/TUI don't have channel notification tools)
+                if (transport == ChannelType.SignalR.ToWireValue() || transport == ChannelType.Tui.ToWireValue())
+                    return $"Error: Transport '{transport}' does not support channel delivery. Use current_session instead.";
+
+                // Look up resolver by transport
+                if (!_resolversByTransport.TryGetValue(transport, out var resolver))
+                {
+                    var available = _resolversByTransport.Count > 0
+                        ? string.Join(", ", _resolversByTransport.Keys)
+                        : "none";
+                    return $"Error: Unknown transport '{transport}'. Available transports: [{available}].";
+                }
+
+                // Resolve address to canonical ID
+                var resolution = await resolver.ResolveAsync(rawDeliveryAddress, ct);
+                if (!resolution.Success)
+                {
+                    var detail = resolution.ErrorMessage ?? "unresolvable target";
+                    return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': {detail}. Use #channel, @user, or a valid channel ID.";
+                }
+
+                if (string.IsNullOrWhiteSpace(resolution.ResolvedId))
+                    return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': resolver returned an empty canonical target ID.";
+
+                delivery = new ReminderDelivery
+                {
+                    Kind = DeliveryKind.Channel,
+                    Transport = transport,
+                    Address = resolution.ResolvedId
+                };
+                break;
+            }
+
+            case DeliveryKind.None:
+            {
+                // Reject if transport or address supplied
+                if (!string.IsNullOrWhiteSpace(rawDeliveryTransport) || !string.IsNullOrWhiteSpace(rawDeliveryAddress))
+                    return "Error: delivery_transport and delivery_address are invalid for none delivery. Omit them.";
+
+                delivery = new ReminderDelivery
+                {
+                    Kind = DeliveryKind.None
+                };
+                break;
+            }
+
+            default:
+                return $"Error: Unhandled delivery kind '{deliveryKind}'.";
+        }
 
         TrustAudience? audience = null;
         if (!string.IsNullOrWhiteSpace(args.Audience))
@@ -172,15 +221,12 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             Title = args.Name,
             Schedule = schedule,
             Instructions = args.Prompt,
-            NotifyInstructions = notifyInstructions,
-            NotifyPolicy = notifyPolicy,
+            Delivery = delivery,
+            DeliveryRequired = args.DeliveryRequired,
+            DeliveryInstructions = args.DeliveryInstructions,
             Audience = audience,
             Boundary = boundary,
             Enabled = true,
-            SessionId = sessionId,
-            OriginChannelType = originChannelType,
-            ReportToChannel = reportToChannel,
-            ReportToThreadTs = reportToThreadTs,
             CreatedBy = "llm-tool",
             CreatedAt = now,
             UpdatedAt = now
@@ -212,7 +258,15 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             _ => $"Next execution: {nextFireStr}."
         };
 
-        return $"Reminder '{args.Name}' scheduled. {scheduleDesc} ID: {id.Value}";
+        var deliveryDesc = deliveryKind switch
+        {
+            DeliveryKind.CurrentSession => "Delivery: reply to this session.",
+            DeliveryKind.Channel => $"Delivery: post to {delivery.Transport} target {delivery.Address}.",
+            DeliveryKind.None => "Delivery: none (silent execution).",
+            _ => ""
+        };
+
+        return $"Reminder '{args.Name}' scheduled. {scheduleDesc} {deliveryDesc} ID: {id.Value}";
     }
 
     private static string FormatInterval(TimeSpan interval) => interval.TotalHours switch

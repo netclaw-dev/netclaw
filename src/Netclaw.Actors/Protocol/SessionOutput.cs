@@ -158,6 +158,12 @@ public sealed record TurnCompleted : SessionOutput
     /// How the turn ended. Defaults to <see cref="TurnOutcome.Completed"/> for backward compatibility.
     /// </summary>
     public TurnOutcome Outcome { get; init; } = TurnOutcome.Completed;
+
+    /// <summary>
+    /// Reminder delivery key (<c>{reminderId}:{fireTimestampMs}</c>) for reminder-sourced turns.
+    /// Null for non-reminder turns.
+    /// </summary>
+    public string? SourceReminderId { get; init; }
 }
 
 /// <summary>
