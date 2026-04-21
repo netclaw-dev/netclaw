@@ -139,13 +139,13 @@ public static class NetclawAkkaHostingExtensions
     }
 
     /// <summary>
-    /// Configures protobuf-net serialization for Netclaw protocol types and disables
-    /// the System.Object JSON fallback to fail loudly on unregistered types.
+    /// Configures protobuf-net serialization for Netclaw protocol types.
+    /// Registered types use efficient protobuf encoding; our serializer throws
+    /// for unregistered manifests to fail loudly on schema drift.
     /// </summary>
     public static AkkaConfigurationBuilder WithNetclawSerialization(
         this AkkaConfigurationBuilder builder)
     {
-        // All types that should use our protobuf serializer
         var boundTypes = new[]
         {
             typeof(SessionId),
@@ -166,13 +166,9 @@ public static class NetclawAkkaHostingExtensions
             typeof(ReminderPayload),
         };
 
-        return builder
-            .WithCustomSerializer(
-                serializerIdentifier: "netclaw-protobuf",
-                boundTypes: boundTypes,
-                serializerFactory: system => new NetclawProtobufSerializer(system))
-            .AddHocon(
-                @"akka.actor.serialization-bindings { ""System.Object"" = null }",
-                HoconAddMode.Prepend);
+        return builder.WithCustomSerializer(
+            serializerIdentifier: "netclaw-protobuf",
+            boundTypes: boundTypes,
+            serializerFactory: system => new NetclawProtobufSerializer(system));
     }
 }
