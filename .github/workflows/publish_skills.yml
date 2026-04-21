@@ -38,6 +38,9 @@ jobs:
             --base-url https://skills.netclaw.dev \
             --existing-manifest ./feeds/skills/.system/existing-manifest.json
 
+      - name: Install Wrangler
+        run: npm install --global wrangler@3.90.0 --include=optional
+
       - name: Upload skill files to R2
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -52,23 +55,22 @@ jobs:
           while IFS=' ' read -r local_path r2_key; do
             [ -z "$local_path" ] && continue
             echo "Uploading $r2_key"
-            npx wrangler r2 object put "netclaw-skills/$r2_key" \
+            wrangler r2 object put "netclaw-skills/$r2_key" \
               --file="$local_path" \
               --content-type=text/markdown \
               --remote
           done < "$UPLOAD_LIST"
 
       - name: Deploy manifest to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Pin --branch=dev so release-tag builds (detached HEAD) still
-          # deploy to the production branch instead of a preview alias.
-          # Without this, wrangler infers the branch name from git state
-          # and tag builds land on head.netclaw-feeds.pages.dev while
-          # feeds.netclaw.dev stays frozen on the last dev-branch deploy.
-          command: pages deploy feeds/ --project-name=netclaw-feeds --branch=dev
+        # Pin --branch=dev so release-tag builds (detached HEAD) still
+        # deploy to the production branch instead of a preview alias.
+        # Without this, wrangler infers the branch name from git state
+        # and tag builds land on head.netclaw-feeds.pages.dev while
+        # feeds.netclaw.dev stays frozen on the last dev-branch deploy.
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: wrangler pages deploy feeds/ --project-name=netclaw-feeds --branch=dev
 
       - name: Validate R2 uploads
         run: |

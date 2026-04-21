@@ -175,28 +175,28 @@ jobs:
         release-tag: ${{ github.ref_name }}
         files: 'archives/*'
 
-      # Upload each archive individually
+    - name: Install Wrangler
+      run: npm install --global wrangler@3.90.0 --include=optional
+
     - name: Upload CLI archive to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/${{ github.ref_name }}/netclaw-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
-          --file=./archives/netclaw-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
-          --content-type=application/octet-stream
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/${{ github.ref_name }}/netclaw-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+        --file=./archives/netclaw-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+        --content-type=application/octet-stream
 
     - name: Upload Daemon archive to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/${{ github.ref_name }}/netclawd-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
-          --file=./archives/netclawd-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
-          --content-type=application/octet-stream
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/${{ github.ref_name }}/netclawd-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+        --file=./archives/netclawd-${{ github.ref_name }}-${{ matrix.rid }}.${{ matrix.archive_ext }}
+        --content-type=application/octet-stream
 
     - name: Upload checksum artifacts
       uses: actions/upload-artifact@v7
@@ -381,60 +381,58 @@ jobs:
         cp scripts/install.sh ./feeds/releases/install.sh
         cp scripts/install.ps1 ./feeds/releases/install.ps1
 
+    - name: Install Wrangler
+      run: npm install --global wrangler@3.90.0 --include=optional
+
     - name: Upload release manifest to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/manifest.json
-          --file=./feeds/releases/manifest.json
-          --content-type=application/json
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/manifest.json
+        --file=./feeds/releases/manifest.json
+        --content-type=application/json
 
     - name: Upload release manifest signature to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/manifest.json.sig
-          --file=./feeds/releases/manifest.json.sig
-          --content-type=text/plain
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/manifest.json.sig
+        --file=./feeds/releases/manifest.json.sig
+        --content-type=text/plain
 
     - name: Upload manifest public key to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/manifest.pub
-          --file=./feeds/releases/manifest.pub
-          --content-type=text/plain
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/manifest.pub
+        --file=./feeds/releases/manifest.pub
+        --content-type=text/plain
 
     - name: Upload Linux install script to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/install.sh
-          --file=./feeds/releases/install.sh
-          --content-type=text/x-shellscript
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/install.sh
+        --file=./feeds/releases/install.sh
+        --content-type=text/x-shellscript
 
     - name: Upload Windows install script to R2
-      uses: cloudflare/wrangler-action@v3
-      with:
-        apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        command: >
-          r2 object put
-          netclaw-releases/install.ps1
-          --file=./feeds/releases/install.ps1
-          --content-type=text/plain
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      run: >
+        wrangler r2 object put
+        netclaw-releases/install.ps1
+        --file=./feeds/releases/install.ps1
+        --content-type=text/plain
 
     - name: Cleanup signing key
       if: always()
