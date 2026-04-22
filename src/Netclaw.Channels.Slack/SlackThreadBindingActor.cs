@@ -248,7 +248,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
             if (!string.IsNullOrWhiteSpace(message.Text))
             {
-                var classification = await ClassifyAsync(message.Text, "slack-live", inboundCts.Token);
+                var classification = await PromptClassifier.ClassifyAsync(
+                    _promptInjectionDetector, message.Text, "slack-live", _log, inboundCts.Token);
                 switch (classification.Outcome)
                 {
                     case ClassificationOutcome.Block:
@@ -842,32 +843,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             .Select(t => t.Text)
             .Where(t => !string.IsNullOrWhiteSpace(t)));
 
-        return ClassifyAsync(text, "slack-backfill", cancellationToken);
-    }
-
-    private async Task<Classification> ClassifyAsync(string? text, string sourceContext, CancellationToken cancellationToken)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return new Classification(ClassificationOutcome.Allow, null);
-
-        PromptInjectionResult detection;
-        try
-        {
-            detection = await _promptInjectionDetector.DetectAsync(text, sourceContext, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Prompt injection detector failed for source={Source}", sourceContext);
-            return new Classification(ClassificationOutcome.DetectorUnavailable, ex.Message);
-        }
-
-        if (detection.Risk != PromptInjectionRisk.High)
-            return new Classification(ClassificationOutcome.Allow, null);
-
-        var reason = string.IsNullOrWhiteSpace(detection.Message)
-            ? "High-risk prompt injection pattern detected"
-            : detection.Message;
-        return new Classification(ClassificationOutcome.Block, reason);
+        return PromptClassifier.ClassifyAsync(
+            _promptInjectionDetector, text, "slack-backfill", _log, cancellationToken);
     }
 
     private void AdvanceCursor(SlackEventTs candidateTs)
@@ -904,15 +881,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
             DeleteMessages(LastSequenceNr - 1);
     }
-
-    private enum ClassificationOutcome
-    {
-        Allow,
-        Block,
-        DetectorUnavailable
-    }
-
-    private readonly record struct Classification(ClassificationOutcome Outcome, string? Reason);
 
     private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
 

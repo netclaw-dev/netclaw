@@ -612,14 +612,6 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             IsDirectMessage: false);
     }
 
-    private sealed class ForwardActor : ReceiveActor
-    {
-        public ForwardActor(IActorRef target)
-        {
-            ReceiveAny(msg => target.Tell(msg));
-        }
-    }
-
     /// <summary>
     /// Actor that simulates SlackThreadBindingActor's proactive ack behavior.
     /// </summary>

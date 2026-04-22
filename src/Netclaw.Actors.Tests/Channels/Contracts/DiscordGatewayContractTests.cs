@@ -1,0 +1,73 @@
+using Akka.Actor;
+using Akka.Hosting;
+using Netclaw.Actors.Channels;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Channels.Discord;
+using Xunit;
+
+namespace Netclaw.Actors.Tests.Channels.Contracts;
+
+public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
+    : GatewayRoutingContractTests(output)
+{
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
+    {
+    }
+
+    protected override IActorRef CreateGateway(ChannelOptionsBuilder options)
+    {
+        var discordOptions = new DiscordChannelOptions
+        {
+            AllowedChannelIds = options.AllowedChannelIds,
+            AllowedUserIds = options.AllowedUserIds,
+            AllowDirectMessages = options.AllowDirectMessages,
+            ChannelAudiences = options.ChannelAudiences
+        };
+
+        var defaultChannelId = options.DefaultChannelId is not null
+            ? new DiscordChannelId(options.DefaultChannelId)
+            : (DiscordChannelId?)null;
+
+        var deps = new DiscordGatewayDependencies(
+            Pipeline: new FailingSessionPipeline(new InvalidOperationException("not used")),
+            IngressGate: null,
+            TimeProvider: TimeProvider.System,
+            Options: discordOptions,
+            DefaultChannelId: defaultChannelId,
+            ReplyClient: new RecordingDiscordReplyClient(),
+            SessionPropsFactory: (sid, chId, replyId, threadId, rootId, d) =>
+                Props.Create(() => new ForwardActor(TestActor)));
+
+        return Sys.ActorOf(DiscordGatewayActor.CreateProps(deps));
+    }
+
+    protected override object CreateAllowedMessage(
+        string channelId, string threadId, string userId, string text, string eventId)
+        => new DiscordGatewayMessage(
+            EventId: new DiscordEventId(eventId),
+            ChannelId: new DiscordChannelId(channelId),
+            ReplyChannelId: new DiscordReplyChannelId(threadId),
+            MessageId: new DiscordMessageId("msg-1"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId(threadId),
+            RootMessageId: null,
+            SenderId: new DiscordUserId(userId),
+            IsBotMessage: false,
+            IsDirectMessage: false,
+            Text: text,
+            ReceivedAt: DateTimeOffset.UtcNow);
+
+    protected override object CreateDeniedMessage(
+        string channelId, string userId, string eventId)
+        => new DiscordGatewayMessage(
+            EventId: new DiscordEventId(eventId),
+            ChannelId: new DiscordChannelId(channelId),
+            ReplyChannelId: new DiscordReplyChannelId("reply-1"),
+            MessageId: new DiscordMessageId("msg-1"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-1"),
+            RootMessageId: null,
+            SenderId: new DiscordUserId(userId),
+            IsBotMessage: false,
+            IsDirectMessage: false,
+            Text: "denied",
+            ReceivedAt: DateTimeOffset.UtcNow);
+}

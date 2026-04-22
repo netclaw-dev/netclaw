@@ -209,7 +209,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             return;
         }
 
-        var classification = await ClassifyAsync(message.Text, "discord-live");
+        var classification = await PromptClassifier.ClassifyAsync(
+            _promptInjectionDetector, message.Text, "discord-live", _log);
         switch (classification.Outcome)
         {
             case ClassificationOutcome.Block:
@@ -441,35 +442,6 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
         return chunks;
     }
-
-    private async Task<Classification> ClassifyAsync(string? text, string sourceContext)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-            return new Classification(ClassificationOutcome.Allow, null);
-
-        PromptInjectionResult detection;
-        try
-        {
-            detection = await _promptInjectionDetector.DetectAsync(text, sourceContext);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Prompt injection detector failed for source={Source}", sourceContext);
-            return new Classification(ClassificationOutcome.DetectorUnavailable, ex.Message);
-        }
-
-        if (detection.Risk != PromptInjectionRisk.High)
-            return new Classification(ClassificationOutcome.Allow, null);
-
-        var reason = string.IsNullOrWhiteSpace(detection.Message)
-            ? "High-risk prompt injection pattern detected"
-            : detection.Message;
-        return new Classification(ClassificationOutcome.Block, reason);
-    }
-
-    private enum ClassificationOutcome { Allow, Block, DetectorUnavailable }
-
-    private readonly record struct Classification(ClassificationOutcome Outcome, string? Reason);
 
     private sealed record InitializePipeline
     {

@@ -1,0 +1,10 @@
+namespace Netclaw.Actors.Tests.Channels.TestHelpers;
+
+public sealed record ChannelOptionsBuilder
+{
+    public bool AllowDirectMessages { get; init; }
+    public string[] AllowedChannelIds { get; init; } = [];
+    public string[] AllowedUserIds { get; init; } = [];
+    public Dictionary<string, string> ChannelAudiences { get; init; } = new();
+    public string? DefaultChannelId { get; init; }
+}

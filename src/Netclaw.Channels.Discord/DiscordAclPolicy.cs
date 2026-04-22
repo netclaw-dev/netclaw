@@ -86,11 +86,6 @@ public static class DiscordAclPolicy
         return new AudienceResult(audience);
     }
 
-    internal readonly record struct AudienceResult(TrustAudience Audience, string? Error)
-    {
-        public AudienceResult(TrustAudience audience) : this(audience, null) { }
-        public AudienceResult(string error) : this(default, error) { }
-    }
 }
 
 public sealed record DiscordAclDecision(
@@ -98,7 +93,7 @@ public sealed record DiscordAclDecision(
     string? DenyReason,
     TrustAudience Audience,
     PrincipalClassification Principal,
-    SourceProvenance Provenance)
+    SourceProvenance Provenance) : IAclDecision
 {
     public static DiscordAclDecision Deny(string reason) => new(
         false,

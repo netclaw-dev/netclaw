@@ -104,12 +104,6 @@ public static class SlackAclPolicy
         return new AudienceResult(audience);
     }
 
-    internal readonly record struct AudienceResult(TrustAudience Audience, string? Error)
-    {
-        public AudienceResult(TrustAudience audience) : this(audience, null) { }
-        public AudienceResult(string error) : this(default, error) { }
-    }
-
     /// <summary>
     /// Returns true if the user is permitted. An empty allow-list means all users are allowed.
     /// </summary>
@@ -127,7 +121,7 @@ public sealed record SlackAclDecision(
     string? DenyReason,
     TrustAudience Audience,
     PrincipalClassification Principal,
-    SourceProvenance Provenance)
+    SourceProvenance Provenance) : IAclDecision
 {
     public static SlackAclDecision Deny(string reason) => new(
         false,

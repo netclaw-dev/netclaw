@@ -6,6 +6,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Discord;
 using Xunit;
 
@@ -293,11 +294,4 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             ReceivedAt: TimeProvider.System.GetUtcNow());
     }
 
-    private sealed class ForwardActor : ReceiveActor
-    {
-        public ForwardActor(IActorRef target)
-        {
-            ReceiveAny(msg => target.Tell(msg));
-        }
-    }
 }

@@ -296,14 +296,6 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             Files: files);
     }
 
-    private sealed class ForwardActor : ReceiveActor
-    {
-        public ForwardActor(IActorRef target)
-        {
-            ReceiveAny(msg => target.Tell(msg));
-        }
-    }
-
     // ── Mode B reminder re-entry (DeliverTrustedSessionTurn) ──
 
     [Fact]
