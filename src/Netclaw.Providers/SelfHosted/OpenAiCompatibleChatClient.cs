@@ -97,7 +97,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                 // content-free keepalive so the caller knows the stream is alive.
                 if (suppressThisUpdate)
                 {
-                    yield return new ChatResponseUpdate { Role = ChatRole.Assistant };
+                    yield return KeepaliveUpdate;
                     continue;
                 }
 
@@ -715,6 +715,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
         public StringBuilder Arguments { get; } = new();
     }
+
+    private static readonly ChatResponseUpdate KeepaliveUpdate = new() { Role = ChatRole.Assistant };
 
     internal sealed class ToolCallTextFilter
     {

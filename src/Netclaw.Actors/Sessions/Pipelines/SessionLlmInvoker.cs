@@ -12,6 +12,7 @@ namespace Netclaw.Actors.Sessions.Pipelines;
 /// </summary>
 internal static class SessionLlmInvoker
 {
+    private static readonly TextContent EmptyTextContent = new(string.Empty);
     public static async Task InvokeAsync(
         IChatClient client,
         List<AiChatMessage> messages,
@@ -130,14 +131,12 @@ internal static class SessionLlmInvoker
                 }
             }
 
-            // Stream is alive but no content was dispatched (text suppressed by
-            // the tool call filter, empty keepalive, or 1-delta hold). Signal
-            // activity so the watchdog timer resets.
+            // No content dispatched — send keepalive to refresh the idle timeout watchdog.
             if (!dispatched)
             {
                 self.Tell(new LlmResponseDeltaReceived
                 {
-                    Content = new TextContent(string.Empty),
+                    Content = EmptyTextContent,
                     CallId = callId
                 });
             }
