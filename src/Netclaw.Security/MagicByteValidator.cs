@@ -54,6 +54,16 @@ public static class MagicByteValidator
         BuildRules().ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Normalization rules for known MIME type mismatches. Some providers
+    /// (notably Slack) report incorrect MIME types for certain file
+    /// extensions — e.g., <c>.md</c> as <c>text/plain</c> instead of
+    /// <c>text/markdown</c>. This table maps (extension, incorrect-MIME)
+    /// pairs to the canonical MIME type.
+    /// </summary>
+    private static readonly FrozenDictionary<(string Extension, string DeclaredMime), string> MimeNormalizationRules =
+        BuildMimeNormalizationRules().ToFrozenDictionary(new ExtensionMimePairComparer());
+
+    /// <summary>
     /// Validates file content against its declared MIME type and filename.
     /// Rejects empty content, oversized content, executables, unknown or
     /// disallowed MIME types, filenames whose extension doesn't match the
@@ -91,20 +101,6 @@ public static class MagicByteValidator
                 detectedType is not null ? new MimeType(detectedType) : null);
         }
 
-        if (!RulesByMime.TryGetValue(declaredMimeType, out var rule))
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.UnrecognizedFileType,
-                $"MIME type '{declaredMimeType}' is not supported by the content scanner");
-        }
-
-        if (!effectivePolicy.AllowedMimeTypes.Contains(declaredMimeType))
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.UnrecognizedFileType,
-                $"MIME type '{declaredMimeType}' is not allowed by policy");
-        }
-
         var extension = Path.GetExtension(filename);
         if (string.IsNullOrEmpty(extension))
         {
@@ -113,11 +109,28 @@ public static class MagicByteValidator
                 "File has no extension");
         }
 
+        // Normalize known MIME type mismatches (e.g., Slack reports .md as text/plain)
+        var effectiveMimeType = NormalizeMimeType(declaredMimeType, extension);
+
+        if (!RulesByMime.TryGetValue(effectiveMimeType, out var rule))
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.UnrecognizedFileType,
+                $"MIME type '{effectiveMimeType}' is not supported by the content scanner");
+        }
+
+        if (!effectivePolicy.AllowedMimeTypes.Contains(effectiveMimeType))
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.UnrecognizedFileType,
+                $"MIME type '{effectiveMimeType}' is not allowed by policy");
+        }
+
         if (!rule.Extensions.Contains(extension))
         {
             return ContentScanResult.Rejected(
                 ContentScanError.MimeTypeMismatch,
-                $"Extension '{extension}' does not match declared type '{declaredMimeType}'");
+                $"Extension '{extension}' does not match declared type '{effectiveMimeType}'");
         }
 
         if (!rule.Matches(content))
@@ -125,11 +138,11 @@ public static class MagicByteValidator
             var detectedMimeType = DetectMimeType(content);
             return ContentScanResult.Rejected(
                 ContentScanError.MimeTypeMismatch,
-                $"Content is not a valid {declaredMimeType} file",
+                $"Content is not a valid {effectiveMimeType} file",
                 detectedMimeType is not null ? new MimeType(detectedMimeType) : null);
         }
 
-        return ContentScanResult.Allowed(new MimeType(declaredMimeType));
+        return ContentScanResult.Allowed(new MimeType(effectiveMimeType));
     }
 
     /// <summary>
@@ -252,6 +265,43 @@ public static class MagicByteValidator
 
     private static FrozenSet<string> Exts(params string[] extensions) =>
         extensions.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    private static Dictionary<(string Extension, string DeclaredMime), string> BuildMimeNormalizationRules()
+    {
+        var rules = new Dictionary<(string, string), string>(new ExtensionMimePairComparer());
+
+        // Slack reports .md files as text/plain instead of text/markdown
+        rules[(".md", "text/plain")] = "text/markdown";
+        rules[(".markdown", "text/plain")] = "text/markdown";
+
+        // JSON/YAML/CSV/XML sometimes reported as text/plain by various providers
+        rules[(".json", "text/plain")] = "application/json";
+        rules[(".yaml", "text/plain")] = "application/yaml";
+        rules[(".yml", "text/plain")] = "application/yaml";
+        rules[(".csv", "text/plain")] = "text/csv";
+        rules[(".xml", "text/plain")] = "text/xml";
+
+        return rules;
+    }
+
+    private static string NormalizeMimeType(string declaredMimeType, string extension)
+    {
+        if (MimeNormalizationRules.TryGetValue((extension, declaredMimeType), out var correctedMime))
+            return correctedMime;
+        return declaredMimeType;
+    }
+
+    private sealed class ExtensionMimePairComparer : IEqualityComparer<(string, string)>
+    {
+        public bool Equals((string, string) x, (string, string) y) =>
+            StringComparer.OrdinalIgnoreCase.Equals(x.Item1, y.Item1) &&
+            StringComparer.OrdinalIgnoreCase.Equals(x.Item2, y.Item2);
+
+        public int GetHashCode((string, string) obj) =>
+            HashCode.Combine(
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Item1),
+                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Item2));
+    }
 
     /// <summary>
     /// Internal helper exposed for <see cref="ContentPolicy"/> to seed its

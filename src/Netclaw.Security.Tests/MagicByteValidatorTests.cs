@@ -258,6 +258,62 @@ public sealed class MagicByteValidatorTests
         Assert.Equal(ContentScanError.ExecutableContent, result.Error);
     }
 
+    // ── MIME type normalization (provider mismatch correction) ────────────
+
+    [Theory]
+    [InlineData("readme.md")]
+    [InlineData("notes.markdown")]
+    public void Validate_MarkdownDeclaredAsTextPlain_NormalizesAndAllows(string filename)
+    {
+        // Slack reports .md files as text/plain — normalization corrects this
+        var result = MagicByteValidator.Validate(PlainTextBytes, "text/plain", filename);
+
+        Assert.True(result.IsAllowed);
+    }
+
+    [Theory]
+    [InlineData("data.json")]
+    [InlineData("config.yaml")]
+    [InlineData("config.yml")]
+    [InlineData("data.csv")]
+    [InlineData("doc.xml")]
+    public void Validate_StructuredTextDeclaredAsTextPlain_NormalizesAndAllows(string filename)
+    {
+        // Various providers report structured text as text/plain
+        var result = MagicByteValidator.Validate(PlainTextBytes, "text/plain", filename);
+
+        Assert.True(result.IsAllowed);
+    }
+
+    [Fact]
+    public void Validate_NormalizationDoesNotAffectCorrectMimeTypes()
+    {
+        // text/markdown + .md should still work (no normalization needed)
+        var result = MagicByteValidator.Validate(PlainTextBytes, "text/markdown", "readme.md");
+
+        Assert.True(result.IsAllowed);
+    }
+
+    [Fact]
+    public void Validate_PlainTextWithTxtExtension_UnaffectedByNormalization()
+    {
+        // .txt + text/plain should work as before — normalization only applies
+        // to known mismatches, not to correctly-typed files
+        var result = MagicByteValidator.Validate(PlainTextBytes, "text/plain", "notes.txt");
+
+        Assert.True(result.IsAllowed);
+    }
+
+    [Theory]
+    [InlineData("README.MD", "TEXT/PLAIN")]
+    [InlineData("config.JSON", "Text/Plain")]
+    public void Validate_NormalizationIsCaseInsensitive(string filename, string mimeType)
+    {
+        var result = MagicByteValidator.Validate(PlainTextBytes, mimeType, filename);
+
+        Assert.True(result.IsAllowed);
+    }
+
     [Fact]
     public void Validate_RtfAllowed()
     {
