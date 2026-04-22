@@ -823,6 +823,106 @@ data: [DONE]
         Assert.True(root.GetProperty("stream_options").GetProperty("include_usage").GetBoolean());
     }
 
+    [Fact]
+    public async Task StreamingYieldsKeepaliveUpdates_WhenToolCallFilterSuppressesText()
+    {
+        // Simulate a model that emits normal text, then switches to <tool_call> XML.
+        // After the filter activates, the client should yield empty keepalive updates
+        // instead of silently dropping SSE events.
+        const string sse = """
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"Let me "}}]}
+
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"content":"help. "}}]}
+
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"content":"<tool_call>\n<function=search>\n"}}]}
+
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"content":"<parameter=Query>test</parameter>\n"}}]}
+
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"content":"</function>\n</tool_call>"}}]}
+
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+""";
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000/api/v1");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "help")],
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            updates.Add(update);
+        }
+
+        // Should have received updates for every SSE event — not just the non-suppressed ones.
+        // 2 normal text deltas + 3 suppressed (yielded as keepalives) + 1 finish + 1 tool call = 7
+        Assert.True(updates.Count >= 5,
+            $"Expected at least 5 updates (2 text + 3 keepalives), got {updates.Count}");
+
+        // The first two streaming updates have visible text content.
+        // The end-of-stream fallback also emits a cleaned text update (non-tool-call preamble),
+        // so expect 3 total text updates.
+        var textUpdates = updates
+            .Where(u => u.Contents.OfType<TextContent>().Any(t => !string.IsNullOrEmpty(t.Text)))
+            .ToList();
+        Assert.Equal(3, textUpdates.Count);
+
+        // Suppressed updates should be content-free keepalives (Role set, no text content)
+        var keepaliveUpdates = updates
+            .Where(u => u.Role == ChatRole.Assistant
+                        && !u.Contents.OfType<TextContent>().Any(t => !string.IsNullOrEmpty(t.Text))
+                        && !u.Contents.OfType<FunctionCallContent>().Any()
+                        && u.FinishReason is null)
+            .ToList();
+        Assert.True(keepaliveUpdates.Count >= 2,
+            $"Expected at least 2 keepalive updates for suppressed tool call text, got {keepaliveUpdates.Count}");
+    }
+
+    [Fact]
+    public async Task StreamingKeepalive_ToolCallStillExtracted_AfterSuppression()
+    {
+        // Verify that the end-of-stream tool call extraction still works when text
+        // was suppressed and keepalive updates were yielded instead.
+        const string sse = """
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{"role":"assistant","content":"<tool_call>\n<function=store_memory>\n<parameter=Content>note</parameter>\n<parameter=Domain>test</parameter>\n</function>\n</tool_call>"}}]}
+
+data: {"id":"abc","model":"test","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+
+data: [DONE]
+
+""";
+
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sse, Encoding.UTF8, "text/event-stream")
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000/api/v1");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var update in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "save")],
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            updates.Add(update);
+        }
+
+        // Tool call should still be extracted at end-of-stream
+        var toolCallUpdate = updates.FirstOrDefault(u => u.FinishReason == ChatFinishReason.ToolCalls);
+        Assert.NotNull(toolCallUpdate);
+        var toolCall = Assert.Single(toolCallUpdate.Contents.OfType<FunctionCallContent>());
+        Assert.Equal("store_memory", toolCall.Name);
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;

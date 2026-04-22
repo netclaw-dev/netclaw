@@ -69,6 +69,7 @@ internal static class SessionLlmInvoker
         await foreach (var update in client.GetStreamingResponseAsync(messages, options, cancellationToken))
         {
             updates.Add(update);
+            var dispatched = false;
 
             if (update.Contents is not null)
             {
@@ -95,6 +96,7 @@ internal static class SessionLlmInvoker
                                 }
 
                                 self.Tell(new LlmResponseDeltaReceived { Content = content, CallId = callId });
+                                dispatched = true;
                             }
                             break;
 
@@ -117,6 +119,7 @@ internal static class SessionLlmInvoker
                                 }
 
                                 self.Tell(new LlmResponseDeltaReceived { Content = content, CallId = callId });
+                                dispatched = true;
                             }
                             break;
 
@@ -127,6 +130,17 @@ internal static class SessionLlmInvoker
                 }
             }
 
+            // Stream is alive but no content was dispatched (text suppressed by
+            // the tool call filter, empty keepalive, or 1-delta hold). Signal
+            // activity so the watchdog timer resets.
+            if (!dispatched)
+            {
+                self.Tell(new LlmResponseDeltaReceived
+                {
+                    Content = new TextContent(string.Empty),
+                    CallId = callId
+                });
+            }
         }
 
         if (thinkingBuilder.Length > 0)

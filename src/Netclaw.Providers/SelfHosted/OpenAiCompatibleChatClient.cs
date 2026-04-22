@@ -93,9 +93,13 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                 if (update.FinishReason is not null)
                     finalUpdate = update;
 
-                // Suppress text updates that contain tool call XML
+                // Suppress text updates that contain tool call XML, but yield a
+                // content-free keepalive so the caller knows the stream is alive.
                 if (suppressThisUpdate)
+                {
+                    yield return new ChatResponseUpdate { Role = ChatRole.Assistant };
                     continue;
+                }
 
                 yield return update;
             }
