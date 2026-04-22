@@ -1,3 +1,25 @@
+#### 0.14.3 2026-04-22 ####
+
+Netclaw v0.14.3 — Webhooks CLI, scheduling audience gating, proactive check-back guidance, and security/reliability fixes
+
+**Features**
+
+* Added `netclaw webhooks` CLI command group for managing inbound webhook routes — `webhooks list`, `webhooks show`, `webhooks set`, `webhooks delete`, and `webhooks validate` commands provide full CRUD management of webhook route configuration from the terminal. Supports multiple secret input methods (`--secret`, `--secret-file`, `--secret-env`) to avoid shell history exposure, `--dry-run` preview mode, and `--create-only` / `--update-only` flags for explicit upsert control. Closes [#529](https://github.com/Aaronontheweb/netclaw/issues/529). ([#711](https://github.com/Aaronontheweb/netclaw/pull/711))
+
+* Added scheduling audience gating — `set_reminder`, `list_reminders`, `cancel_reminder`, and `get_reminder_history` now respect the session's audience `AllowedTools` list. Public and Team audiences no longer have scheduling access by default; only Personal sessions (with `ToolsMode=All`) retain it. Operators can grant Team access by explicitly adding the tool names to `AllowedTools`. Closes [#710](https://github.com/Aaronontheweb/netclaw/issues/710). ([#714](https://github.com/Aaronontheweb/netclaw/pull/714))
+
+* Added proactive check-back guidance to `AGENTS.md` template — the agent now automatically schedules `current_session` reminders when it kicks off async work (builds, CI pipelines, deployments) instead of waiting for the user to ask for status. New installations pick this up via the init wizard; existing users can copy the "Proactive Check-Back" block into `~/.netclaw/identity/AGENTS.md` manually. ([#714](https://github.com/Aaronontheweb/netclaw/pull/714))
+
+**Bug Fixes**
+
+* Fixed false `StreamIdleTimeout` when `ToolCallTextFilter` suppresses SSE events — when the filter detects `<tool_call>` XML in streaming text it suppresses subsequent SSE updates, creating a watchdog blackout where `ProcessingWatchdog.Refresh()` is never called and the 120-second idle timeout fires even while the GPU is actively generating tokens. The fix yields a content-free keepalive `ChatResponseUpdate` when text is suppressed so the watchdog resets unconditionally. Fixes [#717](https://github.com/Aaronontheweb/netclaw/issues/717). ([#720](https://github.com/Aaronontheweb/netclaw/pull/720))
+
+* Fixed skill index missing descriptions, causing skill auto-loading failures — the skill discovery index only showed file paths without context about when to load each skill, leaving the model unable to decide which skills were relevant. `GenerateIndex()` now includes skill descriptions on each line, and AGENTS.md skill reference guidance uses action-oriented "BEFORE you..." language to improve auto-loading accuracy. Fixes [#696](https://github.com/Aaronontheweb/netclaw/issues/696). ([#712](https://github.com/Aaronontheweb/netclaw/pull/712))
+
+* Fixed MIME type rejection for markdown files sent from Slack — Slack reports `.md` files with MIME type `text/plain` instead of `text/markdown`, causing the content scanner to reject them. Extension-based MIME normalization now corrects known mismatches (`.md`/`.markdown`, `.json`, `.yaml`/`.yml`, `.csv`, `.xml`) before validation. Fixes [#716](https://github.com/Aaronontheweb/netclaw/issues/716). ([#719](https://github.com/Aaronontheweb/netclaw/pull/719))
+
+* Fixed `*unsaved*` indicator visibility in `netclaw mcp permissions` TUI — the status message is now positioned above the tool list so it remains visible regardless of list length, and the unsaved indicator color is changed from gray to yellow for better contrast. ([#709](https://github.com/Aaronontheweb/netclaw/pull/709))
+
 #### 0.14.2 2026-04-21 ####
 
 Netclaw v0.14.2 — Structured reminder delivery, protobuf serialization, subagent robustness, and web-content-retrieval skill
