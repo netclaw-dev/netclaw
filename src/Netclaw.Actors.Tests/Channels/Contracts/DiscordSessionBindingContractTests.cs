@@ -88,6 +88,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
+    protected override ChannelType ExpectedChannelType => ChannelType.Discord;
+
     private void ResetReplyClient()
     {
         var pendingThrow = _replyClient.ThrowOnPost;

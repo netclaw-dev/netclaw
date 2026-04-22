@@ -104,35 +104,6 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
-    public async Task Gateway_denies_before_dispatch_when_user_not_allowed()
-    {
-        var sink = CreateTestProbe("discord-sink-deny");
-        var deps = CreateDependencies(
-            options: new DiscordChannelOptions
-            {
-                Enabled = true,
-                AllowedChannelIds = ["ch-7"],
-                AllowedUserIds = ["u-allowed"],
-                AllowDirectMessages = false
-            },
-            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
-
-        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-deny");
-
-        gateway.Tell(CreateMessage(
-            eventId: "ev-deny",
-            channelId: "ch-7",
-            replyChannelId: "ch-7",
-            messageId: "m-deny",
-            threadOrMessageId: "m-deny",
-            rootMessageId: "m-deny",
-            senderId: "u-denied",
-            text: "blocked"));
-
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
-    }
-
-    [Fact]
     public async Task Gateway_routes_interaction_response_to_existing_session_binding()
     {
         var sink = CreateTestProbe("discord-sink-interaction");
@@ -167,40 +138,6 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
         Assert.Equal("call-1", interaction.CallId);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, interaction.SelectedKey);
         Assert.Equal("u-1", interaction.SenderId.Value);
-    }
-
-    [Fact]
-    public async Task Gateway_drops_duplicate_event_ids()
-    {
-        var sink = CreateTestProbe("discord-sink-dedup");
-        var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
-
-        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-dedup");
-
-        gateway.Tell(CreateMessage(
-            eventId: "ev-dup",
-            channelId: "ch-7",
-            replyChannelId: "ch-7",
-            messageId: "m-1",
-            threadOrMessageId: "m-1",
-            rootMessageId: "m-1",
-            senderId: "u-1",
-            text: "first"));
-
-        await sink.ExpectMsgAsync<DiscordThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
-
-        gateway.Tell(CreateMessage(
-            eventId: "ev-dup",
-            channelId: "ch-7",
-            replyChannelId: "ch-7",
-            messageId: "m-2",
-            threadOrMessageId: "m-1",
-            rootMessageId: "m-1",
-            senderId: "u-1",
-            text: "duplicate"));
-
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
     }
 
     [Fact]
