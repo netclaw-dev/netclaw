@@ -9,7 +9,7 @@ namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 /// Fake <see cref="ISessionPipeline"/> that throws a pre-configured exception
 /// on <see cref="CreateAsync"/>. Used to test initialization failure paths.
 /// </summary>
-internal sealed class FailingSessionPipeline(Exception exception) : ISessionPipeline
+public sealed class FailingSessionPipeline(Exception exception) : ISessionPipeline
 {
     public Task<MaterializedSession> CreateAsync(
         SessionId sessionId,

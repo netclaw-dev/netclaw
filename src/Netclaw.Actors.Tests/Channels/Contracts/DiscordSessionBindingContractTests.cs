@@ -1,0 +1,120 @@
+using Akka.Actor;
+using Akka.Hosting;
+using Netclaw.Actors.Channels;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Channels.Discord;
+using Netclaw.Configuration;
+using Netclaw.Security;
+using Xunit;
+
+namespace Netclaw.Actors.Tests.Channels.Contracts;
+
+public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
+    : SessionBindingContractTests(output)
+{
+    private RecordingDiscordReplyClient _replyClient = new();
+
+    protected override IActorRef CreateBindingActor(
+        SessionId sessionId,
+        RecordingSessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector)
+    {
+        ResetReplyClient();
+        return CreateActorCore(sessionId, pipeline, detector);
+    }
+
+    protected override IActorRef CreateBindingActorWithPipeline(
+        SessionId sessionId,
+        ISessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector)
+    {
+        ResetReplyClient();
+        var options = new DiscordChannelOptions();
+        var deps = new DiscordGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            TimeProvider: TimeProvider.System,
+            Options: options,
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            PromptInjectionDetector: detector);
+
+        return Sys.ActorOf(DiscordSessionBindingActor.CreateProps(
+            sessionId,
+            new DiscordChannelId("ch-test"),
+            new DiscordReplyChannelId("reply-test"),
+            new DiscordThreadOrMessageId("thread-test"),
+            rootMessageId: null,
+            deps));
+    }
+
+    protected override object CreateInboundMessage(string text, string senderId)
+        => new DiscordThreadInbound(
+            SessionId: new SessionId("ignored"),
+            ChannelId: new DiscordChannelId("ch-test"),
+            ReplyChannelId: new DiscordReplyChannelId("reply-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            RootMessageId: null,
+            EventId: new DiscordEventId($"evt-{Guid.NewGuid():N}"),
+            SenderId: new DiscordUserId(senderId),
+            Audience: TrustAudience.Team,
+            Principal: PrincipalClassification.UntrustedExternal,
+            Provenance: new SourceProvenance
+            {
+                TransportAuthenticity = TransportAuthenticity.Verified,
+                SourceKind = "discord"
+            },
+            Text: text,
+            ReceivedAt: DateTimeOffset.UtcNow);
+
+    protected override object CreateApprovalResponse(string callId, string selectedKey, string senderId)
+        => new DiscordApprovalResponse(
+            ChannelId: new DiscordChannelId("ch-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            CallId: callId,
+            SelectedKey: selectedKey,
+            SenderId: new DiscordUserId(senderId));
+
+    protected override IReadOnlyList<string> GetPostedTexts()
+        => _replyClient.Posts.Select(p => p.Text).ToList();
+
+    protected override void ClearPostedTexts()
+        => _replyClient.Posts.Clear();
+
+    protected override void SetReplyClientThrows(Exception ex)
+        => _replyClient.ThrowOnPost = ex;
+
+    protected override void ClearReplyClientThrows()
+        => _replyClient.ThrowOnPost = null;
+
+    private void ResetReplyClient()
+    {
+        var pendingThrow = _replyClient.ThrowOnPost;
+        _replyClient = new RecordingDiscordReplyClient { ThrowOnPost = pendingThrow };
+    }
+
+    private IActorRef CreateActorCore(
+        SessionId sessionId,
+        ISessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector)
+    {
+        var options = new DiscordChannelOptions();
+        var deps = new DiscordGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            TimeProvider: TimeProvider.System,
+            Options: options,
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            PromptInjectionDetector: detector);
+
+        return Sys.ActorOf(DiscordSessionBindingActor.CreateProps(
+            sessionId,
+            new DiscordChannelId("ch-test"),
+            new DiscordReplyChannelId("reply-test"),
+            new DiscordThreadOrMessageId("thread-test"),
+            rootMessageId: null,
+            deps));
+    }
+}

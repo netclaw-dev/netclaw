@@ -7,7 +7,7 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
-internal sealed class RecordingSessionPipeline(
+public sealed class RecordingSessionPipeline(
     Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory) : ISessionPipeline
 {
     public SessionPipelineOptions? CapturedOptions { get; private set; }

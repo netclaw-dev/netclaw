@@ -2,7 +2,7 @@ using Netclaw.Security;
 
 namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
-internal sealed class ConfigurablePromptInjectionDetector : IPromptInjectionDetector
+public sealed class ConfigurablePromptInjectionDetector : IPromptInjectionDetector
 {
     private readonly Func<string, string, CancellationToken, Task<PromptInjectionResult>> _behavior;
 
