@@ -123,7 +123,7 @@ public sealed class WizardConfigBuilder
             config["Slack"] = slackSection;
         }
 
-        // Search section
+        // Discord section
         if (Discord is { Enabled: true })
         {
             var discordSection = new Dictionary<string, object>

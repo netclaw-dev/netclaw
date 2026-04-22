@@ -38,7 +38,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         ConfigurablePromptInjectionDetector detector)
     {
         ResetReplyClient();
-        return CreateActorWithPipelineCore(sessionId, pipeline, detector);
+        return CreateActorCore(sessionId, pipeline, detector, nameSuffix: "fail");
     }
 
     protected override object CreateInboundMessage(string text, string senderId)
@@ -90,7 +90,8 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     private IActorRef CreateActorCore(
         SessionId sessionId,
         ISessionPipeline pipeline,
-        ConfigurablePromptInjectionDetector detector)
+        ConfigurablePromptInjectionDetector detector,
+        string nameSuffix = "")
     {
         var paths = TestSlackGatewayDeps.NewTestPaths();
         var deps = new SlackGatewayDependencies(
@@ -114,42 +115,8 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             Paths: paths,
             PromptInjectionDetector: detector);
 
-        var name = $"slack-thread-contract-{Interlocked.Increment(ref _actorCounter)}";
-        return Sys.ActorOf(SlackThreadBindingActor.CreateProps(
-            sessionId,
-            new SlackChannelId("C-test"),
-            new SlackThreadTs("1000.1"),
-            deps), name);
-    }
-
-    private IActorRef CreateActorWithPipelineCore(
-        SessionId sessionId,
-        ISessionPipeline pipeline,
-        ConfigurablePromptInjectionDetector detector)
-    {
-        var paths = TestSlackGatewayDeps.NewTestPaths();
-        var deps = new SlackGatewayDependencies(
-            Pipeline: pipeline,
-            IngressGate: null,
-            ActorSystem: Sys,
-            TimeProvider: TimeProvider.System,
-            Options: new SlackChannelOptions
-            {
-                Enabled = true,
-                AllowDirectMessages = true,
-                BotToken = new SensitiveString("xoxb-fake")
-            },
-            BotUserId: new SlackUserId("UBOT"),
-            DefaultChannelId: null,
-            ReplyClient: _replyClient,
-            ContentScanner: new NullContentScanner(),
-            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
-            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
-            ModelCapabilities: TestSlackGatewayDeps.DefaultTextOnlyModel,
-            Paths: paths,
-            PromptInjectionDetector: detector);
-
-        var name = $"slack-thread-contract-fail-{Interlocked.Increment(ref _actorCounter)}";
+        var suffix = string.IsNullOrEmpty(nameSuffix) ? "" : $"-{nameSuffix}";
+        var name = $"slack-thread-contract{suffix}-{Interlocked.Increment(ref _actorCounter)}";
         return Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             sessionId,
             new SlackChannelId("C-test"),

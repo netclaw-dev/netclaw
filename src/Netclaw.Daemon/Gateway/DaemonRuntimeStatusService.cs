@@ -39,10 +39,13 @@ internal sealed class DaemonRuntimeStatusService(
         var now = timeProvider.GetUtcNow();
         var uptime = now - startClock.StartedAt;
 
+        var channelLookup = channels.ToDictionary(c => c.ChannelType);
         var connectors = new List<DaemonRuntimeStatus.Connector>
         {
-            await BuildSlackStatusAsync(cancellationToken),
-            await BuildDiscordStatusAsync(cancellationToken)
+            await BuildChannelStatusAsync(channelLookup, Actors.Channels.ChannelType.Slack,
+                slackOptions.Enabled, "slack", "Slack", cancellationToken),
+            await BuildChannelStatusAsync(channelLookup, Actors.Channels.ChannelType.Discord,
+                discordOptions.Enabled, "discord", "Discord", cancellationToken)
         };
 
         connectors.AddRange(BuildMcpStatuses());
@@ -69,13 +72,7 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Provider = persistenceOptions.Provider.ToString()
             },
-            Telemetry = new DaemonRuntimeStatus.Telemetry
-            {
-                Enabled = telemetryOptions.Value.Enabled,
-                OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint,
-                SlackCounters = BuildSlackCounters(),
-                DiscordCounters = BuildDiscordCounters()
-            },
+            Telemetry = BuildTelemetry(),
             Model = new DaemonRuntimeStatus.Model
             {
                 ModelId = modelCapabilities.ModelId,
@@ -91,118 +88,75 @@ internal sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private static DaemonRuntimeStatus.SlackCounters BuildSlackCounters()
+    private DaemonRuntimeStatus.Telemetry BuildTelemetry()
     {
         var snapshot = ChannelTelemetry.GetSnapshot();
-        return new DaemonRuntimeStatus.SlackCounters
+        return new DaemonRuntimeStatus.Telemetry
         {
-            EventsReceived = snapshot.SlackEventsReceived,
-            EventsDropped = snapshot.SlackEventsDropped,
-            EventsRouted = snapshot.SlackEventsRouted,
-            MessagesEnqueued = snapshot.SlackMessagesEnqueued,
-            RepliesPosted = snapshot.SlackRepliesPosted,
-            RepliesRejected = snapshot.SlackRepliesRejected,
-            RepliesFailed = snapshot.SlackRepliesFailed
-        };
-    }
-
-    private static DaemonRuntimeStatus.DiscordCounters BuildDiscordCounters()
-    {
-        var snapshot = ChannelTelemetry.GetSnapshot();
-        return new DaemonRuntimeStatus.DiscordCounters
-        {
-            EventsReceived = snapshot.DiscordEventsReceived,
-            EventsDropped = snapshot.DiscordEventsDropped,
-            EventsRouted = snapshot.DiscordEventsRouted,
-            MessagesEnqueued = snapshot.DiscordMessagesEnqueued,
-            RepliesPosted = snapshot.DiscordRepliesPosted,
-            RepliesRejected = snapshot.DiscordRepliesRejected,
-            RepliesFailed = snapshot.DiscordRepliesFailed,
-            InteractionErrors = snapshot.DiscordInteractionErrors,
-            ApprovalFallbackActivated = snapshot.DiscordApprovalFallbackActivated
-        };
-    }
-
-    private async Task<DaemonRuntimeStatus.Connector> BuildSlackStatusAsync(CancellationToken cancellationToken)
-    {
-        if (!slackOptions.Enabled)
-        {
-            return new DaemonRuntimeStatus.Connector
+            Enabled = telemetryOptions.Value.Enabled,
+            OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint,
+            SlackCounters = new DaemonRuntimeStatus.SlackCounters
             {
-                Key = "slack",
-                DisplayName = "Slack",
-                Enabled = false,
-                Status = "disabled",
-                Message = "Slack connector is disabled in configuration."
-            };
-        }
-
-        var slackChannel = channels.FirstOrDefault(c =>
-            c.ChannelType == Actors.Channels.ChannelType.Slack);
-
-        if (slackChannel is null)
-        {
-            return new DaemonRuntimeStatus.Connector
-            {
-                Key = "slack",
-                DisplayName = "Slack",
-                Enabled = true,
-                Status = "disconnected",
-                Message = "Slack connector is enabled but was not registered."
-            };
-        }
-
-        var health = await slackChannel.GetHealthAsync(cancellationToken);
-        return new DaemonRuntimeStatus.Connector
-        {
-            Key = "slack",
-            DisplayName = slackChannel.DisplayName,
-            Enabled = true,
-            Status = health.Status switch
-            {
-                ChannelHealthStatus.Healthy => "healthy",
-                ChannelHealthStatus.Degraded => "degraded",
-                ChannelHealthStatus.Disconnected => "disconnected",
-                _ => "unknown"
+                EventsReceived = snapshot.SlackEventsReceived,
+                EventsDropped = snapshot.SlackEventsDropped,
+                EventsRouted = snapshot.SlackEventsRouted,
+                MessagesEnqueued = snapshot.SlackMessagesEnqueued,
+                RepliesPosted = snapshot.SlackRepliesPosted,
+                RepliesRejected = snapshot.SlackRepliesRejected,
+                RepliesFailed = snapshot.SlackRepliesFailed
             },
-            Message = health.Detail
+            DiscordCounters = new DaemonRuntimeStatus.DiscordCounters
+            {
+                EventsReceived = snapshot.DiscordEventsReceived,
+                EventsDropped = snapshot.DiscordEventsDropped,
+                EventsRouted = snapshot.DiscordEventsRouted,
+                MessagesEnqueued = snapshot.DiscordMessagesEnqueued,
+                RepliesPosted = snapshot.DiscordRepliesPosted,
+                RepliesRejected = snapshot.DiscordRepliesRejected,
+                RepliesFailed = snapshot.DiscordRepliesFailed,
+                InteractionErrors = snapshot.DiscordInteractionErrors,
+                ApprovalFallbackActivated = snapshot.DiscordApprovalFallbackActivated
+            }
         };
     }
 
-    private async Task<DaemonRuntimeStatus.Connector> BuildDiscordStatusAsync(CancellationToken cancellationToken)
+    private static async Task<DaemonRuntimeStatus.Connector> BuildChannelStatusAsync(
+        Dictionary<Actors.Channels.ChannelType, IChannel> channelLookup,
+        Actors.Channels.ChannelType channelType,
+        bool enabled,
+        string key,
+        string displayName,
+        CancellationToken cancellationToken)
     {
-        if (!discordOptions.Enabled)
+        if (!enabled)
         {
             return new DaemonRuntimeStatus.Connector
             {
-                Key = "discord",
-                DisplayName = "Discord",
+                Key = key,
+                DisplayName = displayName,
                 Enabled = false,
                 Status = "disabled",
-                Message = "Discord connector is disabled in configuration."
+                Message = $"{displayName} connector is disabled in configuration."
             };
         }
 
-        var discordChannel = channels.FirstOrDefault(c =>
-            c.ChannelType == Actors.Channels.ChannelType.Discord);
-
-        if (discordChannel is null)
+        if (!channelLookup.TryGetValue(channelType, out var channel))
         {
             return new DaemonRuntimeStatus.Connector
             {
-                Key = "discord",
-                DisplayName = "Discord",
+                Key = key,
+                DisplayName = displayName,
                 Enabled = true,
                 Status = "disconnected",
-                Message = "Discord connector is enabled but was not registered."
+                Message = $"{displayName} connector is enabled but was not registered."
             };
         }
 
-        var health = await discordChannel.GetHealthAsync(cancellationToken);
+        var health = await channel.GetHealthAsync(cancellationToken);
         return new DaemonRuntimeStatus.Connector
         {
-            Key = "discord",
-            DisplayName = discordChannel.DisplayName,
+            Key = key,
+            DisplayName = channel.DisplayName,
             Enabled = true,
             Status = health.Status switch
             {
