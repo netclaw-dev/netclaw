@@ -17,7 +17,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     private readonly DiscordChannelId _channelId;
     private DiscordReplyChannelId _replyChannelId;
     private readonly DiscordThreadOrMessageId _threadOrMessageId;
-    private readonly DiscordMessageId? _rootMessageId;
+    private DiscordMessageId? _rootMessageId;
     private bool _threadCreated;
     private const int MaxDiscordMessageLength = 2000;
     private const string EmptyTurnFallbackText =
@@ -271,16 +271,23 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message, string selectedKey)
     {
-        var pending = ResolvePendingRequest(message.SenderId, callId: null);
-        if (pending is null)
+        var (result, pending) = ResolvePendingRequest(message.SenderId, callId: null);
+
+        if (result is ApprovalLookupResult.NotFound)
             return false;
 
-        _pendingApprovalRequests.Remove(pending);
+        if (result is ApprovalLookupResult.WrongRequester)
+        {
+            await SafeReplyAsync(":warning: Only the requesting user can approve this tool action.");
+            return true;
+        }
+
+        _pendingApprovalRequests.Remove(pending!);
 
         await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
         {
             SessionId = _sessionId,
-            CallId = pending.CallId,
+            CallId = pending!.CallId,
             SelectedKey = selectedKey,
             SenderId = message.SenderId.Value
         });
@@ -291,15 +298,22 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private async Task HandleApprovalResponseAsync(DiscordApprovalResponse message)
     {
-        var pending = ResolvePendingRequest(message.SenderId, message.CallId);
-        if (pending is null)
+        var (result, pending) = ResolvePendingRequest(message.SenderId, message.CallId);
+
+        if (result is ApprovalLookupResult.WrongRequester)
+        {
+            await SafeReplyAsync(":warning: Only the requesting user can approve this tool action.");
+            return;
+        }
+
+        if (result is ApprovalLookupResult.NotFound)
         {
             _log.Info("Ignoring Discord approval response for unknown call id {0}", message.CallId);
             ChannelTelemetry.RecordDiscordInteractionError("unknown_call_id");
             return;
         }
 
-        _pendingApprovalRequests.Remove(pending);
+        _pendingApprovalRequests.Remove(pending!);
 
         await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
         {
@@ -375,17 +389,30 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         }
     }
 
-    private PendingApprovalRequest? ResolvePendingRequest(DiscordUserId senderId, string? callId)
+    private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
+
+    private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
+        DiscordUserId senderId, string? callId)
     {
         if (callId is not null)
         {
-            return _pendingApprovalRequests.LastOrDefault(p =>
-                string.Equals(p.CallId, callId, StringComparison.Ordinal)
-                && (p.RequesterSenderId is null || p.RequesterSenderId == senderId));
+            var byCallId = _pendingApprovalRequests.LastOrDefault(p =>
+                string.Equals(p.CallId, callId, StringComparison.Ordinal));
+            if (byCallId is null)
+                return (ApprovalLookupResult.NotFound, null);
+            if (byCallId.RequesterSenderId is not null && byCallId.RequesterSenderId != senderId)
+                return (ApprovalLookupResult.WrongRequester, null);
+            return (ApprovalLookupResult.Matched, byCallId);
         }
 
-        return _pendingApprovalRequests.LastOrDefault(p =>
+        if (_pendingApprovalRequests.Count == 0)
+            return (ApprovalLookupResult.NotFound, null);
+
+        var bySender = _pendingApprovalRequests.LastOrDefault(p =>
             p.RequesterSenderId is null || p.RequesterSenderId == senderId);
+        return bySender is not null
+            ? (ApprovalLookupResult.Matched, bySender)
+            : (ApprovalLookupResult.WrongRequester, null);
     }
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
@@ -517,6 +544,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         {
             _replyChannelId = threadId;
             _threadCreated = true;
+            _rootMessageId = null;
             _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
             Context.Parent.Tell(new ThreadPromoted(
                 _threadOrMessageId,

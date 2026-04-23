@@ -91,7 +91,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         {
             _log.Info("discord_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
             ChannelTelemetry.RecordDiscordEventFiltered("restart_drain_active");
-            _log.Debug("Ingress closed reason: {0}", closedReason);
+            _ = PostIngressClosedReplyAsync(message.ReplyChannelId, closedReason);
             return;
         }
 
@@ -338,6 +338,19 @@ internal sealed class DiscordConversationActor : ReceiveActor
         var child = Context.ActorOf(props, resolvedName);
         Context.Watch(child);
         return child;
+    }
+
+    private async Task PostIngressClosedReplyAsync(DiscordReplyChannelId replyChannelId, string message)
+    {
+        try
+        {
+            await _dependencies.ReplyClient.PostReplyAsync(
+                new DiscordPostMessage(replyChannelId, message));
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to post restart-drain reply to Discord channel {0}", replyChannelId.Value);
+        }
     }
 
     private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
