@@ -23,7 +23,6 @@ public sealed class DiscordChannel : IChannel
     private readonly ILogger<DiscordChannel> _logger;
 
     private IActorRef? _gateway;
-    private volatile bool _connected;
 
     public DiscordChannel(
         ActorSystem system,
@@ -58,7 +57,7 @@ public sealed class DiscordChannel : IChannel
         if (!_options.Enabled)
             return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled."));
 
-        if (_connected)
+        if (_gatewayClient.IsConnected)
             return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
 
         return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Disconnected, "Discord gateway disconnected."));
@@ -92,16 +91,18 @@ public sealed class DiscordChannel : IChannel
 
             ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);
 
-            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
-
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
-            _connected = true;
+
+            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
 
             _logger.LogInformation("Discord channel connected.");
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
+            _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
+
             _notificationSink.Emit(OperationalAlert.Create(
                 _timeProvider,
                 "channel.disconnected",
@@ -116,8 +117,6 @@ public sealed class DiscordChannel : IChannel
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _connected = false;
-
         _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
         _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
         await _gatewayClient.DisconnectAsync(cancellationToken);

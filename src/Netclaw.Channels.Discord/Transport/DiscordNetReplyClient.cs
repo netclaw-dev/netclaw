@@ -12,7 +12,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         _client = client;
     }
 
-    public async Task PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
+    public async Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
     {
         var channelId = ulong.Parse(message.ReplyChannelId.Value);
         var channel = _client.GetChannel(channelId)
@@ -23,9 +23,22 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
             throw new InvalidOperationException(
                 $"Discord channel {message.ReplyChannelId.Value} is not a message channel.");
 
-        var rootRef = message.RootMessageId is { } rootId
-            ? new MessageReference(ulong.Parse(rootId.Value))
-            : null;
+        IMessageChannel targetChannel = messageChannel;
+        DiscordReplyChannelId? createdThreadId = null;
+
+        if (message.CreateThreadOnMessage is { } threadAnchor
+            && channel is ITextChannel textChannel)
+        {
+            var anchorId = ulong.Parse(threadAnchor.Value);
+            var threadName = message.ThreadName ?? "Conversation";
+            var thread = await textChannel.CreateThreadAsync(
+                threadName,
+                ThreadType.PublicThread,
+                ThreadArchiveDuration.OneDay,
+                message: await textChannel.GetMessageAsync(anchorId));
+            targetChannel = thread;
+            createdThreadId = new DiscordReplyChannelId(thread.Id.ToString());
+        }
 
         MessageComponent? components = null;
         if (message.Buttons is { Count: > 0 })
@@ -42,9 +55,15 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
             components = builder.Build();
         }
 
-        await messageChannel.SendMessageAsync(
+        var rootRef = message.CreateThreadOnMessage is null && message.RootMessageId is { } rootId
+            ? new MessageReference(ulong.Parse(rootId.Value))
+            : null;
+
+        await targetChannel.SendMessageAsync(
             text: message.Text,
             messageReference: rootRef,
             components: components);
+
+        return new DiscordPostResult(CreatedThreadId: createdThreadId);
     }
 }

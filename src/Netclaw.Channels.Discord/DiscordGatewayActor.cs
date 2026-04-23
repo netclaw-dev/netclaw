@@ -93,6 +93,14 @@ public sealed class DiscordGatewayActor : ReceiveActor
 
         Receive<DiscordGatewayInteraction>(interaction =>
         {
+            ChannelTelemetry.RecordDiscordEventReceived("interaction");
+
+            if (!IsInteractionAuthorized(interaction))
+            {
+                ChannelTelemetry.RecordDiscordEventDropped("interaction_acl_denied");
+                return;
+            }
+
             var actorName = BuildActorName(interaction.ChannelId, interaction.ThreadOrMessageId);
             var sessionBinding = Context.Child(actorName);
             if (sessionBinding.IsNobody())
@@ -105,6 +113,7 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 return;
             }
 
+            ChannelTelemetry.RecordDiscordEventRouted("interaction");
             sessionBinding.Forward(new DiscordApprovalResponse(
                 ChannelId: interaction.ChannelId,
                 ThreadOrMessageId: interaction.ThreadOrMessageId,
@@ -125,9 +134,16 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 return;
             }
 
-            var replyChannelId = new DiscordReplyChannelId(threadOrMessageId.Value);
-            var sessionBinding = GetOrCreateSessionBinding(
-                message.SessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId: null);
+            var actorName = BuildActorName(channelId, threadOrMessageId);
+            var sessionBinding = Context.Child(actorName);
+            if (sessionBinding.IsNobody())
+            {
+                _log.Warning(
+                    "Dropping DeliverTrustedSessionTurn for missing session binding session={Session}",
+                    message.SessionId.Value);
+                Sender.Tell(CommandNack.For(message.SessionId, "No active Discord session binding"));
+                return;
+            }
 
             _log.Debug(
                 "Routing DeliverTrustedSessionTurn session={Session} channel={Channel} threadOrMessage={ThreadOrMessage}",
@@ -156,6 +172,30 @@ public sealed class DiscordGatewayActor : ReceiveActor
                     ?? DiscordSessionBindingActor.CreateProps(
                         sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies);
         return Context.ActorOf(props, actorName);
+    }
+
+    private bool IsInteractionAuthorized(DiscordGatewayInteraction interaction)
+    {
+        if (string.IsNullOrWhiteSpace(interaction.SenderId.Value))
+        {
+            _log.Info("discord_interaction_dropped reason=missing_user_id");
+            return false;
+        }
+
+        if (!DiscordAclPolicy.IsAllowedChannel(interaction.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
+        {
+            _log.Info("discord_interaction_dropped channel={0} reason=channel_not_allowed", interaction.ChannelId.Value);
+            return false;
+        }
+
+        if (_dependencies.Options.AllowedUserIds.Length > 0
+            && !_dependencies.Options.AllowedUserIds.Contains(interaction.SenderId.Value, StringComparer.Ordinal))
+        {
+            _log.Info("discord_interaction_dropped user={0} reason=user_not_allowed", interaction.SenderId.Value);
+            return false;
+        }
+
+        return true;
     }
 
     private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)

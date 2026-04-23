@@ -15,9 +15,10 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 {
     private readonly SessionId _sessionId;
     private readonly DiscordChannelId _channelId;
-    private readonly DiscordReplyChannelId _replyChannelId;
+    private DiscordReplyChannelId _replyChannelId;
     private readonly DiscordThreadOrMessageId _threadOrMessageId;
     private readonly DiscordMessageId? _rootMessageId;
+    private bool _threadCreated;
     private const int MaxDiscordMessageLength = 2000;
     private const string EmptyTurnFallbackText =
         ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
@@ -140,6 +141,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     {
         ReceiveAsync<DiscordThreadInbound>(HandleInboundAsync);
         ReceiveAsync<DiscordApprovalResponse>(HandleApprovalResponseAsync);
+        ReceiveAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
         ReceiveAsync<OutputReceived>(HandleOutputReceivedAsync);
 
         Receive<OutputStreamTerminated>(msg =>
@@ -310,6 +312,69 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildDecisionStatus(message.SelectedKey));
     }
 
+    private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
+    {
+        var ackTarget = Sender;
+
+        if (message.SessionId != _sessionId)
+        {
+            _log.Warning(
+                "Dropping DeliverTrustedSessionTurn with mismatching session id actual={Actual} expected={Expected}",
+                message.SessionId.Value, _sessionId.Value);
+            ackTarget.Tell(CommandNack.For(_sessionId, "Session id mismatch"));
+            return;
+        }
+
+        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+        {
+            _log.Info("Rejecting Mode B reminder while restart drain is active");
+            ackTarget.Tell(CommandNack.For(_sessionId, ingressClosedReason));
+            return;
+        }
+
+        var writer = _handle.InputQueue;
+        if (writer is null)
+        {
+            _log.Warning("Discord input queue is not initialized; rejecting Mode B reminder");
+            ackTarget.Tell(CommandNack.For(_sessionId, "Discord session pipeline not initialized"));
+            return;
+        }
+
+        var input = new ChannelInput
+        {
+            SenderId = message.Source.SenderId,
+            ChannelId = _channelId.Value,
+            MessageId = message.Source.MessageId,
+            Audience = message.Source.Audience,
+            Boundary = message.Source.Boundary,
+            Principal = message.Source.Principal,
+            Provenance = message.Source.Provenance,
+            Contents = [new TextContent(message.Content)],
+            ReceivedAt = _dependencies.TimeProvider.GetUtcNow(),
+            ReminderId = message.Source.ReminderId,
+            AckTarget = ackTarget
+        };
+
+        try
+        {
+            using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await writer.WriteAsync(input, writeCts.Token);
+            _log.Debug(
+                "reminder_mode_b_dispatch session={Session} reminder={Reminder}",
+                _sessionId.Value, message.Source.ReminderId);
+        }
+        catch (OperationCanceledException)
+        {
+            _log.Warning("Timed out enqueueing Mode B reminder for session {0}", _sessionId.Value);
+            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline enqueue timeout"));
+        }
+        catch (ChannelClosedException)
+        {
+            _log.Warning("Discord input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
+            ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
+        }
+    }
+
     private PendingApprovalRequest? ResolvePendingRequest(DiscordUserId senderId, string? callId)
     {
         if (callId is not null)
@@ -378,11 +443,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
-            await _dependencies.ReplyClient.PostReplyAsync(new DiscordPostMessage(
-                ReplyChannelId: _replyChannelId,
-                Text: text,
-                RootMessageId: _rootMessageId,
-                Buttons: buttons));
+            var postMessage = BuildPostMessage(text, buttons: buttons);
+            var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
+            ApplyThreadPromotion(result);
             var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
             ChannelTelemetry.RecordDiscordReplyPosted(duration);
             ChannelTelemetry.RecordDiscordApprovalFallbackActivated("button_prompt");
@@ -403,10 +466,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             var startedAt = _dependencies.TimeProvider.GetTimestamp();
             try
             {
-                await _dependencies.ReplyClient.PostReplyAsync(new DiscordPostMessage(
-                    ReplyChannelId: _replyChannelId,
-                    Text: chunk,
-                    RootMessageId: _rootMessageId));
+                var postMessage = BuildPostMessage(chunk);
+                var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
+                ApplyThreadPromotion(result);
                 var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
                 ChannelTelemetry.RecordDiscordReplyPosted(duration);
             }
@@ -418,6 +480,37 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
                 return;
             }
+        }
+    }
+
+    private DiscordPostMessage BuildPostMessage(
+        string text,
+        IReadOnlyList<DiscordButtonSpec>? buttons = null)
+    {
+        if (!_threadCreated && _rootMessageId is not null)
+        {
+            return new DiscordPostMessage(
+                ReplyChannelId: _replyChannelId,
+                Text: text,
+                Buttons: buttons,
+                CreateThreadOnMessage: _rootMessageId,
+                ThreadName: "Netclaw");
+        }
+
+        return new DiscordPostMessage(
+            ReplyChannelId: _replyChannelId,
+            Text: text,
+            RootMessageId: _rootMessageId,
+            Buttons: buttons);
+    }
+
+    private void ApplyThreadPromotion(DiscordPostResult result)
+    {
+        if (result.CreatedThreadId is { } threadId)
+        {
+            _replyChannelId = threadId;
+            _threadCreated = true;
+            _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
         }
     }
 
