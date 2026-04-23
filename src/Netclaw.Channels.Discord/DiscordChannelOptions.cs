@@ -12,6 +12,10 @@ public sealed class DiscordChannelOptions
 
     public bool AllowDirectMessages { get; init; }
 
+    public bool MentionOnly { get; init; } = true;
+
+    public bool MentionRequiredInDm { get; init; }
+
     public string[] AllowedChannelIds { get; init; } = [];
 
     public string[] AllowedUserIds { get; init; } = [];

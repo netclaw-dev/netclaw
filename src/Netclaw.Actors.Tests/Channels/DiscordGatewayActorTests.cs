@@ -8,6 +8,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Discord;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -26,11 +27,11 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
-    public async Task Gateway_routes_threaded_and_root_messages_to_stable_session_ids()
+    public async Task Gateway_routes_messages_to_conversation_actor_by_channel_id()
     {
         var sink = CreateTestProbe("discord-sink-route");
         var deps = CreateDependencies(
-            sessionPropsFactory: (sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _) =>
+            conversationPropsFactory: (_, _) =>
                 Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-route");
@@ -45,9 +46,34 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             senderId: "u-1",
             text: "hello"));
 
-        var first = await sink.ExpectMsgAsync<DiscordThreadInbound>(
+        var first = await sink.ExpectMsgAsync<DiscordGatewayMessage>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("ch-7/th-42", first.SessionId.Value);
+        Assert.Equal("ch-7", first.ChannelId.Value);
+        Assert.Equal("hello", first.Text);
+    }
+
+    [Fact]
+    public async Task Gateway_routes_same_channel_messages_to_same_conversation_actor()
+    {
+        var sink = CreateTestProbe("discord-sink-same-channel");
+        var deps = CreateDependencies(
+            conversationPropsFactory: (_, _) =>
+                Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-same-channel");
+
+        gateway.Tell(CreateMessage(
+            eventId: "ev-1",
+            channelId: "ch-7",
+            replyChannelId: "th-42",
+            messageId: "m-1",
+            threadOrMessageId: "th-42",
+            rootMessageId: null,
+            senderId: "u-1",
+            text: "hello"));
+
+        var first = await sink.ExpectMsgAsync<DiscordGatewayMessage>(
+            cancellationToken: TestContext.Current.CancellationToken);
 
         gateway.Tell(CreateMessage(
             eventId: "ev-2",
@@ -59,31 +85,17 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             senderId: "u-1",
             text: "follow up"));
 
-        var second = await sink.ExpectMsgAsync<DiscordThreadInbound>(
+        var second = await sink.ExpectMsgAsync<DiscordGatewayMessage>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("ch-7/th-42", second.SessionId.Value);
-
-        gateway.Tell(CreateMessage(
-            eventId: "ev-3",
-            channelId: "ch-7",
-            replyChannelId: "ch-7",
-            messageId: "m-9001",
-            threadOrMessageId: "m-9001",
-            rootMessageId: "m-9001",
-            senderId: "u-1",
-            text: "root"));
-
-        var root = await sink.ExpectMsgAsync<DiscordThreadInbound>(
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("ch-7/m-9001", root.SessionId.Value);
+        Assert.Equal("follow up", second.Text);
     }
 
     [Fact]
-    public async Task Gateway_preserves_leading_slash_text()
+    public async Task Gateway_forwards_raw_message_preserving_text()
     {
         var sink = CreateTestProbe("discord-sink-slash");
         var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-slash");
         const string slashText = "/netclaw-operations check daemon health";
@@ -98,31 +110,19 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             senderId: "u-1",
             text: slashText));
 
-        var inbound = await sink.ExpectMsgAsync<DiscordThreadInbound>(
+        var inbound = await sink.ExpectMsgAsync<DiscordGatewayMessage>(
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(slashText, inbound.Text);
     }
 
     [Fact]
-    public async Task Gateway_routes_interaction_response_to_existing_session_binding()
+    public async Task Gateway_forwards_interaction_to_conversation_actor()
     {
         var sink = CreateTestProbe("discord-sink-interaction");
         var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-interaction");
-
-        gateway.Tell(CreateMessage(
-            eventId: "ev-setup",
-            channelId: "ch-7",
-            replyChannelId: "ch-7",
-            messageId: "m-setup",
-            threadOrMessageId: "m-setup",
-            rootMessageId: "m-setup",
-            senderId: "u-1",
-            text: "seed"));
-
-        await sink.ExpectMsgAsync<DiscordThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
 
         gateway.Tell(new DiscordGatewayInteraction(
             ChannelId: new DiscordChannelId("ch-7"),
@@ -133,7 +133,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             RequesterSenderId: new DiscordUserId("u-1"),
             ReceivedAt: TimeProvider.System.GetUtcNow()));
 
-        var interaction = await sink.ExpectMsgAsync<DiscordApprovalResponse>(
+        var interaction = await sink.ExpectMsgAsync<DiscordGatewayInteraction>(
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("call-1", interaction.CallId);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, interaction.SelectedKey);
@@ -145,7 +145,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     {
         var sink = CreateTestProbe("discord-sink-empty-eid");
         var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-empty-eid");
 
@@ -159,15 +159,15 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             senderId: "u-1",
             text: "no event id"));
 
-        await sink.ExpectMsgAsync<DiscordThreadInbound>(cancellationToken: TestContext.Current.CancellationToken);
+        await sink.ExpectMsgAsync<DiscordGatewayMessage>(cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
-    public async Task Gateway_drops_bot_messages()
+    public async Task Gateway_forwards_bot_messages_to_conversation_actor()
     {
         var sink = CreateTestProbe("discord-sink-bot");
         var deps = CreateDependencies(
-            sessionPropsFactory: (_, _, _, _, _, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
 
         var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-bot");
 
@@ -181,17 +181,117 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             SenderId: new DiscordUserId("u-bot"),
             IsBotMessage: true,
             IsDirectMessage: false,
+            ContainsBotMention: false,
             Text: "bot message",
             ReceivedAt: TimeProvider.System.GetUtcNow());
 
         gateway.Tell(botMessage);
 
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+        // Gateway no longer filters bot messages -- that is the conversation actor's job.
+        var forwarded = await sink.ExpectMsgAsync<DiscordGatewayMessage>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(forwarded.IsBotMessage);
+    }
+
+    [Fact]
+    public async Task Gateway_deduplicates_events()
+    {
+        var sink = CreateTestProbe("discord-sink-dedup");
+        var deps = CreateDependencies(
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-dedup");
+
+        var msg = CreateMessage(
+            eventId: "ev-dup",
+            channelId: "ch-7",
+            replyChannelId: "ch-7",
+            messageId: "m-1",
+            threadOrMessageId: "m-1",
+            rootMessageId: "m-1",
+            senderId: "u-1",
+            text: "first send");
+
+        gateway.Tell(msg);
+        await sink.ExpectMsgAsync<DiscordGatewayMessage>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Send same event ID again
+        gateway.Tell(msg);
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Gateway_routes_trusted_session_turn_to_conversation_actor()
+    {
+        var sink = CreateTestProbe("discord-sink-trusted");
+        var deps = CreateDependencies(
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-trusted");
+
+        var turn = new DeliverTrustedSessionTurn(
+            SessionId: new SessionId("ch-7/th-42"),
+            Content: "reminder content",
+            Source: new MessageSource
+            {
+                ChannelType = ChannelType.Discord,
+                SenderId = "system",
+                MessageId = "reminder-1",
+                Audience = TrustAudience.Team,
+                Boundary = "trusted-instance",
+                Principal = PrincipalClassification.TrustedInternal,
+                Provenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.Verified,
+                    SourceKind = "reminder"
+                },
+                ReminderId = "rem-1"
+            });
+
+        gateway.Tell(turn);
+
+        var forwarded = await sink.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("ch-7/th-42", forwarded.SessionId.Value);
+    }
+
+    [Fact]
+    public async Task Gateway_nacks_trusted_session_turn_with_invalid_session_id()
+    {
+        var sink = CreateTestProbe("discord-sink-nack");
+        var deps = CreateDependencies(
+            conversationPropsFactory: (_, _) => Props.Create(() => new ForwardActor(sink.Ref)));
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gateway-test-nack");
+
+        var turn = new DeliverTrustedSessionTurn(
+            SessionId: new SessionId("invalid-no-slash"),
+            Content: "reminder content",
+            Source: new MessageSource
+            {
+                ChannelType = ChannelType.Discord,
+                SenderId = "system",
+                MessageId = "reminder-1",
+                Audience = TrustAudience.Team,
+                Boundary = "trusted-instance",
+                Principal = PrincipalClassification.TrustedInternal,
+                Provenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.Verified,
+                    SourceKind = "reminder"
+                },
+                ReminderId = "rem-1"
+            });
+
+        gateway.Tell(turn, TestActor);
+
+        var nack = await ExpectMsgAsync<CommandNack>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("Invalid Discord SessionId format", nack.Reason);
     }
 
     private static DiscordGatewayDependencies CreateDependencies(
         DiscordChannelOptions? options = null,
-        Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? sessionPropsFactory = null)
+        Func<DiscordChannelId, DiscordGatewayDependencies, Props>? conversationPropsFactory = null)
     {
         return new DiscordGatewayDependencies(
             Pipeline: null!,
@@ -204,7 +304,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             },
             DefaultChannelId: null,
             ReplyClient: new UnconfiguredDiscordReplyClient(),
-            SessionPropsFactory: sessionPropsFactory);
+            ConversationPropsFactory: conversationPropsFactory);
     }
 
     private static DiscordGatewayMessage CreateMessage(
@@ -227,8 +327,8 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             SenderId: new DiscordUserId(senderId),
             IsBotMessage: false,
             IsDirectMessage: false,
+            ContainsBotMention: false,
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());
     }
-
 }

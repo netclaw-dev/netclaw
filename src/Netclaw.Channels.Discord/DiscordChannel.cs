@@ -98,7 +98,7 @@ public sealed class DiscordChannel : IChannel
 
             _logger.LogInformation("Discord channel connected.");
         }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception ex)
         {
             _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
@@ -120,6 +120,8 @@ public sealed class DiscordChannel : IChannel
         _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
         _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
         await _gatewayClient.DisconnectAsync(cancellationToken);
+        if (_gatewayClient is IDisposable disposable)
+            disposable.Dispose();
 
         if (_gateway is not null)
         {

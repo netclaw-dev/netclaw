@@ -28,6 +28,8 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             ? new DiscordChannelId(options.DefaultChannelId)
             : (DiscordChannelId?)null;
 
+        // Wire a real DiscordConversationActor (which performs ACL) with a
+        // SessionPropsFactory that routes accepted messages to the test probe.
         var deps = new DiscordGatewayDependencies(
             Pipeline: new FailingSessionPipeline(new InvalidOperationException("not used")),
             IngressGate: null,
@@ -53,6 +55,7 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             SenderId: new DiscordUserId(userId),
             IsBotMessage: false,
             IsDirectMessage: false,
+            ContainsBotMention: true,
             Text: text,
             ReceivedAt: DateTimeOffset.UtcNow);
 
@@ -68,6 +71,7 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             SenderId: new DiscordUserId(userId),
             IsBotMessage: false,
             IsDirectMessage: false,
+            ContainsBotMention: true,
             Text: "denied",
             ReceivedAt: DateTimeOffset.UtcNow);
 }

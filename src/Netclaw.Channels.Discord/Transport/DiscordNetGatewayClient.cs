@@ -5,7 +5,7 @@ using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Channels.Discord.Transport;
 
-internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient
+internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposable
 {
     private readonly DiscordSocketClient _client;
     private readonly TimeProvider _timeProvider;
@@ -14,7 +14,10 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
 
+    private string? _botMentionTag;
+
     public bool IsConnected => _client.ConnectionState == ConnectionState.Connected;
+    public DiscordUserId? BotUserId { get; private set; }
 
     public DiscordNetGatewayClient(
         DiscordSocketClient client,
@@ -34,6 +37,12 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient
     {
         await _client.LoginAsync(TokenType.Bot, botToken);
         await _client.StartAsync();
+
+        if (_client.CurrentUser is { } currentUser)
+        {
+            BotUserId = new DiscordUserId(currentUser.Id.ToString());
+            _botMentionTag = $"<@{currentUser.Id}>";
+        }
     }
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
@@ -42,9 +51,16 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient
         await _client.LogoutAsync();
     }
 
+    public void Dispose()
+    {
+        _client.Log -= OnDiscordLog;
+        _client.MessageReceived -= OnMessageReceivedAsync;
+        _client.ButtonExecuted -= OnButtonExecutedAsync;
+    }
+
     private async Task OnMessageReceivedAsync(SocketMessage message)
     {
-        if (message is not SocketUserMessage)
+        if (message is not SocketUserMessage userMessage)
             return;
 
         var handler = MessageReceived;
@@ -55,7 +71,11 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient
             message.Channel, message.Id);
 
         var isThread = message.Channel is SocketThreadChannel;
+        var isDm = message.Channel is IDMChannel;
         var messageIdStr = message.Id.ToString();
+
+        var containsMention = _botMentionTag is not null
+            && userMessage.Content.Contains(_botMentionTag, StringComparison.Ordinal);
 
         var gatewayMessage = new DiscordGatewayMessage(
             EventId: new DiscordEventId(messageIdStr),
@@ -63,10 +83,11 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient
             ReplyChannelId: new DiscordReplyChannelId(replyChannelId),
             MessageId: new DiscordMessageId(messageIdStr),
             ThreadOrMessageId: new DiscordThreadOrMessageId(threadOrMessageId),
-            RootMessageId: isThread ? null : new DiscordMessageId(messageIdStr),
+            RootMessageId: isThread || isDm ? null : new DiscordMessageId(messageIdStr),
             SenderId: new DiscordUserId(message.Author.Id.ToString()),
             IsBotMessage: message.Author.IsBot,
-            IsDirectMessage: message.Channel is IDMChannel,
+            IsDirectMessage: isDm,
+            ContainsBotMention: containsMention,
             Text: message.Content,
             ReceivedAt: _timeProvider.GetUtcNow());
 

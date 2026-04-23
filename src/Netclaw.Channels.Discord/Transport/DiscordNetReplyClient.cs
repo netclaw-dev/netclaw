@@ -1,4 +1,6 @@
+using System.Net;
 using Discord;
+using Discord.Net;
 using Discord.WebSocket;
 
 namespace Netclaw.Channels.Discord.Transport;
@@ -31,11 +33,24 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         {
             var anchorId = ulong.Parse(threadAnchor.Value);
             var threadName = message.ThreadName ?? "Conversation";
-            var thread = await textChannel.CreateThreadAsync(
-                threadName,
-                ThreadType.PublicThread,
-                ThreadArchiveDuration.OneDay,
-                message: await textChannel.GetMessageAsync(anchorId));
+            var anchorMessage = await textChannel.GetMessageAsync(anchorId)
+                ?? throw new InvalidOperationException(
+                    $"Discord message {threadAnchor.Value} not found — cannot create thread.");
+            IThreadChannel thread;
+            try
+            {
+                thread = await textChannel.CreateThreadAsync(
+                    threadName,
+                    ThreadType.PublicThread,
+                    ThreadArchiveDuration.OneDay,
+                    message: anchorMessage);
+            }
+            catch (HttpException httpEx) when (httpEx.HttpCode == HttpStatusCode.BadRequest)
+            {
+                throw new InvalidOperationException(
+                    $"Failed to create thread on message {threadAnchor.Value} — a thread may already exist on this message.",
+                    httpEx);
+            }
             targetChannel = thread;
             createdThreadId = new DiscordReplyChannelId(thread.Id.ToString());
         }

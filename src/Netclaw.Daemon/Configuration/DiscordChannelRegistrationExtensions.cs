@@ -26,10 +26,9 @@ public static class DiscordChannelRegistrationExtensions
             GatewayIntents = Discord.GatewayIntents.Guilds
                 | Discord.GatewayIntents.GuildMessages
                 | Discord.GatewayIntents.DirectMessages
-                | Discord.GatewayIntents.MessageContent
-                | Discord.GatewayIntents.GuildMessageReactions,
+                | Discord.GatewayIntents.MessageContent,
             AlwaysDownloadUsers = false,
-            MessageCacheSize = 0
+            MessageCacheSize = 100
         }));
 
         services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();

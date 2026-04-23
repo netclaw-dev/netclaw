@@ -454,7 +454,15 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         {
             _log.Warning(ex, "Failed posting Discord button prompt; falling back to text-only");
             ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
-            await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
+            try
+            {
+                await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
+            }
+            catch (Exception textEx)
+            {
+                _log.Error(textEx, "Failed posting text-only approval fallback; auto-denying request");
+                await SendApprovalDenyOnFailureAsync(request.CallId);
+            }
         }
     }
 
@@ -500,7 +508,6 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         return new DiscordPostMessage(
             ReplyChannelId: _replyChannelId,
             Text: text,
-            RootMessageId: _rootMessageId,
             Buttons: buttons);
     }
 
@@ -511,6 +518,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             _replyChannelId = threadId;
             _threadCreated = true;
             _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
+            Context.Parent.Tell(new ThreadPromoted(
+                _threadOrMessageId,
+                threadId));
         }
     }
 
@@ -530,6 +540,29 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to send delivery feedback to session");
+        }
+    }
+
+    private async Task SendApprovalDenyOnFailureAsync(string callId)
+    {
+        var pending = _pendingApprovalRequests.LastOrDefault(p =>
+            string.Equals(p.CallId, callId, StringComparison.Ordinal));
+        if (pending is not null)
+            _pendingApprovalRequests.Remove(pending);
+
+        try
+        {
+            await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+            {
+                SessionId = _sessionId,
+                CallId = callId,
+                SelectedKey = ApprovalOptionKeys.Deny,
+                SenderId = "system"
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to send auto-deny feedback for call {CallId}", callId);
         }
     }
 

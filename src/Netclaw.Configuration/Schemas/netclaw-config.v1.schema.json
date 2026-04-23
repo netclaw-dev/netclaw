@@ -44,6 +44,8 @@
         "Enabled": { "type": "boolean" },
         "DefaultChannelId": { "type": ["string", "null"] },
         "AllowDirectMessages": { "type": "boolean" },
+        "MentionOnly": { "type": "boolean", "default": true },
+        "MentionRequiredInDm": { "type": "boolean", "default": false },
         "AllowedChannelIds": {
           "type": "array",
           "items": { "type": "string" }

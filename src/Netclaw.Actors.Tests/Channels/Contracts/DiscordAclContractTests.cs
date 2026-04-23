@@ -36,6 +36,7 @@ public sealed class DiscordAclContractTests : AclPolicyContractTests
             SenderId: new DiscordUserId(userId),
             IsBotMessage: false,
             IsDirectMessage: isDm,
+            ContainsBotMention: false,
             Text: "test",
             ReceivedAt: DateTimeOffset.UtcNow);
 

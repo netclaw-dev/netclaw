@@ -32,100 +32,29 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 return;
             }
 
-            if (message.IsBotMessage)
-            {
-                _log.Info("discord_event_filtered event={0} reason=bot_message", message.EventId.Value);
-                ChannelTelemetry.RecordDiscordEventFiltered("bot_message");
-                return;
-            }
+            var conversation = GetOrCreateConversationActor(message.ChannelId);
 
-            if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
-            {
-                _log.Info("discord_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
-                ChannelTelemetry.RecordDiscordEventFiltered("restart_drain_active");
-                _log.Debug("Ingress closed reason: {0}", closedReason);
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(message.Text))
-            {
-                _log.Info("discord_event_filtered event={0} reason=no_content", message.EventId.Value);
-                ChannelTelemetry.RecordDiscordEventFiltered("no_content");
-                return;
-            }
-
-            var aclDecision = DiscordAclPolicy.EvaluateInbound(
-                message,
-                _dependencies.Options,
-                _dependencies.DefaultChannelId);
-
-            if (!aclDecision.IsAllowed)
-            {
-                var reason = aclDecision.DenyReason ?? "acl_denied";
-                _log.Info("discord_event_dropped event={0} reason={1}", message.EventId.Value, reason);
-                ChannelTelemetry.RecordDiscordEventDropped(reason);
-                return;
-            }
-
-            var sessionId = new SessionId($"{message.ChannelId.Value}/{message.ThreadOrMessageId.Value}");
-            var sessionBinding = GetOrCreateSessionBinding(
-                sessionId,
-                message.ChannelId,
-                message.ReplyChannelId,
-                message.ThreadOrMessageId,
-                message.RootMessageId);
-
+            _log.Debug("Routing Discord event {0} to conversation {1}", message.EventId.Value, message.ChannelId);
             ChannelTelemetry.RecordDiscordEventRouted("message");
-            sessionBinding.Forward(new DiscordThreadInbound(
-                SessionId: sessionId,
-                ChannelId: message.ChannelId,
-                ReplyChannelId: message.ReplyChannelId,
-                ThreadOrMessageId: message.ThreadOrMessageId,
-                RootMessageId: message.RootMessageId,
-                EventId: message.EventId,
-                SenderId: message.SenderId,
-                Audience: aclDecision.Audience,
-                Principal: aclDecision.Principal,
-                Provenance: aclDecision.Provenance,
-                Text: message.Text,
-                ReceivedAt: message.ReceivedAt));
+            conversation.Forward(message);
         });
 
         Receive<DiscordGatewayInteraction>(interaction =>
         {
             ChannelTelemetry.RecordDiscordEventReceived("interaction");
 
-            if (!IsInteractionAuthorized(interaction))
-            {
-                ChannelTelemetry.RecordDiscordEventDropped("interaction_acl_denied");
-                return;
-            }
+            var conversation = GetOrCreateConversationActor(interaction.ChannelId);
 
-            var actorName = BuildActorName(interaction.ChannelId, interaction.ThreadOrMessageId);
-            var sessionBinding = Context.Child(actorName);
-            if (sessionBinding.IsNobody())
-            {
-                _log.Info(
-                    "Ignoring Discord interaction for missing session binding channel={0} threadOrMessage={1}",
-                    interaction.ChannelId.Value,
-                    interaction.ThreadOrMessageId.Value);
-                ChannelTelemetry.RecordDiscordInteractionError("missing_session_binding");
-                return;
-            }
-
+            _log.Debug("Routing Discord interaction to conversation {0}", interaction.ChannelId);
             ChannelTelemetry.RecordDiscordEventRouted("interaction");
-            sessionBinding.Forward(new DiscordApprovalResponse(
-                ChannelId: interaction.ChannelId,
-                ThreadOrMessageId: interaction.ThreadOrMessageId,
-                CallId: interaction.CallId,
-                SelectedKey: interaction.SelectedKey,
-                SenderId: interaction.SenderId,
-                RequesterSenderId: interaction.RequesterSenderId));
+            conversation.Forward(interaction);
         });
 
+        // No ACL call — audience was validated at reminder mint time by
+        // the reminder-audience-authorization capability.
         Receive<DeliverTrustedSessionTurn>(message =>
         {
-            if (!TryParseDiscordSessionId(message.SessionId, out var channelId, out var threadOrMessageId))
+            if (!TryParseDiscordSessionId(message.SessionId, out var channelId, out _))
             {
                 _log.Warning(
                     "Dropping DeliverTrustedSessionTurn with unparseable Discord SessionId {SessionId}",
@@ -134,72 +63,17 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 return;
             }
 
-            var actorName = BuildActorName(channelId, threadOrMessageId);
-            var sessionBinding = Context.Child(actorName);
-            if (sessionBinding.IsNobody())
-            {
-                _log.Warning(
-                    "Dropping DeliverTrustedSessionTurn for missing session binding session={Session}",
-                    message.SessionId.Value);
-                Sender.Tell(CommandNack.For(message.SessionId, "No active Discord session binding"));
-                return;
-            }
+            var conversation = GetOrCreateConversationActor(channelId);
 
             _log.Debug(
-                "Routing DeliverTrustedSessionTurn session={Session} channel={Channel} threadOrMessage={ThreadOrMessage}",
-                message.SessionId.Value, channelId.Value, threadOrMessageId.Value);
-            sessionBinding.Forward(message);
+                "Routing DeliverTrustedSessionTurn session={Session} channel={Channel}",
+                message.SessionId.Value, channelId.Value);
+            conversation.Forward(message);
         });
     }
 
     public static Props CreateProps(DiscordGatewayDependencies dependencies) =>
         Props.Create(() => new DiscordGatewayActor(dependencies));
-
-    private IActorRef GetOrCreateSessionBinding(
-        SessionId sessionId,
-        DiscordChannelId channelId,
-        DiscordReplyChannelId replyChannelId,
-        DiscordThreadOrMessageId threadOrMessageId,
-        DiscordMessageId? rootMessageId)
-    {
-        var actorName = BuildActorName(channelId, threadOrMessageId);
-        var existing = Context.Child(actorName);
-        if (!existing.IsNobody())
-            return existing;
-
-        var props = _dependencies.SessionPropsFactory?.Invoke(
-                        sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies)
-                    ?? DiscordSessionBindingActor.CreateProps(
-                        sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies);
-        return Context.ActorOf(props, actorName);
-    }
-
-    private bool IsInteractionAuthorized(DiscordGatewayInteraction interaction)
-    {
-        if (string.IsNullOrWhiteSpace(interaction.SenderId.Value))
-        {
-            _log.Info("discord_interaction_dropped reason=missing_user_id");
-            return false;
-        }
-
-        if (!DiscordAclPolicy.IsAllowedChannel(interaction.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
-        {
-            _log.Info("discord_interaction_dropped channel={0} reason=channel_not_allowed", interaction.ChannelId.Value);
-            return false;
-        }
-
-        if (_dependencies.Options.AllowedUserIds.Length > 0
-            && !_dependencies.Options.AllowedUserIds.Contains(interaction.SenderId.Value, StringComparer.Ordinal))
-        {
-            _log.Info("discord_interaction_dropped user={0} reason=user_not_allowed", interaction.SenderId.Value);
-            return false;
-        }
-
-        return true;
-    }
-
-    private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
-        => $"{channelId.Value}:{threadOrMessageId.Value}";
 
     internal static bool TryParseDiscordSessionId(
         SessionId sessionId,
@@ -220,6 +94,18 @@ public sealed class DiscordGatewayActor : ReceiveActor
         channelId = new DiscordChannelId(value[..slashIdx]);
         threadOrMessageId = new DiscordThreadOrMessageId(value[(slashIdx + 1)..]);
         return true;
+    }
+
+    private IActorRef GetOrCreateConversationActor(DiscordChannelId channelId)
+    {
+        var actorName = Uri.EscapeDataString(channelId.Value);
+        var existing = Context.Child(actorName);
+        if (!existing.IsNobody())
+            return existing;
+
+        var props = _dependencies.ConversationPropsFactory?.Invoke(channelId, _dependencies)
+            ?? DiscordConversationActor.CreateProps(channelId, _dependencies);
+        return Context.ActorOf(props, actorName);
     }
 
     private bool TryMarkEventProcessed(DiscordEventId eventId)
@@ -247,5 +133,7 @@ public sealed record DiscordGatewayDependencies(
     DiscordChannelOptions Options,
     DiscordChannelId? DefaultChannelId,
     IDiscordReplyClient ReplyClient,
+    DiscordUserId? BotUserId = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
+    Func<DiscordChannelId, DiscordGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null);

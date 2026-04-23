@@ -13,6 +13,7 @@ public sealed record DiscordGatewayMessage(
     DiscordUserId SenderId,
     bool IsBotMessage,
     bool IsDirectMessage,
+    bool ContainsBotMention,
     string Text,
     DateTimeOffset ReceivedAt);
 
@@ -35,6 +36,8 @@ public interface IDiscordGatewayClient
     event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
 
     bool IsConnected { get; }
+
+    DiscordUserId? BotUserId { get; }
 
     Task ConnectAsync(string botToken, CancellationToken cancellationToken = default);
 
@@ -92,6 +95,8 @@ public sealed class UnconfiguredDiscordGatewayClient : IDiscordGatewayClient
     }
 
     public bool IsConnected => false;
+
+    public DiscordUserId? BotUserId => null;
 
     public Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
