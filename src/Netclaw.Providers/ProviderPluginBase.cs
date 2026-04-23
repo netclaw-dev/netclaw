@@ -36,7 +36,7 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     /// Creates an <see cref="HttpClient"/> with a generous timeout suitable for LLM calls.
     /// The default <see cref="HttpClient.Timeout"/> of 100 seconds is far too short for
     /// large-context models — prefill alone can exceed 100 seconds on self-hosted hardware.
-    /// Session-level timeouts (FirstTokenTimeout, StreamIdleTimeout via ProcessingWatchdog)
+    /// Session-level timeouts (FirstTokenTimeout via ProcessingWatchdog)
     /// are the authoritative timeout layer; the HttpClient timeout is a last-resort safety
     /// net that should never fire before the watchdog.
     /// </summary>

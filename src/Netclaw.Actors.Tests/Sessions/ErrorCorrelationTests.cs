@@ -34,7 +34,6 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : TestKit(ou
         services.AddSingleton(new SessionConfig
         {
             FirstTokenTimeout = TimeSpan.FromSeconds(10),
-            StreamIdleTimeout = TimeSpan.FromSeconds(10),
             ToolExecutionTimeout = TimeSpan.FromSeconds(10),
             SidecarLlmTimeout = TimeSpan.FromSeconds(10),
             Tuning = new SessionTuning

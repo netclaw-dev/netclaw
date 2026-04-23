@@ -58,20 +58,12 @@ public sealed record SessionConfig
     public TimeSpan SidecarLlmTimeout { get; init; } = TimeSpan.FromSeconds(90);
 
     /// <summary>
-    /// Maximum wait time for the first streaming token from the LLM provider.
-    /// Covers the prefill phase where the model processes input context before
-    /// generating output. Large contexts (200K+ tokens) can take several minutes.
+    /// Maximum inactivity timeout for LLM streaming calls. Used both as the
+    /// initial wait for the first token (prefill phase) and as the silence
+    /// threshold between consecutive deltas — the timer resets on every delta.
     /// Falls back to <see cref="TurnLlmTimeout"/> if not explicitly configured.
     /// </summary>
     public TimeSpan FirstTokenTimeout { get; init; } = TimeSpan.FromSeconds(600);
-
-    /// <summary>
-    /// Maximum silence between consecutive streaming tokens. Once the first token
-    /// arrives, the watchdog switches to this tighter timeout and resets on every
-    /// delta. If no tokens arrive within this window, the stream is considered dead.
-    /// Falls back to <see cref="TurnLlmTimeout"/> if not explicitly configured.
-    /// </summary>
-    public TimeSpan StreamIdleTimeout { get; init; } = TimeSpan.FromSeconds(120);
 
     /// <summary>
     /// Internal tuning constants. Bindable from config for development/testing
@@ -98,15 +90,10 @@ public sealed record SessionConfig
             TurnLlmTimeout = turnLlmTimeout,
             ToolExecutionTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.ToolExecutionTimeoutSeconds)),
             SidecarLlmTimeout = TimeSpan.FromSeconds(Math.Max(1, raw.SidecarLlmTimeoutSeconds)),
-            // Two-phase timeout: explicit value → TurnLlmTimeout fallback (if customized) → default
-            // If operator set TurnLlmTimeoutSeconds (non-default 180), use it for both phases
-            // to preserve backward compat. Otherwise use the generous new defaults.
+            // Explicit value → TurnLlmTimeout fallback (if customized) → default
             FirstTokenTimeout = raw.FirstTokenTimeoutSeconds > 0
                 ? TimeSpan.FromSeconds(raw.FirstTokenTimeoutSeconds)
                 : raw.TurnLlmTimeoutSeconds != 180 ? turnLlmTimeout : TimeSpan.FromSeconds(600),
-            StreamIdleTimeout = raw.StreamIdleTimeoutSeconds > 0
-                ? TimeSpan.FromSeconds(raw.StreamIdleTimeoutSeconds)
-                : raw.TurnLlmTimeoutSeconds != 180 ? turnLlmTimeout : TimeSpan.FromSeconds(120),
             Tuning = tuning,
         };
     }
@@ -158,6 +145,5 @@ public sealed record SessionConfig
         public int ToolExecutionTimeoutSeconds { get; init; } = 90;
         public int SidecarLlmTimeoutSeconds { get; init; } = 90;
         public int FirstTokenTimeoutSeconds { get; init; }
-        public int StreamIdleTimeoutSeconds { get; init; }
     }
 }

@@ -118,14 +118,7 @@
           "minimum": 10,
           "maximum": 1800,
           "default": 600,
-          "description": "Maximum wait in seconds for the first streaming token. Covers model prefill on large contexts."
-        },
-        "StreamIdleTimeoutSeconds": {
-          "type": "integer",
-          "minimum": 10,
-          "maximum": 600,
-          "default": 120,
-          "description": "Maximum silence in seconds between streaming tokens. Resets on each delta."
+          "description": "Maximum inactivity in seconds for LLM streaming calls. Used as both the initial wait for the first token and the silence threshold between deltas (resets on each delta)."
         },
         "CompactionThreshold": {
           "type": "number",

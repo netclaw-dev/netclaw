@@ -16,22 +16,21 @@ using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : TestKit(output: output)
 {
-    private readonly TwoPhaseTestChatClient _chatClient = new();
+    private readonly StreamingTimeoutTestChatClient _chatClient = new();
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
         services.AddSingleton(new ModelCapabilities
         {
-            ModelId = "two-phase-timeout-test-model",
+            ModelId = "streaming-timeout-test-model",
             ContextWindowTokens = 128_000,
         });
         services.AddSingleton(new SessionConfig
         {
             FirstTokenTimeout = TimeSpan.FromSeconds(2),
-            StreamIdleTimeout = TimeSpan.FromSeconds(1),
             ToolExecutionTimeout = TimeSpan.FromSeconds(10),
             SidecarLlmTimeout = TimeSpan.FromSeconds(10),
             Tuning = new SessionTuning
@@ -67,13 +66,13 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
     }
 
     [Fact]
-    public async Task First_token_timeout_fires_when_no_deltas_arrive()
+    public async Task Timeout_fires_when_no_deltas_arrive()
     {
         _chatClient.Mode = StreamMode.HangForever;
 
-        var sessionId = new SessionId("two-phase/first-token-timeout");
+        var sessionId = new SessionId("streaming-timeout/no-deltas");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("first-token-sub");
+        var subscriber = CreateTestProbe("no-delta-sub");
 
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
@@ -92,19 +91,20 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
         // FirstTokenTimeout is 2s — should fire within ~3s
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.Timeout, error.Category);
-        Assert.Contains("did not respond", error.Message);
+        Assert.Contains("timed out", error.Message);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
-    public async Task Stream_idle_timeout_fires_when_stream_stalls_after_deltas()
+    public async Task Timeout_resets_on_delta_and_fires_after_silence()
     {
-        // Emit 2 deltas then hang — the stream-idle timeout (1s) should fire, not first-token (2s)
+        // Emit deltas then hang — the unified timeout (2s) resets on each delta,
+        // then fires 2s after the last one
         _chatClient.Mode = StreamMode.EmitThenHang;
 
-        var sessionId = new SessionId("two-phase/stream-idle-timeout");
+        var sessionId = new SessionId("streaming-timeout/delta-then-silence");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("stream-idle-sub");
+        var subscriber = CreateTestProbe("delta-silence-sub");
 
         await sessionManager.Ask<SessionJoined>(new JoinSession
         {
@@ -120,11 +120,10 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
             Content = "hello"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        // We should see text deltas streamed, then a timeout error
-        // StreamIdleTimeout is 1s — should fire well before FirstTokenTimeout (2s)
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        // Deltas stream, then silence — timeout fires after FirstTokenTimeout (2s) of no activity
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(8), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(ErrorCategory.Timeout, error.Category);
-        Assert.Contains("stopped unexpectedly", error.Message);
+        Assert.Contains("timed out", error.Message);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -133,7 +132,7 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
     {
         _chatClient.Mode = StreamMode.SucceedImmediately;
 
-        var sessionId = new SessionId("two-phase/success");
+        var sessionId = new SessionId("streaming-timeout/success");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("success-sub");
 
@@ -158,7 +157,7 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
 
     private enum StreamMode { HangForever, EmitThenHang, SucceedImmediately }
 
-    private sealed class TwoPhaseTestChatClient : IChatClient
+    private sealed class StreamingTimeoutTestChatClient : IChatClient
     {
         public StreamMode Mode { get; set; } = StreamMode.HangForever;
 
@@ -193,7 +192,6 @@ public sealed class LlmSessionTwoPhaseTimeoutTests(ITestOutputHelper output) : T
         private static async IAsyncEnumerable<ChatResponseUpdate> EmitThenHangAsync(
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
-            // Emit a few deltas so the actor receives LlmResponseDeltaReceived
             yield return new ChatResponseUpdate
             {
                 Role = AiChatRole.Assistant,

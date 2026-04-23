@@ -106,9 +106,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ProcessingWatchdog _watchdog = new();
 
     // Actor-owned CTS for the active LLM call. Cancelled by the watchdog on timeout
-    // or when a response/failure arrives. The session-level watchdog (FirstTokenTimeout /
-    // StreamIdleTimeout) is the authoritative timeout — this CTS just propagates
-    // cancellation to the HTTP layer so timed-out connections are released.
+    // or when a response/failure arrives. The session-level watchdog (FirstTokenTimeout)
+    // is the authoritative timeout — this CTS just propagates cancellation to the
+    // HTTP layer so timed-out connections are released.
     private CancellationTokenSource? _activeLlmCts;
 
     // Correlation ID for the active LLM call. Incremented in FireLlmCall.
@@ -116,8 +116,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // from cancelled calls are ignored when their CallId doesn't match.
     private long _activeCallId;
 
-    // Two-phase timeout: tracks whether we've received any streaming delta this turn
-    private bool _firstDeltaReceived;
+    // Tracks whether any content was streamed this call — used to gate transient retry logic
+    // (mid-stream failures can't be retried because partial output was already emitted)
+    private bool _anyContentStreamed;
 
     // Per-turn diagnostic correlation (ephemeral)
     private string? _activeTurnId;
@@ -480,8 +481,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<LlmResponseDeltaReceived>(msg =>
         {
             if (msg.CallId != _activeCallId) return; // stale delta from cancelled call
-            _firstDeltaReceived = true;
-            _watchdog.Refresh(_config.StreamIdleTimeout, Timers);
+            _anyContentStreamed = true;
+            _watchdog.Refresh(_config.FirstTokenTimeout, Timers);
 
             switch (msg.Content)
             {
@@ -830,7 +831,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // Pre-stream transient failure: retry with backoff if no data was streamed yet.
             // IsTransientStreamingError handles ProviderException (which wraps HTTP status codes)
             // while RetryPolicy only provides the attempt limit and backoff delay.
-            if (!_firstDeltaReceived && IsTransientStreamingError(msg.Cause))
+            if (!_anyContentStreamed && IsTransientStreamingError(msg.Cause))
             {
                 var policy = _config.Tuning.StreamingRetryPolicy;
                 if (_streamingRetryAttempt < policy.MaxRetries)
@@ -874,7 +875,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var timeout = msg.OperationName switch
             {
                 "tool-execution" => _config.ToolExecutionTimeout,
-                "llm-call" => _firstDeltaReceived ? _config.StreamIdleTimeout : _config.FirstTokenTimeout,
+                "llm-call" => _config.FirstTokenTimeout,
                 _ => _config.TurnLlmTimeout
             };
 
@@ -2055,9 +2056,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_model.ModelId} context window ({_model.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
 
         if (cause is TimeoutException)
-            return _firstDeltaReceived
-                ? "The LLM response stream stopped unexpectedly. Please try again."
-                : "The LLM provider did not respond in time. The model may be overloaded or the context too large. Please try again.";
+            return "The LLM response stream timed out due to inactivity. The model may be overloaded or the context too large. Please try again.";
 
         return "I encountered an error processing your message. Please try again.";
     }
@@ -2227,7 +2226,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)
     {
-        _firstDeltaReceived = false;
+        _anyContentStreamed = false;
         CancelAndDisposeLlmCts();
         _activeLlmCts = new CancellationTokenSource();
         _activeCallId++;
