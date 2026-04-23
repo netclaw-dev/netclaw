@@ -27,6 +27,7 @@ public sealed class RecordingSessionPipeline(
             .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
 
         var output = Source.From(outputFactory(sessionId).ToList())
+            .Concat(Source.Never<SessionOutput>())
             .Via(killSwitch.Flow<SessionOutput>());
 
         return Task.FromResult(new MaterializedSession(input, output, killSwitch));

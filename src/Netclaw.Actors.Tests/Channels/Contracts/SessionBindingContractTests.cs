@@ -412,11 +412,15 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.True(texts.Count >= 2, $"Expected at least 2 posts, got {texts.Count}");
         }, cancellationToken: ct);
 
-        // Stale approval should NOT produce feedback. Send it, then use
-        // ExpectNoMsgAsync as a synchronization barrier — the actor will have
-        // processed the approval (and dropped it) within this window.
+        // Stale approval should NOT produce feedback. Send the approval, then
+        // a PoisonPill to stop the actor. FIFO mailbox ordering guarantees the
+        // actor processes the approval before stopping, so ExpectTerminatedAsync
+        // is a deterministic sync barrier — no time-based waits needed.
+        var probe = CreateTestProbe();
+        probe.Watch(actor);
         actor.Tell(CreateApprovalResponse("call-stale", ApprovalOptionKeys.ApproveOnce, "user-1"));
-        await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), ct);
+        actor.Tell(PoisonPill.Instance);
+        await probe.ExpectTerminatedAsync(actor, cancellationToken: ct);
 
         var staleResponses = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()
             .Where(f => f.CallId == "call-stale")

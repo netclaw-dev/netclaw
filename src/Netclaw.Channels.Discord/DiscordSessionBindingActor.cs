@@ -349,7 +349,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
                 ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
                 await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
-                _deliveredThisTurn = true;
+                // Approval prompts are infrastructure — not agent output. Do not count
+                // as "delivered" so TurnCompleted still fires the empty-turn fallback,
+                // matching Slack parity.
                 break;
 
             case TurnCompleted completed:
