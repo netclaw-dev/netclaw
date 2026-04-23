@@ -324,10 +324,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
                 await writer.WriteAsync(input, queueWriteCts.Token);
 
-                // Track the highest enqueued timestamp but do NOT persist the cursor yet.
-                // The cursor advances only when TurnCompleted confirms the session actor
-                // has durably recorded the turn — see HandleOutputAsync. This prevents
-                // message loss when the daemon crashes between cursor persist and turn persist.
+                // Defer cursor persistence until TurnCompleted confirms durable turn recording,
+                // otherwise a crash between cursor and turn persist loses messages.
                 if (currentTs is { } ts)
                 {
                     if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
@@ -1016,6 +1014,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task ReinitializePipelineAsync(string reason)
     {
+        _pendingCursorTs = null;
         await _handle.ReinitializeAsync(
             reason,
             () => Timers.StartSingleTimer(
@@ -1080,12 +1079,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 break;
 
             case TurnCompleted completed:
-                // Advance the cursor now that the session actor has durably persisted the turn.
                 if (completed.Outcome == TurnOutcome.Completed && _pendingCursorTs is { } pendingTs)
-                {
                     AdvanceCursor(pendingTs);
-                    _pendingCursorTs = null;
-                }
+                _pendingCursorTs = null;
 
                 if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && (_postedThisTurn || _uploadedFileThisTurn))
                 {

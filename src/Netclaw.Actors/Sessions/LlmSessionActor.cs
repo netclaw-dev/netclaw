@@ -2197,10 +2197,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var content = _promptProvider.GetSystemPrompt();
         if (string.IsNullOrWhiteSpace(content))
         {
-            // Retain the last-known prompt from recovery if we have one.
-            // Deleting the prompt strips the agent of all identity and project context,
-            // which is worse than a potentially stale prompt. The proper fix for
-            // stale project context is CWD tracking (#595).
+            // Retain the last-known prompt from recovery — deleting it strips the agent
+            // of all identity and project context, which is worse than a stale prompt.
             if (_state.History.Count > 0 && _state.History[0].Role == Protocol.ChatRole.System)
             {
                 _log.Warning("Identity files missing — retaining last-known system prompt from recovery");
