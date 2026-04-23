@@ -508,29 +508,20 @@ forwarding via `self.Tell(LlmResponseDeltaReceived)`, and error packaging as
 `LlmCallFailed`. Dynamic context layer injection SHALL be a static method on
 this class.
 
-#### Scenario: Two-phase LLM call timeout
+#### Scenario: LLM streaming inactivity timeout
 
-The system SHALL enforce two separate timeout phases for LLM streaming calls:
+The system SHALL enforce a single reset-on-delta inactivity timeout for LLM
+streaming calls using `FirstTokenTimeout` (default 600s). The timer starts
+when the LLM call is fired and resets on every streaming delta received.
 
-- **Phase 1 — First-Token Timeout**: The system SHALL wait up to
-  `FirstTokenTimeout` (default 600s) for the first streaming delta. This
-  covers the prefill phase where the model processes input context.
-- **Phase 2 — Stream-Idle Timeout**: Once the first delta arrives, the
-  system SHALL switch to `StreamIdleTimeout` (default 120s). This resets
-  on every subsequent delta and detects dead streams.
-
-- **GIVEN** an LLM streaming call is in progress and no deltas have arrived
-- **WHEN** the `FirstTokenTimeout` elapses
-- **THEN** the invoker sends `LlmCallFailed` with a `TimeoutException`
-- **AND** the error message indicates the provider did not respond
-
-- **GIVEN** an LLM streaming call has produced at least one delta
-- **WHEN** no further deltas arrive within `StreamIdleTimeout`
+- **GIVEN** an LLM streaming call is in progress
+- **WHEN** no deltas arrive within `FirstTokenTimeout` of the call start or
+  the last received delta
 - **THEN** the watchdog fires and the turn fails with `ErrorCategory.Timeout`
-- **AND** the error message indicates the stream stopped unexpectedly
+- **AND** the error message indicates the stream timed out due to inactivity
 
-Backward compat: if `TurnLlmTimeoutSeconds` is configured but the new
-properties are not, both phases use `TurnLlmTimeout`.
+Backward compat: if `TurnLlmTimeoutSeconds` is configured but
+`FirstTokenTimeoutSeconds` is not, `FirstTokenTimeout` uses `TurnLlmTimeout`.
 
 #### Scenario: Streaming deltas forwarded to actor
 
@@ -538,7 +529,7 @@ properties are not, both phases use `TurnLlmTimeout`.
 - **WHEN** text content chunks arrive
 - **THEN** each chunk after the first is forwarded as `LlmResponseDeltaReceived`
 - **AND** the first chunk is held until the second arrives (single-chunk optimization)
-- **AND** the watchdog refreshes with `StreamIdleTimeout` on each delta
+- **AND** the watchdog refreshes with `FirstTokenTimeout` on each delta
 
 ### Requirement: Tool execution encapsulation
 
