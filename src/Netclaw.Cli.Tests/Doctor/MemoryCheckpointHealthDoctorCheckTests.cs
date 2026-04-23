@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
@@ -27,6 +28,8 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
             RetryCount: 0,
             CreatedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
             UpdatedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()), TestContext.Current.CancellationToken);
+
+        await ForceWalCheckpointAsync(paths.MemorySqliteDbPath, TestContext.Current.CancellationToken);
 
         var check = new MemoryCheckpointHealthDoctorCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
@@ -60,6 +63,8 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
                 UpdatedAtMs: now), TestContext.Current.CancellationToken);
         }
 
+        await ForceWalCheckpointAsync(paths.MemorySqliteDbPath, TestContext.Current.CancellationToken);
+
         var check = new MemoryCheckpointHealthDoctorCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
@@ -87,5 +92,15 @@ public sealed class MemoryCheckpointHealthDoctorCheckTests
 
         File.WriteAllText(paths.NetclawConfigPath,
             JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static async Task ForceWalCheckpointAsync(string dbPath, CancellationToken ct)
+    {
+        var connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        await using var conn = new SqliteConnection(connectionString);
+        await conn.OpenAsync(ct);
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 }

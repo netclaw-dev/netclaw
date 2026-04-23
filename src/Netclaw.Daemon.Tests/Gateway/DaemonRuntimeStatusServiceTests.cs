@@ -49,7 +49,14 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         if (!Directory.Exists(path))
             return;
 
-        SqliteConnection.ClearAllPools();
+        // Clear only the connection pool for THIS test's database, not all pools.
+        // Using ClearAllPools() would interfere with other parallel tests.
+        var dbPath = Path.Combine(path, "netclaw.db");
+        if (File.Exists(dbPath))
+        {
+            var connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+            SqliteConnection.ClearPool(new SqliteConnection(connectionString));
+        }
 
         for (var i = 0; i < 8; i++)
         {

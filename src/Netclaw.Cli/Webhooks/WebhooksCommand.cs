@@ -10,29 +10,30 @@ namespace Netclaw.Cli.Webhooks;
 /// </summary>
 internal static class WebhooksCommand
 {
-    public static Task<int> RunAsync(string[] args, NetclawPaths paths)
+    public static Task<int> RunAsync(string[] args, NetclawPaths paths, TextWriter? output = null)
     {
+        output ??= Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "list";
 
         if (subcommand is "help" or "-h" or "--help")
-            return Task.FromResult(WriteHelp());
+            return Task.FromResult(WriteHelp(output));
 
         var store = new WebhookRouteStore(paths);
 
         return Task.FromResult(subcommand switch
         {
-            "list" => RunList(args, store, paths),
-            "show" => RunShow(args, store, paths),
-            "set" => RunSet(args, store, paths),
-            "delete" => RunDelete(args, store),
-            "validate" => RunValidate(args, paths),
-            _ => WriteHelp()
+            "list" => RunList(args, store, paths, output),
+            "show" => RunShow(args, store, paths, output),
+            "set" => RunSet(args, store, paths, output),
+            "delete" => RunDelete(args, store, output),
+            "validate" => RunValidate(args, paths, output),
+            _ => WriteHelp(output)
         });
     }
 
     // ── list ──
 
-    private static int RunList(string[] args, WebhookRouteStore store, NetclawPaths paths)
+    private static int RunList(string[] args, WebhookRouteStore store, NetclawPaths paths, TextWriter output)
     {
         var json = HasFlag(args, "--json");
         var all = HasFlag(args, "--all");
@@ -59,12 +60,12 @@ internal static class WebhooksCommand
         {
             if (json)
             {
-                Console.WriteLine("[]");
+                output.WriteLine("[]");
             }
             else
             {
-                Console.WriteLine("No webhook routes configured.");
-                Console.WriteLine($"Routes are stored in: {paths.WebhooksDirectory}");
+                output.WriteLine("No webhook routes configured.");
+                output.WriteLine($"Routes are stored in: {paths.WebhooksDirectory}");
             }
             return 0;
         }
@@ -82,7 +83,7 @@ internal static class WebhooksCommand
                     deliveryRequired = r.IsValid && r.Definition!.DeliveryRequired
                 })
                 .ToList();
-            Console.WriteLine(JsonSerializer.Serialize(items, JsonDefaults.IndentedCamelCase));
+            output.WriteLine(JsonSerializer.Serialize(items, JsonDefaults.IndentedCamelCase));
             return 0;
         }
 
@@ -91,9 +92,9 @@ internal static class WebhooksCommand
         const int colAudience = 10;
         const int colVerification = 14;
 
-        Console.WriteLine(
+        output.WriteLine(
             $"{"NAME",-colName}  {"STATUS",-colStatus}  {"AUDIENCE",-colAudience}  {"VERIFICATION",-colVerification}  DELIVERY");
-        Console.WriteLine(new string('-', colName + colStatus + colAudience + colVerification + 18));
+        output.WriteLine(new string('-', colName + colStatus + colAudience + colVerification + 18));
 
         foreach (var route in routes)
         {
@@ -106,7 +107,7 @@ internal static class WebhooksCommand
             var verification = route.IsValid ? route.Definition!.Verification.Kind.ToString().ToLowerInvariant() : "-";
             var delivery = route.IsValid && route.Definition!.DeliveryRequired ? "required" : "optional";
 
-            Console.WriteLine(
+            output.WriteLine(
                 $"{route.RouteName,-colName}  {status,-colStatus}  {audience,-colAudience}  {verification,-colVerification}  {delivery}");
         }
 
@@ -115,7 +116,7 @@ internal static class WebhooksCommand
 
     // ── show ──
 
-    private static int RunShow(string[] args, WebhookRouteStore store, NetclawPaths paths)
+    private static int RunShow(string[] args, WebhookRouteStore store, NetclawPaths paths, TextWriter output)
     {
         if (args.Length < 3)
         {
@@ -157,7 +158,7 @@ internal static class WebhooksCommand
 
         if (json)
         {
-            var output = new
+            var jsonOutput = new
             {
                 name = routeName,
                 file = match.FilePath,
@@ -187,70 +188,70 @@ internal static class WebhooksCommand
                 maxBodyBytes = route.MaxBodyBytes,
                 rateLimitPerMinute = route.RateLimitPerMinute
             };
-            Console.WriteLine(JsonSerializer.Serialize(output, JsonDefaults.IndentedCamelCase));
+            output.WriteLine(JsonSerializer.Serialize(jsonOutput, JsonDefaults.IndentedCamelCase));
             return 0;
         }
 
-        Console.WriteLine($"Route:              {routeName}");
-        Console.WriteLine($"File:               {match.FilePath}");
-        Console.WriteLine($"Status:             {(route.Enabled ? "enabled" : "disabled")}");
-        Console.WriteLine($"Endpoint:           /api/webhooks/{routeName}");
-        Console.WriteLine();
-        Console.WriteLine("Verification:");
-        Console.WriteLine($"  Kind:             {route.Verification.Kind.ToString().ToLowerInvariant()}");
-        Console.WriteLine($"  Secret:           {(showSecret ? route.Verification.Secret?.Value ?? "(not set)" : "********** (use --show-secret to reveal)")}");
+        output.WriteLine($"Route:              {routeName}");
+        output.WriteLine($"File:               {match.FilePath}");
+        output.WriteLine($"Status:             {(route.Enabled ? "enabled" : "disabled")}");
+        output.WriteLine($"Endpoint:           /api/webhooks/{routeName}");
+        output.WriteLine();
+        output.WriteLine("Verification:");
+        output.WriteLine($"  Kind:             {route.Verification.Kind.ToString().ToLowerInvariant()}");
+        output.WriteLine($"  Secret:           {(showSecret ? route.Verification.Secret?.Value ?? "(not set)" : "********** (use --show-secret to reveal)")}");
         if (route.Verification.Kind == WebhookVerifierKind.Hmac)
         {
-            Console.WriteLine($"  Algorithm:        {route.Verification.HmacAlgorithm.ToString().ToLowerInvariant()}");
-            Console.WriteLine($"  Signature Header: {route.Verification.SignatureHeaderName ?? "(default)"}");
-            Console.WriteLine($"  Signature Prefix: {route.Verification.SignaturePrefix ?? "(none)"}");
+            output.WriteLine($"  Algorithm:        {route.Verification.HmacAlgorithm.ToString().ToLowerInvariant()}");
+            output.WriteLine($"  Signature Header: {route.Verification.SignatureHeaderName ?? "(default)"}");
+            output.WriteLine($"  Signature Prefix: {route.Verification.SignaturePrefix ?? "(none)"}");
         }
         else
         {
-            Console.WriteLine($"  Secret Header:    {route.Verification.SecretHeaderName ?? "(default)"}");
+            output.WriteLine($"  Secret Header:    {route.Verification.SecretHeaderName ?? "(default)"}");
         }
-        Console.WriteLine($"  Event Header:     {route.Verification.EventHeaderName ?? "(default)"}");
-        Console.WriteLine($"  Delivery Header:  {route.Verification.DeliveryIdHeaderName ?? "(default)"}");
-        Console.WriteLine();
-        Console.WriteLine("Behavior:");
-        Console.WriteLine($"  Audience:         {route.Audience.ToString().ToLowerInvariant()}");
-        Console.WriteLine($"  Events:           {(route.Events.Count > 0 ? string.Join(", ", route.Events) : "(all)")}");
-        Console.WriteLine($"  Rate Limit:       {route.RateLimitPerMinute} req/min");
-        Console.WriteLine($"  Max Body:         {route.MaxBodyBytes} bytes ({route.MaxBodyBytes / 1024 / 1024} MB)");
-        Console.WriteLine();
-        Console.WriteLine("Notification:");
-        Console.WriteLine($"  Delivery:         {(route.DeliveryRequired ? "required" : "optional")}");
+        output.WriteLine($"  Event Header:     {route.Verification.EventHeaderName ?? "(default)"}");
+        output.WriteLine($"  Delivery Header:  {route.Verification.DeliveryIdHeaderName ?? "(default)"}");
+        output.WriteLine();
+        output.WriteLine("Behavior:");
+        output.WriteLine($"  Audience:         {route.Audience.ToString().ToLowerInvariant()}");
+        output.WriteLine($"  Events:           {(route.Events.Count > 0 ? string.Join(", ", route.Events) : "(all)")}");
+        output.WriteLine($"  Rate Limit:       {route.RateLimitPerMinute} req/min");
+        output.WriteLine($"  Max Body:         {route.MaxBodyBytes} bytes ({route.MaxBodyBytes / 1024 / 1024} MB)");
+        output.WriteLine();
+        output.WriteLine("Notification:");
+        output.WriteLine($"  Delivery:         {(route.DeliveryRequired ? "required" : "optional")}");
         if (route.NotificationTarget is not null)
         {
-            Console.WriteLine($"  Target:           {route.NotificationTarget.Kind.ToString().ToLowerInvariant()} (channel: {route.NotificationTarget.ChannelId ?? "(not set)"})");
+            output.WriteLine($"  Target:           {route.NotificationTarget.Kind.ToString().ToLowerInvariant()} (channel: {route.NotificationTarget.ChannelId ?? "(not set)"})");
         }
         else
         {
-            Console.WriteLine("  Target:           (not configured)");
+            output.WriteLine("  Target:           (not configured)");
         }
         if (!string.IsNullOrWhiteSpace(route.NotifyInstructions))
         {
             var truncated = route.NotifyInstructions.Length > 60
                 ? route.NotifyInstructions[..60] + "..."
                 : route.NotifyInstructions;
-            Console.WriteLine($"  Instructions:     {truncated.Replace("\n", " ")}");
+            output.WriteLine($"  Instructions:     {truncated.Replace("\n", " ")}");
         }
-        Console.WriteLine();
-        Console.WriteLine("Prompt:");
+        output.WriteLine();
+        output.WriteLine("Prompt:");
         if (string.IsNullOrWhiteSpace(route.Prompt))
         {
-            Console.WriteLine("  (empty)");
+            output.WriteLine("  (empty)");
         }
         else if (route.Prompt.Length > 200)
         {
-            Console.WriteLine($"  {route.Prompt[..200].Replace("\n", " ")}...");
-            Console.WriteLine("  (truncated; run with --json for full prompt)");
+            output.WriteLine($"  {route.Prompt[..200].Replace("\n", " ")}...");
+            output.WriteLine("  (truncated; run with --json for full prompt)");
         }
         else
         {
             foreach (var line in route.Prompt.Split('\n'))
             {
-                Console.WriteLine($"  {line}");
+                output.WriteLine($"  {line}");
             }
         }
 
@@ -259,11 +260,11 @@ internal static class WebhooksCommand
 
     // ── set ──
 
-    private static int RunSet(string[] args, WebhookRouteStore store, NetclawPaths paths)
+    private static int RunSet(string[] args, WebhookRouteStore store, NetclawPaths paths, TextWriter output)
     {
         if (args.Length < 3 || HasFlag(args, "--help") || HasFlag(args, "-h"))
         {
-            WriteSetHelp();
+            WriteSetHelp(output);
             return args.Length < 3 ? 1 : 0;
         }
 
@@ -465,8 +466,8 @@ internal static class WebhooksCommand
 
         if (dryRun)
         {
-            Console.WriteLine($"[OK] Webhook route '{routeName}' is valid (dry run, not saved).");
-            Console.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+            output.WriteLine($"[OK] Webhook route '{routeName}' is valid (dry run, not saved).");
+            output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
             return 0;
         }
 
@@ -474,16 +475,16 @@ internal static class WebhooksCommand
         store.Save(routeName, route);
 
         var action = exists ? "Updated" : "Created";
-        Console.WriteLine($"[OK] {action} webhook route '{routeName}'.");
-        Console.WriteLine($"     File: {Path.Combine(paths.WebhooksDirectory, $"{routeName}.json")}");
-        Console.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+        output.WriteLine($"[OK] {action} webhook route '{routeName}'.");
+        output.WriteLine($"     File: {Path.Combine(paths.WebhooksDirectory, $"{routeName}.json")}");
+        output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
 
         return 0;
     }
 
     // ── delete ──
 
-    private static int RunDelete(string[] args, WebhookRouteStore store)
+    private static int RunDelete(string[] args, WebhookRouteStore store, TextWriter output)
     {
         if (args.Length < 3)
         {
@@ -502,7 +503,7 @@ internal static class WebhooksCommand
             var response = Console.ReadLine()?.Trim().ToLowerInvariant();
             if (response is not "y" and not "yes")
             {
-                Console.WriteLine("Cancelled.");
+                output.WriteLine("Cancelled.");
                 return 0;
             }
         }
@@ -513,13 +514,13 @@ internal static class WebhooksCommand
             return 1;
         }
 
-        Console.WriteLine($"[OK] Deleted webhook route '{routeName}'.");
+        output.WriteLine($"[OK] Deleted webhook route '{routeName}'.");
         return 0;
     }
 
     // ── validate ──
 
-    private static int RunValidate(string[] args, NetclawPaths paths)
+    private static int RunValidate(string[] args, NetclawPaths paths, TextWriter output)
     {
         if (args.Length < 3)
         {
@@ -563,10 +564,10 @@ internal static class WebhooksCommand
             return 1;
         }
 
-        Console.WriteLine($"[OK] Webhook route '{routeName}' is valid.");
-        Console.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
-        Console.WriteLine($"     Verification: {route.Verification.Kind.ToString().ToLowerInvariant()}");
-        Console.WriteLine($"     Audience: {route.Audience.ToString().ToLowerInvariant()}");
+        output.WriteLine($"[OK] Webhook route '{routeName}' is valid.");
+        output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+        output.WriteLine($"     Verification: {route.Verification.Kind.ToString().ToLowerInvariant()}");
+        output.WriteLine($"     Audience: {route.Audience.ToString().ToLowerInvariant()}");
         return 0;
     }
 
@@ -732,85 +733,85 @@ internal static class WebhooksCommand
 
     // ── Help ──
 
-    private static int WriteHelp()
+    private static int WriteHelp(TextWriter output)
     {
-        Console.WriteLine("Usage: netclaw webhooks <subcommand>");
-        Console.WriteLine();
-        Console.WriteLine("Manage inbound webhook routes. Routes define how external services");
-        Console.WriteLine("(GitHub, Slack, etc.) can trigger agent actions via HTTP webhooks.");
-        Console.WriteLine();
-        Console.WriteLine("Subcommands:");
-        Console.WriteLine("  list                     List configured webhook routes");
-        Console.WriteLine("  show <route>             Show route details");
-        Console.WriteLine("  set <route> [options]    Create or update a route");
-        Console.WriteLine("  delete <route>           Delete a route");
-        Console.WriteLine("  validate <route>         Validate a route file");
-        Console.WriteLine();
-        Console.WriteLine("Options for list:");
-        Console.WriteLine("  --json                   Output as JSON");
-        Console.WriteLine("  --all                    Include disabled routes");
-        Console.WriteLine();
-        Console.WriteLine("Options for show:");
-        Console.WriteLine("  --json                   Output full config as JSON");
-        Console.WriteLine("  --show-secret            Reveal verification secret");
-        Console.WriteLine();
-        Console.WriteLine("Run 'netclaw webhooks set --help' for set command options.");
-        Console.WriteLine();
-        Console.WriteLine("Routes are stored in ~/.netclaw/config/webhooks/<route>.json");
-        Console.WriteLine("and served at /api/webhooks/<route> by the daemon.");
-        Console.WriteLine();
-        Console.WriteLine("Note: This command manages INBOUND webhook routes (external services");
-        Console.WriteLine("calling Netclaw). For OUTBOUND notifications (Netclaw posting to Slack),");
-        Console.WriteLine("see `netclaw secrets set Slack.BotToken` and notification target config.");
+        output.WriteLine("Usage: netclaw webhooks <subcommand>");
+        output.WriteLine();
+        output.WriteLine("Manage inbound webhook routes. Routes define how external services");
+        output.WriteLine("(GitHub, Slack, etc.) can trigger agent actions via HTTP webhooks.");
+        output.WriteLine();
+        output.WriteLine("Subcommands:");
+        output.WriteLine("  list                     List configured webhook routes");
+        output.WriteLine("  show <route>             Show route details");
+        output.WriteLine("  set <route> [options]    Create or update a route");
+        output.WriteLine("  delete <route>           Delete a route");
+        output.WriteLine("  validate <route>         Validate a route file");
+        output.WriteLine();
+        output.WriteLine("Options for list:");
+        output.WriteLine("  --json                   Output as JSON");
+        output.WriteLine("  --all                    Include disabled routes");
+        output.WriteLine();
+        output.WriteLine("Options for show:");
+        output.WriteLine("  --json                   Output full config as JSON");
+        output.WriteLine("  --show-secret            Reveal verification secret");
+        output.WriteLine();
+        output.WriteLine("Run 'netclaw webhooks set --help' for set command options.");
+        output.WriteLine();
+        output.WriteLine("Routes are stored in ~/.netclaw/config/webhooks/<route>.json");
+        output.WriteLine("and served at /api/webhooks/<route> by the daemon.");
+        output.WriteLine();
+        output.WriteLine("Note: This command manages INBOUND webhook routes (external services");
+        output.WriteLine("calling Netclaw). For OUTBOUND notifications (Netclaw posting to Slack),");
+        output.WriteLine("see `netclaw secrets set Slack.BotToken` and notification target config.");
         return 0;
     }
 
-    private static void WriteSetHelp()
+    private static void WriteSetHelp(TextWriter output)
     {
-        Console.WriteLine("Usage: netclaw webhooks set <route> [options]");
-        Console.WriteLine();
-        Console.WriteLine("Create or update an inbound webhook route.");
-        Console.WriteLine();
-        Console.WriteLine("Required (for new routes):");
-        Console.WriteLine("  --prompt <text>              Prompt instructions for the agent");
-        Console.WriteLine("  --prompt-file <path>         Read prompt from file");
-        Console.WriteLine("  --secret <value>             Verification secret (visible in shell history!)");
-        Console.WriteLine("  --secret-file <path>         Read secret from file");
-        Console.WriteLine("  --secret-env <VAR>           Read secret from environment variable");
-        Console.WriteLine();
-        Console.WriteLine("Verification:");
-        Console.WriteLine("  --verification-kind <kind>   'hmac' (default) or 'header-secret'");
-        Console.WriteLine("  --signature-header <name>    HMAC signature header (e.g., X-Hub-Signature-256)");
-        Console.WriteLine("  --signature-prefix <prefix>  HMAC signature prefix (e.g., sha256=)");
-        Console.WriteLine("  --secret-header <name>       Header-secret header name");
-        Console.WriteLine("  --event-header <name>        Event type header");
-        Console.WriteLine("  --delivery-header <name>     Delivery ID header");
-        Console.WriteLine();
-        Console.WriteLine("Behavior:");
-        Console.WriteLine("  --events <list>              Comma-separated event allowlist");
-        Console.WriteLine("  --audience <level>           'public' (default), 'team', or 'personal'");
-        Console.WriteLine("  --max-body <bytes>           Max request body size (default: 1048576)");
-        Console.WriteLine("  --rate-limit <req/min>       Rate limit per minute (default: 30)");
-        Console.WriteLine("  --enabled / --disabled       Enable or disable the route");
-        Console.WriteLine();
-        Console.WriteLine("Notification:");
-        Console.WriteLine("  --notify-instructions <text>     Notification instructions");
-        Console.WriteLine("  --notify-instructions-file <path>");
-        Console.WriteLine("  --delivery-required              Require notification delivery");
-        Console.WriteLine("  --no-delivery-required           Make notification optional");
-        Console.WriteLine("  --notification-channel <id>      Slack channel ID for notifications");
-        Console.WriteLine();
-        Console.WriteLine("Modifiers:");
-        Console.WriteLine("  --dry-run                    Validate without saving");
-        Console.WriteLine("  --create-only                Fail if route already exists");
-        Console.WriteLine("  --update-only                Fail if route doesn't exist");
-        Console.WriteLine();
-        Console.WriteLine("Examples:");
-        Console.WriteLine("  netclaw webhooks set github-issues \\");
-        Console.WriteLine("    --prompt \"Triage incoming GitHub issues\" \\");
-        Console.WriteLine("    --secret-env GITHUB_WEBHOOK_SECRET \\");
-        Console.WriteLine("    --signature-header X-Hub-Signature-256 \\");
-        Console.WriteLine("    --signature-prefix \"sha256=\" \\");
-        Console.WriteLine("    --events issues.opened,issues.closed");
+        output.WriteLine("Usage: netclaw webhooks set <route> [options]");
+        output.WriteLine();
+        output.WriteLine("Create or update an inbound webhook route.");
+        output.WriteLine();
+        output.WriteLine("Required (for new routes):");
+        output.WriteLine("  --prompt <text>              Prompt instructions for the agent");
+        output.WriteLine("  --prompt-file <path>         Read prompt from file");
+        output.WriteLine("  --secret <value>             Verification secret (visible in shell history!)");
+        output.WriteLine("  --secret-file <path>         Read secret from file");
+        output.WriteLine("  --secret-env <VAR>           Read secret from environment variable");
+        output.WriteLine();
+        output.WriteLine("Verification:");
+        output.WriteLine("  --verification-kind <kind>   'hmac' (default) or 'header-secret'");
+        output.WriteLine("  --signature-header <name>    HMAC signature header (e.g., X-Hub-Signature-256)");
+        output.WriteLine("  --signature-prefix <prefix>  HMAC signature prefix (e.g., sha256=)");
+        output.WriteLine("  --secret-header <name>       Header-secret header name");
+        output.WriteLine("  --event-header <name>        Event type header");
+        output.WriteLine("  --delivery-header <name>     Delivery ID header");
+        output.WriteLine();
+        output.WriteLine("Behavior:");
+        output.WriteLine("  --events <list>              Comma-separated event allowlist");
+        output.WriteLine("  --audience <level>           'public' (default), 'team', or 'personal'");
+        output.WriteLine("  --max-body <bytes>           Max request body size (default: 1048576)");
+        output.WriteLine("  --rate-limit <req/min>       Rate limit per minute (default: 30)");
+        output.WriteLine("  --enabled / --disabled       Enable or disable the route");
+        output.WriteLine();
+        output.WriteLine("Notification:");
+        output.WriteLine("  --notify-instructions <text>     Notification instructions");
+        output.WriteLine("  --notify-instructions-file <path>");
+        output.WriteLine("  --delivery-required              Require notification delivery");
+        output.WriteLine("  --no-delivery-required           Make notification optional");
+        output.WriteLine("  --notification-channel <id>      Slack channel ID for notifications");
+        output.WriteLine();
+        output.WriteLine("Modifiers:");
+        output.WriteLine("  --dry-run                    Validate without saving");
+        output.WriteLine("  --create-only                Fail if route already exists");
+        output.WriteLine("  --update-only                Fail if route doesn't exist");
+        output.WriteLine();
+        output.WriteLine("Examples:");
+        output.WriteLine("  netclaw webhooks set github-issues \\");
+        output.WriteLine("    --prompt \"Triage incoming GitHub issues\" \\");
+        output.WriteLine("    --secret-env GITHUB_WEBHOOK_SECRET \\");
+        output.WriteLine("    --signature-header X-Hub-Signature-256 \\");
+        output.WriteLine("    --signature-prefix \"sha256=\" \\");
+        output.WriteLine("    --events issues.opened,issues.closed");
     }
 }

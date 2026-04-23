@@ -82,17 +82,8 @@ public sealed class WebhooksCommandTests : IDisposable
 """);
 
         using var stdout = new StringWriter();
-        var original = Console.Out;
-        Console.SetOut(stdout);
-        try
-        {
-            var result = await WebhooksCommand.RunAsync(["webhooks", "list", "--json"], _paths);
-            Assert.Equal(0, result);
-        }
-        finally
-        {
-            Console.SetOut(original);
-        }
+        var result = await WebhooksCommand.RunAsync(["webhooks", "list", "--json"], _paths, stdout);
+        Assert.Equal(0, result);
 
         var list = JsonSerializer.Deserialize<List<RouteListItem>>(stdout.ToString(), JsonDefaults.ConfigRead);
         Assert.NotNull(list);
