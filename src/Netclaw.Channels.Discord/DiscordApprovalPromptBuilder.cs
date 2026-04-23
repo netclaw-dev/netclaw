@@ -24,6 +24,41 @@ internal static class DiscordApprovalPromptBuilder
         return sb.ToString().TrimEnd();
     }
 
+    public static (string Text, IReadOnlyList<DiscordButtonSpec> Buttons) BuildButtonPrompt(
+        ToolInteractionRequest request)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(":lock: **Tool approval required**");
+        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
+        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+
+        if (request.Patterns.Count > 0)
+        {
+            if (request.Patterns.Count == 1)
+            {
+                sb.Append("**Pattern:** `").Append(request.Patterns[0]).AppendLine("`");
+            }
+            else
+            {
+                sb.AppendLine("**Patterns:**");
+                foreach (var pattern in request.Patterns)
+                    sb.Append("  • `").Append(pattern).AppendLine("`");
+            }
+        }
+
+        sb.AppendLine();
+        sb.Append("You can also reply with `A`, `B`, `C`, or `D` in this thread.");
+
+        var buttons = request.Options
+            .Select(option => new DiscordButtonSpec(
+                CustomId: BuildButtonValue(request, option),
+                Label: option.Label,
+                Style: GetButtonStyle(option.Key)))
+            .ToList();
+
+        return (sb.ToString().TrimEnd(), buttons);
+    }
+
     public static string BuildDecisionStatus(string selectedKey)
     {
         var label = selectedKey switch
@@ -37,4 +72,18 @@ internal static class DiscordApprovalPromptBuilder
 
         return $"Recorded approval decision: {label}.";
     }
+
+    internal static string BuildButtonValue(ToolInteractionRequest request, ToolInteractionOption option)
+        => ApprovalButtonValueCodec.Encode(request, option);
+
+    internal static bool TryParseButtonValue(string? value, out string? callId, out string? selectedKey, out string? requesterSenderId)
+        => ApprovalButtonValueCodec.TryDecode(value, out callId, out selectedKey, out requesterSenderId);
+
+    private static DiscordButtonStyle GetButtonStyle(string optionKey)
+        => optionKey switch
+        {
+            ApprovalOptionKeys.Deny => DiscordButtonStyle.Danger,
+            ApprovalOptionKeys.ApproveOnce => DiscordButtonStyle.Success,
+            _ => DiscordButtonStyle.Secondary
+        };
 }

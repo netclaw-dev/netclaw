@@ -49,7 +49,21 @@ public interface IDiscordReplyClient
 public sealed record DiscordPostMessage(
     DiscordReplyChannelId ReplyChannelId,
     string Text,
-    DiscordMessageId? RootMessageId = null);
+    DiscordMessageId? RootMessageId = null,
+    IReadOnlyList<DiscordButtonSpec>? Buttons = null);
+
+public sealed record DiscordButtonSpec(
+    string CustomId,
+    string Label,
+    DiscordButtonStyle Style);
+
+public enum DiscordButtonStyle
+{
+    Primary = 1,
+    Secondary = 2,
+    Success = 3,
+    Danger = 4
+}
 
 /// <summary>
 /// Placeholder transport client that fails loud until the real Discord gateway

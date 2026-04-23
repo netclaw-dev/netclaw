@@ -347,11 +347,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                     request.CallId,
                     request.RequesterSenderId is null ? null : new DiscordUserId(request.RequesterSenderId)));
 
-                ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
-                await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
-                // Approval prompts are infrastructure — not agent output. Do not count
-                // as "delivered" so TurnCompleted still fires the empty-turn fallback,
-                // matching Slack parity.
+                var (promptText, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+                await SafeReplyWithButtonsAsync(promptText, buttons, request);
                 break;
 
             case TurnCompleted completed:
@@ -370,6 +367,31 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
                 break;
+        }
+    }
+
+    private async Task SafeReplyWithButtonsAsync(
+        string text,
+        IReadOnlyList<DiscordButtonSpec> buttons,
+        ToolInteractionRequest request)
+    {
+        var startedAt = _dependencies.TimeProvider.GetTimestamp();
+        try
+        {
+            await _dependencies.ReplyClient.PostReplyAsync(new DiscordPostMessage(
+                ReplyChannelId: _replyChannelId,
+                Text: text,
+                RootMessageId: _rootMessageId,
+                Buttons: buttons));
+            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            ChannelTelemetry.RecordDiscordReplyPosted(duration);
+            ChannelTelemetry.RecordDiscordApprovalFallbackActivated("button_prompt");
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed posting Discord button prompt; falling back to text-only");
+            ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
+            await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
         }
     }
 

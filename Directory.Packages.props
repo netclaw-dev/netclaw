@@ -8,6 +8,7 @@
     <AkkaRemindersVersion>0.6.0-beta2</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
+    <DiscordNetVersion>3.19.1</DiscordNetVersion>
     <MicrosoftExtensionsAIVersion>10.5.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.7</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
@@ -47,6 +48,7 @@
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OllamaSharp" Version="5.4.25" />
     <PackageVersion Include="SauceControl.Blake2Fast" Version="2.0.0" />
+    <PackageVersion Include="Discord.Net" Version="$(DiscordNetVersion)" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.8.4" />

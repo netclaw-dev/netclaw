@@ -92,10 +92,10 @@ public sealed class DiscordChannel : IChannel
 
             ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);
 
+            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
-
-            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
             _connected = true;
 
             _logger.LogInformation("Discord channel connected.");

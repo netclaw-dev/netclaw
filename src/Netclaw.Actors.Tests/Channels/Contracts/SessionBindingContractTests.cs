@@ -287,7 +287,7 @@ public abstract class SessionBindingContractTests : TestKit
             var texts = GetPostedTexts();
             Assert.Contains(texts, t =>
                 t.Contains("execute_shell", StringComparison.OrdinalIgnoreCase)
-                && t.Contains("Approve", StringComparison.OrdinalIgnoreCase));
+                && t.Contains("approval", StringComparison.OrdinalIgnoreCase));
         }, cancellationToken: ct);
     }
 

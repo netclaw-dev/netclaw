@@ -142,33 +142,10 @@ internal static class SlackApprovalBlockBuilder
     }
 
     internal static string BuildButtonValue(ToolInteractionRequest request, ToolInteractionOption option)
-        => string.Join("|",
-        [
-            request.CallId,
-            option.Key,
-            request.RequesterSenderId ?? string.Empty
-        ]);
+        => ApprovalButtonValueCodec.Encode(request, option);
 
     internal static bool TryParseButtonValue(string? value, out string? callId, out string? selectedKey, out string? requesterSenderId)
-    {
-        callId = null;
-        selectedKey = null;
-        requesterSenderId = null;
-
-        if (string.IsNullOrWhiteSpace(value))
-            return false;
-
-        var parts = value.Split('|');
-        if (parts.Length < 2)
-            return false;
-
-        callId = string.IsNullOrWhiteSpace(parts[0]) ? null : parts[0];
-        selectedKey = string.IsNullOrWhiteSpace(parts[1]) ? null : parts[1];
-        requesterSenderId = parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2])
-            ? parts[2]
-            : null;
-        return callId is not null && selectedKey is not null;
-    }
+        => ApprovalButtonValueCodec.TryDecode(value, out callId, out selectedKey, out requesterSenderId);
 
     private static ButtonStyle GetButtonStyle(string optionKey)
         => optionKey switch

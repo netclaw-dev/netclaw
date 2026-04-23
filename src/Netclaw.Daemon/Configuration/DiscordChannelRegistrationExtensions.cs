@@ -1,6 +1,8 @@
+using Discord.WebSocket;
 using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
+using Netclaw.Channels.Discord.Transport;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -19,8 +21,19 @@ public static class DiscordChannelRegistrationExtensions
         if (discordOptions.BotToken is null || string.IsNullOrWhiteSpace(discordOptions.BotToken.Value))
             throw new InvalidOperationException("Discord is enabled but Discord:BotToken is not configured.");
 
-        services.AddSingleton<IDiscordGatewayClient, UnconfiguredDiscordGatewayClient>();
-        services.AddSingleton<IDiscordReplyClient, UnconfiguredDiscordReplyClient>();
+        services.AddSingleton(_ => new DiscordSocketClient(new DiscordSocketConfig
+        {
+            GatewayIntents = Discord.GatewayIntents.Guilds
+                | Discord.GatewayIntents.GuildMessages
+                | Discord.GatewayIntents.DirectMessages
+                | Discord.GatewayIntents.MessageContent
+                | Discord.GatewayIntents.GuildMessageReactions,
+            AlwaysDownloadUsers = false,
+            MessageCacheSize = 0
+        }));
+
+        services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();
+        services.AddSingleton<IDiscordReplyClient, DiscordNetReplyClient>();
         services.AddSingleton<IReminderTargetResolver, DiscordReminderTargetResolver>();
 
         services.AddKeyedSingleton<IChannel, DiscordChannel>(DiscordChannelKey);
