@@ -76,6 +76,12 @@ public sealed class DiscordChannel : IChannel
 
         try
         {
+            // Connect first so BotUserId is available before creating the gateway actor.
+            _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
+            _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
+
+            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+
             _gateway = _system.ActorOf(
                 DiscordGatewayActor.CreateProps(new DiscordGatewayDependencies(
                     Pipeline: _pipeline,
@@ -86,15 +92,11 @@ public sealed class DiscordChannel : IChannel
                         ? new DiscordChannelId(_options.DefaultChannelId)
                         : null,
                     ReplyClient: _replyClient,
+                    BotUserId: _gatewayClient.BotUserId,
                     PromptInjectionDetector: _promptInjectionDetector)),
                 "discord-gateway");
 
             ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);
-
-            _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
-            _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
-
-            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
 
             _logger.LogInformation("Discord channel connected.");
         }
@@ -117,12 +119,12 @@ public sealed class DiscordChannel : IChannel
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Unsubscribe events first so no new messages enter the actor system.
         _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
         _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
-        await _gatewayClient.DisconnectAsync(cancellationToken);
-        if (_gatewayClient is IDisposable disposable)
-            disposable.Dispose();
 
+        // Drain actors before disconnecting the transport client so that
+        // in-flight replies can still reach Discord.
         if (_gateway is not null)
         {
             try
@@ -137,6 +139,10 @@ public sealed class DiscordChannel : IChannel
 
             _gateway = null;
         }
+
+        await _gatewayClient.DisconnectAsync(cancellationToken);
+        if (_gatewayClient is IDisposable disposable)
+            disposable.Dispose();
     }
 
     private Task HandleMessageReceivedAsync(DiscordGatewayMessage message)

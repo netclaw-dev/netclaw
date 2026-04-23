@@ -35,7 +35,6 @@ public sealed class DiscordGatewayActor : ReceiveActor
             var conversation = GetOrCreateConversationActor(message.ChannelId);
 
             _log.Debug("Routing Discord event {0} to conversation {1}", message.EventId.Value, message.ChannelId);
-            ChannelTelemetry.RecordDiscordEventRouted("message");
             conversation.Forward(message);
         });
 
@@ -46,7 +45,6 @@ public sealed class DiscordGatewayActor : ReceiveActor
             var conversation = GetOrCreateConversationActor(interaction.ChannelId);
 
             _log.Debug("Routing Discord interaction to conversation {0}", interaction.ChannelId);
-            ChannelTelemetry.RecordDiscordEventRouted("interaction");
             conversation.Forward(interaction);
         });
 

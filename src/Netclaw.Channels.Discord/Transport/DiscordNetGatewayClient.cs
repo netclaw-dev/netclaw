@@ -10,11 +10,12 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     private readonly DiscordSocketClient _client;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DiscordNetGatewayClient> _logger;
+    private readonly TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
 
-    private string? _botMentionTag;
+    private volatile string? _botMentionTag;
 
     public bool IsConnected => _client.ConnectionState == ConnectionState.Connected;
     public DiscordUserId? BotUserId { get; private set; }
@@ -29,6 +30,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         _logger = logger;
 
         _client.Log += OnDiscordLog;
+        _client.Ready += OnReadyAsync;
         _client.MessageReceived += OnMessageReceivedAsync;
         _client.ButtonExecuted += OnButtonExecutedAsync;
     }
@@ -38,11 +40,25 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         await _client.LoginAsync(TokenType.Bot, botToken);
         await _client.StartAsync();
 
+        // Wait for the READY event so that CurrentUser is populated before
+        // we start processing messages. Without this, BotUserId and
+        // _botMentionTag would be null and mention detection would fail.
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linkedCts.CancelAfter(TimeSpan.FromSeconds(30));
+        await _readyTcs.Task.WaitAsync(linkedCts.Token);
+    }
+
+    private Task OnReadyAsync()
+    {
         if (_client.CurrentUser is { } currentUser)
         {
             BotUserId = new DiscordUserId(currentUser.Id.ToString());
             _botMentionTag = $"<@{currentUser.Id}>";
+            _logger.LogInformation("Discord bot identity resolved: {BotUserId}", currentUser.Id);
         }
+
+        _readyTcs.TrySetResult();
+        return Task.CompletedTask;
     }
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
@@ -54,6 +70,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     public void Dispose()
     {
         _client.Log -= OnDiscordLog;
+        _client.Ready -= OnReadyAsync;
         _client.MessageReceived -= OnMessageReceivedAsync;
         _client.ButtonExecuted -= OnButtonExecutedAsync;
     }
