@@ -19,6 +19,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
     private readonly DiscordChannelId _channelId;
     private readonly DiscordGatewayDependencies _dependencies;
+    private readonly string? _botMentionTag;
     private readonly ILoggingAdapter _log;
 
     private readonly Dictionary<string, string> _threadAliases = new(StringComparer.Ordinal);
@@ -28,6 +29,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
     {
         _channelId = channelId;
         _dependencies = dependencies;
+        _botMentionTag = dependencies.BotUserId is { } botId ? $"<@{botId.Value}>" : null;
         _log = Context.GetLogger()
             .WithContext("Adapter", "discord")
             .WithContext("DiscordChannelId", _channelId.Value);
@@ -47,9 +49,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         Receive<Terminated>(HandleTerminated);
     }
 
-    // Fix #6: Stop failing children rather than restarting -- a restart resets
-    // _replyChannelId and _threadCreated, corrupting outbound routing.
-    // The next inbound message re-creates the binding via GetOrCreateSessionBinding.
+    // Restart would reset _replyChannelId and _threadCreated, corrupting outbound routing.
     protected override SupervisorStrategy SupervisorStrategy()
         => new OneForOneStrategy(ex =>
         {
@@ -179,9 +179,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
     private void HandleGatewayInteraction(DiscordGatewayInteraction interaction)
     {
-        // Fix #10: Use _channelId (the conversation actor's canonical channel)
-        // rather than interaction.ChannelId which could theoretically differ.
-        var sessionBinding = ResolveSessionBinding(_channelId, interaction.ThreadOrMessageId);
+        var (_, sessionBinding) = ResolveExistingBinding(_channelId, interaction.ThreadOrMessageId);
         if (sessionBinding is null)
         {
             _log.Info(
@@ -203,7 +201,6 @@ internal sealed class DiscordConversationActor : ReceiveActor
     }
 
     // No ACL call -- audience was validated at reminder mint time.
-    // Fix #3: Re-create passivated session bindings instead of dropping the message.
     private void HandleTrustedSessionTurn(DeliverTrustedSessionTurn message)
     {
         if (!DiscordGatewayActor.TryParseDiscordSessionId(
@@ -230,7 +227,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         var sessionBinding = GetOrCreateSessionBinding(
             message.SessionId,
             _channelId,
-            new DiscordReplyChannelId(ResolveReplyChannelForTrustedTurn(threadOrMessageId)),
+            ResolveReplyChannelForTrustedTurn(threadOrMessageId),
             threadOrMessageId,
             rootMessageId: null);
 
@@ -256,7 +253,6 @@ internal sealed class DiscordConversationActor : ReceiveActor
             originalActorName);
     }
 
-    // Fix #9: Clean up stale thread aliases when session bindings stop.
     private void HandleTerminated(Terminated msg)
     {
         var deadName = msg.ActorRef.Path.Name;
@@ -277,11 +273,10 @@ internal sealed class DiscordConversationActor : ReceiveActor
     /// </summary>
     private string NormalizeInboundText(string text)
     {
-        if (_dependencies.BotUserId is not { } botUserId)
+        if (_botMentionTag is null)
             return text.Trim();
 
-        var mention = $"<@{botUserId.Value}>";
-        return text.Replace(mention, string.Empty, StringComparison.Ordinal).Trim();
+        return text.Replace(_botMentionTag, string.Empty, StringComparison.Ordinal).Trim();
     }
 
     /// <summary>
@@ -289,29 +284,16 @@ internal sealed class DiscordConversationActor : ReceiveActor
     /// thread was promoted, uses the thread channel ID; otherwise falls back
     /// to the thread-or-message ID (which is the channel itself for DMs).
     /// </summary>
-    private string ResolveReplyChannelForTrustedTurn(DiscordThreadOrMessageId threadOrMessageId)
+    private DiscordReplyChannelId ResolveReplyChannelForTrustedTurn(DiscordThreadOrMessageId threadOrMessageId)
     {
-        // Check if there is a thread alias whose original actor name matches this threadOrMessageId.
-        // If so, the reply channel is the promoted thread channel ID (the alias key).
         var originalActorName = BuildActorName(_channelId, threadOrMessageId);
         foreach (var (threadChannelId, aliasedActorName) in _threadAliases)
         {
             if (string.Equals(aliasedActorName, originalActorName, StringComparison.Ordinal))
-                return threadChannelId;
+                return new DiscordReplyChannelId(threadChannelId);
         }
 
-        return threadOrMessageId.Value;
-    }
-
-    /// <summary>
-    /// Looks up a session binding actor by direct child name, then falls back to
-    /// the thread-alias map for promoted thread channel IDs. Returns null if no
-    /// matching live actor exists.
-    /// </summary>
-    private IActorRef? ResolveSessionBinding(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
-    {
-        var (_, binding) = ResolveExistingBinding(channelId, threadOrMessageId);
-        return binding;
+        return new DiscordReplyChannelId(threadOrMessageId.Value);
     }
 
     /// <summary>
