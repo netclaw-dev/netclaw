@@ -59,12 +59,12 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
     }
 
     [Fact]
-    public async Task Thread_promotion_routes_promoted_thread_messages_to_original_binding()
+    public async Task Thread_message_creates_session_with_thread_channel_id()
     {
-        var sink = CreateTestProbe("thread-promotion");
+        var sink = CreateTestProbe("thread-blind-write");
         var conversation = CreateConversation("ch-1", sink);
 
-        // Initial message creates a session binding keyed by original message ID
+        // Bare channel message creates session keyed by message ID
         conversation.Tell(CreateMessage(
             channelId: "ch-1", threadOrMessageId: "msg-100", rootMessageId: "msg-100",
             text: "start conversation"));
@@ -73,43 +73,30 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("ch-1/msg-100", first.SessionId.Value);
 
-        // Simulate thread promotion: the session binding actor tells the parent
-        // that a thread was created with a new channel ID.
-        conversation.Tell(new ThreadPromoted(
-            OriginalThreadOrMessageId: new DiscordThreadOrMessageId("msg-100"),
-            ThreadChannelId: new DiscordReplyChannelId("thread-ch-999")));
-
-        // Follow-up message arrives with the new thread channel ID as ThreadOrMessageId
+        // Thread message arrives with thread channel ID — gets its own session
         conversation.Tell(CreateMessage(
             channelId: "ch-1", threadOrMessageId: "thread-ch-999",
-            text: "follow up in promoted thread", eventId: "ev-2"));
+            text: "follow up in thread", eventId: "ev-2"));
 
         var second = await sink.ExpectMsgAsync<DiscordThreadInbound>(
             cancellationToken: TestContext.Current.CancellationToken);
-        // Should route to the SAME session with the ORIGINAL session ID
-        Assert.Equal("ch-1/msg-100", second.SessionId.Value);
-        Assert.Equal("follow up in promoted thread", second.Text);
+        Assert.Equal("ch-1/thread-ch-999", second.SessionId.Value);
     }
 
     [Fact]
-    public async Task Button_interaction_routes_via_thread_alias()
+    public async Task Button_interaction_routes_to_session_by_thread_id()
     {
-        var sink = CreateTestProbe("interaction-alias");
+        var sink = CreateTestProbe("interaction-direct");
         var conversation = CreateConversation("ch-1", sink);
 
-        // Create the session binding with an initial message
+        // Create the session binding with a thread message
         conversation.Tell(CreateMessage(
-            channelId: "ch-1", threadOrMessageId: "msg-200", rootMessageId: "msg-200",
+            channelId: "ch-1", threadOrMessageId: "thread-ch-500",
             text: "start"));
         await sink.ExpectMsgAsync<DiscordThreadInbound>(
             cancellationToken: TestContext.Current.CancellationToken);
 
-        // Register thread promotion alias
-        conversation.Tell(new ThreadPromoted(
-            OriginalThreadOrMessageId: new DiscordThreadOrMessageId("msg-200"),
-            ThreadChannelId: new DiscordReplyChannelId("thread-ch-500")));
-
-        // Send an interaction using the promoted thread channel ID
+        // Send an interaction using the same thread channel ID
         conversation.Tell(new DiscordGatewayInteraction(
             ChannelId: new DiscordChannelId("ch-1"),
             ThreadOrMessageId: new DiscordThreadOrMessageId("thread-ch-500"),

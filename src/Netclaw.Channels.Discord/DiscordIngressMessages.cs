@@ -30,12 +30,3 @@ internal sealed record PendingApprovalRequest(
     string CallId,
     DiscordUserId? RequesterSenderId);
 
-/// <summary>
-/// Sent by a session binding actor to its parent conversation actor when the
-/// transport creates a thread from a root message. The conversation actor
-/// registers an alias so that subsequent messages/interactions arriving on the
-/// new thread channel ID route to the original session binding.
-/// </summary>
-internal sealed record ThreadPromoted(
-    DiscordThreadOrMessageId OriginalThreadOrMessageId,
-    DiscordReplyChannelId ThreadChannelId);

@@ -201,6 +201,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             initCts.Token);
     }
 
+    private static readonly TimeSpan InboundProcessingTimeout = TimeSpan.FromSeconds(30);
+
     private async Task HandleInboundAsync(DiscordThreadInbound message)
     {
         if (string.IsNullOrWhiteSpace(message.Text))
@@ -213,8 +215,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             return;
         }
 
+        using var inboundCts = new CancellationTokenSource(InboundProcessingTimeout);
         var classification = await PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, message.Text, "discord-live", _log);
+            _promptInjectionDetector, message.Text, "discord-live", _log, inboundCts.Token);
         switch (classification.Outcome)
         {
             case ClassificationOutcome.Block:
@@ -548,9 +551,6 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             _threadCreated = true;
             _rootMessageId = null;
             _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
-            Context.Parent.Tell(new ThreadPromoted(
-                _threadOrMessageId,
-                threadId));
         }
     }
 

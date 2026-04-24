@@ -9,21 +9,16 @@ namespace Netclaw.Channels.Discord;
 
 /// <summary>
 /// Per-channel actor that serves as the security boundary for Discord messages.
-/// Performs ACL checks, routing policy evaluation, ingress gating, and manages
-/// the thread-ID alias map so that messages arriving on a promoted thread channel
-/// route back to the original session binding actor.
+/// Performs ACL checks, routing policy evaluation, and ingress gating.
+/// Uses blind-write routing: session IDs are derived deterministically from
+/// message identifiers with no routing state.
 /// </summary>
 internal sealed class DiscordConversationActor : ReceiveActor
 {
-    private const int MaxThreadAliases = 4096;
-
     private readonly DiscordChannelId _channelId;
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly string? _botMentionTag;
     private readonly ILoggingAdapter _log;
-
-    private readonly Dictionary<string, string> _threadAliases = new(StringComparer.Ordinal);
-    private readonly Queue<string> _threadAliasOrder = new();
 
     public DiscordConversationActor(DiscordChannelId channelId, DiscordGatewayDependencies dependencies)
     {
@@ -45,11 +40,9 @@ internal sealed class DiscordConversationActor : ReceiveActor
         Receive<DiscordGatewayMessage>(HandleGatewayMessage);
         Receive<DiscordGatewayInteraction>(HandleGatewayInteraction);
         Receive<DeliverTrustedSessionTurn>(HandleTrustedSessionTurn);
-        Receive<ThreadPromoted>(HandleThreadPromoted);
         Receive<Terminated>(HandleTerminated);
     }
 
-    // Restart would reset _replyChannelId and _threadCreated, corrupting outbound routing.
     protected override SupervisorStrategy SupervisorStrategy()
         => new OneForOneStrategy(ex =>
         {
@@ -96,10 +89,9 @@ internal sealed class DiscordConversationActor : ReceiveActor
         }
 
         // --- Routing policy ---
-        // Resolve the actor name, checking the thread alias map for promoted threads
-        // so that follow-up messages in a promoted thread find the original binding.
-        var (actorName, existingBinding) = ResolveExistingBinding(_channelId, message.ThreadOrMessageId);
-        var threadExists = existingBinding is not null;
+        var actorName = BuildActorName(_channelId, message.ThreadOrMessageId);
+        var existingBinding = Context.Child(actorName);
+        var threadExists = !existingBinding.IsNobody();
 
         var decision = DiscordRoutingPolicy.Evaluate(
             message,
@@ -138,11 +130,10 @@ internal sealed class DiscordConversationActor : ReceiveActor
         }
 
         // --- Build session and forward ---
-        // Use the resolved actor name to derive the session ID so that
-        // aliased thread messages preserve the original session identity.
-        var sessionId = SessionIdFromActorName(actorName);
-        var sessionBinding = existingBinding
-            ?? GetOrCreateSessionBinding(
+        var sessionId = new SessionId($"{_channelId.Value}/{message.ThreadOrMessageId.Value}");
+        var sessionBinding = threadExists
+            ? existingBinding
+            : GetOrCreateSessionBinding(
                 sessionId,
                 _channelId,
                 message.ReplyChannelId,
@@ -181,8 +172,9 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
     private void HandleGatewayInteraction(DiscordGatewayInteraction interaction)
     {
-        var (_, sessionBinding) = ResolveExistingBinding(_channelId, interaction.ThreadOrMessageId);
-        if (sessionBinding is null)
+        var actorName = BuildActorName(_channelId, interaction.ThreadOrMessageId);
+        var sessionBinding = Context.Child(actorName);
+        if (sessionBinding.IsNobody())
         {
             _log.Info(
                 "Ignoring Discord interaction for missing session binding channel={0} threadOrMessage={1}",
@@ -202,7 +194,6 @@ internal sealed class DiscordConversationActor : ReceiveActor
             RequesterSenderId: interaction.RequesterSenderId));
     }
 
-    // No ACL call -- audience was validated at reminder mint time.
     private void HandleTrustedSessionTurn(DeliverTrustedSessionTurn message)
     {
         if (!DiscordGatewayActor.TryParseDiscordSessionId(
@@ -226,10 +217,11 @@ internal sealed class DiscordConversationActor : ReceiveActor
             return;
         }
 
+        var replyChannelId = new DiscordReplyChannelId(threadOrMessageId.Value);
         var sessionBinding = GetOrCreateSessionBinding(
             message.SessionId,
             _channelId,
-            ResolveReplyChannelForTrustedTurn(threadOrMessageId),
+            replyChannelId,
             threadOrMessageId,
             rootMessageId: null);
 
@@ -239,33 +231,13 @@ internal sealed class DiscordConversationActor : ReceiveActor
         sessionBinding.Forward(message);
     }
 
-    private void HandleThreadPromoted(ThreadPromoted msg)
-    {
-        var originalActorName = BuildActorName(_channelId, msg.OriginalThreadOrMessageId);
-        _threadAliases[msg.ThreadChannelId.Value] = originalActorName;
-        _threadAliasOrder.Enqueue(msg.ThreadChannelId.Value);
-
-        while (_threadAliases.Count > MaxThreadAliases
-               && _threadAliasOrder.TryDequeue(out var oldest))
-            _threadAliases.Remove(oldest);
-
-        _log.Info(
-            "Registered thread alias thread_channel={ThreadChannel} -> actor={ActorName}",
-            msg.ThreadChannelId.Value,
-            originalActorName);
-    }
-
-    // Aliases are intentionally kept after child death so that the next
-    // message in a promoted thread re-creates the binding with the original
-    // actor name and session ID, preserving persisted conversation history.
     private void HandleTerminated(Terminated msg)
     {
         _log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name);
     }
 
     /// <summary>
-    /// Strips the bot mention tag from inbound text and trims whitespace,
-    /// mirroring Slack's NormalizeInboundText behavior.
+    /// Strips the bot mention tag from inbound text and trims whitespace.
     /// </summary>
     private string NormalizeInboundText(string text)
     {
@@ -275,50 +247,6 @@ internal sealed class DiscordConversationActor : ReceiveActor
         return text.Replace(_botMentionTag, string.Empty, StringComparison.Ordinal).Trim();
     }
 
-    /// <summary>
-    /// Resolves the best reply channel ID for a trusted session turn. If the
-    /// thread was promoted, uses the thread channel ID; otherwise falls back
-    /// to the thread-or-message ID (which is the channel itself for DMs).
-    /// </summary>
-    private DiscordReplyChannelId ResolveReplyChannelForTrustedTurn(DiscordThreadOrMessageId threadOrMessageId)
-    {
-        var originalActorName = BuildActorName(_channelId, threadOrMessageId);
-        foreach (var (threadChannelId, aliasedActorName) in _threadAliases)
-        {
-            if (string.Equals(aliasedActorName, originalActorName, StringComparison.Ordinal))
-                return new DiscordReplyChannelId(threadChannelId);
-        }
-
-        return new DiscordReplyChannelId(threadOrMessageId.Value);
-    }
-
-    /// <summary>
-    /// Looks up a session binding actor by direct child name, then falls back to
-    /// the thread-alias map for promoted thread channel IDs. Returns both the
-    /// resolved actor name and the actor ref (or null if no live actor matches).
-    /// </summary>
-    private (string ActorName, IActorRef? Binding) ResolveExistingBinding(
-        DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
-    {
-        var actorName = BuildActorName(channelId, threadOrMessageId);
-        var direct = Context.Child(actorName);
-        if (!direct.IsNobody())
-            return (actorName, direct);
-
-        if (_threadAliases.TryGetValue(threadOrMessageId.Value, out var aliasedActorName))
-        {
-            var aliased = Context.Child(aliasedActorName);
-            // Return the aliased name even if the actor is dead — this ensures
-            // GetOrCreateSessionBinding re-creates the binding with the original
-            // actor name and session ID, preserving persisted conversation history.
-            return aliased.IsNobody()
-                ? (aliasedActorName, null)
-                : (aliasedActorName, aliased);
-        }
-
-        return (actorName, null);
-    }
-
     private IActorRef GetOrCreateSessionBinding(
         SessionId sessionId,
         DiscordChannelId channelId,
@@ -326,16 +254,16 @@ internal sealed class DiscordConversationActor : ReceiveActor
         DiscordThreadOrMessageId threadOrMessageId,
         DiscordMessageId? rootMessageId)
     {
-        // Check alias map first so promoted thread messages find the original binding
-        var (resolvedName, existing) = ResolveExistingBinding(channelId, threadOrMessageId);
-        if (existing is not null)
+        var actorName = BuildActorName(channelId, threadOrMessageId);
+        var existing = Context.Child(actorName);
+        if (!existing.IsNobody())
             return existing;
 
         var props = _dependencies.SessionPropsFactory?.Invoke(
                         sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies)
                     ?? DiscordSessionBindingActor.CreateProps(
                         sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies);
-        var child = Context.ActorOf(props, resolvedName);
+        var child = Context.ActorOf(props, actorName);
         Context.Watch(child);
         return child;
     }
@@ -351,15 +279,6 @@ internal sealed class DiscordConversationActor : ReceiveActor
         {
             _log.Warning(ex, "Failed to post restart-drain reply to Discord channel {0}", replyChannelId.Value);
         }
-    }
-
-    private static SessionId SessionIdFromActorName(string actorName)
-    {
-        var decoded = Uri.UnescapeDataString(actorName);
-        var colonIdx = decoded.IndexOf(':', StringComparison.Ordinal);
-        return colonIdx > 0
-            ? new SessionId($"{decoded[..colonIdx]}/{decoded[(colonIdx + 1)..]}")
-            : new SessionId(decoded);
     }
 
     private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)

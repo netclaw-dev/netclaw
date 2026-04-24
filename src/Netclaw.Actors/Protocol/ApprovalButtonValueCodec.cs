@@ -7,13 +7,20 @@ namespace Netclaw.Actors.Protocol;
 /// </summary>
 public static class ApprovalButtonValueCodec
 {
+    public const int MaxEncodedLength = 100;
+
     public static string Encode(ToolInteractionRequest request, ToolInteractionOption option)
-        => string.Join("|",
-        [
-            request.CallId,
-            option.Key,
-            request.RequesterSenderId ?? string.Empty
-        ]);
+        => Encode(request.CallId, option.Key, request.RequesterSenderId);
+
+    public static string Encode(string callId, string optionKey, string? requesterSenderId)
+    {
+        var suffix = $"|{optionKey}|{requesterSenderId ?? string.Empty}";
+        var maxCallIdLength = MaxEncodedLength - suffix.Length;
+        var truncatedCallId = callId.Length > maxCallIdLength
+            ? callId[..maxCallIdLength]
+            : callId;
+        return $"{truncatedCallId}{suffix}";
+    }
 
     public static bool TryDecode(string? value, out string? callId, out string? selectedKey, out string? requesterSenderId)
     {

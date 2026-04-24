@@ -77,10 +77,10 @@ public sealed class DiscordChannel : IChannel
         try
         {
             // Connect first so BotUserId is available before creating the gateway actor.
+            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
-
-            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
 
             _gateway = _system.ActorOf(
                 DiscordGatewayActor.CreateProps(new DiscordGatewayDependencies(

@@ -27,7 +27,10 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 
     public async Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
     {
-        var channelId = ulong.Parse(message.ReplyChannelId.Value);
+        if (!ulong.TryParse(message.ReplyChannelId.Value, out var channelId))
+            throw new InvalidOperationException(
+                $"Discord reply channel ID '{message.ReplyChannelId.Value}' is not a valid snowflake.");
+
         var channel = _client.GetChannel(channelId)
             ?? throw new InvalidOperationException(
                 $"Discord channel {message.ReplyChannelId.Value} not found in cache.");
@@ -42,7 +45,9 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         if (message.CreateThreadOnMessage is { } threadAnchor
             && channel is ITextChannel textChannel)
         {
-            var anchorId = ulong.Parse(threadAnchor.Value);
+            if (!ulong.TryParse(threadAnchor.Value, out var anchorId))
+                throw new InvalidOperationException(
+                    $"Discord anchor message ID '{threadAnchor.Value}' is not a valid snowflake.");
             var threadName = message.ThreadName ?? "Conversation";
             var anchorMessage = await textChannel.GetMessageAsync(anchorId)
                 ?? throw new InvalidOperationException(
@@ -86,9 +91,14 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
             components = builder.Build();
         }
 
-        var rootRef = message.CreateThreadOnMessage is null && message.RootMessageId is { } rootId
-            ? new MessageReference(ulong.Parse(rootId.Value))
-            : null;
+        MessageReference? rootRef = null;
+        if (message.CreateThreadOnMessage is null && message.RootMessageId is { } rootId)
+        {
+            if (!ulong.TryParse(rootId.Value, out var rootMsgId))
+                throw new InvalidOperationException(
+                    $"Discord root message ID '{rootId.Value}' is not a valid snowflake.");
+            rootRef = new MessageReference(rootMsgId);
+        }
 
         await targetChannel.SendMessageAsync(
             text: message.Text,
