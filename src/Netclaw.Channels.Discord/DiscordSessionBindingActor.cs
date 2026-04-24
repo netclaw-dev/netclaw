@@ -26,6 +26,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         ":warning: Message blocked by prompt-injection policy.";
     private const string LiveDetectorUnavailableWarning =
         ":warning: I couldn't safely analyze your message — please try again in a moment.";
+    private const string WrongRequesterWarning =
+        ":warning: Only the requesting user can approve this tool action.";
 
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
@@ -278,7 +280,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
         if (result is ApprovalLookupResult.WrongRequester)
         {
-            await SafeReplyAsync(":warning: Only the requesting user can approve this tool action.");
+            await SafeReplyAsync(WrongRequesterWarning);
             return true;
         }
 
@@ -302,7 +304,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
         if (result is ApprovalLookupResult.WrongRequester)
         {
-            await SafeReplyAsync(":warning: Only the requesting user can approve this tool action.");
+            await SafeReplyAsync(WrongRequesterWarning);
             return;
         }
 
