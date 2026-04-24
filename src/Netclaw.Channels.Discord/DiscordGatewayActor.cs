@@ -133,5 +133,6 @@ public sealed record DiscordGatewayDependencies(
     IDiscordReplyClient ReplyClient,
     DiscordUserId? BotUserId = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
+    IThreadHistoryFetcher? ThreadHistoryFetcher = null,
     Func<DiscordChannelId, DiscordGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null);

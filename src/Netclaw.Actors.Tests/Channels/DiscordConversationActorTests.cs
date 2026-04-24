@@ -344,6 +344,65 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
             TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Ingress_gate_posts_drain_reply()
+    {
+        var replyClient = new RecordingDiscordReplyClient();
+        var gate = new SessionIngressGate();
+        gate.TryClose("restarting");
+
+        var deps = CreateDependencies(
+            ingressGate: gate,
+            replyClient: replyClient,
+            sessionPropsFactory: (_, _, _, _, _, _) =>
+                Props.Create(() => new ForwardActor(TestActor)));
+
+        var conversation = Sys.ActorOf(
+            DiscordConversationActor.CreateProps(new DiscordChannelId("ch-1"), deps),
+            $"conv-gate-reply-{Guid.NewGuid():N}");
+
+        conversation.Tell(CreateMessage(channelId: "ch-1", text: "blocked"));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(replyClient.Posts);
+            Assert.Contains("restarting", replyClient.Posts[0].Text, StringComparison.OrdinalIgnoreCase);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Ingress_gate_reply_failure_does_not_crash_actor()
+    {
+        var replyClient = new RecordingDiscordReplyClient
+        {
+            ThrowOnPost = new InvalidOperationException("API down")
+        };
+        var gate = new SessionIngressGate();
+        gate.TryClose("restarting");
+
+        var deps = CreateDependencies(
+            ingressGate: gate,
+            replyClient: replyClient,
+            sessionPropsFactory: (_, _, _, _, _, _) =>
+                Props.Create(() => new ForwardActor(TestActor)));
+
+        var conversation = Sys.ActorOf(
+            DiscordConversationActor.CreateProps(new DiscordChannelId("ch-1"), deps),
+            $"conv-gate-fail-{Guid.NewGuid():N}");
+
+        conversation.Tell(CreateMessage(channelId: "ch-1", text: "blocked"));
+
+        // Actor should survive the reply failure — send another message to prove it's alive
+        var probe = CreateTestProbe();
+        probe.Watch(conversation);
+
+        // Give the fire-and-forget reply time to fail, then verify actor still alive
+        await AwaitAssertAsync(() =>
+        {
+            Assert.False(probe.HasMessages, "Actor should not have terminated");
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     private IActorRef CreateConversation(
         string channelId,
         Akka.TestKit.TestProbe sink,
@@ -365,6 +424,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
         DiscordChannelOptions? options = null,
         SessionIngressGate? ingressGate = null,
         DiscordUserId? botUserId = null,
+        IDiscordReplyClient? replyClient = null,
         Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? sessionPropsFactory = null)
     {
         return new DiscordGatewayDependencies(
@@ -378,7 +438,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
                 AllowedChannelIds = ["ch-1"]
             },
             DefaultChannelId: null,
-            ReplyClient: new UnconfiguredDiscordReplyClient(),
+            ReplyClient: replyClient ?? new UnconfiguredDiscordReplyClient(),
             BotUserId: botUserId,
             SessionPropsFactory: sessionPropsFactory);
     }

@@ -524,6 +524,142 @@ public abstract class SessionBindingContractTests : TestKit
             "Override CreateBindingActorWithPipeline to test with arbitrary ISessionPipeline");
     }
 
+    // --- Wrong-Requester Approval ---
+
+    [Fact]
+    public async Task Button_approval_from_wrong_requester_posts_warning()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-wrong-button");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = "call-wr-1",
+                ToolName = "execute_shell",
+                DisplayText = "rm -rf /tmp",
+                RequesterSenderId = "user-A",
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        ClearPostedTexts();
+
+        // Wrong user sends button approval
+        actor.Tell(CreateApprovalResponse("call-wr-1", ApprovalOptionKeys.ApproveOnce, "user-B"));
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("Only the requesting user", StringComparison.OrdinalIgnoreCase));
+        }, cancellationToken: ct);
+
+        // No feedback sent — the pending request is NOT consumed
+        var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+        Assert.Empty(feedback);
+    }
+
+    [Fact]
+    public async Task Text_approval_from_wrong_requester_posts_warning()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-wrong-text");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = "call-wr-2",
+                ToolName = "write_file",
+                DisplayText = "write /etc/passwd",
+                RequesterSenderId = "user-A",
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("write_file"));
+        }, cancellationToken: ct);
+
+        ClearPostedTexts();
+
+        // Wrong user sends text "A" approval
+        actor.Tell(CreateInboundMessage("A", "user-B"));
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("Only the requesting user", StringComparison.OrdinalIgnoreCase));
+        }, cancellationToken: ct);
+
+        // No feedback sent
+        var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+        Assert.Empty(feedback);
+    }
+
+    // --- Auto-Deny on Reply Failure ---
+
+    [Fact]
+    public async Task Reply_failure_auto_denies_approval()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-auto-deny");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = "call-deny-1",
+                ToolName = "execute_shell",
+                DisplayText = "dangerous command",
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        // Both button and text fallback will fail
+        SetReplyClientThrows(new InvalidOperationException("Discord API down"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-deny-1", feedback[0].CallId);
+            Assert.Equal(ApprovalOptionKeys.Deny, feedback[0].SelectedKey);
+        }, cancellationToken: ct);
+
+        ClearReplyClientThrows();
+    }
+
     // --- Thread Hydration ---
 
     [Fact]

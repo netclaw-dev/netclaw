@@ -41,6 +41,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
     private int _turnNumber;
+    private bool _threadHistoryFetchAttempted;
 
     public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
@@ -243,6 +244,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             return;
         }
 
+        var liveContents = new List<AIContent> { new TextContent(message.Text) };
+        var mergedContents = await BuildInputContentsAsync(liveContents, inboundCts.Token);
+
         var input = new ChannelInput
         {
             SenderId = message.SenderId.Value,
@@ -252,7 +256,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             Principal = message.Principal,
             Provenance = message.Provenance,
-            Contents = [new TextContent(message.Text)],
+            Contents = mergedContents,
             ReceivedAt = message.ReceivedAt
         };
 
@@ -272,6 +276,79 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             _log.Warning("Discord input queue closed for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue closed"));
         }
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildInputContentsAsync(
+        List<AIContent> liveContents,
+        CancellationToken cancellationToken)
+    {
+        if (_threadHistoryFetchAttempted || _dependencies.ThreadHistoryFetcher is not { } fetcher)
+            return liveContents;
+
+        _threadHistoryFetchAttempted = true;
+
+        IReadOnlyList<ChannelInput> history;
+        try
+        {
+            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Thread history fetch failed for session {0}", _sessionId.Value);
+            return liveContents;
+        }
+
+        if (history.Count == 0)
+            return liveContents;
+
+        _log.Info("Thread history hydrated fetched={FetchedCount} session={Session}",
+            history.Count, _sessionId.Value);
+
+        return MergeHistoryWithLiveContents(history, liveContents);
+    }
+
+    private static List<AIContent> MergeHistoryWithLiveContents(
+        IReadOnlyList<ChannelInput> history,
+        IReadOnlyList<AIContent> liveContents)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("[thread history — messages exchanged before this inbound event]");
+        sb.AppendLine();
+
+        foreach (var item in history)
+        {
+            var ts = item.ReceivedAt == default ? string.Empty : $", {item.ReceivedAt:yyyy-MM-dd HH:mm} UTC";
+            sb.AppendLine($"<user: {item.SenderId}{ts}>");
+
+            foreach (var content in item.Contents)
+            {
+                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
+                    sb.AppendLine(text.Text);
+            }
+
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("[end thread history]");
+
+        var liveText = string.Join("\n", liveContents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        var mergedText = string.IsNullOrWhiteSpace(liveText)
+            ? sb.ToString()
+            : $"{sb}\n\n{liveText}";
+
+        var merged = new List<AIContent> { new TextContent(mergedText) };
+
+        foreach (var content in liveContents)
+        {
+            if (content is not TextContent)
+                merged.Add(content);
+        }
+
+        return merged;
     }
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message, string selectedKey)
@@ -488,7 +565,10 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
             try
             {
-                await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildTextPrompt(request));
+                var fallbackText = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+                var postMessage = BuildPostMessage(fallbackText);
+                var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
+                ApplyThreadPromotion(result);
             }
             catch (Exception textEx)
             {

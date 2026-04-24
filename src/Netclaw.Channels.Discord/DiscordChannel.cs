@@ -17,6 +17,7 @@ public sealed class DiscordChannel : IChannel
     private readonly IDiscordGatewayClient _gatewayClient;
     private readonly IDiscordReplyClient _replyClient;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
+    private readonly IThreadHistoryFetcher? _threadHistoryFetcher;
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly DiscordChannelOptions _options;
@@ -31,6 +32,7 @@ public sealed class DiscordChannel : IChannel
         IDiscordGatewayClient gatewayClient,
         IDiscordReplyClient replyClient,
         IPromptInjectionDetector? promptInjectionDetector,
+        IThreadHistoryFetcher? threadHistoryFetcher,
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         DiscordChannelOptions options,
@@ -42,6 +44,7 @@ public sealed class DiscordChannel : IChannel
         _gatewayClient = gatewayClient;
         _replyClient = replyClient;
         _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
+        _threadHistoryFetcher = threadHistoryFetcher;
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _options = options;
@@ -93,7 +96,8 @@ public sealed class DiscordChannel : IChannel
                         : null,
                     ReplyClient: _replyClient,
                     BotUserId: _gatewayClient.BotUserId,
-                    PromptInjectionDetector: _promptInjectionDetector)),
+                    PromptInjectionDetector: _promptInjectionDetector,
+                    ThreadHistoryFetcher: _threadHistoryFetcher)),
                 "discord-gateway");
 
             ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);

@@ -90,6 +90,39 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
     protected override ChannelType ExpectedChannelType => ChannelType.Discord;
 
+    protected override bool SupportsThreadHydration => true;
+
+    protected override IActorRef CreateBindingActorWithHydration(
+        SessionId sessionId,
+        RecordingSessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector,
+        IThreadHistoryFetcher historyFetcher)
+    {
+        ResetReplyClient();
+        return CreateActorCore(sessionId, pipeline, detector, historyFetcher);
+    }
+
+    protected override IReadOnlyList<ChannelInput> CreateHistoryItems(int count)
+    {
+        var items = new List<ChannelInput>();
+        for (var i = 0; i < count; i++)
+        {
+            items.Add(new ChannelInput
+            {
+                SenderId = $"history-user-{i}",
+                ChannelId = "ch-test",
+                MessageId = $"history-msg-{i}",
+                Contents = [new Microsoft.Extensions.AI.TextContent($"history message {i}")],
+                ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-count + i)
+            });
+        }
+
+        return items;
+    }
+
+    protected override object CreateHydrationTriggerInboundMessage(string text, string senderId)
+        => CreateInboundMessage(text, senderId);
+
     private void ResetReplyClient()
     {
         var pendingThrow = _replyClient.ThrowOnPost;
@@ -99,7 +132,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     private IActorRef CreateActorCore(
         SessionId sessionId,
         ISessionPipeline pipeline,
-        ConfigurablePromptInjectionDetector detector)
+        ConfigurablePromptInjectionDetector detector,
+        IThreadHistoryFetcher? historyFetcher = null)
     {
         var options = new DiscordChannelOptions();
         var deps = new DiscordGatewayDependencies(
@@ -109,7 +143,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Options: options,
             DefaultChannelId: null,
             ReplyClient: _replyClient,
-            PromptInjectionDetector: detector);
+            PromptInjectionDetector: detector,
+            ThreadHistoryFetcher: historyFetcher);
 
         return Sys.ActorOf(DiscordSessionBindingActor.CreateProps(
             sessionId,

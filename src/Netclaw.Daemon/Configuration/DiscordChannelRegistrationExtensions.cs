@@ -1,4 +1,5 @@
 using Discord.WebSocket;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
@@ -33,6 +34,7 @@ public static class DiscordChannelRegistrationExtensions
 
         services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();
         services.AddSingleton<IDiscordReplyClient, DiscordNetReplyClient>();
+        services.AddSingleton<IThreadHistoryFetcher, DiscordThreadHistoryFetcher>();
         services.AddSingleton<IReminderTargetResolver, DiscordReminderTargetResolver>();
 
         services.AddKeyedSingleton<IChannel, DiscordChannel>(DiscordChannelKey);
