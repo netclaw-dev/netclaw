@@ -86,8 +86,8 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
 
         var second = await sink.ExpectMsgAsync<DiscordThreadInbound>(
             cancellationToken: TestContext.Current.CancellationToken);
-        // Should route to the SAME session (the original binding, not a new one)
-        Assert.Equal("ch-1/thread-ch-999", second.SessionId.Value);
+        // Should route to the SAME session with the ORIGINAL session ID
+        Assert.Equal("ch-1/msg-100", second.SessionId.Value);
         Assert.Equal("follow up in promoted thread", second.Text);
     }
 

@@ -138,7 +138,9 @@ internal sealed class DiscordConversationActor : ReceiveActor
         }
 
         // --- Build session and forward ---
-        var sessionId = new SessionId($"{_channelId.Value}/{message.ThreadOrMessageId.Value}");
+        // Use the resolved actor name to derive the session ID so that
+        // aliased thread messages preserve the original session identity.
+        var sessionId = SessionIdFromActorName(actorName);
         var sessionBinding = existingBinding
             ?? GetOrCreateSessionBinding(
                 sessionId,
@@ -253,18 +255,12 @@ internal sealed class DiscordConversationActor : ReceiveActor
             originalActorName);
     }
 
+    // Aliases are intentionally kept after child death so that the next
+    // message in a promoted thread re-creates the binding with the original
+    // actor name and session ID, preserving persisted conversation history.
     private void HandleTerminated(Terminated msg)
     {
-        var deadName = msg.ActorRef.Path.Name;
-        var keysToRemove = new List<string>();
-        foreach (var (key, value) in _threadAliases)
-        {
-            if (string.Equals(value, deadName, StringComparison.Ordinal))
-                keysToRemove.Add(key);
-        }
-
-        foreach (var key in keysToRemove)
-            _threadAliases.Remove(key);
+        _log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name);
     }
 
     /// <summary>
@@ -312,8 +308,12 @@ internal sealed class DiscordConversationActor : ReceiveActor
         if (_threadAliases.TryGetValue(threadOrMessageId.Value, out var aliasedActorName))
         {
             var aliased = Context.Child(aliasedActorName);
-            if (!aliased.IsNobody())
-                return (aliasedActorName, aliased);
+            // Return the aliased name even if the actor is dead — this ensures
+            // GetOrCreateSessionBinding re-creates the binding with the original
+            // actor name and session ID, preserving persisted conversation history.
+            return aliased.IsNobody()
+                ? (aliasedActorName, null)
+                : (aliasedActorName, aliased);
         }
 
         return (actorName, null);
@@ -351,6 +351,15 @@ internal sealed class DiscordConversationActor : ReceiveActor
         {
             _log.Warning(ex, "Failed to post restart-drain reply to Discord channel {0}", replyChannelId.Value);
         }
+    }
+
+    private static SessionId SessionIdFromActorName(string actorName)
+    {
+        var decoded = Uri.UnescapeDataString(actorName);
+        var colonIdx = decoded.IndexOf(':', StringComparison.Ordinal);
+        return colonIdx > 0
+            ? new SessionId($"{decoded[..colonIdx]}/{decoded[(colonIdx + 1)..]}")
+            : new SessionId(decoded);
     }
 
     private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
