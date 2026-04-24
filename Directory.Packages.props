@@ -8,7 +8,7 @@
     <AkkaRemindersVersion>0.6.0-beta2</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
-    <MicrosoftExtensionsAIVersion>10.4.1</MicrosoftExtensionsAIVersion>
+    <MicrosoftExtensionsAIVersion>10.5.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.7</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
   <!-- App dependencies -->
