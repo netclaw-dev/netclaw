@@ -1,11 +1,12 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.65</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.62</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.6.0-beta2</AkkaRemindersVersion>
-    <OpenTelemetryVersion>1.13.1</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <MicrosoftExtensionsAIVersion>10.4.1</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.7</MicrosoftAspNetCoreVersion>
@@ -41,6 +42,7 @@
     <PackageVersion Include="JsonSchema.Net" Version="7.4.0" />
     <PackageVersion Include="NSec.Cryptography" Version="24.4.0" />
     <PackageVersion Include="OpenTelemetry" Version="$(OpenTelemetryVersion)" />
+    <PackageVersion Include="OpenTelemetry.Api" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="$(OpenTelemetryVersion)" />
     <PackageVersion Include="OllamaSharp" Version="5.4.25" />
