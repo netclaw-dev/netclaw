@@ -57,7 +57,7 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             IsDirectMessage: false,
             ContainsBotMention: true,
             Text: text,
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: TimeProvider.System.GetUtcNow());
 
     protected override object CreateDeniedMessage(
         string channelId, string userId, string eventId)
@@ -73,5 +73,5 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             IsDirectMessage: false,
             ContainsBotMention: true,
             Text: "denied",
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: TimeProvider.System.GetUtcNow());
 }

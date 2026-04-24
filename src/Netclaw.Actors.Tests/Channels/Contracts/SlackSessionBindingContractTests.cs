@@ -58,7 +58,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
                 SourceKind = "slack"
             },
             Text: text,
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: TimeProvider.System.GetUtcNow());
 
     protected override object CreateApprovalResponse(string callId, string selectedKey, string senderId)
         => new SlackApprovalResponse(
@@ -113,7 +113,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
                 ChannelId = "C-test",
                 MessageId = $"C-test:{900 + i}.1",
                 Contents = [new TextContent($"history message {i}")],
-                ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-(count - i))
+                ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-(count - i))
             });
         }
         return items;

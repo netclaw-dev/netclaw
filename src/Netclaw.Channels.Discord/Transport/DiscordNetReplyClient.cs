@@ -27,9 +27,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 
     public async Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
     {
-        if (!ulong.TryParse(message.ReplyChannelId.Value, out var channelId))
-            throw new InvalidOperationException(
-                $"Discord reply channel ID '{message.ReplyChannelId.Value}' is not a valid snowflake.");
+        var channelId = ParseSnowflake(message.ReplyChannelId.Value, "reply channel ID");
 
         var channel = _client.GetChannel(channelId)
             ?? throw new InvalidOperationException(
@@ -45,9 +43,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         if (message.CreateThreadOnMessage is { } threadAnchor
             && channel is ITextChannel textChannel)
         {
-            if (!ulong.TryParse(threadAnchor.Value, out var anchorId))
-                throw new InvalidOperationException(
-                    $"Discord anchor message ID '{threadAnchor.Value}' is not a valid snowflake.");
+            var anchorId = ParseSnowflake(threadAnchor.Value, "anchor message ID");
             var threadName = message.ThreadName ?? "Conversation";
             var anchorMessage = await textChannel.GetMessageAsync(anchorId)
                 ?? throw new InvalidOperationException(
@@ -93,12 +89,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 
         MessageReference? rootRef = null;
         if (message.CreateThreadOnMessage is null && message.RootMessageId is { } rootId)
-        {
-            if (!ulong.TryParse(rootId.Value, out var rootMsgId))
-                throw new InvalidOperationException(
-                    $"Discord root message ID '{rootId.Value}' is not a valid snowflake.");
-            rootRef = new MessageReference(rootMsgId);
-        }
+            rootRef = new MessageReference(ParseSnowflake(rootId.Value, "root message ID"));
 
         await targetChannel.SendMessageAsync(
             text: message.Text,
@@ -106,5 +97,12 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
             components: components);
 
         return new DiscordPostResult(CreatedThreadId: createdThreadId);
+    }
+
+    private static ulong ParseSnowflake(string value, string label)
+    {
+        if (!ulong.TryParse(value, out var id))
+            throw new InvalidOperationException($"Discord {label} '{value}' is not a valid snowflake.");
+        return id;
     }
 }

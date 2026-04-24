@@ -66,7 +66,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
                 SourceKind = "discord"
             },
             Text: text,
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: TimeProvider.System.GetUtcNow());
 
     protected override object CreateApprovalResponse(string callId, string selectedKey, string senderId)
         => new DiscordApprovalResponse(

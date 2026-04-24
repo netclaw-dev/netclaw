@@ -38,7 +38,7 @@ public sealed class DiscordAclContractTests : AclPolicyContractTests
             IsDirectMessage: isDm,
             ContainsBotMention: false,
             Text: "test",
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: TimeProvider.System.GetUtcNow());
 
         var defaultChannelId = options.DefaultChannelId is not null
             ? new DiscordChannelId(options.DefaultChannelId)
