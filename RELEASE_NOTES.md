@@ -1,3 +1,15 @@
+#### 0.15.1 2026-04-24 ####
+
+Netclaw v0.15.1 — Project directory tracking and automatic context loading
+
+**Features**
+
+* Added `set_working_directory` tool and project directory tracking — sessions now track a mutable `ProjectDirectory` in `WorkingContext` that persists across crash and restart. When a project directory is set, the session automatically discovers and loads the project's identity file (`.netclaw/AGENTS.md`, `CLAUDE.md`, `AGENTS.md`, or `CONTEXT.md` — first match wins) into the system prompt alongside global identity layers. The loaded project context is stable across turns and benefits from prompt caching. The `set_working_directory` tool validates that the target path exists and is within the audience's allowed file access roots; Public and Team audiences cannot use it by default. Also adds `session_dir` to the `[session]` context block so the agent knows its full session directory path. Closes [#595](https://github.com/Aaronontheweb/netclaw/issues/595), [#596](https://github.com/Aaronontheweb/netclaw/issues/596). ([#734](https://github.com/Aaronontheweb/netclaw/pull/734))
+
+**Dependencies**
+
+* Bumped `Microsoft.Extensions.AI.Abstractions` from 10.4.1 to 10.5.0. ([#736](https://github.com/Aaronontheweb/netclaw/pull/736))
+
 #### 0.15.0 2026-04-24 ####
 
 Netclaw v0.15.0 — Session crash recovery hardening, unified streaming timeout, and dependency security updates
