@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 
@@ -9,7 +8,6 @@ internal sealed class RecordingThreadHistoryFetcher : IThreadHistoryFetcher
     private int _fetchCount;
     private IReadOnlyList<ChannelInput> _history = Array.Empty<ChannelInput>();
     private Exception? _throwOnFetch;
-    public ConcurrentQueue<SessionId> FetchedSessionIds { get; } = new();
 
     public int FetchCount => Volatile.Read(ref _fetchCount);
 
@@ -22,7 +20,6 @@ internal sealed class RecordingThreadHistoryFetcher : IThreadHistoryFetcher
         CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref _fetchCount);
-        FetchedSessionIds.Enqueue(sessionId);
         if (_throwOnFetch is not null)
             throw _throwOnFetch;
         return Task.FromResult(_history);

@@ -87,22 +87,10 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     private int _hydrationEventCounter;
 
     protected override object CreateHydrationTriggerInboundMessage(string text, string senderId)
-        => new SlackThreadInbound(
-            SessionId: new SessionId("ignored"),
-            ChannelId: new SlackChannelId("C-test"),
-            ThreadTs: new SlackThreadTs("1000.1"),
-            EventId: new SlackEventId($"C-test:{1000 + Interlocked.Increment(ref _hydrationEventCounter)}.1"),
-            TurnId: Guid.NewGuid().ToString("N"),
-            SenderId: senderId,
-            Audience: TrustAudience.Team,
-            Principal: PrincipalClassification.UntrustedExternal,
-            Provenance: new SourceProvenance
-            {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                SourceKind = "slack"
-            },
-            Text: text,
-            ReceivedAt: DateTimeOffset.UtcNow);
+        => ((SlackThreadInbound)CreateInboundMessage(text, senderId)) with
+        {
+            EventId = new SlackEventId($"C-test:{1000 + Interlocked.Increment(ref _hydrationEventCounter)}.1")
+        };
 
     protected override IActorRef CreateBindingActorWithHydration(
         SessionId sessionId,
