@@ -2,6 +2,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
+using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
@@ -81,6 +82,55 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 
     protected override ChannelType ExpectedChannelType => ChannelType.Slack;
 
+    protected override bool SupportsThreadHydration => true;
+
+    private int _hydrationEventCounter;
+
+    protected override object CreateHydrationTriggerInboundMessage(string text, string senderId)
+        => new SlackThreadInbound(
+            SessionId: new SessionId("ignored"),
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            EventId: new SlackEventId($"C-test:{1000 + Interlocked.Increment(ref _hydrationEventCounter)}.1"),
+            TurnId: Guid.NewGuid().ToString("N"),
+            SenderId: senderId,
+            Audience: TrustAudience.Team,
+            Principal: PrincipalClassification.UntrustedExternal,
+            Provenance: new SourceProvenance
+            {
+                TransportAuthenticity = TransportAuthenticity.Verified,
+                SourceKind = "slack"
+            },
+            Text: text,
+            ReceivedAt: DateTimeOffset.UtcNow);
+
+    protected override IActorRef CreateBindingActorWithHydration(
+        SessionId sessionId,
+        RecordingSessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector,
+        IThreadHistoryFetcher historyFetcher)
+    {
+        ResetReplyClient();
+        return CreateActorCore(sessionId, pipeline, detector, historyFetcher: historyFetcher);
+    }
+
+    protected override IReadOnlyList<ChannelInput> CreateHistoryItems(int count)
+    {
+        var items = new List<ChannelInput>();
+        for (var i = 0; i < count; i++)
+        {
+            items.Add(new ChannelInput
+            {
+                SenderId = $"user-history-{i}",
+                ChannelId = "C-test",
+                MessageId = $"C-test:{900 + i}.1",
+                Contents = [new TextContent($"history message {i}")],
+                ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-(count - i))
+            });
+        }
+        return items;
+    }
+
     private void ResetReplyClient()
     {
         var pendingThrow = _replyClient.ThrowOnPost;
@@ -91,7 +141,8 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         SessionId sessionId,
         ISessionPipeline pipeline,
         ConfigurablePromptInjectionDetector detector,
-        string nameSuffix = "")
+        string nameSuffix = "",
+        IThreadHistoryFetcher? historyFetcher = null)
     {
         var paths = TestSlackGatewayDeps.NewTestPaths();
         var deps = new SlackGatewayDependencies(
@@ -109,7 +160,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
-            ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
+            ThreadHistoryFetcher: historyFetcher ?? EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultTextOnlyModel,
             Paths: paths,

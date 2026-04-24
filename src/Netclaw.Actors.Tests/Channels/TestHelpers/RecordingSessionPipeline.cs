@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Akka;
 using Akka.Streams;
 using Akka.Streams.Dsl;
@@ -12,6 +13,7 @@ public sealed class RecordingSessionPipeline(
 {
     public SessionPipelineOptions? CapturedOptions { get; private set; }
     public List<IWithSessionId> RecordedFeedback { get; } = [];
+    public ConcurrentQueue<ChannelInput> CapturedInputs { get; } = new();
 
     public Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
@@ -23,7 +25,7 @@ public sealed class RecordingSessionPipeline(
 
         var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
 
-        var input = Sink.Ignore<ChannelInput>()
+        var input = Sink.ForEach<ChannelInput>(ci => CapturedInputs.Enqueue(ci))
             .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
 
         var output = Source.From(outputFactory(sessionId).ToList())

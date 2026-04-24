@@ -1,6 +1,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
@@ -36,6 +37,26 @@ public abstract class SessionBindingContractTests : TestKit
     protected abstract void ClearReplyClientThrows();
 
     protected abstract ChannelType ExpectedChannelType { get; }
+
+    // --- Thread Hydration Contract (opt-in) ---
+
+    protected virtual bool SupportsThreadHydration => false;
+
+    protected virtual IActorRef CreateBindingActorWithHydration(
+        SessionId sessionId,
+        RecordingSessionPipeline pipeline,
+        ConfigurablePromptInjectionDetector detector,
+        IThreadHistoryFetcher historyFetcher)
+        => throw new NotImplementedException(
+            "Override CreateBindingActorWithHydration to test thread hydration");
+
+    protected virtual IReadOnlyList<ChannelInput> CreateHistoryItems(int count)
+        => throw new NotImplementedException(
+            "Override CreateHistoryItems to supply channel-compatible history");
+
+    protected virtual object CreateHydrationTriggerInboundMessage(string text, string senderId)
+        => throw new NotImplementedException(
+            "Override CreateHydrationTriggerInboundMessage to create an inbound that triggers hydration");
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services) { }
 
@@ -501,5 +522,111 @@ public abstract class SessionBindingContractTests : TestKit
     {
         throw new NotImplementedException(
             "Override CreateBindingActorWithPipeline to test with arbitrary ISessionPipeline");
+    }
+
+    // --- Thread Hydration ---
+
+    [Fact]
+    public async Task Thread_history_merged_on_first_inbound()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-merge");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(CreateHistoryItems(2));
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("live message", "user-1"));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, historyFetcher.FetchCount);
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            var textContent = string.Join("\n", input.Contents
+                .OfType<TextContent>()
+                .Select(t => t.Text));
+            Assert.Contains("thread history", textContent, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("live message", textContent);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Thread_history_fetched_once_per_lifetime()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-oneshot");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(CreateHistoryItems(1));
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "first reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("first live", "user-1"));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, historyFetcher.FetchCount);
+            Assert.True(pipeline.CapturedInputs.Count >= 1);
+        }, cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("second live", "user-1"));
+
+        await AwaitAssertAsync(() =>
+            Assert.True(pipeline.CapturedInputs.Count >= 2),
+            cancellationToken: ct);
+
+        Assert.Equal(1, historyFetcher.FetchCount);
+    }
+
+    [Fact]
+    public async Task Empty_history_delivers_live_message_without_merge()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-empty");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply without history" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("live message", "user-1"));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, historyFetcher.FetchCount);
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            var textContent = string.Join("\n", input.Contents
+                .OfType<TextContent>()
+                .Select(t => t.Text));
+            Assert.Contains("live message", textContent);
+            Assert.DoesNotContain("thread history", textContent, StringComparison.OrdinalIgnoreCase);
+        }, cancellationToken: ct);
     }
 }
