@@ -20,12 +20,12 @@
 - [ ] 3.4 Create `SetWorkingDirectoryAudienceTests.cs` following `SchedulingToolAudienceTests` pattern: theory covering Public blocked, Team blocked, Personal allowed
 - [ ] 3.5 Test: valid directory within roots updates project directory; outside roots rejected; nonexistent directory rejected; personal audience allows any valid directory; switching projects replaces previous
 
-## 4. Project Instructions Context Layer
+## 4. Project Instructions in System Prompt
 
-- [ ] 4.1 Create `ProjectInstructionLayerProvider` implementing `IContextLayerProvider` with `ContextLayerTiming.EveryTurn` — checks `.netclaw/AGENTS.md`, `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md` at project root (first match wins), frames as `Instructions from: {path}\n{content}`
-- [ ] 4.2 Inject `Func<string?>` project directory accessor at construction time
-- [ ] 4.3 Register the provider in the session's context layer list
-- [ ] 4.4 Extend `SessionMessageAssemblerTests.cs`: project instructions injected when project dir has identity file; no project dir produces no `[project-instructions]` block; switching projects picks up new instructions
+- [ ] 4.1 Extend `SystemPromptAssembler.Assemble()` to accept optional project instructions content and include it alongside SOUL/AGENTS/TOOLING
+- [ ] 4.2 Update `LlmSessionActor.SetSystemPrompt()` to read project identity file from `_state.WorkingContext.ProjectDirectory` — check `.netclaw/AGENTS.md`, `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md` at project root (first match wins), skip gracefully on I/O errors
+- [ ] 4.3 Call `SetSystemPrompt()` again when `set_working_directory` changes the project directory
+- [ ] 4.4 Test: system prompt includes project content when project dir has identity file; no project dir → system prompt has only global layers; project switch re-assembles prompt with new project content
 
 ## 5. System Skill and Identity Template Updates
 

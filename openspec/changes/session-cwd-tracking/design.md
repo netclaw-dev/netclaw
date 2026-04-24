@@ -110,19 +110,24 @@ points to `/home/user/workspaces/akadonic/`, and that's where `AGENTS.md`
 lives. This eliminates the walker class, audience root boundary logic, and
 stop conditions entirely.
 
-### D5: Automatic injection via EveryTurn context layer
+### D5: Project instructions in system prompt, not a context layer
 
-**Decision:** Implement `ProjectInstructionLayerProvider` as an
-`IContextLayerProvider` with `ContextLayerTiming.EveryTurn`. The provider
-reads the project directory from session state via a `Func<string?>`
-accessor and loads the identity file on each turn.
+**Decision:** Include project identity file content in the system prompt at
+position [0] via `SystemPromptAssembler.Assemble()`, alongside the global
+SOUL/AGENTS/TOOLING layers. No separate `IContextLayerProvider`. Call
+`SetSystemPrompt()` again when the project directory changes.
 
-**Rationale:** Automatic injection guarantees the project context is always
-present regardless of model capability. Smaller models that might not
-reliably follow behavioral instructions ("read AGENTS.md on recovery")
-get the context for free. Content is re-read from disk each turn so edits
-take effect immediately. This should be validated via eval against the
-behavioral alternative.
+**Rationale:** The project's `AGENTS.md` serves the same role as the global
+`AGENTS.md` — it's identity context the model should always have. Putting it
+in the system prompt at position [0] means it sits in the cached prefix,
+stable across turns. A project switch busts the cache once, then
+re-stabilizes immediately. An `EveryTurn` context layer would put it in
+the volatile tail where it's never cached — strictly worse.
+
+This also guarantees the project context is always present regardless of
+model capability. Smaller models that might not reliably follow behavioral
+instructions ("read AGENTS.md on recovery") get the context for free.
+Should be validated via eval against the behavioral alternative.
 
 ### D6: Project directory persistence via WorkingContext
 
@@ -145,11 +150,11 @@ to reference it directly.
 
 ## Risks / Trade-offs
 
-**[Risk: Model ignores `[project-instructions]`]** →
-The content is in the volatile context tail, which the model might
-deprioritize. Mitigation: eval suite validates that project instructions
-influence model behavior. If needed, the block can be moved to the static
-prefix at the cost of cache stability.
+**[Risk: Cache bust on project switch]** →
+Changing the project directory re-runs `SetSystemPrompt()`, which changes
+position [0] and invalidates the prompt cache prefix. Mitigation: project
+switches are rare, deliberate actions. The cache re-stabilizes immediately
+on the next turn.
 
 **[Risk: WorkingContext serialization change]** →
 Adding `ProjectDirectory` to `WorkingContext` is a protobuf schema change.
@@ -157,8 +162,7 @@ Old snapshots without the field will deserialize with `null`, which is the
 correct backward-compat default. No migration needed.
 
 **[Risk: Large project identity files]** →
-The `[project-instructions]` block uses `EveryTurn` timing and lands in the
-volatile context tail, so it does not benefit from prompt caching. Project
-identity files are typically small (under 2K tokens). If a project has
-unusually large instructions, the cost is bounded by the same truncation
-limits as other context layers.
+Project identity files are included in the system prompt at position [0],
+which benefits from prompt caching. Large files increase the cached prefix
+size but don't cause per-turn overhead. Project identity files are typically
+small (under 2K tokens).
