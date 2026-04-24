@@ -256,6 +256,31 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void WorkingContext_round_trips_with_project_directory()
+    {
+        var original = WorkingContext.Empty
+            .WithProjectDirectory("/home/user/akadonic")
+            .AddRecentFile("src/Rect.cs");
+
+        var result = RoundTrip(original);
+
+        Assert.Equal("/home/user/akadonic", result.ProjectDirectory);
+        Assert.Equal(new[] { "src/Rect.cs" }, result.RecentFiles);
+    }
+
+    [Fact]
+    public void WorkingContext_without_project_directory_deserializes_as_null()
+    {
+        var original = WorkingContext.Empty
+            .AddRecentFile("src/Rect.cs");
+
+        var result = RoundTrip(original);
+
+        Assert.Null(result.ProjectDirectory);
+        Assert.Single(result.RecentFiles);
+    }
+
+    [Fact]
     public void CompactionBroadcast_round_trips()
     {
         var ts = new DateTimeOffset(2026, 2, 21, 11, 0, 1, TimeSpan.Zero);

@@ -114,6 +114,57 @@ public class WorkingContextTests
     }
 
     [Fact]
+    public void IsEmpty_is_false_when_project_directory_set_but_no_files()
+    {
+        var ctx = WorkingContext.Empty.WithProjectDirectory("/home/user/project");
+
+        Assert.False(ctx.IsEmpty);
+        Assert.Empty(ctx.RecentFiles);
+    }
+
+    [Fact]
+    public void WithProjectDirectory_returns_same_instance_when_unchanged()
+    {
+        var ctx = WorkingContext.Empty.WithProjectDirectory("/home/user/project");
+        var again = ctx.WithProjectDirectory("/home/user/project");
+
+        Assert.Same(ctx, again);
+    }
+
+    [Fact]
+    public void WithProjectDirectory_returns_new_instance_on_change()
+    {
+        var original = WorkingContext.Empty.WithProjectDirectory("/home/user/project-a");
+        var updated = original.WithProjectDirectory("/home/user/project-b");
+
+        Assert.NotSame(original, updated);
+        Assert.Equal("/home/user/project-a", original.ProjectDirectory);
+        Assert.Equal("/home/user/project-b", updated.ProjectDirectory);
+    }
+
+    [Fact]
+    public void WithProjectDirectory_clears_with_null()
+    {
+        var ctx = WorkingContext.Empty.WithProjectDirectory("/home/user/project");
+        var cleared = ctx.WithProjectDirectory(null);
+
+        Assert.Null(cleared.ProjectDirectory);
+        Assert.True(cleared.IsEmpty);
+    }
+
+    [Theory]
+    [InlineData("/home/user/evil\ninjected")]
+    [InlineData("/home/user/evil\rinjected")]
+    [InlineData("/home/user/evil\0injected")]
+    public void WithProjectDirectory_rejects_control_characters(string evilPath)
+    {
+        var ctx = WorkingContext.Empty.WithProjectDirectory(evilPath);
+
+        Assert.Null(ctx.ProjectDirectory);
+        Assert.True(ctx.IsEmpty);
+    }
+
+    [Fact]
     public void ToContextBlock_returns_empty_string_when_context_is_empty()
     {
         Assert.Equal(string.Empty, WorkingContext.Empty.ToContextBlock());
@@ -130,6 +181,31 @@ public class WorkingContextTests
         Assert.Contains("[working-context]", block);
         Assert.Contains("recent_files:", block);
         Assert.Contains("- src/B.cs", block);
+        Assert.Contains("- src/A.cs", block);
+    }
+
+    [Fact]
+    public void ToContextBlock_includes_project_dir_line()
+    {
+        var block = WorkingContext.Empty
+            .WithProjectDirectory("/home/user/akadonic")
+            .ToContextBlock();
+
+        Assert.Contains("[working-context]", block);
+        Assert.Contains("project_dir: /home/user/akadonic", block);
+        Assert.DoesNotContain("recent_files:", block);
+    }
+
+    [Fact]
+    public void ToContextBlock_includes_both_project_dir_and_recent_files()
+    {
+        var block = WorkingContext.Empty
+            .WithProjectDirectory("/home/user/akadonic")
+            .AddRecentFile("src/A.cs")
+            .ToContextBlock();
+
+        Assert.Contains("project_dir: /home/user/akadonic", block);
+        Assert.Contains("recent_files:", block);
         Assert.Contains("- src/A.cs", block);
     }
 }

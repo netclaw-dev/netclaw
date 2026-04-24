@@ -3,7 +3,7 @@ name: netclaw-projects
 description: "How to create, find, and work with project workspaces. Load when the user references a project, asks to organize work, or you need a sustained workspace."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.1.0"
 license: MIT
 compatibility: "netclaw >= 0.10.0"
 disable-model-invocation: false
@@ -50,7 +50,18 @@ project evolves.
 
 ## Working in a Project
 
-When you `cd` into a project directory, read its `AGENTS.md` to load context.
+When you start working on a project, use `set_working_directory` to set the
+project directory:
+
+```
+set_working_directory(path: "/home/user/workspaces/my-project")
+```
+
+This automatically loads the project's identity file (`.netclaw/AGENTS.md`,
+`CLAUDE.md`, `AGENTS.md`, or `CONTEXT.md` — first match wins) into the system
+prompt. The project context persists across crash/restart, so you don't need to
+re-read it manually.
+
 Use the project directory as your working directory for all project-related
 file operations. Commit meaningful changes so the project has history.
 

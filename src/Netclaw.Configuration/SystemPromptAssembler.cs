@@ -14,17 +14,20 @@ public static class SystemPromptAssembler
     /// <param name="soul">Agent personality, tone, user's name, communication style (SOUL.md).</param>
     /// <param name="agents">Agent purpose/mission, operating rules, meta-guidance (AGENTS.md).</param>
     /// <param name="tooling">Host environment execution capabilities (TOOLING.md).</param>
+    /// <param name="projectInstructions">Project-scoped identity content from the project directory.</param>
     /// <returns>Assembled prompt or empty string if all layers are missing.</returns>
     public static string Assemble(
         string? soul = null,
         string? agents = null,
-        string? tooling = null)
+        string? tooling = null,
+        string? projectInstructions = null)
     {
-        var sections = new List<string>(3);
+        var sections = new List<string>(4);
 
         AddSection(sections, soul);
         AddSection(sections, agents);
         AddSection(sections, tooling);
+        AddSection(sections, projectInstructions);
 
         return sections.Count > 0
             ? string.Join("\n\n", sections)

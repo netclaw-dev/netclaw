@@ -10,7 +10,8 @@ public interface ISystemPromptProvider
     /// <summary>
     /// Get the assembled system prompt. Returns empty string if no layers are available.
     /// </summary>
-    string GetSystemPrompt();
+    /// <param name="projectDirectory">Optional project root for loading project-scoped identity files.</param>
+    string GetSystemPrompt(string? projectDirectory = null);
 }
 
 /// <summary>
@@ -64,7 +65,7 @@ public sealed class StaticSystemPromptProvider : ISystemPromptProvider
         _prompt = prompt;
     }
 
-    public string GetSystemPrompt() => _prompt;
+    public string GetSystemPrompt(string? projectDirectory = null) => _prompt;
 }
 
 /// <summary>
@@ -74,7 +75,7 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
 {
     public static readonly NullSystemPromptProvider Instance = new();
 
-    public string GetSystemPrompt() => string.Empty;
+    public string GetSystemPrompt(string? projectDirectory = null) => string.Empty;
 }
 
 /// <summary>
@@ -135,6 +136,9 @@ public sealed class FileContextLayerProvider : IContextLayerProvider
 /// </summary>
 public sealed class FileSystemPromptProvider : ISystemPromptProvider
 {
+    private static readonly string[] ProjectIdentityFileNames =
+        [".netclaw/AGENTS.md", "CLAUDE.md", "AGENTS.md", "CONTEXT.md"];
+
     private readonly NetclawPaths _paths;
 
     public FileSystemPromptProvider(NetclawPaths paths)
@@ -142,17 +146,37 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
         _paths = paths;
     }
 
-    public string GetSystemPrompt()
+    public string GetSystemPrompt(string? projectDirectory = null)
     {
         // Try new identity paths first, fall back to legacy soul/ paths
         var soul = TryReadFile(_paths.SoulPath) ?? TryReadFile(_paths.PersonalityPath);
         var agents = TryReadFile(_paths.AgentsPath) ?? TryReadFile(_paths.InstructionsPath);
         var tooling = TryReadFile(_paths.ToolingPath) ?? TryReadFile(_paths.UserPreferencesPath);
+        var projectInstructions = TryReadProjectIdentityFile(projectDirectory);
 
         return SystemPromptAssembler.Assemble(
             soul: soul,
             agents: agents,
-            tooling: tooling);
+            tooling: tooling,
+            projectInstructions: projectInstructions);
+    }
+
+    /// <summary>
+    /// Check candidate filenames at the project root. First match wins.
+    /// </summary>
+    internal static string? TryReadProjectIdentityFile(string? projectDirectory)
+    {
+        if (string.IsNullOrEmpty(projectDirectory))
+            return null;
+
+        foreach (var candidate in ProjectIdentityFileNames)
+        {
+            var content = TryReadFile(Path.Combine(projectDirectory, candidate));
+            if (content is not null)
+                return content;
+        }
+
+        return null;
     }
 
     private static string? TryReadFile(string path)

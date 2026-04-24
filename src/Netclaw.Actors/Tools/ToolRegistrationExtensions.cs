@@ -43,6 +43,7 @@ public static class ToolRegistrationExtensions
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));
         registry.Register(new WebFetchTool(config));
+        registry.Register(new SetWorkingDirectoryTool(config));
 
         // Register search_tools and load_tool meta-tools (always loaded, "builtin" grant)
         registry.Register(new SearchToolsTool(registry, toolAccessPolicy));

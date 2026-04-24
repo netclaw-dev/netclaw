@@ -179,5 +179,6 @@ internal sealed class ToolAudienceProfileResolver
             or "set_reminder"
             or "list_reminders"
             or "cancel_reminder"
-            or "get_reminder_history";
+            or "get_reminder_history"
+            or "set_working_directory";
 }

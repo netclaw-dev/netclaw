@@ -135,6 +135,7 @@ public static class SessionMessageAssembler
         }
 
         var sessionBlock = $"[session]\nid: {input.SessionId.Value}"
+            + $"\nsession_dir: {sessionDir}"
             + $"\nmedia_dir: {Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory)}";
         parts.Add(sessionBlock);
 

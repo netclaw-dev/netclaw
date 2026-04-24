@@ -1,0 +1,68 @@
+using Netclaw.Actors.Tests.Memory;
+using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Tools;
+using Xunit;
+
+namespace Netclaw.Actors.Tests.Tools;
+
+public sealed class SetWorkingDirectoryAudienceTests
+{
+    private static readonly EffectivePolicyDefaults Defaults = new(
+        DeploymentPosture.Personal,
+        TrustAudience.Personal,
+        ShellExecutionMode.HostAllowed,
+        UsedStrictFallback: false);
+
+    [Fact]
+    public void SetWorkingDirectory_BlockedForPublicAudience_ByDefault()
+    {
+        var config = new ToolConfig();
+        var policy = new ToolAccessPolicy(config, Defaults);
+        var tool = CreateFakeTool();
+
+        Assert.False(policy.IsToolExposed(tool, CreateContext(TrustAudience.Public)));
+    }
+
+    [Fact]
+    public void SetWorkingDirectory_BlockedForTeamAudience_ByDefault()
+    {
+        var config = new ToolConfig();
+        var policy = new ToolAccessPolicy(config, Defaults);
+        var tool = CreateFakeTool();
+
+        Assert.False(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
+    }
+
+    [Fact]
+    public void SetWorkingDirectory_AllowedForPersonalAudience_ByDefault()
+    {
+        var config = new ToolConfig();
+        var policy = new ToolAccessPolicy(config, Defaults);
+        var tool = CreateFakeTool();
+
+        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Personal)));
+    }
+
+    [Fact]
+    public void SetWorkingDirectory_AllowedForTeam_WhenExplicitlyGranted()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Team.AllowedTools.Add("set_working_directory");
+        var policy = new ToolAccessPolicy(config, Defaults);
+        var tool = CreateFakeTool();
+
+        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
+    }
+
+    private static FakeNetclawTool CreateFakeTool()
+        => new("set_working_directory", "ok", "file");
+
+    private static ToolExecutionContext CreateContext(TrustAudience audience)
+        => new ToolExecutionContext("slack/thread-1", null)
+        {
+            Audience = audience.ToWireValue(),
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "slack"
+        };
+}

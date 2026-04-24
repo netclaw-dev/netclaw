@@ -10,21 +10,13 @@ namespace Netclaw.Actors.Sessions;
 /// actor recovery, and daemon restart without depending on the observer LLM
 /// to reconstruct it.
 ///
-/// Currently carries a single field: <see cref="RecentFiles"/> — a bounded
-/// ring buffer of file paths the agent has recently read/written/edited.
-/// Most-recent-first, deduped on repeat access, capped at
-/// <see cref="MaxRecentFiles"/> entries.
-///
-/// Goals and progress markers are intentionally NOT part of this struct.
-/// The original design included `OpenGoals` and `ProgressMarkers` slots that
-/// would be populated by an observer-output parser running after compaction,
-/// but that parser is a separate OpenSpec change that hasn't landed yet.
-/// Per the project's "no hypothetical future requirements" rule, the fields
-/// live with their first real caller.
-///
-/// Also explicitly not in this struct: <c>CurrentWorkingDirectory</c> and
-/// <c>ActiveProjectPath</c>. Those are tracked as GitHub issues
-/// (Aaronontheweb/netclaw#595 and #596) and will land in separate changes.
+/// Carries two fields:
+/// - <see cref="RecentFiles"/>: bounded ring buffer of file paths the agent
+///   has recently read/written/edited. Most-recent-first, deduped, capped at
+///   <see cref="MaxRecentFiles"/>.
+/// - <see cref="ProjectDirectory"/>: optional absolute path to the project
+///   root the session is working on. Set via <c>set_working_directory</c>
+///   tool, persisted across crash/restart. Null means "no project selected."
 /// </summary>
 [ProtoContract]
 public sealed record WorkingContext
@@ -41,12 +33,33 @@ public sealed record WorkingContext
     public ImmutableList<string> RecentFiles { get; init; } =
         ImmutableList<string>.Empty;
 
+    [ProtoMember(2)]
+    public string? ProjectDirectory { get; init; }
+
     /// <summary>
-    /// Returns true when no recent files are tracked. Consumers use this to
-    /// suppress the <c>[working-context]</c> block from the dynamic context
-    /// injection when there is nothing to report.
+    /// Returns true when there is nothing to report — no recent files and
+    /// no project directory. Consumers use this to suppress the
+    /// <c>[working-context]</c> block entirely.
     /// </summary>
-    public bool IsEmpty => RecentFiles.IsEmpty;
+    public bool IsEmpty => RecentFiles.IsEmpty && ProjectDirectory is null;
+
+    /// <summary>
+    /// Return a new <see cref="WorkingContext"/> with <see cref="ProjectDirectory"/>
+    /// set to the given absolute path. Returns the same instance when the value
+    /// is unchanged, so <c>ReferenceEquals</c> callers can short-circuit.
+    /// Rejects paths containing control characters for the same prompt-injection
+    /// reasons as <see cref="AddRecentFile"/>.
+    /// </summary>
+    public WorkingContext WithProjectDirectory(string? path)
+    {
+        if (string.Equals(ProjectDirectory, path, StringComparison.Ordinal))
+            return this;
+
+        if (path is not null && path.AsSpan().IndexOfAny('\n', '\r', '\0') >= 0)
+            return this;
+
+        return this with { ProjectDirectory = path };
+    }
 
     /// <summary>
     /// Push a file path to the front of <see cref="RecentFiles"/>, dedupe on
@@ -107,9 +120,16 @@ public sealed record WorkingContext
 
         var sb = new System.Text.StringBuilder();
         sb.Append("[working-context]");
-        sb.Append("\nrecent_files:");
-        foreach (var path in RecentFiles)
-            sb.Append("\n  - ").Append(path);
+
+        if (ProjectDirectory is not null)
+            sb.Append("\nproject_dir: ").Append(ProjectDirectory);
+
+        if (!RecentFiles.IsEmpty)
+        {
+            sb.Append("\nrecent_files:");
+            foreach (var path in RecentFiles)
+                sb.Append("\n  - ").Append(path);
+        }
 
         return sb.ToString();
     }

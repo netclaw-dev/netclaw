@@ -630,6 +630,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }
             }
 
+            // Project directory: if set_working_directory was called, update
+            // WorkingContext and re-assemble the system prompt so the project's
+            // identity files are included. The tool returns an absolute path on
+            // success — IsPathRooted is a structural gate that rejects error
+            // messages without relying on string prefix conventions.
+            foreach (var result in msg.ToolResults)
+            {
+                if (result.Name is "set_working_directory" && result.Content is not null)
+                {
+                    var projectDir = result.Content.Trim();
+                    if (!Path.IsPathRooted(projectDir))
+                        continue;
+                    var next = _state.WorkingContext.WithProjectDirectory(projectDir);
+                    if (!ReferenceEquals(next, _state.WorkingContext))
+                    {
+                        _state = _state with { WorkingContext = next };
+                        SetSystemPrompt();
+                        _log.Info("Project directory set to {ProjectDir}", projectDir);
+                    }
+                }
+            }
+
             // Emit FileOutput for any file attachments registered by tools
             foreach (var file in msg.FileAttachments)
             {
@@ -2194,7 +2216,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void SetSystemPrompt()
     {
-        var content = _promptProvider.GetSystemPrompt();
+        var content = _promptProvider.GetSystemPrompt(_state.WorkingContext.ProjectDirectory);
         if (string.IsNullOrWhiteSpace(content))
         {
             // Retain the last-known prompt from recovery — deleting it strips the agent
