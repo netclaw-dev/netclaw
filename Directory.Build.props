@@ -7,26 +7,22 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.14.3</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.14.3 — Webhooks CLI, scheduling audience gating, proactive check-back guidance, and security/reliability fixes
-
-**Features**
-
-* Added `netclaw webhooks` CLI command group for managing inbound webhook routes — `webhooks list`, `webhooks show`, `webhooks set`, `webhooks delete`, and `webhooks validate` commands provide full CRUD management of webhook route configuration from the terminal. Supports multiple secret input methods (`--secret`, `--secret-file`, `--secret-env`) to avoid shell history exposure, `--dry-run` preview mode, and `--create-only` / `--update-only` flags for explicit upsert control. Closes [#529](https://github.com/Aaronontheweb/netclaw/issues/529). ([#711](https://github.com/Aaronontheweb/netclaw/pull/711))
-
-* Added scheduling audience gating — `set_reminder`, `list_reminders`, `cancel_reminder`, and `get_reminder_history` now respect the session's audience `AllowedTools` list. Public and Team audiences no longer have scheduling access by default; only Personal sessions (with `ToolsMode=All`) retain it. Operators can grant Team access by explicitly adding the tool names to `AllowedTools`. Closes [#710](https://github.com/Aaronontheweb/netclaw/issues/710). ([#714](https://github.com/Aaronontheweb/netclaw/pull/714))
-
-* Added proactive check-back guidance to `AGENTS.md` template — the agent now automatically schedules `current_session` reminders when it kicks off async work (builds, CI pipelines, deployments) instead of waiting for the user to ask for status. New installations pick this up via the init wizard; existing users can copy the "Proactive Check-Back" block into `~/.netclaw/identity/AGENTS.md` manually. ([#714](https://github.com/Aaronontheweb/netclaw/pull/714))
+    <VersionPrefix>0.15.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.15.0 — Session crash recovery hardening, unified streaming timeout, and dependency security updates
 
 **Bug Fixes**
 
-* Fixed false `StreamIdleTimeout` when `ToolCallTextFilter` suppresses SSE events — when the filter detects `&lt;tool_call&gt;` XML in streaming text it suppresses subsequent SSE updates, creating a watchdog blackout where `ProcessingWatchdog.Refresh()` is never called and the 120-second idle timeout fires even while the GPU is actively generating tokens. The fix yields a content-free keepalive `ChatResponseUpdate` when text is suppressed so the watchdog resets unconditionally. Fixes [#717](https://github.com/Aaronontheweb/netclaw/issues/717). ([#720](https://github.com/Aaronontheweb/netclaw/pull/720))
+* Fixed session amnesia after daemon crash — `SlackThreadBindingActor` was advancing its persistence cursor (marking messages as "seen") at enqueue time via `PersistAsync`, before the downstream `LlmSessionActor` durably recorded the completed turn. On a crash between those two writes the message was permanently lost: the cursor said "seen" but no turn was recorded, and thread history hydration skipped it on restart. The cursor now advances only when `TurnCompleted(Completed)` confirms the turn is durably persisted. Additionally, when identity files are missing on recovery, the last-known system prompt is retained as a fallback instead of being actively deleted. Fixes #733. (#733)
 
-* Fixed skill index missing descriptions, causing skill auto-loading failures — the skill discovery index only showed file paths without context about when to load each skill, leaving the model unable to decide which skills were relevant. `GenerateIndex()` now includes skill descriptions on each line, and AGENTS.md skill reference guidance uses action-oriented "BEFORE you..." language to improve auto-loading accuracy. Fixes [#696](https://github.com/Aaronontheweb/netclaw/issues/696). ([#712](https://github.com/Aaronontheweb/netclaw/pull/712))
+* Fixed false streaming timeout on GPU-contended inference servers — the two-phase watchdog (`FirstTokenTimeout` 600 s + `StreamIdleTimeout` 120 s) was causing spurious timeouts on self-hosted inference servers where requests are preempted mid-stream by concurrent sessions, triggering the 120-second idle cutoff even while tokens were actively generating. The two timers are now unified into a single `FirstTokenTimeout` (600 s) that resets on every streaming delta, eliminating false positives under load. `StreamIdleTimeout` / `StreamIdleTimeoutSeconds` are removed from config; `netclaw doctor --fix` auto-removes the stale key from existing configurations. Fixes #731. (#732)
 
-* Fixed MIME type rejection for markdown files sent from Slack — Slack reports `.md` files with MIME type `text/plain` instead of `text/markdown`, causing the content scanner to reject them. Extension-based MIME normalization now corrects known mismatches (`.md`/`.markdown`, `.json`, `.yaml`/`.yml`, `.csv`, `.xml`) before validation. Fixes [#716](https://github.com/Aaronontheweb/netclaw/issues/716). ([#719](https://github.com/Aaronontheweb/netclaw/pull/719))
+**Dependencies**
 
-* Fixed `*unsaved*` indicator visibility in `netclaw mcp permissions` TUI — the status message is now positioned above the tool list so it remains visible regardless of list length, and the unsaved indicator color is changed from gray to yellow for better contrast. ([#709](https://github.com/Aaronontheweb/netclaw/pull/709))</PackageReleaseNotes>
+* Bumped OpenTelemetry packages from 1.13.1 to 1.15.3 — resolves three moderate-severity GitHub Security Advisories (GHSA-g94r-2vxg-569j, GHSA-mr8r-92fq-pj8p, GHSA-q834-8qmm-v933) affecting `OpenTelemetry.Api` and `OpenTelemetry.Exporter.OpenTelemetryProtocol`. (#737)
+
+* Bumped Anthropic SDK from 12.13.0 to 12.16.0. (#724)
+
+* Bumped `Microsoft.AspNetCore.DataProtection` and `System.Security.Cryptography.Xml` to 10.0.7. (#725)</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

@@ -1,3 +1,21 @@
+#### 0.15.0 2026-04-24 ####
+
+Netclaw v0.15.0 — Session crash recovery hardening, unified streaming timeout, and dependency security updates
+
+**Bug Fixes**
+
+* Fixed session amnesia after daemon crash — `SlackThreadBindingActor` was advancing its persistence cursor (marking messages as "seen") at enqueue time via `PersistAsync`, before the downstream `LlmSessionActor` durably recorded the completed turn. On a crash between those two writes the message was permanently lost: the cursor said "seen" but no turn was recorded, and thread history hydration skipped it on restart. The cursor now advances only when `TurnCompleted(Completed)` confirms the turn is durably persisted. Additionally, when identity files are missing on recovery, the last-known system prompt is retained as a fallback instead of being actively deleted. Fixes [#733](https://github.com/Aaronontheweb/netclaw/issues/733). ([#733](https://github.com/Aaronontheweb/netclaw/pull/733))
+
+* Fixed false streaming timeout on GPU-contended inference servers — the two-phase watchdog (`FirstTokenTimeout` 600 s → `StreamIdleTimeout` 120 s) was causing spurious timeouts on self-hosted inference servers where requests are preempted mid-stream by concurrent sessions, triggering the 120-second idle cutoff even while tokens were actively generating. The two timers are now unified into a single `FirstTokenTimeout` (600 s) that resets on every streaming delta, eliminating false positives under load. `StreamIdleTimeout` / `StreamIdleTimeoutSeconds` are removed from config; `netclaw doctor --fix` auto-removes the stale key from existing configurations. Fixes [#731](https://github.com/Aaronontheweb/netclaw/issues/731). ([#732](https://github.com/Aaronontheweb/netclaw/pull/732))
+
+**Dependencies**
+
+* Bumped OpenTelemetry packages from 1.13.1 to 1.15.3 — resolves three moderate-severity GitHub Security Advisories (GHSA-g94r-2vxg-569j, GHSA-mr8r-92fq-pj8p, GHSA-q834-8qmm-v933) affecting `OpenTelemetry.Api` and `OpenTelemetry.Exporter.OpenTelemetryProtocol`. Transitive pinning is enabled to override the older 1.9.0 pull from Akka.Hosting. ([#737](https://github.com/Aaronontheweb/netclaw/pull/737))
+
+* Bumped Anthropic SDK from 12.13.0 to 12.16.0. ([#724](https://github.com/Aaronontheweb/netclaw/pull/724))
+
+* Bumped `Microsoft.AspNetCore.DataProtection` and `System.Security.Cryptography.Xml` to 10.0.7 (routine patch update). ([#725](https://github.com/Aaronontheweb/netclaw/pull/725))
+
 #### 0.14.3 2026-04-22 ####
 
 Netclaw v0.14.3 — Webhooks CLI, scheduling audience gating, proactive check-back guidance, and security/reliability fixes
