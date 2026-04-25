@@ -551,6 +551,7 @@ internal static class ReminderCommand
         Console.WriteLine("  --delivery <kind>        Delivery kind: none, channel (default: none)");
         Console.WriteLine("  --transport <transport>  Transport for channel delivery (e.g. 'slack')");
         Console.WriteLine("  --address <target>       Target for channel delivery (#channel, @user, ID)");
+        Console.WriteLine("  --expires-in <duration>  Auto-disable after duration (e.g. '24h', '7d')");
         Console.WriteLine();
         Console.WriteLine("If a reminder with the given ID already exists, it will be updated (upsert).");
         Console.WriteLine();

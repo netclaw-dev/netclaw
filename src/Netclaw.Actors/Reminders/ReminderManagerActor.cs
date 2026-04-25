@@ -201,6 +201,12 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 : cmd.Definition.CreatedBy
         };
 
+        if (normalized.Schedule.Type == ReminderScheduleType.OneShot && normalized.ExpiresAt is not null)
+        {
+            replyTo.Tell(ValidationFailure(id, title, "expires_at is not applicable to one-shot reminders."));
+            return;
+        }
+
         if (exists)
         {
             var existing = _definitionStore.Get(id);
@@ -486,7 +492,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        if (definition.ExpiresAt is { } expiresAt && expiresAt <= _timeProvider.GetUtcNow())
+        if (definition.Schedule.Type is not ReminderScheduleType.OneShot
+            && definition.ExpiresAt is { } expiresAt
+            && expiresAt <= _timeProvider.GetUtcNow())
         {
             _log.Info("Reminder '{0}' has expired (expiresAt={1}), disabling", reminderId.Value, expiresAt);
             await DisableReminderInternalAsync(reminderId);
@@ -718,6 +726,16 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var definition = _definitionStore.Get(nextId);
             if (definition is null || !definition.Enabled)
                 continue;
+
+            var now = _timeProvider.GetUtcNow();
+            if (definition.Schedule.Type is not ReminderScheduleType.OneShot
+                && definition.ExpiresAt is { } expiresAt
+                && expiresAt <= now)
+            {
+                _log.Info("Deferred reminder '{0}' expired while queued (expiresAt={1}), disabling", nextId.Value, expiresAt);
+                await DisableReminderInternalAsync(nextId);
+                continue;
+            }
 
             StartExecution(definition);
         }

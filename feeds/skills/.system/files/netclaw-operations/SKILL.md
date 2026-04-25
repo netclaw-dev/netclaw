@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.17.0"
+  version: "1.18.0"
 ---
 
 # Netclaw Operations
@@ -75,6 +75,7 @@ Delivery contract parameters:
 - `delivery_address`: required when `delivery_kind=channel` (`#channel`, `@user`, or canonical ID)
 - `delivery_required`: optional bool, default `true`; set `false` only for audit/cleanup tasks
 - `delivery_instructions`: optional content guidance only (never routing)
+- `expires_in`: optional recurring-reminder expiry duration (for `interval`/`cron` only), e.g. `"24h"`, `"7d"`
 
 You may also pass the structured form `delivery: { kind, transport?, address? }`
 instead of the three flat delivery fields.
@@ -88,6 +89,10 @@ Rules:
 - `channel` requires both transport + address and resolves names/handles to
   canonical IDs at set time; unresolved targets fail loud.
 - `none` runs silently (history still records execution).
+- `expires_in` is not valid for `once` reminders; omit it for one-shot schedules.
+- For recurring reminders that are permanently complete (PR merged, deploy done,
+  incident resolved), call `cancel_reminder` with that reminder's ID so it does
+  not keep firing indefinitely.
 
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be
