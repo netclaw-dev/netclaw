@@ -4,7 +4,11 @@
 # alongside the self-contained binary archives. It is distinct from
 # docker/smoke/Dockerfile, which is a test fixture for the CLI smoke suite.
 #
-# The image auto-starts netclawd as PID 1 and fails loudly when required
+# A wrapper entrypoint (entrypoint.sh) runs as PID 1 and supervises the
+# netclawd process, restarting it on exit so the container survives
+# config-update restarts and `netclaw init` wizard flows.
+#
+# The daemon fails loudly when required
 # configuration is missing (no silent fallbacks). Operators supply
 # provider, model, and identity configuration via:
 #   * NETCLAW_*-prefixed environment variables at `docker run` time
@@ -50,8 +54,9 @@ WORKDIR /opt/netclaw
 # shared build script (scripts/docker/build-image.sh) and copied in.
 COPY publish/cli/netclaw /opt/netclaw/cli/netclaw
 COPY publish/daemon/netclawd /opt/netclaw/daemon/netclawd
+COPY docker/entrypoint.sh /opt/netclaw/entrypoint.sh
 
-RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd \
+RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/entrypoint.sh \
  && ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
  && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
 
@@ -65,10 +70,13 @@ VOLUME /root/.netclaw
 
 EXPOSE 5199
 
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -sf http://127.0.0.1:5199/api/health/ready || exit 1
+
 LABEL org.opencontainers.image.source="https://github.com/Aaronontheweb/netclaw" \
       org.opencontainers.image.title="netclawd" \
       org.opencontainers.image.description="Netclaw autonomous operations daemon" \
       org.opencontainers.image.version="${NETCLAW_VERSION}" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-ENTRYPOINT ["/usr/local/bin/netclawd"]
+ENTRYPOINT ["/opt/netclaw/entrypoint.sh"]
