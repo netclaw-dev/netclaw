@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Reminders;
 using Xunit;
 
@@ -100,8 +101,4 @@ public class CronScheduleHelperTests
         Assert.StartsWith("cron '", result);
     }
 
-    private sealed class FakeTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => utcNow;
-    }
 }

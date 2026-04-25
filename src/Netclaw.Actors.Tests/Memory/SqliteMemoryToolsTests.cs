@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -276,10 +277,4 @@ public sealed class SqliteMemoryToolsTests : IDisposable
             Directory.Delete(_baseDir, recursive: true);
     }
 
-    private sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        private DateTimeOffset _now = now;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-    }
 }

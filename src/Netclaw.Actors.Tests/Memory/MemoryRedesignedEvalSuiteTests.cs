@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
@@ -11,14 +12,14 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
 {
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-memory-redesigned-evals", Guid.NewGuid().ToString("N"));
     private readonly string _dbPath;
-    private readonly FakeEvalTimeProvider _timeProvider;
+    private readonly FakeTimeProvider _timeProvider;
     private readonly SQLiteMemoryStore _store;
 
     public MemoryRedesignedEvalSuiteTests()
     {
         Directory.CreateDirectory(_baseDir);
         _dbPath = Path.Combine(_baseDir, "netclaw-memory-redesigned-evals.db");
-        _timeProvider = new FakeEvalTimeProvider(DateTimeOffset.Parse("2026-03-10T12:00:00Z"));
+        _timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-03-10T12:00:00Z"));
         _store = new SQLiteMemoryStore(_dbPath, _timeProvider);
     }
 
@@ -586,10 +587,5 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
     {
         if (Directory.Exists(_baseDir))
             Directory.Delete(_baseDir, recursive: true);
-    }
-
-    private sealed class FakeEvalTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => now;
     }
 }
