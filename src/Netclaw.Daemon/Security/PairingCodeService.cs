@@ -66,7 +66,7 @@ public sealed class PairingCodeService
     /// <returns><c>true</c> if the code matched and was not expired; the code is consumed on success.</returns>
     public bool TryConsume(string presentedCode)
     {
-        var normalized = presentedCode.Replace("-", "").ToUpperInvariant();
+        var normalized = presentedCode.Replace("-", "", StringComparison.Ordinal).ToUpperInvariant();
 
         lock (_lock)
         {

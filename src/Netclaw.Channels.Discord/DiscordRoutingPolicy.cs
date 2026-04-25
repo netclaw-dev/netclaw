@@ -25,14 +25,6 @@ internal static class DiscordRoutingPolicy
         if (threadExists)
             return DiscordRoutingDecision.ContinueOnly;
 
-        // Thread message where the actor was lost (e.g. daemon restart):
-        // RootMessageId is null for thread messages and DM messages. Since we
-        // already handled DMs above, a null RootMessageId here means this is a
-        // thread reply whose actor no longer exists. Re-create the actor and
-        // continue the persisted session.
-        if (message.RootMessageId is null)
-            return DiscordRoutingDecision.StartOrContinue;
-
         if (!mentionOnly)
             return DiscordRoutingDecision.StartOrContinue;
 

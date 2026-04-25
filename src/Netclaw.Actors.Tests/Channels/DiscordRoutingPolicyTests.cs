@@ -57,7 +57,7 @@ public class DiscordRoutingPolicyTests
     }
 
     [Fact]
-    public void ThreadReply_RehydratesSession_AfterDaemonRestart()
+    public void ThreadReply_RequiresMention_WhenNoExistingActor()
     {
         var message = CreateMessage(text: "follow up", rootMessageId: null, isThread: true);
 
@@ -68,6 +68,23 @@ public class DiscordRoutingPolicyTests
             mentionRequiredInDm: false,
             threadExists: false,
             containsBotMention: false);
+
+        Assert.Equal(DiscordRoutingDecisionKind.Ignore, decision.Kind);
+        Assert.Equal(DiscordRoutingIgnoreReason.ChannelMentionRequired, decision.IgnoreReason);
+    }
+
+    [Fact]
+    public void ThreadReply_StartsSession_WhenMentioned()
+    {
+        var message = CreateMessage(text: "<@123> follow up", rootMessageId: null, isThread: true);
+
+        var decision = DiscordRoutingPolicy.Evaluate(
+            message,
+            mentionOnly: true,
+            allowDirectMessages: true,
+            mentionRequiredInDm: false,
+            threadExists: false,
+            containsBotMention: true);
 
         Assert.Equal(DiscordRoutingDecisionKind.StartOrContinue, decision.Kind);
         Assert.Null(decision.IgnoreReason);

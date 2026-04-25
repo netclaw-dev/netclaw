@@ -46,6 +46,7 @@ RUN apt-get update \
       python3-pip \
       python3-venv \
       gh \
+      libicu74 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/netclaw
