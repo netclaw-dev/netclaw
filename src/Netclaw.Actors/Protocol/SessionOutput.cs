@@ -1,3 +1,5 @@
+using Netclaw.Configuration;
+
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>
@@ -343,6 +345,12 @@ public sealed record ToolInteractionRequest : SessionOutput
     /// Channels can use this to ensure responses are routed for the correct user.
     /// </summary>
     public string? RequesterSenderId { get; init; }
+
+    /// <summary>
+    /// Principal classification of the requester. When <see cref="PrincipalClassification.VerifiedAutomation"/>
+    /// (e.g. scheduled tasks, webhooks), any channel member may approve — the sender match is skipped.
+    /// </summary>
+    public PrincipalClassification? RequesterPrincipal { get; init; }
 
     /// <summary>Patterns requiring approval (for shell: verb chains like "git push").</summary>
     public IReadOnlyList<string> Patterns { get; init; } = [];

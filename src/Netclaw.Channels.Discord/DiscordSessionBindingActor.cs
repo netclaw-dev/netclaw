@@ -1,3 +1,4 @@
+using System.Text;
 using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
@@ -311,7 +312,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         IReadOnlyList<ChannelInput> history,
         IReadOnlyList<AIContent> liveContents)
     {
-        var sb = new System.Text.StringBuilder();
+        var sb = new StringBuilder();
         sb.AppendLine("[thread history — messages exchanged before this inbound event]");
         sb.AppendLine();
 
@@ -482,7 +483,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 string.Equals(p.CallId, callId, StringComparison.Ordinal));
             if (byCallId is null)
                 return (ApprovalLookupResult.NotFound, null);
-            if (byCallId.RequesterSenderId is not null && byCallId.RequesterSenderId != senderId)
+            if (byCallId.RequesterPrincipal is not PrincipalClassification.VerifiedAutomation
+                && byCallId.RequesterSenderId is not null && byCallId.RequesterSenderId != senderId)
                 return (ApprovalLookupResult.WrongRequester, null);
             return (ApprovalLookupResult.Matched, byCallId);
         }
@@ -491,7 +493,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             return (ApprovalLookupResult.NotFound, null);
 
         var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            p.RequesterSenderId is null || p.RequesterSenderId == senderId);
+            p.RequesterPrincipal is PrincipalClassification.VerifiedAutomation
+            || p.RequesterSenderId is null || p.RequesterSenderId == senderId);
         return bySender is not null
             ? (ApprovalLookupResult.Matched, bySender)
             : (ApprovalLookupResult.WrongRequester, null);
@@ -519,7 +522,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
                 _pendingApprovalRequests.Add(new PendingApprovalRequest(
                     request.CallId,
-                    request.RequesterSenderId is null ? null : new DiscordUserId(request.RequesterSenderId)));
+                    request.RequesterSenderId is null ? null : new DiscordUserId(request.RequesterSenderId),
+                    request.RequesterPrincipal));
 
                 var (promptText, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
                 await SafeReplyWithButtonsAsync(promptText, buttons, request);

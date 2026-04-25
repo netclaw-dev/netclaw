@@ -524,6 +524,53 @@ public abstract class SessionBindingContractTests : TestKit
             "Override CreateBindingActorWithPipeline to test with arbitrary ISessionPipeline");
     }
 
+    // --- Automation Approval (any user can approve) ---
+
+    [Fact]
+    public async Task Automation_originated_approval_accepted_from_any_user()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-automation-approval");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = "call-auto-1",
+                ToolName = "execute_shell",
+                DisplayText = "scheduled backup",
+                RequesterSenderId = "reminder-system",
+                RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        // Any user (not "reminder-system") should be able to approve
+        actor.Tell(CreateApprovalResponse("call-auto-1", ApprovalOptionKeys.ApproveOnce, "random-human-user"));
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-auto-1", feedback[0].CallId);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
+            Assert.Equal("random-human-user", feedback[0].SenderId);
+        }, cancellationToken: ct);
+    }
+
     // --- Wrong-Requester Approval ---
 
     [Fact]

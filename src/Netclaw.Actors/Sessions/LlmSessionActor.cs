@@ -746,7 +746,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.ToolName,
                 msg.Patterns,
                 audience,
-                msg.RequesterSenderId);
+                msg.RequesterSenderId,
+                msg.RequesterPrincipal);
 
             PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
 
@@ -761,7 +762,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            if (!string.IsNullOrWhiteSpace(pending.RequesterSenderId)
+            if (pending.RequesterPrincipal is not PrincipalClassification.VerifiedAutomation
+                && !string.IsNullOrWhiteSpace(pending.RequesterSenderId)
                 && !string.Equals(pending.RequesterSenderId, msg.SenderId, StringComparison.Ordinal))
             {
                 _log.Warning(
@@ -2998,7 +3000,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string ToolName,
         IReadOnlyList<string> Patterns,
         TrustAudience Audience,
-        string? RequesterSenderId);
+        string? RequesterSenderId,
+        PrincipalClassification? RequesterPrincipal);
 
     private sealed record RoutedSkillExecutionCompleted(
         string SkillName,

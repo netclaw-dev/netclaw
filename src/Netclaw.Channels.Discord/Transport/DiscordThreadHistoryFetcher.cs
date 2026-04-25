@@ -12,16 +12,13 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
     private const int MaxMessages = 200;
 
     private readonly DiscordSocketClient _client;
-    private readonly DiscordUserId? _botUserId;
     private readonly ILogger<DiscordThreadHistoryFetcher> _logger;
 
     public DiscordThreadHistoryFetcher(
         DiscordSocketClient client,
-        IDiscordGatewayClient gatewayClient,
         ILogger<DiscordThreadHistoryFetcher> logger)
     {
         _client = client;
-        _botUserId = gatewayClient.BotUserId;
         _logger = logger;
     }
 
@@ -68,7 +65,6 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             .GetMessagesAsync(MaxMessages, options: new RequestOptions { CancelToken = cancellationToken })
             .FlattenAsync();
 
-        var botId = _botUserId?.Value;
         var results = new List<ChannelInput>();
 
         foreach (var message in messages.OrderBy(m => m.Timestamp))
@@ -76,9 +72,6 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             cancellationToken.ThrowIfCancellationRequested();
 
             if (message.Author.IsBot)
-                continue;
-
-            if (botId is not null && message.Author.Id.ToString() == botId)
                 continue;
 
             if (string.IsNullOrWhiteSpace(message.Content))

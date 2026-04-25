@@ -1090,7 +1090,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return false;
 
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            string.IsNullOrWhiteSpace(request.Request.RequesterSenderId)
+            request.Request.RequesterPrincipal is PrincipalClassification.VerifiedAutomation
+            || string.IsNullOrWhiteSpace(request.Request.RequesterSenderId)
             || string.Equals(request.Request.RequesterSenderId, message.SenderId, StringComparison.Ordinal));
 
         if (pendingIndex < 0)
@@ -1141,7 +1142,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return;
 
         var pending = _pendingApprovalRequests[pendingIndex];
-        if (!string.IsNullOrWhiteSpace(pending.Request.RequesterSenderId)
+        if (pending.Request.RequesterPrincipal is not PrincipalClassification.VerifiedAutomation
+            && !string.IsNullOrWhiteSpace(pending.Request.RequesterSenderId)
             && !string.Equals(pending.Request.RequesterSenderId, message.SenderId, StringComparison.Ordinal))
         {
             await SafePostAsync(":warning: Only the requesting user can approve this tool action.");

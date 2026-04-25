@@ -267,6 +267,7 @@ internal static class SessionToolExecutionPipeline
                 ToolName = ctx.ToolName,
                 DisplayText = ctx.DisplayText,
                 RequesterSenderId = source?.SenderId,
+                RequesterPrincipal = source?.Principal,
                 Patterns = ctx.UnapprovedPatterns,
                 Options = ctx.Options
                     .Select(o => new ToolInteractionOption(o.Key, o.Label))
