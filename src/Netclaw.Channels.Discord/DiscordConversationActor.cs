@@ -122,7 +122,8 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
         // --- Empty text filter ---
         var normalizedText = NormalizeInboundText(message.Text);
-        if (string.IsNullOrWhiteSpace(normalizedText))
+        var hasAttachments = message.Attachments is { Count: > 0 };
+        if (string.IsNullOrWhiteSpace(normalizedText) && !hasAttachments)
         {
             _log.Info("discord_event_filtered event={0} reason=empty_text", message.EventId.Value);
             ChannelTelemetry.RecordDiscordEventFiltered("empty_text");
@@ -167,7 +168,8 @@ internal sealed class DiscordConversationActor : ReceiveActor
             Principal: aclDecision.Principal,
             Provenance: aclDecision.Provenance,
             Text: normalizedText,
-            ReceivedAt: message.ReceivedAt));
+            ReceivedAt: message.ReceivedAt,
+            Attachments: message.Attachments));
     }
 
     private void HandleGatewayInteraction(DiscordGatewayInteraction interaction)

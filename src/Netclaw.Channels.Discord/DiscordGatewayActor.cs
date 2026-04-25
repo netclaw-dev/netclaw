@@ -3,6 +3,7 @@ using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Telemetry;
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Channels.Discord;
@@ -131,8 +132,13 @@ public sealed record DiscordGatewayDependencies(
     DiscordChannelOptions Options,
     DiscordChannelId? DefaultChannelId,
     IDiscordReplyClient ReplyClient,
+    IContentScanner ContentScanner,
+    ToolAudienceProfiles AudienceProfiles,
+    ModelCapabilities ModelCapabilities,
+    NetclawPaths Paths,
     DiscordUserId? BotUserId = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
     IThreadHistoryFetcher? ThreadHistoryFetcher = null,
+    HttpClient? HttpClient = null,
     Func<DiscordChannelId, DiscordGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? SessionPropsFactory = null);

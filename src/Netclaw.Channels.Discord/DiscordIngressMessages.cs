@@ -4,6 +4,12 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Discord;
 
+public sealed record DiscordFileReference(
+    string Name,
+    string MimeType,
+    long Size,
+    string Url);
+
 public sealed record DiscordThreadInbound(
     SessionId SessionId,
     DiscordChannelId ChannelId,
@@ -16,7 +22,8 @@ public sealed record DiscordThreadInbound(
     PrincipalClassification Principal,
     SourceProvenance Provenance,
     string Text,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    IReadOnlyList<DiscordFileReference>? Attachments = null);
 
 public sealed record DiscordApprovalResponse(
     DiscordChannelId ChannelId,

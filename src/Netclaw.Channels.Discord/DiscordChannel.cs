@@ -16,12 +16,17 @@ public sealed class DiscordChannel : IChannel
     private readonly SessionIngressGate _ingressGate;
     private readonly IDiscordGatewayClient _gatewayClient;
     private readonly IDiscordReplyClient _replyClient;
+    private readonly IContentScanner _contentScanner;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly IThreadHistoryFetcher? _threadHistoryFetcher;
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly DiscordChannelOptions _options;
     private readonly ILogger<DiscordChannel> _logger;
+    private readonly ToolAudienceProfiles _audienceProfiles;
+    private readonly ModelCapabilities _modelCapabilities;
+    private readonly NetclawPaths _paths;
 
     private IActorRef? _gateway;
 
@@ -31,24 +36,34 @@ public sealed class DiscordChannel : IChannel
         SessionIngressGate ingressGate,
         IDiscordGatewayClient gatewayClient,
         IDiscordReplyClient replyClient,
+        IContentScanner contentScanner,
         IPromptInjectionDetector? promptInjectionDetector,
+        IHttpClientFactory httpClientFactory,
         IThreadHistoryFetcher? threadHistoryFetcher,
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         DiscordChannelOptions options,
-        ILogger<DiscordChannel> logger)
+        ILogger<DiscordChannel> logger,
+        ToolConfig toolConfig,
+        ModelCapabilities modelCapabilities,
+        NetclawPaths paths)
     {
         _system = system;
         _pipeline = pipeline;
         _ingressGate = ingressGate;
         _gatewayClient = gatewayClient;
         _replyClient = replyClient;
+        _contentScanner = contentScanner;
         _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
+        _httpClientFactory = httpClientFactory;
         _threadHistoryFetcher = threadHistoryFetcher;
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _options = options;
         _logger = logger;
+        _audienceProfiles = toolConfig.AudienceProfiles;
+        _modelCapabilities = modelCapabilities;
+        _paths = paths;
     }
 
     public ChannelType ChannelType => ChannelType.Discord;
@@ -85,6 +100,8 @@ public sealed class DiscordChannel : IChannel
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
 
+            var httpClient = _httpClientFactory.CreateClient("discord-files");
+
             _gateway = _system.ActorOf(
                 DiscordGatewayActor.CreateProps(new DiscordGatewayDependencies(
                     Pipeline: _pipeline,
@@ -95,9 +112,14 @@ public sealed class DiscordChannel : IChannel
                         ? new DiscordChannelId(_options.DefaultChannelId)
                         : null,
                     ReplyClient: _replyClient,
+                    ContentScanner: _contentScanner,
+                    AudienceProfiles: _audienceProfiles,
+                    ModelCapabilities: _modelCapabilities,
+                    Paths: _paths,
                     BotUserId: _gatewayClient.BotUserId,
                     PromptInjectionDetector: _promptInjectionDetector,
-                    ThreadHistoryFetcher: _threadHistoryFetcher)),
+                    ThreadHistoryFetcher: _threadHistoryFetcher,
+                    HttpClient: httpClient)),
                 "discord-gateway");
 
             ActorRegistry.For(_system).Register<DiscordGatewayActorKey>(_gateway);

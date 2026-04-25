@@ -94,6 +94,18 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         var containsMention = _botMentionTag is not null
             && userMessage.Content.Contains(_botMentionTag, StringComparison.Ordinal);
 
+        IReadOnlyList<DiscordFileReference>? attachments = null;
+        if (message.Attachments.Count > 0)
+        {
+            attachments = message.Attachments
+                .Select(a => new DiscordFileReference(
+                    Name: a.Filename,
+                    MimeType: a.ContentType ?? "application/octet-stream",
+                    Size: (long)a.Size,
+                    Url: a.Url))
+                .ToList();
+        }
+
         var gatewayMessage = new DiscordGatewayMessage(
             EventId: new DiscordEventId(messageIdStr),
             ChannelId: new DiscordChannelId(channelId),
@@ -106,7 +118,8 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
             IsDirectMessage: isDm,
             ContainsBotMention: containsMention,
             Text: message.Content,
-            ReceivedAt: _timeProvider.GetUtcNow());
+            ReceivedAt: _timeProvider.GetUtcNow(),
+            Attachments: attachments);
 
         try
         {

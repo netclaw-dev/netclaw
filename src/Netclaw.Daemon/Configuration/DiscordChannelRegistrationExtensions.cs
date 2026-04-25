@@ -32,6 +32,7 @@ public static class DiscordChannelRegistrationExtensions
             MessageCacheSize = 100
         }));
 
+        services.AddHttpClient("discord-files");
         services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();
         services.AddSingleton<IDiscordReplyClient, DiscordNetReplyClient>();
         services.AddSingleton<IThreadHistoryFetcher, DiscordThreadHistoryFetcher>();

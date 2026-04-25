@@ -9,6 +9,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Discord;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -304,6 +305,10 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             },
             DefaultChannelId: null,
             ReplyClient: new UnconfiguredDiscordReplyClient(),
+            ContentScanner: new NullContentScanner(),
+            AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
+            Paths: TestDiscordGatewayDeps.NewTestPaths(),
             ConversationPropsFactory: conversationPropsFactory);
     }
 

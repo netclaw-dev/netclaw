@@ -3,6 +3,7 @@ using Akka.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels.Discord;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
@@ -37,6 +38,10 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             Options: discordOptions,
             DefaultChannelId: defaultChannelId,
             ReplyClient: new RecordingDiscordReplyClient(),
+            ContentScanner: new NullContentScanner(),
+            AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
+            Paths: TestDiscordGatewayDeps.NewTestPaths(),
             SessionPropsFactory: (sid, chId, replyId, threadId, rootId, d) =>
                 Props.Create(() => new ForwardActor(TestActor)));
 

@@ -10,7 +10,8 @@ internal static class DiscordRoutingPolicy
         bool threadExists,
         bool containsBotMention)
     {
-        if (string.IsNullOrWhiteSpace(message.Text))
+        var hasAttachments = message.Attachments is { Count: > 0 };
+        if (string.IsNullOrWhiteSpace(message.Text) && !hasAttachments)
             return DiscordRoutingDecision.Ignore(DiscordRoutingIgnoreReason.NoContent);
 
         if (message.IsDirectMessage)

@@ -38,6 +38,10 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Options: options,
             DefaultChannelId: null,
             ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
+            Paths: TestDiscordGatewayDeps.NewTestPaths(),
             PromptInjectionDetector: detector);
 
         return Sys.ActorOf(DiscordSessionBindingActor.CreateProps(
@@ -143,6 +147,10 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Options: options,
             DefaultChannelId: null,
             ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
+            Paths: TestDiscordGatewayDeps.NewTestPaths(),
             PromptInjectionDetector: detector,
             ThreadHistoryFetcher: historyFetcher);
 

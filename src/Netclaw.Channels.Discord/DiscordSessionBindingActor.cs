@@ -9,6 +9,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using IOPath = System.IO.Path;
 
 namespace Netclaw.Channels.Discord;
 
@@ -207,10 +208,12 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private async Task HandleInboundAsync(DiscordThreadInbound message)
     {
-        if (string.IsNullOrWhiteSpace(message.Text))
+        var hasAttachments = message.Attachments is { Count: > 0 };
+        if (string.IsNullOrWhiteSpace(message.Text) && !hasAttachments)
             return;
 
-        if (ToolInteractionResponseParser.TryParseApprovalResponse(message.Text, out var selectedKey)
+        if (!string.IsNullOrWhiteSpace(message.Text)
+            && ToolInteractionResponseParser.TryParseApprovalResponse(message.Text, out var selectedKey)
             && selectedKey is not null
             && await TryHandleTextApprovalResponseAsync(message, selectedKey))
         {
@@ -218,24 +221,28 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         }
 
         using var inboundCts = new CancellationTokenSource(InboundProcessingTimeout);
-        var classification = await PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, message.Text, "discord-live", _log, inboundCts.Token);
-        switch (classification.Outcome)
+
+        if (!string.IsNullOrWhiteSpace(message.Text))
         {
-            case ClassificationOutcome.Block:
-                _log.Warning("Blocked Discord message due to prompt injection risk: {Reason}", classification.Reason);
-                ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_high");
-                await SafeReplyAsync(LiveInjectionBlockedWarning);
-                return;
+            var classification = await PromptClassifier.ClassifyAsync(
+                _promptInjectionDetector, message.Text, "discord-live", _log, inboundCts.Token);
+            switch (classification.Outcome)
+            {
+                case ClassificationOutcome.Block:
+                    _log.Warning("Blocked Discord message due to prompt injection risk: {Reason}", classification.Reason);
+                    ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_high");
+                    await SafeReplyAsync(LiveInjectionBlockedWarning);
+                    return;
 
-            case ClassificationOutcome.DetectorUnavailable:
-                _log.Warning("Prompt injection detector unavailable for live message — dropping");
-                ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_detector_unavailable");
-                await SafeReplyAsync(LiveDetectorUnavailableWarning);
-                return;
+                case ClassificationOutcome.DetectorUnavailable:
+                    _log.Warning("Prompt injection detector unavailable for live message — dropping");
+                    ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_detector_unavailable");
+                    await SafeReplyAsync(LiveDetectorUnavailableWarning);
+                    return;
 
-            case ClassificationOutcome.Allow:
-                break;
+                case ClassificationOutcome.Allow:
+                    break;
+            }
         }
 
         var writer = _handle.InputQueue;
@@ -245,7 +252,16 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             return;
         }
 
-        var liveContents = new List<AIContent> { new TextContent(message.Text) };
+        var liveContents = new List<AIContent>();
+        if (!string.IsNullOrWhiteSpace(message.Text))
+            liveContents.Add(new TextContent(message.Text));
+
+        if (hasAttachments)
+            await ProcessInboundAttachmentsAsync(message.Attachments!, message.Audience, liveContents, inboundCts.Token);
+
+        if (liveContents.Count == 0)
+            return;
+
         var mergedContents = await BuildInputContentsAsync(liveContents, inboundCts.Token);
 
         var input = new ChannelInput
@@ -676,6 +692,297 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         {
             _log.Error(ex, "Failed to send auto-deny feedback for call {CallId}", callId);
         }
+    }
+
+    private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
+
+    private async Task ProcessInboundAttachmentsAsync(
+        IReadOnlyList<DiscordFileReference> files,
+        TrustAudience audience,
+        List<AIContent> contents,
+        CancellationToken cancellationToken)
+    {
+        if (_dependencies.HttpClient is null)
+        {
+            _log.Warning(
+                "Discord HTTP client is not configured; rejecting {Count} inbound attachment(s)",
+                files.Count);
+            await SafeReplyAsync(":warning: I can't download attachments right now — HTTP client is not configured.");
+            return;
+        }
+
+        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_dependencies.AudienceProfiles, audience);
+        var policy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
+
+        if (files.Count > policy.MaxFilesPerMessage)
+        {
+            _log.Warning(
+                "discord_attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
+                files.Count,
+                policy.MaxFilesPerMessage,
+                audience);
+            await SafeReplyAsync(
+                $":warning: I can only accept up to {policy.MaxFilesPerMessage} attachments per message. " +
+                $"Please split your upload and try again. Text content was delivered.");
+            return;
+        }
+
+        var modelCapabilities = _dependencies.ModelCapabilities;
+        var inlineImages = modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
+
+        var acceptedLines = new List<string>(files.Count);
+        var dataContents = new List<DataContent>();
+        var rejections = new List<string>();
+
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(_sessionId, _dependencies.Paths.SessionsDirectory);
+
+        foreach (var file in files)
+        {
+            var attachmentResult = await TryIngestSingleAttachmentAsync(
+                file, audience, policy, inlineImages, inboxDir, cancellationToken);
+
+            switch (attachmentResult)
+            {
+                case AttachmentIngestResult.Accepted accepted:
+                    acceptedLines.Add(accepted.Line);
+                    if (accepted.Inline is { } inline)
+                        dataContents.Add(inline);
+                    break;
+
+                case AttachmentIngestResult.Rejected rejected:
+                    rejections.Add(rejected.UserFacingReason);
+                    break;
+            }
+        }
+
+        if (acceptedLines.Count > 0)
+        {
+            contents.Add(new TextContent(string.Join('\n', acceptedLines)));
+            contents.AddRange(dataContents);
+        }
+
+        if (rejections.Count > 0)
+        {
+            var joined = rejections.Count == 1
+                ? rejections[0]
+                : ":warning: Some attachments were not accepted:\n  - " + string.Join("\n  - ", rejections);
+            await SafeReplyAsync(joined);
+        }
+    }
+
+    private async Task<AttachmentIngestResult> TryIngestSingleAttachmentAsync(
+        DiscordFileReference file,
+        TrustAudience audience,
+        ChannelAttachmentPolicy policy,
+        bool inlineImages,
+        string inboxDir,
+        CancellationToken cancellationToken)
+    {
+        var category = AttachmentCategories.FromMime(file.MimeType);
+
+        if (!policy.Allows(category))
+        {
+            _log.Warning(
+                "discord_attachment_rejected name={Name} mime={Mime} audience={Audience} category={Category} reason=category-not-allowed",
+                file.Name, file.MimeType, audience, category);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` ({category}) isn't allowed in {audience} channels. " +
+                "Please DM me if you want to share this class of file.");
+        }
+
+        if (file.Size > policy.MaxFileBytes)
+        {
+            _log.Warning(
+                "discord_attachment_rejected name={Name} mime={Mime} audience={Audience} size={Size} limit={Limit} reason=too-large",
+                file.Name, file.MimeType, audience, file.Size, policy.MaxFileBytes);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` ({FormatBytes(file.Size)}) exceeds the {FormatBytes(policy.MaxFileBytes)} per-file limit.");
+        }
+
+        ReadOnlyMemory<byte> bytes;
+        try
+        {
+            using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            downloadCts.CancelAfter(OperationTimeout);
+            bytes = await _dependencies.HttpClient!.GetByteArrayAsync(file.Url, downloadCts.Token);
+        }
+        catch (OperationCanceledException ex)
+        {
+            _log.Warning(ex,
+                "discord_attachment_rejected name={Name} mime={Mime} reason=download-timeout",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"Timed out downloading `{file.Name}`. Please try again.");
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "discord_attachment_rejected name={Name} mime={Mime} reason=download-failed",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"Couldn't download `{file.Name}` — please try again later.");
+        }
+
+        if (bytes.Length == 0)
+        {
+            _log.Warning(
+                "discord_attachment_rejected name={Name} mime={Mime} reason=empty-download",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` downloaded as zero bytes.");
+        }
+
+        ContentScanResult scanResult;
+        try
+        {
+            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scanCts.CancelAfter(OperationTimeout);
+            scanResult = await _dependencies.ContentScanner.ScanAsync(
+                bytes, file.Name, file.MimeType, scanCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "discord_attachment_rejected name={Name} mime={Mime} reason=scan-exception",
+                file.Name, file.MimeType);
+            return new AttachmentIngestResult.Rejected(
+                $"Couldn't scan `{file.Name}` — please try again later.");
+        }
+
+        if (!scanResult.IsAllowed)
+        {
+            _log.Warning(
+                "discord_attachment_rejected name={Name} mime={Mime} reason=scan-blocked error={ScanError} message={ScanMessage}",
+                file.Name, file.MimeType, scanResult.Error?.ToString(), scanResult.Message ?? scanResult.Error?.ToString());
+
+            if (scanResult.Error == ContentScanError.ScanFailure)
+            {
+                return new AttachmentIngestResult.Rejected(
+                    $"Couldn't scan `{file.Name}` — please try again later.");
+            }
+
+            return new AttachmentIngestResult.Rejected(
+                $"Content scanner rejected `{file.Name}`: {scanResult.Message ?? scanResult.Error?.ToString()}.");
+        }
+
+        string inboxPath;
+        try
+        {
+            inboxPath = await InboxWriter.SanitizeReserveAndWriteAsync(
+                inboxDir, file.Name, bytes, cancellationToken);
+        }
+        catch (InboxWriter.CollisionExhaustedException ex)
+        {
+            _log.Warning(ex,
+                "discord_attachment_rejected name={Name} reason=collision-exhausted",
+                file.Name);
+            return new AttachmentIngestResult.Rejected(
+                $"Too many attachments named `{file.Name}` in this session — please rename and try again.");
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex,
+                "discord_attachment_rejected name={Name} reason=inbox-write-failed",
+                file.Name);
+            return new AttachmentIngestResult.Rejected(
+                $"Couldn't save `{file.Name}` — please try again later.");
+        }
+
+        var (inlined, note) = ResolveInlineDecision(category, inlineImages);
+
+        var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{IOPath.GetFileName(inboxPath)}";
+        var line = BuildAttachmentLine(file.Name, file.MimeType, bytes.Length, relativePath, inlined, note);
+
+        DataContent? inlineContent = null;
+        if (inlined)
+            inlineContent = new DataContent(bytes, file.MimeType);
+
+        _log.Info(
+            "discord_attachment_accepted name={Name} mime={Mime} size={Size} audience={Audience} category={Category} inlined={Inlined}",
+            file.Name, file.MimeType, bytes.Length, audience, category, inlined);
+
+        return new AttachmentIngestResult.Accepted(line, inlineContent);
+    }
+
+    private static (bool Inlined, string? Note) ResolveInlineDecision(
+        AttachmentCategory category,
+        bool inlineImages)
+    {
+        return category switch
+        {
+            AttachmentCategory.Image when inlineImages => (true, null),
+            AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
+            AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
+            _ => (false, AttachmentNotes.FormatNotInlineable)
+        };
+    }
+
+    internal static string BuildAttachmentLine(
+        string name,
+        string mimeType,
+        long size,
+        string relativePath,
+        bool inlined,
+        string? note)
+    {
+        var inlinedWire = inlined ? "true" : "false";
+        var sb = new StringBuilder(128);
+        sb.Append("[attachment] name=\"").Append(EscapeQuoted(name)).Append('"');
+        sb.Append(" mime=\"").Append(EscapeQuoted(mimeType)).Append('"');
+        sb.Append(" size=").Append(size);
+        sb.Append(" path=\"").Append(EscapeQuoted(relativePath)).Append('"');
+        sb.Append(" inlined=\"").Append(inlinedWire).Append('"');
+        if (!string.IsNullOrEmpty(note))
+            sb.Append(" note=\"").Append(EscapeQuoted(note)).Append('"');
+        return sb.ToString();
+    }
+
+    internal static string EscapeQuoted(string value)
+    {
+        var needsProcessing = false;
+        foreach (var c in value)
+        {
+            if (c < ' ' || c == '\\' || c == '"')
+            {
+                needsProcessing = true;
+                break;
+            }
+        }
+
+        if (!needsProcessing)
+            return value;
+
+        var sb = new StringBuilder(value.Length + 8);
+        foreach (var c in value)
+        {
+            if (c < ' ')
+                sb.Append(' ');
+            else if (c == '\\')
+                sb.Append("\\\\");
+            else if (c == '"')
+                sb.Append("\\\"");
+            else
+                sb.Append(c);
+        }
+        return sb.ToString();
+    }
+
+    private static string FormatBytes(long size)
+    {
+        const long Mib = 1024 * 1024;
+        const long Kib = 1024;
+        if (size >= Mib)
+            return $"{size / (double)Mib:F1} MiB";
+        if (size >= Kib)
+            return $"{size / (double)Kib:F1} KiB";
+        return $"{size} bytes";
+    }
+
+    private abstract record AttachmentIngestResult
+    {
+        public sealed record Accepted(string Line, DataContent? Inline) : AttachmentIngestResult;
+
+        public sealed record Rejected(string UserFacingReason) : AttachmentIngestResult;
     }
 
     internal static List<string> ChunkMessage(string text)
