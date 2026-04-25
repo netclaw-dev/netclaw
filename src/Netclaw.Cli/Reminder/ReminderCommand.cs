@@ -104,6 +104,7 @@ internal static class ReminderCommand
             Console.Error.WriteLine("  --delivery <kind>        Delivery kind: none, channel (default: none)");
             Console.Error.WriteLine("  --transport <transport>  Transport for channel delivery (e.g. 'slack')");
             Console.Error.WriteLine("  --address <target>       Target for channel delivery (#channel, @user, ID)");
+            Console.Error.WriteLine("  --expires-in <duration>  Auto-disable after duration (e.g. '24h', '7d')");
             Console.Error.WriteLine();
             Console.Error.WriteLine("If a reminder with the given ID already exists, it will be updated.");
             return 1;
@@ -117,6 +118,7 @@ internal static class ReminderCommand
         string deliveryKind = "none";
         string? deliveryTransport = null;
         string? deliveryAddress = null;
+        string? expiresIn = null;
 
         for (var i = 6; i < args.Length; i++)
         {
@@ -136,6 +138,10 @@ internal static class ReminderCommand
             {
                 deliveryAddress = args[++i];
             }
+            else if (args[i] is "--expires-in" && i + 1 < args.Length)
+            {
+                expiresIn = args[++i];
+            }
         }
 
         name ??= id;
@@ -149,7 +155,8 @@ internal static class ReminderCommand
             schedule,
             deliveryKind,
             deliveryTransport,
-            deliveryAddress
+            deliveryAddress,
+            expiresIn
         };
 
         try

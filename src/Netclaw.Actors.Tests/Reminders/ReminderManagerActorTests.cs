@@ -462,6 +462,99 @@ public class ReminderManagerActorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task Reconcile_disables_expired_recurring_reminders()
+    {
+        var manager = await GetManagerAsync();
+        var now = TimeProvider.System.GetUtcNow();
+
+        // Drain PreStart reconcile
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // Write an expired interval reminder directly to the store
+        var expired = new ReminderDefinition
+        {
+            Id = "expired-interval",
+            Title = "Expired interval check",
+            Instructions = "This should be disabled",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                Interval = TimeSpan.FromMinutes(30),
+                FireAt = now.AddMinutes(30)
+            },
+            ExpiresAt = now.AddHours(-1),
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now.AddDays(-1),
+            UpdatedAt = now.AddDays(-1)
+        };
+        _definitionStore.Save(expired);
+
+        var reconcileResult = await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        Assert.Equal(1, reconcileResult.DisabledExpired);
+
+        // Verify definition is still on disk (soft-disable, not delete) but disabled
+        var afterReconcile = _definitionStore.Get(new ReminderId("expired-interval"));
+        Assert.NotNull(afterReconcile);
+        Assert.False(afterReconcile!.Enabled);
+    }
+
+    [Fact]
+    public async Task Expired_reminder_disabled_on_fire_without_executing()
+    {
+        var manager = await GetManagerAsync();
+        var now = TimeProvider.System.GetUtcNow();
+
+        // Drain PreStart reconcile
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // Write an interval reminder that just expired
+        var expired = new ReminderDefinition
+        {
+            Id = "just-expired",
+            Title = "Just expired check",
+            Instructions = "This should not execute",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                Interval = TimeSpan.FromMinutes(20),
+                FireAt = now
+            },
+            ExpiresAt = now.AddSeconds(-1),
+            Enabled = true,
+            CreatedBy = "test",
+            CreatedAt = now.AddDays(-1),
+            UpdatedAt = now.AddDays(-1)
+        };
+        _definitionStore.Save(expired);
+
+        // Fire the reminder
+        manager.Tell(CreateEnvelope("just-expired"));
+
+        // Wait for the fire to be processed — the reminder should be disabled, not executed
+        await AwaitAssertAsync(async () =>
+        {
+            var stored = _definitionStore.Get(new ReminderId("just-expired"));
+            Assert.NotNull(stored);
+            Assert.False(stored!.Enabled);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Verify no execution was started
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Equal(0, health.ActiveExecutions);
+    }
+
     /// <summary>
     /// Test-only gateway stub: handles <see cref="DeliverTrustedSessionTurn"/>
     /// by forwarding to a probe for assertions and immediately replying

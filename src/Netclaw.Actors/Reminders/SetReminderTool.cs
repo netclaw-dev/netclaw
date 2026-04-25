@@ -42,7 +42,9 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         [property: Description("Optional guidance for what to include in the delivery to the user. Content guidance only.")]
         string? DeliveryInstructions = null,
         [property: Description("Trust audience for this reminder's execution: 'personal' (all tools including web_search, shell), 'team' (restricted tools), or 'public' (minimal tools). Omit to inherit the creating session/channel audience.")]
-        string? Audience = null);
+        string? Audience = null,
+        [property: Description("Optional expiration for recurring reminders. After this duration, the reminder auto-disables. Use relative time like '24h', '7d'. Recommended for task-specific reminders (e.g., CI checks, deploy monitoring).")]
+        string? ExpiresIn = null);
 
     public SetReminderTool(
         IActorRef reminderManager,
@@ -215,6 +217,18 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         if (string.IsNullOrWhiteSpace(boundary) && sourceAudience is { } resolvedSourceAudience)
             boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(resolvedSourceAudience);
 
+        DateTimeOffset? expiresAt = null;
+        if (!string.IsNullOrWhiteSpace(args.ExpiresIn))
+        {
+            if (schedule.Type == ReminderScheduleType.OneShot)
+                return "Error: expires_in is not applicable to one-shot reminders.";
+
+            var expDuration = ReminderScheduleParser.ParseDuration(args.ExpiresIn);
+            if (expDuration is null)
+                return $"Error: Cannot parse expires_in '{args.ExpiresIn}'. Use format like '24h', '7d'.";
+            expiresAt = now.Add(expDuration.Value);
+        }
+
         var definition = new ReminderDefinition
         {
             Id = id.Value,
@@ -227,6 +241,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             Audience = audience,
             Boundary = boundary,
             Enabled = true,
+            ExpiresAt = expiresAt,
             CreatedBy = "llm-tool",
             CreatedAt = now,
             UpdatedAt = now
@@ -266,7 +281,11 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             _ => ""
         };
 
-        return $"Reminder '{args.Name}' scheduled. {scheduleDesc} {deliveryDesc} ID: {id.Value}";
+        var expiresDesc = expiresAt is not null
+            ? $" Expires: {FormatNextFire(expiresAt)}."
+            : "";
+
+        return $"Reminder '{args.Name}' scheduled. {scheduleDesc} {deliveryDesc}{expiresDesc} ID: {id.Value}";
     }
 
     private static string FormatInterval(TimeSpan interval) => interval.TotalHours switch

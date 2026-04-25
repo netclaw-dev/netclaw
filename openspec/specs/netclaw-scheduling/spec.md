@@ -767,3 +767,100 @@ drain-on-shutdown follow-up.
 - **WHEN** the tool returns its success message
 - **THEN** the message conveys that the reminder will fire and deliver
   a new turn to the originating session
+
+### Requirement: Recurring reminder expiration
+
+Recurring reminders (interval and cron) support an optional `ExpiresAt`
+timestamp. When a reminder expires, it is soft-disabled — the definition
+and history are preserved on disk, but no further executions occur.
+
+Backwards compatibility: `ExpiresAt` is stored as a nullable
+`ExpiresAtMs` field on `ReminderDefinition`. Existing definitions
+without this field deserialize as `null` (no expiration), preserving
+current behavior.
+
+#### Scenario: Expired interval reminder auto-disabled on fire
+
+- **GIVEN** an enabled interval reminder with `ExpiresAt` in the past
+- **WHEN** Akka.Reminders fires the envelope
+- **THEN** the manager disables the reminder without executing it
+- **AND** the envelope is acknowledged
+- **AND** the definition remains on disk with `Enabled = false`
+
+#### Scenario: Expired cron reminder auto-disabled on fire
+
+- **GIVEN** an enabled cron reminder with `ExpiresAt` in the past
+- **WHEN** Akka.Reminders fires the envelope
+- **THEN** the manager disables the reminder before rescheduling
+- **AND** no new cron schedule is created
+
+#### Scenario: Reconciliation disables expired recurring reminders
+
+- **GIVEN** the daemon restarts
+- **AND** one or more recurring reminders have `ExpiresAt` in the past
+- **WHEN** reconciliation runs
+- **THEN** each expired reminder is disabled and its schedule cancelled
+- **AND** the reconciliation result includes the count of disabled-expired
+  reminders
+
+#### Scenario: Non-expired recurring reminder fires normally
+
+- **GIVEN** an enabled interval reminder with `ExpiresAt` in the future
+- **WHEN** the reminder fires
+- **THEN** execution proceeds as normal
+
+#### Scenario: ExpiresIn parameter accepted on set_reminder
+
+- **GIVEN** a user calls `set_reminder` with `schedule_type = "interval"`
+  and `expires_in = "24h"`
+- **WHEN** the tool processes the request
+- **THEN** `ExpiresAt` is computed as `now + 24h` and set on the definition
+- **AND** the success response includes the expiration time
+
+#### Scenario: ExpiresIn rejected on one-shot reminders
+
+- **GIVEN** a user calls `set_reminder` with `schedule_type = "once"` and
+  `expires_in = "24h"`
+- **WHEN** the tool validates the request
+- **THEN** an error is returned: "expires_in is not applicable to one-shot
+  reminders"
+
+### Requirement: LLM self-completion via complete_reminder
+
+Recurring reminders include prompt guidance telling the executing LLM to
+call `complete_reminder` when the reminder's purpose is permanently
+fulfilled. The `complete_reminder` tool soft-disables the reminder
+(preserving definition and history), semantically distinct from
+`cancel_reminder` which hard-deletes.
+
+#### Scenario: LLM self-completes a recurring reminder
+
+- **GIVEN** an enabled interval reminder fires and the LLM executes
+- **AND** the LLM determines the task is permanently fulfilled
+- **WHEN** the LLM calls `complete_reminder` with the reminder's ID
+- **THEN** the reminder is disabled (soft-delete)
+- **AND** the definition and history remain on disk
+- **AND** future fires do not execute
+
+#### Scenario: Prompt guidance includes reminder ID and completion instructions
+
+- **GIVEN** a recurring (interval or cron) reminder definition
+- **WHEN** the execution actor builds the prompt
+- **THEN** the prompt includes guidance to call `complete_reminder`
+- **AND** the guidance includes the reminder's own ID
+
+### Requirement: Delivery observation timeout alignment
+
+The `DeliveryObservedTimeout` for Mode B (current_session) delivery must
+be aligned with the execution timeout. A delivery observation window
+shorter than the execution window causes false failures when LLM turns
+take longer than the observation timeout but complete before the execution
+timeout.
+
+#### Scenario: Delivery observation succeeds for LLM turns taking >30s
+
+- **GIVEN** a Mode B reminder with `deliveryRequired = true`
+- **AND** the LLM turn takes 45 seconds to produce a delivery
+- **WHEN** the delivery is observed at t=45s
+- **THEN** the execution completes successfully
+- **AND** no failure is recorded

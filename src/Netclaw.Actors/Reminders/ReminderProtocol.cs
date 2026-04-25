@@ -212,6 +212,13 @@ public sealed record ReminderDefinition
     public long CreatedAtMs { get; set; }
     public long UpdatedAtMs { get; set; }
 
+    /// <summary>
+    /// Optional expiration for recurring reminders. When set, the reminder
+    /// auto-disables on next fire after this time without executing.
+    /// Null means no expiration (default for backwards compatibility).
+    /// </summary>
+    public long? ExpiresAtMs { get; set; }
+
     [JsonIgnore]
     public DateTimeOffset CreatedAt
     {
@@ -224,6 +231,13 @@ public sealed record ReminderDefinition
     {
         get => DateTimeOffset.FromUnixTimeMilliseconds(UpdatedAtMs);
         set => UpdatedAtMs = value.ToUnixTimeMilliseconds();
+    }
+
+    [JsonIgnore]
+    public DateTimeOffset? ExpiresAt
+    {
+        get => ExpiresAtMs is not null ? DateTimeOffset.FromUnixTimeMilliseconds(ExpiresAtMs.Value) : null;
+        set => ExpiresAtMs = value?.ToUnixTimeMilliseconds();
     }
 }
 
@@ -306,7 +320,8 @@ public sealed record ReminderInfo(
     DateTimeOffset? NextFire,
     bool Enabled,
     string? AgentDefinitionId,
-    TrustAudience? Audience);
+    TrustAudience? Audience,
+    DateTimeOffset? ExpiresAt = null);
 
 // ── Internal messages ──
 

@@ -102,7 +102,7 @@ public static partial class ReminderScheduleParser
         return null;
     }
 
-    private static TimeSpan? ParseDuration(string value)
+    internal static TimeSpan? ParseDuration(string value)
     {
         var match = RelativeTimePattern().Match(value.Trim());
         if (!match.Success)

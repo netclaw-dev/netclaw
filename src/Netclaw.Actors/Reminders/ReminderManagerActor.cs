@@ -486,6 +486,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
+        if (definition.ExpiresAt is { } expiresAt && expiresAt <= _timeProvider.GetUtcNow())
+        {
+            _log.Info("Reminder '{0}' has expired (expiresAt={1}), disabling", reminderId.Value, expiresAt);
+            await DisableReminderInternalAsync(reminderId);
+            await _client!.AckAsync(envelope);
+            return;
+        }
+
         _log.Info("Reminder fired: id='{0}', title='{1}', schedule_type={2}",
             reminderId.Value, definition.Title, definition.Schedule.Type);
 
@@ -647,17 +655,30 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 deletedOneShots++;
             }
 
-            if (cancelledOrphans > 0 || restoredSchedules > 0 || deletedOneShots > 0)
+            // Disable expired recurring reminders that haven't fired since expiration.
+            var disabledExpired = 0;
+            foreach (var definition in definitions.Where(d =>
+                         d.Enabled &&
+                         d.Schedule.Type is not ReminderScheduleType.OneShot &&
+                         d.ExpiresAt is { } ea && ea <= now))
             {
-                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, deleted_oneshots={2}",
+                await DisableReminderInternalAsync(new ReminderId(definition.Id));
+                await CancelScheduleOnlyAsync(new ReminderId(definition.Id));
+                disabledExpired++;
+            }
+
+            if (cancelledOrphans > 0 || restoredSchedules > 0 || deletedOneShots > 0 || disabledExpired > 0)
+            {
+                _log.Info("Reminder reconcile complete: cancelled_orphans={0}, restored={1}, deleted_oneshots={2}, disabled_expired={3}",
                     cancelledOrphans,
                     restoredSchedules,
-                    deletedOneShots);
+                    deletedOneShots,
+                    disabledExpired);
             }
 
             // Only ack external callers — skip Self.Tell from PreStart
             if (!sender.Equals(Self))
-                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, deletedOneShots));
+                sender.Tell(new ReconcileCompleted(cancelledOrphans, restoredSchedules, deletedOneShots, disabledExpired));
         }
         catch (Exception ex)
         {
@@ -847,7 +868,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         NextFire: nextFire,
         Enabled: d.Enabled,
         AgentDefinitionId: d.AgentDefinitionId,
-        Audience: d.Audience);
+        Audience: d.Audience,
+        ExpiresAt: d.ExpiresAt);
 
     private static string SanitizeActorName(string raw)
     {
@@ -892,5 +914,5 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// Ack sent back to <see cref="ReconcileReminders"/> callers so they can
     /// synchronize on reconcile completion instead of polling.
     /// </summary>
-    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DeletedOneShots);
+    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DeletedOneShots, int DisabledExpired = 0);
 }

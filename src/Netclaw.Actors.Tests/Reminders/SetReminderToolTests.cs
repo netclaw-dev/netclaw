@@ -768,6 +768,85 @@ public class SetReminderToolTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task ExpiresIn_sets_expiration_on_interval_reminder()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider);
+
+        var execution = Task.Run(async () =>
+        {
+            return await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "expiring-check",
+                ["Name"] = "expiring-check",
+                ["Prompt"] = "Check status",
+                ["ScheduleType"] = "interval",
+                ["Schedule"] = "30m",
+                ["DeliveryKind"] = "none",
+                ["ExpiresIn"] = "24h"
+            });
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(cmd.Definition.ExpiresAt);
+        var expectedExpires = _timeProvider.GetUtcNow().AddHours(24);
+        Assert.Equal(expectedExpires, cmd.Definition.ExpiresAt.Value, TimeSpan.FromSeconds(1));
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));
+
+        var result = await execution;
+        Assert.Contains("Expires:", result);
+    }
+
+    [Fact]
+    public async Task ExpiresIn_rejects_on_oneshot_reminder()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "oneshot-no-expire",
+            ["Name"] = "oneshot-no-expire",
+            ["Prompt"] = "Check once",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "30m",
+            ["DeliveryKind"] = "none",
+            ["ExpiresIn"] = "24h"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("not applicable to one-shot", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ExpiresIn_rejects_unparseable_duration()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider);
+
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "bad-expires",
+            ["Name"] = "bad-expires",
+            ["Prompt"] = "Check status",
+            ["ScheduleType"] = "interval",
+            ["Schedule"] = "1h",
+            ["DeliveryKind"] = "none",
+            ["ExpiresIn"] = "next tuesday"
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Contains("Cannot parse expires_in", result);
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
+    }
+
     private sealed class FakeTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => utcNow;

@@ -48,6 +48,8 @@ public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Pa
             sb.AppendLine($"  Schedule: {scheduleDesc}");
             if (r.NextFire is not null)
                 sb.AppendLine($"  Next fire: {SetReminderTool.FormatNextFire(r.NextFire)}");
+            if (r.ExpiresAt is not null)
+                sb.AppendLine($"  Expires: {SetReminderTool.FormatNextFire(r.ExpiresAt)}");
             sb.AppendLine();
         }
 
