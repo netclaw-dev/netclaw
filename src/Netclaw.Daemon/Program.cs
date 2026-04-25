@@ -1198,8 +1198,8 @@ static void MapReminderEndpoints(WebApplication app)
             title = r.Title,
             enabled = r.Enabled,
             schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
-            nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
-            expiresAt = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.ExpiresAt),
+            nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatTimestamp(r.NextFire),
+            expiresAt = Netclaw.Actors.Reminders.SetReminderTool.FormatTimestamp(r.ExpiresAt),
             audience = r.Audience?.ToWireValue(),
         });
         return Results.Ok(projected);
@@ -1391,7 +1391,7 @@ static void MapReminderEndpoints(WebApplication app)
             title = r.Title,
             enabled = r.Enabled,
             schedule = Netclaw.Actors.Reminders.ListRemindersTool.DescribeSchedule(r.Schedule),
-            nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatNextFire(r.NextFire),
+            nextFire = Netclaw.Actors.Reminders.SetReminderTool.FormatTimestamp(r.NextFire),
             instructions = r.Instructions,
             deliveryKind = r.Delivery.Kind.ToString().ToLowerInvariant(),
             deliveryTransport = r.Delivery.Transport,

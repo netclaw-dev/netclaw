@@ -663,7 +663,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                          d.ExpiresAt is { } ea && ea <= now))
             {
                 await DisableReminderInternalAsync(new ReminderId(definition.Id));
-                await CancelScheduleOnlyAsync(new ReminderId(definition.Id));
                 disabledExpired++;
             }
 

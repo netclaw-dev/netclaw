@@ -825,28 +825,27 @@ current behavior.
 - **THEN** an error is returned: "expires_in is not applicable to one-shot
   reminders"
 
-### Requirement: LLM self-completion via complete_reminder
+### Requirement: LLM self-cancellation of fulfilled reminders
 
 Recurring reminders include prompt guidance telling the executing LLM to
-call `complete_reminder` when the reminder's purpose is permanently
-fulfilled. The `complete_reminder` tool soft-disables the reminder
-(preserving definition and history), semantically distinct from
-`cancel_reminder` which hard-deletes.
+call `cancel_reminder` when the reminder's purpose is permanently
+fulfilled. This reuses the existing `cancel_reminder` tool (hard-delete)
+rather than introducing a separate completion tool — fewer tools means
+less confusion for smaller models.
 
-#### Scenario: LLM self-completes a recurring reminder
+#### Scenario: LLM self-cancels a fulfilled recurring reminder
 
 - **GIVEN** an enabled interval reminder fires and the LLM executes
 - **AND** the LLM determines the task is permanently fulfilled
-- **WHEN** the LLM calls `complete_reminder` with the reminder's ID
-- **THEN** the reminder is disabled (soft-delete)
-- **AND** the definition and history remain on disk
+- **WHEN** the LLM calls `cancel_reminder` with the reminder's ID
+- **THEN** the reminder and its history are deleted
 - **AND** future fires do not execute
 
-#### Scenario: Prompt guidance includes reminder ID and completion instructions
+#### Scenario: Prompt guidance includes reminder ID and cancellation instructions
 
 - **GIVEN** a recurring (interval or cron) reminder definition
 - **WHEN** the execution actor builds the prompt
-- **THEN** the prompt includes guidance to call `complete_reminder`
+- **THEN** the prompt includes guidance to call `cancel_reminder`
 - **AND** the guidance includes the reminder's own ID
 
 ### Requirement: Delivery observation timeout alignment

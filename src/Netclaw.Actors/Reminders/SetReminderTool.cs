@@ -263,7 +263,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 : $"Failed to schedule reminder '{args.Name}': {message}";
         }
 
-        var nextFireStr = FormatNextFire(response.NextFire);
+        var nextFireStr = FormatTimestamp(response.NextFire);
 
         var scheduleDesc = schedule.Type switch
         {
@@ -282,7 +282,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         };
 
         var expiresDesc = expiresAt is not null
-            ? $" Expires: {FormatNextFire(expiresAt)}."
+            ? $" Expires: {FormatTimestamp(expiresAt)}."
             : "";
 
         return $"Reminder '{args.Name}' scheduled. {scheduleDesc} {deliveryDesc}{expiresDesc} ID: {id.Value}";
@@ -295,7 +295,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         _ => $"{interval.TotalMinutes:F0}m"
     };
 
-    public static string FormatNextFire(DateTimeOffset? nextFire)
+    public static string FormatTimestamp(DateTimeOffset? nextFire)
     {
         if (nextFire is not { } nf)
             return "unknown";

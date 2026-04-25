@@ -86,7 +86,6 @@ public static class ToolRegistrationExtensions
     {
         registry.Register(new SetReminderTool(reminderManager, timeProvider, targetResolvers));
         registry.Register(new CancelReminderTool(reminderManager));
-        registry.Register(new CompleteReminderTool(reminderManager));
         registry.Register(new ListRemindersTool(reminderManager));
         registry.Register(new GetReminderHistoryTool(historyStore));
         return registry;
