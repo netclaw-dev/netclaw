@@ -483,8 +483,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 string.Equals(p.CallId, callId, StringComparison.Ordinal));
             if (byCallId is null)
                 return (ApprovalLookupResult.NotFound, null);
-            if (byCallId.RequesterPrincipal is not PrincipalClassification.VerifiedAutomation
-                && byCallId.RequesterSenderId is not null && byCallId.RequesterSenderId != senderId)
+            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId?.Value, senderId.Value))
                 return (ApprovalLookupResult.WrongRequester, null);
             return (ApprovalLookupResult.Matched, byCallId);
         }
@@ -493,8 +492,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             return (ApprovalLookupResult.NotFound, null);
 
         var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            p.RequesterPrincipal is PrincipalClassification.VerifiedAutomation
-            || p.RequesterSenderId is null || p.RequesterSenderId == senderId);
+            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId?.Value, senderId.Value));
         return bySender is not null
             ? (ApprovalLookupResult.Matched, bySender)
             : (ApprovalLookupResult.WrongRequester, null);

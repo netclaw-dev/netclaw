@@ -1,3 +1,5 @@
+using Netclaw.Configuration;
+
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>
@@ -20,6 +22,22 @@ public static class ApprovalButtonValueCodec
             ? callId[..maxCallIdLength]
             : callId;
         return $"{truncatedCallId}{suffix}";
+    }
+
+    /// <summary>
+    /// Whether <paramref name="approvingSenderId"/> is allowed to approve a request
+    /// with the given requester identity. VerifiedAutomation requests can be approved by anyone.
+    /// </summary>
+    public static bool CanApprove(
+        PrincipalClassification? requesterPrincipal,
+        string? requesterSenderId,
+        string approvingSenderId)
+    {
+        if (requesterPrincipal is PrincipalClassification.VerifiedAutomation)
+            return true;
+        if (string.IsNullOrWhiteSpace(requesterSenderId))
+            return true;
+        return string.Equals(requesterSenderId, approvingSenderId, StringComparison.Ordinal);
     }
 
     public static bool TryDecode(string? value, out string? callId, out string? selectedKey, out string? requesterSenderId)

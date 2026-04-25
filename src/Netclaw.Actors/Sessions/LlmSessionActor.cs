@@ -762,9 +762,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            if (pending.RequesterPrincipal is not PrincipalClassification.VerifiedAutomation
-                && !string.IsNullOrWhiteSpace(pending.RequesterSenderId)
-                && !string.Equals(pending.RequesterSenderId, msg.SenderId, StringComparison.Ordinal))
+            if (!ApprovalButtonValueCodec.CanApprove(pending.RequesterPrincipal, pending.RequesterSenderId, msg.SenderId))
             {
                 _log.Warning(
                     "Ignoring tool interaction response for call {CallId} from sender {SenderId}; expected {ExpectedSenderId}",
