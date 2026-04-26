@@ -44,6 +44,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     private bool _deliveredThisTurn;
     private int _turnNumber;
     private bool _threadHistoryFetchAttempted;
+    private string? _lastSetThreadName;
 
     public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
@@ -544,7 +545,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 break;
 
             case SessionTitleOutput titleOutput:
-                if (_threadCreated)
+                if (_threadCreated && titleOutput.Title != _lastSetThreadName)
                     await SafeSetThreadNameAsync(titleOutput.Title);
                 break;
 
@@ -651,6 +652,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         try
         {
             await _dependencies.ReplyClient.SetThreadNameAsync(_replyChannelId, title);
+            _lastSetThreadName = title;
             _log.Debug("Set Discord thread name to '{0}'", title);
         }
         catch (Exception ex)

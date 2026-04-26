@@ -136,7 +136,6 @@ public static class MagicByteValidator
             if (detected is not null
                 && RulesByMime.TryGetValue(detected, out var detectedRule)
                 && detectedRule.Extensions.Contains(extension)
-                && detectedRule.Matches(content)
                 && effectivePolicy.AllowedMimeTypes.Contains(detected))
             {
                 return ContentScanResult.Allowed(new MimeType(detected));

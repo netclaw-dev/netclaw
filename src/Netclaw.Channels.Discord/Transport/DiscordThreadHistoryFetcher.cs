@@ -81,14 +81,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
                     if (rootMessage is not null && !rootMessage.Author.IsBot
                         && !string.IsNullOrWhiteSpace(rootMessage.Content))
                     {
-                        results.Add(new ChannelInput
-                        {
-                            SenderId = rootMessage.Author.Id.ToString(),
-                            ChannelId = threadChannelId.ToString(),
-                            MessageId = rootMessage.Id.ToString(),
-                            Contents = [new TextContent(rootMessage.Content)],
-                            ReceivedAt = rootMessage.Timestamp
-                        });
+                        results.Add(ToChannelInput(rootMessage, threadChannelId));
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -112,17 +105,19 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             if (string.IsNullOrWhiteSpace(message.Content))
                 continue;
 
-            results.Add(new ChannelInput
-            {
-                SenderId = message.Author.Id.ToString(),
-                ChannelId = threadChannelId.ToString(),
-                MessageId = message.Id.ToString(),
-                Contents = [new TextContent(message.Content)],
-                ReceivedAt = message.Timestamp
-            });
+            results.Add(ToChannelInput(message, threadChannelId));
         }
 
         _logger.LogInformation("Fetched {Count} thread history messages for thread {ThreadId}", results.Count, threadChannelId);
         return results;
     }
+
+    private static ChannelInput ToChannelInput(IMessage message, ulong threadChannelId) => new()
+    {
+        SenderId = message.Author.Id.ToString(),
+        ChannelId = threadChannelId.ToString(),
+        MessageId = message.Id.ToString(),
+        Contents = [new TextContent(message.Content)],
+        ReceivedAt = message.Timestamp
+    };
 }
