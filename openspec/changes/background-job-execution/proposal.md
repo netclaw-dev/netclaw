@@ -12,8 +12,8 @@ continue other work, and results are delivered via the existing reminder
 re-entrancy channel when the process completes.
 
 Depends on: `structured-tool-call-metadata` change (provides the
-`ToolCallMeta` envelope with `_background` flag and `_timeout_seconds`
-threshold routing).
+`ToolCallMeta` envelope with explicit `_background` signaling and
+`_timeout_seconds` synchronous timeout hints).
 
 ## What Changes
 
@@ -24,15 +24,16 @@ threshold routing).
   processes, capture output to disk, and deliver results to the originating
   session via `DeliverTrustedSessionTurn` on completion.
 - `SessionToolExecutionPipeline` routes tool calls to background execution
-  when `_timeout_seconds` exceeds `BackgroundThresholdSeconds` or
-  `_background` is true.
+  only when `_background` is true.
 - `SessionState` gains an `ActiveBackgroundJobs` collection (persisted to
   journal) so the LLM knows what it's waiting for after compaction or
   session resumption.
-- New `check_background_job` tool (shell grant category) lets the LLM query
-  status or cancel running jobs.
-- Job definitions persist to disk (`~/.netclaw/jobs/{id}.json`) so jobs
-  survive daemon restarts.
+- New `check_background_job` tool is exposed only when shell execution is
+  available, and lets the LLM query status or cancel running jobs. Background
+  jobs remain a shell-only surface coupled to shell grants/availability.
+- Job definitions/history persist to disk (`~/.netclaw/jobs/{id}.json`) for
+  startup reconciliation and diagnostics. If the daemon restarts or goes down
+  mid-job, in-flight jobs are best-effort and may need to be relaunched.
 
 ## Capabilities
 
@@ -54,10 +55,14 @@ threshold routing).
   actor, protocol types, and tool. Modifications to `SessionToolExecutionPipeline`,
   `SessionState`, `LlmSessionActor`, and `Program.cs` (DI registration).
 - **Persistence**: Additive field on `SessionState` for active jobs. Job
-  definitions stored as JSON files on disk (same pattern as reminders).
-- **Security**: `check_background_job` shares the `shell` grant category,
-  inheriting Personal-only audience restriction. Jobs carry the originating
-  session's audience and boundary for delivery.
+  definitions/history stored as JSON files on disk for reconciliation and
+  diagnostics (same pattern as reminders), not durable execution continuity.
+- **Security**: `check_background_job` is available only when shell execution
+  is available and shares the `shell` grant category, inheriting Personal-only
+  audience restriction. Jobs carry the originating
+  session's audience and boundary for delivery. Completion remains trusted by
+  design to match normal synchronous shell results, but only within the
+  originating session and stored originating audience/boundary.
 - **Infrastructure**: New singleton actor registered at daemon startup.
   Concurrency limit (default 5) prevents resource exhaustion.
 - **Dependencies**: Reuses `DeliverTrustedSessionTurn`, delivery observation,

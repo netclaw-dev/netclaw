@@ -122,7 +122,24 @@ the floor are ignored (the default applies).
 allowing meaningful extension. The floor prevents the LLM from accidentally
 shortening timeouts below safe defaults.
 
-### D5: MetaJson as opaque JSON on SerializableToolCall
+### D5: Background signaling is explicit-only
+
+**Choice**: `_background` is the only signal that requests background
+execution. `_timeout_seconds` remains a synchronous timeout hint and SHALL NOT
+auto-promote a call to background execution.
+
+**Alternatives considered**:
+
+- *Timeout-threshold promotion*: convenient for long-running commands, but it
+  conflates "wait longer for this synchronous call" with "run this later and
+  give me a handle".
+
+**Rationale**: Timeout selection and execution mode are separate user intents.
+Keeping `_timeout_seconds` sync-only avoids surprising behavior where asking
+for more patience changes delivery semantics. Background execution remains an
+explicit opt-in.
+
+### D6: MetaJson as opaque JSON on SerializableToolCall
 
 **Choice**: Add `[ProtoMember(4)] string? MetaJson` to `SerializableToolCall`.
 Store the full `ToolCallMeta` as a JSON string rather than individual protobuf
@@ -140,7 +157,7 @@ doesn't require protobuf schema migration. The `MetaJson` field is nullable,
 so existing messages deserialize cleanly with `null`. The pipeline can parse
 it when needed (compaction, audit) without changing the wire format.
 
-### D6: Compaction renders rationale as primary tool call representation
+### D7: Compaction renders rationale as primary tool call representation
 
 **Choice**: `CompactionPromptBuilder` renders tool calls with rationale as:
 ```
@@ -157,7 +174,7 @@ When `MetaJson` is null (legacy messages), fall back to the current format.
 than raw arguments. The compaction prompt exists to help the LLM reconstruct
 context efficiently — intent is higher signal than parameter values.
 
-### D7: Source generator injects meta fields at schema emit time
+### D8: Source generator injects meta fields at schema emit time
 
 **Choice**: `NetclawToolGenerator` appends the three meta properties
 (`_rationale`, `_timeout_seconds`, `_background`) to the generated
@@ -169,7 +186,7 @@ fields without runtime overhead. The generator already builds the JSON schema
 from `TParams` constructor parameters — appending additional properties is a
 straightforward extension.
 
-### D8: McpToolAdapter injects meta fields at schema sanitize time
+### D9: McpToolAdapter injects meta fields at schema sanitize time
 
 **Choice**: `McpToolAdapter.SanitizeSchema()` gains an additional phase that
 appends the same three meta properties to the MCP tool's `inputSchema`. Before

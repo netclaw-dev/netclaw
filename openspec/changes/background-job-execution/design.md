@@ -13,9 +13,9 @@ Persistence if passivated, and delivery observation confirms the result
 reached the session. Background jobs reuse this re-entrancy channel.
 
 The `structured-tool-call-metadata` change (prerequisite) provides the
-`ToolCallMeta` envelope with `_background` flag and `_timeout_seconds`
-threshold routing. This change implements the infrastructure that consumes
-those signals.
+`ToolCallMeta` envelope with explicit `_background` signaling and
+`_timeout_seconds` synchronous timeout hints. This change implements the
+infrastructure that consumes the explicit background signal.
 
 ### Current state
 
@@ -36,7 +36,8 @@ those signals.
 - LLM can check job status and cancel running jobs.
 - Session tracks active jobs in persisted state for compaction/resumption
   awareness.
-- Jobs survive daemon restarts (definitions persisted to disk).
+- Job definitions/history persist across daemon restarts for reconciliation and
+  diagnostics; execution continuity across daemon restart is best-effort only.
 - Concurrency limited to prevent resource exhaustion.
 
 **Non-Goals:**
@@ -65,23 +66,31 @@ those signals.
 **Rationale**: Jobs must outlive sessions. Infrastructure-level singleton is
 the same pattern as reminders, proven in production.
 
-### D2: Two triggers for background routing
+### D2: Explicit-only background routing
 
-**Choice**: Background execution is triggered by either:
-1. `_timeout_seconds` exceeding `ToolConfig.BackgroundThresholdSeconds`
-   (implicit — the runtime infers the need)
-2. `_background: true` (explicit — the LLM opts into parallelism)
+**Choice**: Background execution is triggered only by `_background: true`.
+`_timeout_seconds` remains a synchronous timeout hint and does not change the
+execution mode.
 
-**Rationale**: The timeout threshold handles "this will take too long for
-sync" automatically. The explicit flag handles "I want to keep working on
-other things while this runs" regardless of duration. Both produce the same
-result: immediate job handle return, result delivered via re-entrancy.
+The routing decision SHALL happen only after the normal session-owned tool
+execution path has finished ACL evaluation and any required approval flow for
+`shell_execute`. `BackgroundJobManagerActor` is a post-approval execution
+target, not a bypass around session ACL or approval gates. Denied or timed-out
+approval results stop in the session pipeline and create no `StartBackgroundJob`
+message or persisted job record.
+
+**Rationale**: Waiting longer and switching to deferred execution are different
+user intents. Keeping background execution explicit avoids surprising behavior
+where a large timeout request silently changes approval, result delivery, and
+follow-up semantics.
 
 ### D3: Re-entrancy via DeliverTrustedSessionTurn
 
 **Choice**: On job completion, `BackgroundJobExecutionActor` delivers the
 result to the originating session via `DeliverTrustedSessionTurn` through
-the gateway — the same pathway reminder Mode B delivery uses.
+the gateway — the same pathway reminder Mode B delivery uses. This trusted
+delivery is intentional parity with normal synchronous shell tool results,
+not an accidental trust escalation.
 
 **Alternatives considered**:
 
@@ -90,8 +99,14 @@ the gateway — the same pathway reminder Mode B delivery uses.
 - *New notification channel*: Unnecessary when the reminder re-entrancy
   channel already handles passivation, dedup, and delivery observation.
 
-**Rationale**: Proven path. Handles session passivation, rehydration, dedup,
-and delivery observation without new infrastructure.
+**Rationale**: Background job completion is the deferred completion of a tool
+call the session already initiated and approved. Matching the trust level of
+normal synchronous shell results preserves behavioral parity: the same shell
+execution outcome is delivered as trusted whether it finishes inline or later.
+That trust is narrowly scoped to the originating session and the persisted
+originating audience/boundary captured at job start. Proven path. Handles
+session passivation, rehydration, dedup, and delivery observation without new
+infrastructure.
 
 ### D4: Session tracks ActiveBackgroundJobs in persisted state
 
@@ -106,29 +121,40 @@ telling the resumed agent why a job exists and what to do with the result.
 Without persisted tracking, the LLM wakes up to random test output with no
 context.
 
-### D5: check_background_job with cancel support, shell grant
+### D5: check_background_job with cancel support, coupled to shell availability
 
 **Choice**: Single tool `check_background_job` handles status query and
-cancellation (via `Cancel: true` parameter). Grant category: "shell".
+cancellation (via `Cancel: true` parameter). It is exposed only when shell
+execution is available and uses the `shell` grant category. Job lookup, status
+read, and cancellation are same-session-only: the manager checks the caller's
+session identity plus the persisted originating audience/boundary captured at
+job start before returning any job state.
 
 **Alternatives considered**:
 
 - *Separate cancel_background_job tool*: Adds a tool to the surface for a
   single-parameter difference.
-- *New "jobs" grant category*: Over-engineered when background jobs are
-  currently shell-only.
+- *Independent "jobs" tool surface*: splits discovery and grants away from the
+  shell capability even though background jobs are currently shell-only.
 
-**Rationale**: One tool, minimal surface area. Shell grant means it inherits
-Personal-only audience restriction automatically.
+**Rationale**: One tool, minimal surface area. Coupling the tool to shell
+availability preserves the fact that background jobs are just deferred shell
+execution, not an independent capability. Shell grant means it inherits
+Personal-only audience restriction automatically. Same-session lookup prevents
+cross-session job enumeration. Returning the same generic "job not found"
+result for unknown IDs and for session/audience/boundary mismatches avoids
+turning the tool into an existence oracle for another session's jobs.
 
 ### D6: Job definitions persist to disk as JSON
 
 **Choice**: Job definitions stored at `~/.netclaw/jobs/{id}.json`, same
 pattern as reminder definitions (`~/.netclaw/reminders/{id}.json`).
 
-**Rationale**: Jobs must survive daemon restarts. File-per-job is simple,
+**Rationale**: The system needs enough persisted state to reconcile incomplete
+jobs after daemon restart and to support diagnostics. File-per-job is simple,
 human-inspectable, and matches the established reminder pattern. On startup,
-the manager reconciles disk state against running processes (orphan cleanup).
+the manager makes a best-effort reconciliation pass over persisted job state.
+This is not a guarantee that in-flight execution survives daemon restart.
 
 ### D7: Concurrency limit with queueing
 
@@ -142,11 +168,11 @@ reminder executions).
 ## Risks / Trade-offs
 
 **[Risk] Orphaned processes on daemon restart** → On startup, the job manager
-reads persisted definitions and checks if their PIDs are still running. If
-the process is gone, the job is marked as failed (unknown exit). If the
-process is still running, the execution actor re-attaches to monitor it.
-Mitigation is best-effort — a clean daemon shutdown should kill child
-processes.
+reads persisted definitions and reconciles any incomplete jobs best-effort. If
+the daemon restarted or went down mid-job, the in-flight job may be lost, may
+be marked failed/lost with unknown exit, and the user or agent may need to
+relaunch it. Mitigation is best-effort — a clean daemon shutdown should kill
+child processes.
 
 **[Risk] Output file disk usage** → Long-running commands can produce large
 output. Output files capped at `ToolConfig.MaxOutputChars` (32K default) with
@@ -170,3 +196,22 @@ the initial implementation (process management, output capture, PID tracking
 are all shell-specific). The routing infrastructure in `SessionToolExecutionPipeline`
 is tool-generic, so extending to MCP tools later requires only adding an
 async invocation path in the job execution actor.
+
+## Documentation Follow-Through
+
+This change intentionally does not edit live runtime documentation or skills
+ahead of implementation. The implementation PR for this change must update
+operator-facing documentation only once the feature behavior is real and
+validated.
+
+Required implementation-time documentation updates:
+
+- `src/Netclaw.Cli/Resources/identity/AGENTS.template.md` must add the
+  explicit-only background-shell rule and the approval-before-start rule so
+  newly initialized agents are told that background execution requires
+  `_background: true` and still starts only after the normal approval gate
+  succeeds.
+- Operator manual and runbook documentation for background shell execution
+  must be updated in the same implementation PR to explain how jobs start,
+  how to inspect or cancel them, and how completion is delivered back into
+  the session.

@@ -23,11 +23,11 @@
 - [ ] 4.1 Create a static `ToolCallMetaExtractor` utility that extracts `_rationale`, `_timeout_seconds`, `_background` from a `FunctionCallContent.Arguments` dictionary, returns a `ToolCallMeta` and a cleaned argument dictionary
 - [ ] 4.2 Integrate `ToolCallMetaExtractor` into `SessionToolExecutionPipeline.ExecuteSingleToolAsync` — extract meta before dispatch, pass cleaned arguments to executor
 - [ ] 4.3 Apply timeout from meta: clamp `_timeout_seconds` between tool default floor and `ToolConfig.MaxToolTimeoutSeconds` ceiling; use clamped value for `CancellationTokenSource`
-- [ ] 4.4 Add background routing check: if `_timeout_seconds > BackgroundThresholdSeconds` or `_background == true`, log that background was requested (actual routing deferred to background jobs change)
+- [ ] 4.4 Preserve `_background` as an explicit-only signal: log when background was requested; do not infer background execution from `_timeout_seconds` (actual routing deferred to background jobs change)
 - [ ] 4.5 Pass extracted `ToolCallMeta` to audit entry creation
 - [ ] 4.6 Unit test: meta extraction produces correct `ToolCallMeta` and clean arguments
 - [ ] 4.7 Unit test: timeout clamping — within range, above ceiling, below floor, absent
-- [ ] 4.8 Unit test: background threshold detection
+- [ ] 4.8 Unit test: `_timeout_seconds` alone does not trigger background signaling
 
 ## 5. Audit Entry Enrichment
 
@@ -44,8 +44,8 @@
 
 ## 7. Configuration
 
-- [ ] 7.1 Add `MaxToolTimeoutSeconds` (int, default 600) and `BackgroundThresholdSeconds` (int, default 180) to `ToolConfig`
-- [ ] 7.2 Update `netclaw-config.v1.schema.json` with new properties including `minimum: 1` and `default` values for `SchemaFixResolver` compatibility
+- [ ] 7.1 Add `MaxToolTimeoutSeconds` (int, default 600) to `ToolConfig`
+- [ ] 7.2 Update `netclaw-config.v1.schema.json` with the new property including `minimum: 1` and a `default` value for `SchemaFixResolver` compatibility
 - [ ] 7.3 Verify `ConfigSchemaDoctorCheck` passes with and without the new properties
 
 ## 8. Spec and Documentation Sync

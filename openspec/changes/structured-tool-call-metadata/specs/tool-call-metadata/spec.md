@@ -110,11 +110,10 @@ the clamped value when creating the per-call `CancellationTokenSource`.
 ### Requirement: Background execution signal
 
 The `_background` field SHALL allow the LLM to explicitly request background
-execution. Additionally, if `_timeout_seconds` exceeds
-`ToolConfig.BackgroundThresholdSeconds` (default 180), the pipeline SHALL
-automatically promote the call to background execution. Background execution
-routing SHALL be consumed by a follow-on change (background job execution);
-this spec defines only the signaling mechanism.
+execution. `_timeout_seconds` SHALL remain a synchronous timeout hint and SHALL
+NOT automatically promote the call to background execution. Background
+execution routing SHALL be consumed by a follow-on change (background job
+execution); this spec defines only the signaling mechanism.
 
 #### Scenario: Explicit background request
 
@@ -123,12 +122,14 @@ this spec defines only the signaling mechanism.
 - **THEN** `ToolCallMeta.Background` is true
 - **AND** the pipeline routes to background execution (when available)
 
-#### Scenario: Timeout exceeds background threshold
+#### Scenario: Timeout hint does not trigger background
 
-- **GIVEN** `BackgroundThresholdSeconds` is 180
-- **AND** the LLM requests `_timeout_seconds: 300`
+- **GIVEN** the LLM requests `_timeout_seconds: 300`
+- **AND** `_background` is absent or false
 - **WHEN** the pipeline extracts meta fields
-- **THEN** the pipeline treats this as a background execution request
+- **THEN** the timeout hint is applied only to synchronous execution
+- **AND** the pipeline does not treat the call as a background execution
+  request
 
 #### Scenario: Background not yet implemented returns sync execution
 
@@ -181,13 +182,12 @@ allow/deny, duration, approval decision).
 - **THEN** the entry includes the `TimeoutHintSeconds` value (pre-clamp, as
   requested by the LLM)
 
-### Requirement: Configuration for timeout and background thresholds
+### Requirement: Configuration for timeout ceiling
 
-`ToolConfig` SHALL include `MaxToolTimeoutSeconds` (int, default 600) and
-`BackgroundThresholdSeconds` (int, default 180). Both SHALL be validated in the
-config schema (`netclaw-config.v1.schema.json`) with `minimum: 1`. The schema
-SHALL include default values for migration-friendly `netclaw doctor --fix`
-support.
+`ToolConfig` SHALL include `MaxToolTimeoutSeconds` (int, default 600). It SHALL
+be validated in the config schema (`netclaw-config.v1.schema.json`) with
+`minimum: 1`. The schema SHALL include a default value for migration-friendly
+`netclaw doctor --fix` support.
 
 #### Scenario: Config properties parsed
 
@@ -200,7 +200,6 @@ support.
 - **GIVEN** the config file does not include timeout properties
 - **WHEN** the config is loaded
 - **THEN** `ToolConfig.MaxToolTimeoutSeconds` is 600
-- **AND** `ToolConfig.BackgroundThresholdSeconds` is 180
 
 #### Scenario: Config schema validates new properties
 

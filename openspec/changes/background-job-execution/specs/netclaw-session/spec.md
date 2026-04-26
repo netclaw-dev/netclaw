@@ -41,6 +41,12 @@ set (mirroring `ProcessedReminderIds`). The working context SHALL surface
 active background jobs with their rationales so the LLM knows what it is
 waiting for after compaction or session resumption.
 
+Background job completion delivered through `DeliverTrustedSessionTurn` SHALL
+be treated as the trusted completion of the original tool execution, matching
+the trust semantics of synchronous shell results. The session SHALL process the
+delivery only within the originating session and the persisted originating
+audience/boundary captured for that job.
+
 #### Scenario: Persist and emit assistant reply
 
 - **WHEN** the assistant produces a response
@@ -68,6 +74,16 @@ waiting for after compaction or session resumption.
 - **THEN** the job entry is removed from `ActiveBackgroundJobs`
 - **AND** the job ID is added to the dedup set
 - **AND** both changes are persisted to the journal
+
+#### Scenario: Session applies trusted delivery with originating scope
+
+- **GIVEN** a background job result arrives via `DeliverTrustedSessionTurn`
+- **AND** the job has persisted originating audience/boundary metadata
+- **WHEN** the session processes the delivery
+- **THEN** the turn is treated with the same trust semantics as a synchronous
+  shell result for that session
+- **AND** processing remains scoped to the persisted originating
+  audience/boundary
 
 #### Scenario: Active jobs visible in working context
 

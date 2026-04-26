@@ -25,10 +25,9 @@ timeout hint without changing any tool implementation.
   operational observability.
 - Apply `TimeoutHintSeconds` in `SessionToolExecutionPipeline`, clamped to a
   configurable `MaxToolTimeoutSeconds` ceiling (default 600s).
-- Add `BackgroundThresholdSeconds` config (default 180s) — timeout hints
-  exceeding this threshold, or explicit `Background: true`, signal that the
-  tool call should be routed to background execution (implemented in a
-  follow-on change).
+- Preserve `_background` as an explicit-only signal for follow-on background
+  execution. `_timeout_seconds` remains a synchronous timeout hint and MUST
+  NOT auto-promote a tool call to background execution.
 - Update `CompactionPromptBuilder` to render tool calls using rationale as the
   primary representation, replacing the current raw-arguments format. This
   provides high-signal breadcrumbs for session resumption.
@@ -43,7 +42,7 @@ timeout hint without changing any tool implementation.
 ### Modified Capabilities
 - `netclaw-tools`: Tool schemas gain injected meta fields; `ToolAuditEntry`
   gains `Rationale` and `TimeoutHintSeconds`; `ToolConfig` gains
-  `MaxToolTimeoutSeconds` and `BackgroundThresholdSeconds`.
+  `MaxToolTimeoutSeconds`.
 - `netclaw-session`: Compaction rendering of tool calls changes from raw
   `[Called tool: name(args)]` to rationale-based `→ name: "rationale"` format.
   `SerializableToolCall` gains a `MetaJson` protobuf field.
@@ -59,7 +58,7 @@ timeout hint without changing any tool implementation.
   fields in tool schemas add ~60 tokens per tool definition in the system
   prompt.
 - **Config schema**: `netclaw-config.v1.schema.json` gains
-  `MaxToolTimeoutSeconds` and `BackgroundThresholdSeconds` under `tools`.
+  `MaxToolTimeoutSeconds` under `tools`.
 - **Security**: No audience changes. Meta fields are pure metadata with no
   privilege implications. Timeout ceiling prevents resource abuse.
 - **Dependencies**: None — uses existing MEAI, protobuf-net, and source

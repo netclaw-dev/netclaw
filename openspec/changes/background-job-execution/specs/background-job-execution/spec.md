@@ -5,14 +5,17 @@
 The system SHALL provide a `BackgroundJobManagerActor` as an infrastructure-
 level singleton registered at daemon startup. The manager SHALL own background
 job lifecycle independently of any session. Job definitions SHALL be persisted
-to disk at `~/.netclaw/jobs/{id}.json`. The manager SHALL enforce a
-configurable concurrency limit (default 5) and queue overflow in FIFO order.
+to disk at `~/.netclaw/jobs/{id}.json` for reconciliation and diagnostics. The
+manager SHALL enforce a configurable concurrency limit (default 5) and queue
+overflow in FIFO order. Persistence of job definitions SHALL NOT guarantee
+durable execution continuity across daemon restart.
 
 #### Scenario: Manager registered at startup
 
 - **WHEN** the Netclaw daemon starts
 - **THEN** `BackgroundJobManagerActor` is registered as a singleton actor
-- **AND** it reconciles persisted job definitions against running processes
+- **AND** it performs a best-effort reconciliation pass over persisted job
+  definitions
 
 #### Scenario: Concurrency limit enforced
 
@@ -28,7 +31,17 @@ configurable concurrency limit (default 5) and queue overflow in FIFO order.
 - **WHEN** the manager reconciles on startup
 - **THEN** the job is marked as failed with reason "process lost during
   restart"
-- **AND** the result is delivered to the originating session
+- **AND** the system records enough state for diagnostics and MAY deliver a
+  reconciliation result to the originating session
+
+#### Scenario: In-flight job may need relaunch after restart
+
+- **GIVEN** a background job was running when the daemon restarted or went down
+- **WHEN** the daemon starts and reconciliation runs
+- **THEN** the system makes a best-effort attempt to reconcile the persisted
+  job record
+- **AND** the in-flight job is not guaranteed to resume or complete
+- **AND** the user or agent may need to relaunch the job
 
 ### Requirement: Background job execution
 
@@ -36,8 +49,10 @@ The system SHALL spawn a `BackgroundJobExecutionActor` child of the manager
 for each background job. The execution actor SHALL start the process, capture
 stdout/stderr to `~/.netclaw/jobs/{id}/output.log`, and monitor for process
 exit. On process exit, the actor SHALL deliver the result to the originating
-session via `DeliverTrustedSessionTurn`. On timeout, the actor SHALL kill the
-entire process tree.
+session via `DeliverTrustedSessionTurn`. This trusted delivery SHALL be an
+intentional parity decision with normal synchronous shell tool results, not a
+trust escalation beyond the original tool execution. On timeout, the actor
+SHALL kill the entire process tree.
 
 #### Scenario: Process started and monitored
 
@@ -80,27 +95,89 @@ entire process tree.
 - **THEN** the session rehydrates from the Akka Persistence journal
 - **AND** processes the result turn
 
+#### Scenario: Trusted delivery preserves synchronous shell parity
+
+- **GIVEN** a background job was started from an approved `shell_execute` call
+- **WHEN** the job completes
+- **THEN** the completion is delivered as a trusted turn
+- **AND** that trust matches the trust level of the same shell result if it had
+  completed synchronously
+- **AND** no broader trust is granted than the persisted originating
+  audience/boundary
+
 ### Requirement: Pipeline routing to background execution
 
-`SessionToolExecutionPipeline` SHALL route tool calls to background execution
-when `ToolCallMeta.Background` is true or `ToolCallMeta.TimeoutHintSeconds`
-exceeds `ToolConfig.BackgroundThresholdSeconds`. Background routing SHALL only
-apply to `shell_execute` tool calls. For non-shell tools, background signals
-SHALL be logged and ignored (synchronous execution proceeds).
+`SessionToolExecutionPipeline` SHALL evaluate ACL grants and approval policy in
+the normal session-owned tool execution path before creating any
+`StartBackgroundJob` command or handing a call to `BackgroundJobManagerActor`.
+When `ToolCallMeta.Background` is true, the pipeline SHALL route the call to
+background execution only after `shell_execute` has passed ACL checks and any
+required approval has been granted. Denied, timed-out, or otherwise unapproved
+calls SHALL create no background job, SHALL persist no job definition, and
+SHALL NOT be handed to `BackgroundJobManagerActor`.
+Background routing SHALL only apply to `shell_execute` tool calls. For
+non-shell tools, background signals SHALL be logged and ignored (synchronous
+execution proceeds).
 
-#### Scenario: Timeout threshold triggers background
+#### Scenario: Timeout hint alone remains synchronous
 
-- **GIVEN** `BackgroundThresholdSeconds` is 180
-- **AND** the LLM calls `shell_execute` with `_timeout_seconds: 300`
+- **GIVEN** the LLM calls `shell_execute` with `_timeout_seconds: 300`
+- **AND** `_background` is absent or false
+- **AND** the session ACL allows `shell_execute`
+- **AND** any required approval has already been granted
 - **WHEN** the pipeline processes the tool call
-- **THEN** the call is routed to `BackgroundJobManagerActor`
-- **AND** the tool result returned to the LLM is a job handle
+- **THEN** the call executes synchronously with the requested timeout hint
+- **AND** no background job is created
 
 #### Scenario: Explicit background flag triggers background
 
 - **GIVEN** the LLM calls `shell_execute` with `_background: true`
+- **AND** the session ACL allows `shell_execute`
+- **AND** any required approval has already been granted
 - **WHEN** the pipeline processes the tool call
 - **THEN** the call is routed to `BackgroundJobManagerActor`
+- **AND** the tool result returned to the LLM is a job handle
+
+#### Scenario: Approval is required before StartBackgroundJob
+
+- **GIVEN** the LLM calls `shell_execute` with `_background: true`
+- **AND** the session ACL allows `shell_execute`
+- **AND** `shell_execute` requires approval for the active audience
+- **WHEN** the pipeline processes the tool call
+- **THEN** the call remains in the session-owned approval path until approval is
+  resolved
+- **AND** no `StartBackgroundJob` command is created before approval succeeds
+
+#### Scenario: Denied approval creates no background job
+
+- **GIVEN** the LLM calls `shell_execute` with `_background: true`
+- **AND** the session ACL allows `shell_execute`
+- **AND** `shell_execute` requires approval for the active audience
+- **WHEN** the user denies the approval request
+- **THEN** the tool returns a denial result
+- **AND** no background job is created
+- **AND** no job definition is persisted
+- **AND** nothing is handed to `BackgroundJobManagerActor`
+
+#### Scenario: Approval timeout creates no background job
+
+- **GIVEN** the LLM calls `shell_execute` with `_background: true`
+- **AND** the session ACL allows `shell_execute`
+- **AND** `shell_execute` requires approval for the active audience
+- **WHEN** the approval request times out
+- **THEN** the tool returns an approval-timeout result
+- **AND** no background job is created
+- **AND** no job definition is persisted
+- **AND** nothing is handed to `BackgroundJobManagerActor`
+
+#### Scenario: Only approved calls may be handed to BackgroundJobManagerActor
+
+- **GIVEN** the LLM calls `shell_execute` with `_background: true`
+- **AND** the session ACL allows `shell_execute`
+- **AND** `shell_execute` requires approval for the active audience
+- **WHEN** the user approves the request
+- **THEN** the pipeline creates `StartBackgroundJob`
+- **AND** the approved call is handed to `BackgroundJobManagerActor`
 - **AND** the tool result returned to the LLM is a job handle
 
 #### Scenario: Non-shell tool ignores background signal
@@ -146,13 +223,24 @@ working context or system prompt SHALL surface pending jobs to the LLM.
 
 ### Requirement: check_background_job tool
 
-The system SHALL provide a `check_background_job` tool in the "shell" grant
-category. The tool SHALL accept a `JobId` parameter and an optional
-`Cancel` boolean parameter. When `Cancel` is false or absent, the tool SHALL
-return job status (running, completed, failed, cancelled, timed_out), output
-tail (last N characters if still running, full truncated result if complete),
-and the output file path. When `Cancel` is true, the tool SHALL kill the
-process tree and mark the job as cancelled.
+The system SHALL provide a `check_background_job` tool only when shell
+execution is available. The tool SHALL use the `shell` grant category and SHALL
+accept a `JobId` parameter and an optional `Cancel` boolean parameter. When
+`Cancel` is false or absent, the tool SHALL return job status (running,
+completed, failed, cancelled, timed_out), output tail (last N characters if
+still running, full truncated result if complete), and the output file path.
+Job lookup, status read, and cancellation SHALL be restricted to the
+originating session and the persisted originating audience/boundary captured at
+job start. When `Cancel` is true, the tool SHALL kill the process tree and mark
+the job as cancelled. If the job ID is unknown, or if the caller's
+session/audience/boundary does not match the persisted originating values for
+that job, the tool SHALL return the same generic `job not found` result.
+
+#### Scenario: Job tool unavailable without shell execution
+
+- **GIVEN** shell execution is not available to the session
+- **WHEN** tool definitions are built for the LLM
+- **THEN** `check_background_job` is not included in the available tool surface
 
 #### Scenario: Check running job status
 
@@ -182,11 +270,21 @@ process tree and mark the job as cancelled.
 - **WHEN** the LLM calls `check_background_job`
 - **THEN** the tool returns an error indicating the job was not found
 
+#### Scenario: Session mismatch is indistinguishable from unknown job
+
+- **GIVEN** a background job exists for a different originating session or a
+  different persisted originating audience/boundary
+- **WHEN** the LLM calls `check_background_job` with that job ID
+- **THEN** the tool returns the same generic `job not found` result used for an
+  unknown job ID
+
 ### Requirement: Job delivery carries originating audience
 
 Background job results delivered via `DeliverTrustedSessionTurn` SHALL carry
 the originating session's `TrustAudience` and trust boundary. The job
-definition SHALL persist these values at creation time.
+definition SHALL persist these values at creation time. Trusted delivery SHALL
+be scoped to that originating session and persisted originating
+audience/boundary only.
 
 #### Scenario: Job delivery uses originating audience
 
@@ -194,6 +292,15 @@ definition SHALL persist these values at creation time.
 - **WHEN** the job completes and delivers results
 - **THEN** `DeliverTrustedSessionTurn` carries `TrustAudience.Personal`
 - **AND** the session processes the turn with Personal-level grants
+
+#### Scenario: Trusted delivery remains scoped to originating boundary
+
+- **GIVEN** a background job was started with a specific originating trust
+  boundary
+- **WHEN** the job completes and delivers results
+- **THEN** the delivery uses that persisted originating trust boundary
+- **AND** the result is not delivered with a broader boundary than the one
+  stored at job creation time
 
 ### Requirement: Job deduplication
 
