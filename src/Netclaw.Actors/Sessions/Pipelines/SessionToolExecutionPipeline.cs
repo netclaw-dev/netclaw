@@ -135,7 +135,7 @@ internal static class SessionToolExecutionPipeline
 
         if (meta is { Background: true })
         {
-            if (!string.Equals(tc.Name, "shell_execute", StringComparison.Ordinal))
+            if (!string.Equals(tc.Name, Tools.ShellTool.ToolName, StringComparison.Ordinal))
             {
                 logger?.LogWarning(
                     "Tool {ToolName} (call {CallId}) requested background execution — " +

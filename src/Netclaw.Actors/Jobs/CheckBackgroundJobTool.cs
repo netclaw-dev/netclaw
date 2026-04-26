@@ -66,7 +66,7 @@ public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackground
             result += $"\nExit code: {response.ExitCode}";
 
         if (!string.IsNullOrEmpty(response.OutputTail))
-            result += $"\nOutput (last {Math.Min(response.OutputTail.Length, 2000)} chars):\n```\n{response.OutputTail}\n```";
+            result += $"\nOutput (last {Math.Min(response.OutputTail.Length, BackgroundJobManagerActor.MaxOutputTailChars)} chars):\n```\n{response.OutputTail}\n```";
 
         if (!string.IsNullOrEmpty(response.OutputFilePath))
             result += $"\nFull output: {response.OutputFilePath}";

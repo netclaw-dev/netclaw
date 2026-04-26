@@ -16,6 +16,10 @@ namespace Netclaw.Actors.Jobs;
 public sealed class BackgroundJobManagerActor : ReceiveActor
 {
     internal const int MaxConcurrentJobs = 5;
+    internal const int MaxOutputTailChars = 2000;
+    internal const string JobDeliveryKeyPrefix = "bg-job:";
+    internal const string SystemSenderId = "background-job-system";
+    internal const string SourceKind = "background-job";
     private static readonly TimeSpan DefaultAckTimeout = TimeSpan.FromSeconds(30);
 
     private readonly BackgroundJobDefinitionStore _store;
@@ -96,6 +100,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         }
 
         DeliverResultToSession(completed, def);
+        _definitions.Remove(completed.JobId.Value);
         DispatchDeferred();
     }
 
@@ -139,19 +144,21 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             return;
         }
 
-        var outputFilePath = _store.GetOutputLogPath(query.JobId);
+        var outputFilePath = _store.GetOutputLogPathOnly(query.JobId);
         string? outputTail = null;
-        if (File.Exists(outputFilePath))
+        var outputFileExists = false;
+        try
         {
-            try
-            {
-                var text = File.ReadAllText(outputFilePath);
-                outputTail = text.Length > 2000 ? text[^2000..] : text;
-            }
-            catch
-            {
-                // Ignore read errors
-            }
+            var text = File.ReadAllText(outputFilePath);
+            outputFileExists = true;
+            outputTail = text.Length > MaxOutputTailChars ? text[^MaxOutputTailChars..] : text;
+        }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
+        catch (Exception ex)
+        {
+            _log.Warning("Failed to read output log for job {JobId}: {Error}",
+                query.JobId.Value, ex.Message);
         }
 
         var elapsed = def.CompletedAtMs is not null
@@ -166,7 +173,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             Found = true,
             ExitCode = def.ExitCode,
             OutputTail = outputTail,
-            OutputFilePath = File.Exists(outputFilePath) ? outputFilePath : null,
+            OutputFilePath = outputFileExists ? outputFilePath : null,
             Elapsed = elapsed,
             Rationale = def.Rationale
         });
@@ -205,7 +212,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         var outputLogPath = _store.GetOutputLogPath(new BackgroundJobId(definition.Id));
         var props = DependencyResolver.For(Context.System)
-            .Props<BackgroundJobExecutionActor>(definition, outputLogPath);
+            .Props<BackgroundJobExecutionActor>(definition, outputLogPath, _timeProvider);
         Context.ActorOf(props, $"job-{definition.Id}");
     }
 
@@ -228,13 +235,13 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         var sessionId = new SessionId(def.SessionId);
         var originChannelType = def.OriginChannelType;
 
-        var jobDeliveryKey = $"bg-job:{def.Id}";
+        var jobDeliveryKey = $"{JobDeliveryKeyPrefix}{def.Id}";
         var content = BuildResultContent(completed, def);
 
         var source = new MessageSource
         {
             ChannelType = originChannelType,
-            SenderId = "background-job-system",
+            SenderId = SystemSenderId,
             MessageId = jobDeliveryKey,
             TurnId = jobDeliveryKey,
             Audience = def.Audience,
@@ -244,7 +251,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             {
                 TransportAuthenticity = TransportAuthenticity.LocalProcess,
                 PayloadTaint = PayloadTaint.Trusted,
-                SourceKind = "background-job"
+                SourceKind = SourceKind
             },
             ReceivedAt = _timeProvider.GetUtcNow(),
             BackgroundJobId = jobDeliveryKey
@@ -295,7 +302,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         };
 
         var output = !string.IsNullOrEmpty(completed.OutputTail)
-            ? $"\n\nOutput (last {Math.Min(completed.OutputTail.Length, 2000)} chars):\n```\n{completed.OutputTail}\n```"
+            ? $"\n\nOutput (last {Math.Min(completed.OutputTail.Length, MaxOutputTailChars)} chars):\n```\n{completed.OutputTail}\n```"
             : "\n\n(no output captured)";
 
         var filePath = !string.IsNullOrEmpty(completed.OutputFilePath)

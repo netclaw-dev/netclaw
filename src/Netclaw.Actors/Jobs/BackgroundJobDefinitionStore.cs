@@ -110,6 +110,12 @@ public sealed class BackgroundJobDefinitionStore
     public string GetOutputLogPath(BackgroundJobId id) =>
         Path.Combine(GetOutputDirectory(id), "output.log");
 
+    /// <summary>
+    /// Returns the output log path without creating any directories.
+    /// </summary>
+    public string GetOutputLogPathOnly(BackgroundJobId id) =>
+        Path.Combine(_directory, Uri.EscapeDataString(id.Value), "output.log");
+
     private string GetPath(BackgroundJobId id)
     {
         var encoded = Uri.EscapeDataString(id.Value);

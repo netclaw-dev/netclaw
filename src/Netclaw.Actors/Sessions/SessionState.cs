@@ -276,7 +276,7 @@ public sealed record SessionState
     {
         var activeJobs = snapshot.ActiveBackgroundJobs.Count > 0
             ? snapshot.ActiveBackgroundJobs.ToImmutableDictionary(
-                j => $"bg-job:{j.JobId}", j => j)
+                j => $"{Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix}{j.JobId}", j => j)
             : ImmutableDictionary<string, ActiveJobInfo>.Empty;
 
         return new SessionState

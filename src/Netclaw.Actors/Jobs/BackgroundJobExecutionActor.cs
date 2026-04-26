@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using Akka.Actor;
 using Akka.Event;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Jobs;
 
@@ -13,16 +14,19 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 {
     private readonly BackgroundJobDefinition _definition;
     private readonly string _outputLogPath;
+    private readonly TimeProvider _timeProvider;
     private readonly ILoggingAdapter _log;
     private Process? _process;
     private ICancelable? _timeoutHandle;
 
     public BackgroundJobExecutionActor(
         BackgroundJobDefinition definition,
-        string outputLogPath)
+        string outputLogPath,
+        TimeProvider timeProvider)
     {
         _definition = definition;
         _outputLogPath = outputLogPath;
+        _timeProvider = timeProvider;
         _log = Context.GetLogger();
 
         Receive<CancelBackgroundJob>(_ => HandleCancel());
@@ -93,7 +97,6 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
                 Self, TimeoutTick.Instance, ActorRefs.NoSender);
         }
 
-        // Capture output asynchronously and report when process exits
         var self = Self;
         var process = _process;
         Task.Run(async () =>
@@ -116,16 +119,18 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
                     outputBuilder.Append(stderr);
                 }
 
+                var fullOutput = SecretOutputRedactor.Redact(outputBuilder.ToString());
+
                 try
                 {
-                    await File.WriteAllTextAsync(_outputLogPath, outputBuilder.ToString());
+                    await File.WriteAllTextAsync(_outputLogPath, fullOutput);
                 }
                 catch
                 {
-                    // Best-effort output capture
+                    // Best-effort file write — output still delivered via message
                 }
 
-                self.Tell(new ProcessExited(process.ExitCode, outputBuilder.ToString()));
+                self.Tell(new ProcessExited(process.ExitCode, fullOutput));
             }
             catch (Exception ex)
             {
@@ -184,7 +189,9 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
     private void ReportCompletion(BackgroundJobStatus status, int exitCode, string? output)
     {
-        var outputTail = output is { Length: > 2000 } ? output[^2000..] : output;
+        var outputTail = output is { Length: > BackgroundJobManagerActor.MaxOutputTailChars }
+            ? output[^BackgroundJobManagerActor.MaxOutputTailChars..]
+            : output;
 
         Context.Parent.Tell(new BackgroundJobCompleted
         {
@@ -193,7 +200,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             ExitCode = exitCode,
             OutputTail = outputTail,
             OutputFilePath = _outputLogPath,
-            Duration = DateTimeOffset.UtcNow - _definition.StartedAt
+            Duration = _timeProvider.GetUtcNow() - _definition.StartedAt
         });
 
         Context.Stop(Self);
