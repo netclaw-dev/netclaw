@@ -79,6 +79,18 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
         Assert.Contains("not found", result);
     }
 
+    [Fact]
+    public async Task Cancel_InaccessibleJob_ReturnsError()
+    {
+        var fakeManager = Sys.ActorOf(Props.Create(() => new FakeCancelManager(ActorRefs.Nobody, found: false)));
+
+        var tool = new CheckBackgroundJobTool(fakeManager);
+        var args = new Dictionary<string, object?> { ["JobId"] = "abc123", ["Cancel"] = true };
+        var result = await tool.ExecuteAsync(args, MakeContext(), TestContext.Current.CancellationToken);
+
+        Assert.Contains("not found", result);
+    }
+
     private sealed class FakeQueryManager : ReceiveActor
     {
         public FakeQueryManager(BackgroundJobStatusResponse response)
@@ -89,9 +101,13 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
 
     private sealed class FakeCancelManager : ReceiveActor
     {
-        public FakeCancelManager(IActorRef probe)
+        public FakeCancelManager(IActorRef probe, bool found = true)
         {
-            Receive<CancelBackgroundJob>(cmd => probe.Forward(cmd));
+            Receive<CancelBackgroundJob>(cmd =>
+            {
+                probe.Forward(cmd);
+                Sender.Tell(new BackgroundJobCancelResponse(cmd.JobId, found));
+            });
         }
     }
 }

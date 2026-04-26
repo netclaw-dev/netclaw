@@ -82,7 +82,11 @@ public class BackgroundJobExecutionActorTests : TestKit
         var probe = CreateTestProbe("parent");
         var actor = SpawnExecution(definition, probe);
 
-        actor.Tell(new CancelBackgroundJob(new BackgroundJobId(definition.Id)));
+        actor.Tell(new CancelBackgroundJob(
+            new BackgroundJobId(definition.Id),
+            new Netclaw.Actors.Protocol.SessionId(definition.SessionId),
+            definition.Audience,
+            definition.Boundary));
 
         var completed = await probe.ExpectMsgAsync<BackgroundJobCompleted>(
             TimeSpan.FromSeconds(10),

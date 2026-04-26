@@ -130,6 +130,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     {
         private int _attempt;
 
+        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
         public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
         {
             _attempt++;

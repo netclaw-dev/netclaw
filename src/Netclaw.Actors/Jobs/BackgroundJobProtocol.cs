@@ -31,6 +31,7 @@ public enum BackgroundJobStatus
 public sealed record StartBackgroundJob
 {
     public required string Command { get; init; }
+    public string? WorkingDirectory { get; init; }
     public required Protocol.SessionId SessionId { get; init; }
     public required string Rationale { get; init; }
     public required TrustAudience Audience { get; init; }
@@ -43,7 +44,11 @@ public sealed record StartBackgroundJob
 /// <summary>
 /// Request to cancel a running background job.
 /// </summary>
-public sealed record CancelBackgroundJob(BackgroundJobId JobId);
+public sealed record CancelBackgroundJob(
+    BackgroundJobId JobId,
+    Protocol.SessionId SessionId,
+    TrustAudience Audience,
+    string Boundary);
 
 /// <summary>
 /// Query for current status of a background job.
@@ -72,6 +77,8 @@ public sealed record BackgroundJobStatusResponse
     public string? Rationale { get; init; }
 }
 
+public sealed record BackgroundJobCancelResponse(BackgroundJobId JobId, bool Found);
+
 // ── Internal messages ──
 
 /// <summary>
@@ -96,6 +103,7 @@ public sealed record BackgroundJobDefinition
 {
     public required string Id { get; init; }
     public required string Command { get; init; }
+    public string? WorkingDirectory { get; init; }
     public required string SessionId { get; init; }
     public required string Rationale { get; init; }
     public BackgroundJobStatus Status { get; init; } = BackgroundJobStatus.Pending;

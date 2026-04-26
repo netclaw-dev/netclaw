@@ -10,6 +10,8 @@ namespace Netclaw.Actors.Tools;
 public interface IToolExecutor
 {
     Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default);
+
+    Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default);
 }
 
 /// <summary>

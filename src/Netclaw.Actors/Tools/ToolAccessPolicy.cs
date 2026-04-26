@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -13,20 +14,27 @@ public sealed class ToolAccessPolicy
     private readonly EffectivePolicyDefaults _defaults;
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly ShellCommandPolicy? _shellCommandPolicy;
+    private readonly ToolPathPolicy? _toolPathPolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
 
     public ToolAccessPolicy(
         ToolConfig toolConfig,
         EffectivePolicyDefaults defaults,
         ShellCommandPolicy? shellCommandPolicy = null,
-        IToolApprovalMatcher? fileApprovalMatcher = null)
+        IToolApprovalMatcher? fileApprovalMatcher = null,
+        ToolPathPolicy? toolPathPolicy = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
         _shellCommandPolicy = shellCommandPolicy;
+        _toolPathPolicy = toolPathPolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
     }
+
+    public int MaxToolTimeoutSeconds => _toolConfig.MaxToolTimeoutSeconds;
+
+    public int ShellTimeoutSeconds => _toolConfig.ShellTimeoutSeconds;
 
     public IReadOnlyList<AITool> FilterExposedTools(
         IEnumerable<AITool> tools,
@@ -64,7 +72,7 @@ public sealed class ToolAccessPolicy
         if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), CreateContext(audience)))
             return false;
 
-        if (IsShellTool(tool))
+        if (IsShellCoupledTool(tool))
             return ResolveShellMode() == ShellExecutionMode.HostAllowed && audience == TrustAudience.Personal;
 
         return true;
@@ -95,7 +103,7 @@ public sealed class ToolAccessPolicy
         if (!_profileResolver.IsToolAllowed(toolName, context))
             return ToolAccessDecision.Deny("tool_not_allowed_for_audience_profile");
 
-        if (!IsShellTool(tool))
+        if (!IsShellCoupledTool(tool))
             return CheckApprovalGate(toolName, context, arguments, SelectMatcherForTool(toolName));
 
         var shellMode = ResolveShellMode();
@@ -117,6 +125,11 @@ public sealed class ToolAccessPolicy
                 return ToolAccessDecision.Deny($"hard_deny_{hardDenyDecision.DenyCategory ?? "unknown"}");
         }
 
+        var workingDirectory = ExtractWorkingDirectory(arguments);
+        if (shellCommand is not null
+            && _toolPathPolicy?.CommandReferencesDeniedPath(shellCommand, workingDirectory) == true)
+            return ToolAccessDecision.Deny("shell_references_protected_path");
+
         return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
     }
 
@@ -132,6 +145,14 @@ public sealed class ToolAccessPolicy
             return lowerText;
 
         return null;
+    }
+
+    private static string? ExtractWorkingDirectory(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+            return null;
+
+        return ToolArgumentHelper.GetString(arguments, "WorkingDirectory");
     }
 
     private ToolAccessDecision CheckApprovalGate(
@@ -253,6 +274,10 @@ public sealed class ToolAccessPolicy
 
     private static bool IsShellTool(INetclawTool tool)
         => string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal);
+
+    private static bool IsShellCoupledTool(INetclawTool tool)
+        => IsShellTool(tool)
+           || string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal);
 
     private static string? GetToolName(AITool tool)
         => tool is AIFunction function ? function.Name : null;

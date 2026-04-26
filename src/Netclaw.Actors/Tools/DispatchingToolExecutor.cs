@@ -46,11 +46,50 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
     public async Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
     {
+        if (_registry.GetByName(toolCall.Name) is null)
+        {
+            _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
+            return $"Unknown tool: {toolCall.Name}";
+        }
+
+        var tool = await AuthorizeCoreAsync(toolCall, context, ct);
+
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var result = context is not null
+                ? await tool.ExecuteAsync(toolCall.Arguments, context, ct)
+                : await tool.ExecuteAsync(toolCall.Arguments, ct);
+
+            sw.Stop();
+            _logger.LogInformation(
+                "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
+                toolCall.Name, sw.ElapsedMilliseconds, result.Length);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            _logger.LogError(ex,
+                "Tool execution failed: {ToolName} ({Duration}ms)",
+                toolCall.Name, sw.ElapsedMilliseconds);
+            throw;
+        }
+    }
+
+    public async Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+    {
+        _ = await AuthorizeCoreAsync(toolCall, context, ct);
+    }
+
+    private async Task<INetclawTool> AuthorizeCoreAsync(FunctionCallContent toolCall, ToolExecutionContext? context, CancellationToken ct)
+    {
         var tool = _registry.GetByName(toolCall.Name);
         if (tool is null)
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
-            return $"Unknown tool: {toolCall.Name}";
+            throw new ToolAccessDeniedException("tool_not_found");
         }
 
         var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
@@ -69,18 +108,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 approvalContext.UnapprovedPatterns,
                 ct);
 
-            if (unapproved.Count == 0)
-            {
-                accessDecision = ToolAccessDecision.Allow();
-            }
-            else
-            {
-                accessDecision = ToolAccessDecision.RequiresApproval(new ToolApprovalContext(
+            accessDecision = unapproved.Count == 0
+                ? ToolAccessDecision.Allow()
+                : ToolAccessDecision.RequiresApproval(new ToolApprovalContext(
                     approvalContext.ToolName,
                     approvalContext.DisplayText,
                     unapproved,
                     approvalContext.Options));
-            }
         }
 
         if (accessDecision.NeedsApproval
@@ -106,28 +140,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             throw new ToolAccessDeniedException(accessDecision.DenyReason ?? "tool_denied");
         }
 
-        var sw = Stopwatch.StartNew();
-        try
-        {
-            var result = context is not null
-                ? await tool.ExecuteAsync(toolCall.Arguments, context, ct)
-                : await tool.ExecuteAsync(toolCall.Arguments, ct);
-
-            sw.Stop();
-            _logger.LogInformation(
-                "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
-                toolCall.Name, sw.ElapsedMilliseconds, result.Length);
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            sw.Stop();
-            _logger.LogError(ex,
-                "Tool execution failed: {ToolName} ({Duration}ms)",
-                toolCall.Name, sw.ElapsedMilliseconds);
-            throw;
-        }
+        return tool;
     }
 
     private static bool IsOneTimeApprovalSatisfied(

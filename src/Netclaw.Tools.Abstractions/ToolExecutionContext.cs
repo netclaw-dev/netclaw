@@ -62,6 +62,12 @@ public sealed class ToolExecutionContext
 
     public string? Boundary { get; set; }
 
+    /// <summary>
+    /// Per-call timeout requested by the LLM after pipeline clamping.
+    /// Tools that have their own internal timeout should honor this when set.
+    /// </summary>
+    public int? RequestedTimeoutSeconds { get; set; }
+
     public string? ChannelType { get; set; }
 
     /// <summary>

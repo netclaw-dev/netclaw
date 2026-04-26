@@ -377,6 +377,14 @@ internal sealed class FakeToolExecutor : IToolExecutor
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = new();
 
+    public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
+    {
+        if (FailForTools.Contains(toolCall.Name))
+            throw new InvalidOperationException($"Tool '{toolCall.Name}' failed (simulated)");
+
+        return Task.CompletedTask;
+    }
+
     public Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);

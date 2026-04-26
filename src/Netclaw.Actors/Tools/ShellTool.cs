@@ -34,6 +34,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
@@ -73,7 +76,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         if (!string.IsNullOrWhiteSpace(args.WorkingDirectory))
             psi.WorkingDirectory = args.WorkingDirectory;
 
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.ShellTimeoutSeconds));
+        var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
+            ? context.RequestedTimeoutSeconds.Value
+            : _config.ShellTimeoutSeconds;
+
+        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         Process process;
@@ -114,7 +121,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     // Process already exited between timeout detection and kill — expected TOCTOU race
                     System.Diagnostics.Debug.WriteLine("Process already exited during timeout cleanup");
                 }
-                return $"Error: Command timed out after {_config.ShellTimeoutSeconds} seconds.";
+                return $"Error: Command timed out after {effectiveTimeoutSeconds} seconds.";
             }
 
             var result = new StringBuilder();

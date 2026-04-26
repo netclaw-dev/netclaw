@@ -60,6 +60,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         {
             Id = jobId.Value,
             Command = cmd.Command,
+            WorkingDirectory = cmd.WorkingDirectory,
             SessionId = cmd.SessionId.Value,
             Rationale = cmd.Rationale,
             Status = BackgroundJobStatus.Pending,
@@ -110,14 +111,26 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     private void HandleCancel(CancelBackgroundJob cmd)
     {
+        if (!_definitions.TryGetValue(cmd.JobId.Value, out var def))
+            def = _store.Get(cmd.JobId);
+
+        if (def is null
+            || def.SessionId != cmd.SessionId.Value
+            || def.Audience != cmd.Audience
+            || def.Boundary != cmd.Boundary)
+        {
+            Sender.Tell(new BackgroundJobCancelResponse(cmd.JobId, false));
+            return;
+        }
+
         var childName = $"job-{cmd.JobId.Value}";
         var child = Context.Child(childName);
         if (!child.IsNobody())
         {
             child.Tell(cmd);
+            Sender.Tell(new BackgroundJobCancelResponse(cmd.JobId, true));
         }
-        else if (_definitions.TryGetValue(cmd.JobId.Value, out var def)
-                 && def.Status is BackgroundJobStatus.Pending)
+        else if (def.Status is BackgroundJobStatus.Pending)
         {
             var updated = def with
             {
@@ -126,6 +139,11 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             };
             _definitions[cmd.JobId.Value] = updated;
             _store.Save(updated);
+            Sender.Tell(new BackgroundJobCancelResponse(cmd.JobId, true));
+        }
+        else
+        {
+            Sender.Tell(new BackgroundJobCancelResponse(cmd.JobId, true));
         }
     }
 
@@ -325,6 +343,9 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         return $"[Background job {def.Id} {statusLabel}]\n" +
                $"Command: {def.Command}\n" +
+               (!string.IsNullOrWhiteSpace(def.WorkingDirectory)
+                   ? $"Working directory: {def.WorkingDirectory}\n"
+                   : string.Empty) +
                $"Rationale: {def.Rationale}\n" +
                $"Duration: {completed.Duration.TotalSeconds:F1}s" +
                output + filePath;

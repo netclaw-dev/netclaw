@@ -1,6 +1,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -47,6 +48,21 @@ public class ShellToolTests
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("timed out", result);
+    }
+
+    [Fact]
+    public async Task Requested_timeout_overrides_default_timeout()
+    {
+        var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 1 });
+        var args = new Dictionary<string, object?> { ["Command"] = "sleep 2" };
+        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        {
+            RequestedTimeoutSeconds = 3
+        };
+
+        var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.Contains("Exit code: 0", result);
     }
 
     [Fact]

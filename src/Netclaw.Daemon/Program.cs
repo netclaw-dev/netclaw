@@ -609,7 +609,8 @@ static void ConfigureDaemonServices(
         toolConfig,
         effectivePolicyDefaults,
         shellCommandPolicy,
-        fileApprovalMatcher);
+        fileApprovalMatcher,
+        toolPathPolicy);
     services.AddSingleton(toolAccessPolicy);
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);

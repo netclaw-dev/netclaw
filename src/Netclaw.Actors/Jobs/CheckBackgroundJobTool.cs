@@ -11,6 +11,7 @@ namespace Netclaw.Actors.Jobs;
     Grant = "shell")]
 public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackgroundJobTool.Params>
 {
+    public const string ToolName = "check_background_job";
     private static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(15);
 
     private readonly IActorRef _jobManager;
@@ -35,18 +36,21 @@ public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackground
             return "Error: job_id is required.";
 
         var jobId = new BackgroundJobId(args.JobId);
-
-        if (args.Cancel)
-        {
-            _jobManager.Tell(new CancelBackgroundJob(jobId));
-            return $"Cancellation request sent for job {args.JobId}.";
-        }
-
         var sessionId = context.SessionId ?? "";
         var audience = TrustAudience.Personal;
         if (!string.IsNullOrEmpty(context.Audience))
             Enum.TryParse(context.Audience, true, out audience);
         var boundary = context.Boundary ?? SecurityPolicyDefaults.PersonalBoundary;
+
+        if (args.Cancel)
+        {
+            var cancel = await _jobManager.Ask<BackgroundJobCancelResponse>(
+                new CancelBackgroundJob(jobId, new SessionId(sessionId), audience, boundary),
+                AskTimeout, ct);
+            return cancel.Found
+                ? $"Cancellation request sent for job {args.JobId}."
+                : $"Error: job {args.JobId} not found or not accessible from this session.";
+        }
 
         var response = await _jobManager.Ask<BackgroundJobStatusResponse>(
             new QueryBackgroundJob(jobId, new SessionId(sessionId), audience, boundary),
