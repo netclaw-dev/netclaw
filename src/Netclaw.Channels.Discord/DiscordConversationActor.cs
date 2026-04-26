@@ -15,6 +15,8 @@ namespace Netclaw.Channels.Discord;
 /// </summary>
 internal sealed class DiscordConversationActor : ReceiveActor
 {
+    private const int MaxInboundTextLength = 4000;
+
     private readonly DiscordChannelId _channelId;
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly string? _botMentionTag;
@@ -84,6 +86,8 @@ internal sealed class DiscordConversationActor : ReceiveActor
         {
             _log.Info("discord_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
             ChannelTelemetry.RecordDiscordEventFiltered("restart_drain_active");
+            // Safe fire-and-forget: PostIngressClosedReplyAsync wraps everything in try/catch,
+            // and no synchronous code precedes the first await, so exceptions cannot escape.
             _ = PostIngressClosedReplyAsync(message.ReplyChannelId, closedReason);
             return;
         }
@@ -122,6 +126,12 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
         // --- Empty text filter ---
         var normalizedText = NormalizeInboundText(message.Text);
+        if (normalizedText.Length > MaxInboundTextLength)
+        {
+            _log.Warning("discord_inbound_text_truncated original={OriginalLength} clamped={MaxLength}",
+                normalizedText.Length, MaxInboundTextLength);
+            normalizedText = normalizedText[..MaxInboundTextLength];
+        }
         var hasAttachments = message.Attachments is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(normalizedText) && !hasAttachments)
         {

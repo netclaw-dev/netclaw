@@ -142,7 +142,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
     }
 
     [Fact]
-    public async Task Gateway_accepts_messages_with_empty_event_id()
+    public async Task Gateway_rejects_messages_with_empty_event_id()
     {
         var sink = CreateTestProbe("discord-sink-empty-eid");
         var deps = CreateDependencies(
@@ -160,7 +160,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             senderId: "u-1",
             text: "no event id"));
 
-        await sink.ExpectMsgAsync<DiscordGatewayMessage>(cancellationToken: TestContext.Current.CancellationToken);
+        await sink.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
     }
 
     [Fact]

@@ -119,5 +119,6 @@ public sealed class UnconfiguredDiscordReplyClient : IDiscordReplyClient
             "Discord channel attempted outbound delivery, but no Discord reply client is configured.");
 
     public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
+        => throw new InvalidOperationException(
+            "Discord channel attempted to set thread name, but no Discord reply client is configured.");
 }

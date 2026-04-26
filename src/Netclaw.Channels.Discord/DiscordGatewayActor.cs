@@ -110,7 +110,10 @@ public sealed class DiscordGatewayActor : ReceiveActor
     private bool TryMarkEventProcessed(DiscordEventId eventId)
     {
         if (string.IsNullOrWhiteSpace(eventId.Value))
-            return true;
+        {
+            _log.Warning("Rejecting Discord event with empty EventId — cannot deduplicate");
+            return false;
+        }
 
         if (!_processedEventIds.TryAdd(eventId, 0))
             return false;

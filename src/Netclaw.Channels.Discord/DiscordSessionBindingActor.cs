@@ -30,6 +30,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         ":warning: I couldn't safely analyze your message — please try again in a moment.";
     private const string WrongRequesterWarning =
         ":warning: Only the requesting user can approve this tool action.";
+    private const string BackfillDetectorWarning =
+        ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
 
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
@@ -209,6 +211,13 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private async Task HandleInboundAsync(DiscordThreadInbound message)
     {
+        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+        {
+            _log.Info("Rejecting Discord inbound message while restart drain is active");
+            await SafeReplyAsync(ingressClosedReason);
+            return;
+        }
+
         var hasAttachments = message.Attachments is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(message.Text) && !hasAttachments)
             return;
@@ -263,7 +272,10 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         if (liveContents.Count == 0)
             return;
 
-        var mergedContents = await BuildInputContentsAsync(liveContents, inboundCts.Token);
+        var (mergedContents, backfillDetectorUnavailable) = await BuildInputContentsAsync(liveContents, inboundCts.Token);
+
+        if (backfillDetectorUnavailable)
+            await SafeReplyAsync(BackfillDetectorWarning);
 
         var input = new ChannelInput
         {
@@ -296,12 +308,12 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         }
     }
 
-    private async Task<IReadOnlyList<AIContent>> BuildInputContentsAsync(
+    private async Task<(IReadOnlyList<AIContent> Contents, bool BackfillDetectorUnavailable)> BuildInputContentsAsync(
         List<AIContent> liveContents,
         CancellationToken cancellationToken)
     {
         if (_threadHistoryFetchAttempted || _dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return liveContents;
+            return (liveContents, false);
 
         _threadHistoryFetchAttempted = true;
 
@@ -313,16 +325,63 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         catch (Exception ex)
         {
             _log.Warning(ex, "Thread history fetch failed for session {0}", _sessionId.Value);
-            return liveContents;
+            return (liveContents, false);
         }
 
         if (history.Count == 0)
-            return liveContents;
+            return (liveContents, false);
 
-        _log.Info("Thread history hydrated fetched={FetchedCount} session={Session}",
-            history.Count, _sessionId.Value);
+        // Classify each history message for prompt injection risk.
+        var classifications = await Task.WhenAll(
+            history.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
 
-        return MergeHistoryWithLiveContents(history, liveContents);
+        var safe = new List<ChannelInput>(history.Count);
+        var blockedForRisk = 0;
+        var detectorUnavailable = false;
+
+        for (var i = 0; i < history.Count; i++)
+        {
+            switch (classifications[i].Outcome)
+            {
+                case ClassificationOutcome.Allow:
+                    safe.Add(history[i]);
+                    break;
+
+                case ClassificationOutcome.Block:
+                    blockedForRisk++;
+                    _log.Warning(
+                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
+                        history[i].SenderId,
+                        history[i].MessageId ?? "none",
+                        classifications[i].Reason ?? "high-risk pattern detected");
+                    break;
+
+                case ClassificationOutcome.DetectorUnavailable:
+                    blockedForRisk++;
+                    detectorUnavailable = true;
+                    break;
+            }
+        }
+
+        _log.Info(
+            "Thread history hydrated fetched={FetchedCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} session={Session}",
+            history.Count, safe.Count, blockedForRisk, _sessionId.Value);
+
+        if (safe.Count == 0)
+            return (liveContents, detectorUnavailable);
+
+        return (MergeHistoryWithLiveContents(safe, liveContents), detectorUnavailable);
+    }
+
+    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
+    {
+        var text = string.Join("\n", input.Contents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        return PromptClassifier.ClassifyAsync(
+            _promptInjectionDetector, text, "discord-backfill", _log, cancellationToken);
     }
 
     private static List<AIContent> MergeHistoryWithLiveContents(
@@ -819,6 +878,15 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 $"`{file.Name}` ({FormatBytes(file.Size)}) exceeds the {FormatBytes(policy.MaxFileBytes)} per-file limit.");
         }
 
+        if (!IsAllowedAttachmentDomain(file.Url))
+        {
+            _log.Warning(
+                "discord_attachment_rejected name={Name} url={Url} reason=untrusted-domain",
+                file.Name, file.Url);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` has an untrusted URL domain and was skipped.");
+        }
+
         ReadOnlyMemory<byte> bytes;
         try
         {
@@ -985,6 +1053,12 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 sb.Append(c);
         }
         return sb.ToString();
+    }
+
+    private static bool IsAllowedAttachmentDomain(string url)
+    {
+        return url.StartsWith("https://cdn.discordapp.com/", StringComparison.OrdinalIgnoreCase)
+            || url.StartsWith("https://media.discordapp.net/", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatBytes(long size)

@@ -16,6 +16,13 @@ public static class ApprovalButtonValueCodec
 
     public static string Encode(string callId, string optionKey, string? requesterSenderId)
     {
+        ArgumentNullException.ThrowIfNull(callId);
+        ArgumentNullException.ThrowIfNull(optionKey);
+        if (callId.Contains('|', StringComparison.Ordinal))
+            throw new ArgumentException("callId must not contain the pipe delimiter '|'.", nameof(callId));
+        if (optionKey.Contains('|', StringComparison.Ordinal))
+            throw new ArgumentException("optionKey must not contain the pipe delimiter '|'.", nameof(optionKey));
+
         var suffix = $"|{optionKey}|{requesterSenderId ?? string.Empty}";
         var maxCallIdLength = MaxEncodedLength - suffix.Length;
         var truncatedCallId = callId.Length > maxCallIdLength

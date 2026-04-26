@@ -69,6 +69,11 @@ Supported Discord settings:
 - `AllowDirectMessages` - defaults to `false` (secure by default)
 - `AllowedChannelIds` - allow-list for non-DM channel traffic
 - `AllowedUserIds` - optional user allow-list (empty means no user filter)
+- `MentionOnly` - when `true` (default), the bot only responds to messages that
+  mention it in non-DM channels; when `false`, the bot responds to all messages
+  in allowed channels
+- `MentionRequiredInDm` - when `true`, the bot requires a mention even in direct
+  messages; defaults to `false` (DMs are always treated as addressed to the bot)
 - `ChannelAudiences` - optional audience override map; keys are channel IDs or
   `dm`, values are `personal`, `team`, or `public`
 

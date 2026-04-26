@@ -8,6 +8,8 @@ namespace Netclaw.Channels.Discord.Transport;
 
 internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 {
+    private const int MaxRestChannelCacheSize = 1000;
+
     private readonly DiscordSocketClient _client;
     private readonly ConcurrentDictionary<ulong, IMessageChannel> _restChannelCache = new();
 
@@ -38,7 +40,14 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
             var restChannel = await _client.Rest.GetChannelAsync(channelId);
             messageChannel = restChannel as IMessageChannel;
             if (messageChannel is not null)
-                _restChannelCache.TryAdd(channelId, messageChannel);
+            {
+                // Safety valve — evict stale entries if the cache grows too large.
+                // Full clear is acceptable here because the cache repopulates lazily
+                // and only DM channels (socket cache misses) land here.
+                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
+                    _restChannelCache.Clear();
+                _restChannelCache[channelId] = messageChannel;
+            }
         }
 
         if (messageChannel is null)

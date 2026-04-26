@@ -4,6 +4,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Discord.Transport;
 
@@ -117,6 +118,15 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         SenderId = message.Author.Id.ToString(),
         ChannelId = threadChannelId.ToString(),
         MessageId = message.Id.ToString(),
+        Audience = TrustAudience.Public,
+        Principal = PrincipalClassification.UntrustedExternal,
+        Provenance = new SourceProvenance
+        {
+            TransportAuthenticity = TransportAuthenticity.Verified,
+            PayloadTaint = PayloadTaint.Public,
+            SourceKind = "discord",
+            SourceScope = threadChannelId.ToString()
+        },
         Contents = [new TextContent(message.Content)],
         ReceivedAt = message.Timestamp
     };
