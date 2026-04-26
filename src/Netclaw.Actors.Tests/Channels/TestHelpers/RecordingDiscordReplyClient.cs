@@ -5,6 +5,7 @@ namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
 {
     public List<DiscordPostMessage> Posts { get; } = [];
+    public List<(DiscordReplyChannelId ThreadId, string Name)> ThreadRenames { get; } = [];
     public Exception? ThrowOnPost { get; set; }
 
     public Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
@@ -22,5 +23,11 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
         }
 
         return Task.FromResult(result);
+    }
+
+    public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
+    {
+        ThreadRenames.Add((threadChannelId, name));
+        return Task.CompletedTask;
     }
 }

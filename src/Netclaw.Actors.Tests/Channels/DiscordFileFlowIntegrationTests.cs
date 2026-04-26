@@ -413,5 +413,8 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
 
             return Task.FromResult(result);
         }
+
+        public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 }

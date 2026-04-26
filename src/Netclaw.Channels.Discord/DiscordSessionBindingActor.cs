@@ -543,6 +543,11 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 await SafeReplyWithButtonsAsync(promptText, buttons, request);
                 break;
 
+            case SessionTitleOutput titleOutput:
+                if (_threadCreated)
+                    await SafeSetThreadNameAsync(titleOutput.Title);
+                break;
+
             case TurnCompleted completed:
                 if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
                 {
@@ -639,6 +644,19 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             ReplyChannelId: _replyChannelId,
             Text: text,
             Buttons: buttons);
+    }
+
+    private async Task SafeSetThreadNameAsync(string title)
+    {
+        try
+        {
+            await _dependencies.ReplyClient.SetThreadNameAsync(_replyChannelId, title);
+            _log.Debug("Set Discord thread name to '{0}'", title);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed to set Discord thread name for session {0}", _sessionId.Value);
+        }
     }
 
     private void ApplyThreadPromotion(DiscordPostResult result)

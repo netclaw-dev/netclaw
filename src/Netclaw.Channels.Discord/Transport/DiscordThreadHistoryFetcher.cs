@@ -61,11 +61,46 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             return [];
         }
 
+        var results = new List<ChannelInput>();
+
+        // Discord threads are separate channels — GetMessagesAsync only returns
+        // messages posted IN the thread, not the parent message that started it.
+        // The thread channel ID equals the parent message's snowflake, so fetch
+        // that message from the parent channel and prepend it to the history.
+        if (channel is SocketThreadChannel threadChannel)
+        {
+            var parentChannel = threadChannel.ParentChannel as IMessageChannel;
+            if (parentChannel is not null)
+            {
+                try
+                {
+                    var rootMessage = await parentChannel.GetMessageAsync(
+                        threadChannelId,
+                        options: new RequestOptions { CancelToken = cancellationToken });
+
+                    if (rootMessage is not null && !rootMessage.Author.IsBot
+                        && !string.IsNullOrWhiteSpace(rootMessage.Content))
+                    {
+                        results.Add(new ChannelInput
+                        {
+                            SenderId = rootMessage.Author.Id.ToString(),
+                            ChannelId = threadChannelId.ToString(),
+                            MessageId = rootMessage.Id.ToString(),
+                            Contents = [new TextContent(rootMessage.Content)],
+                            ReceivedAt = rootMessage.Timestamp
+                        });
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Failed to fetch root message for thread {ThreadId}", threadChannelId);
+                }
+            }
+        }
+
         var messages = await channel
             .GetMessagesAsync(MaxMessages, options: new RequestOptions { CancelToken = cancellationToken })
             .FlattenAsync();
-
-        var results = new List<ChannelInput>();
 
         foreach (var message in messages.OrderBy(m => m.Timestamp))
         {

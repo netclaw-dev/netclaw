@@ -99,6 +99,19 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         return new DiscordPostResult(CreatedThreadId: createdThreadId);
     }
 
+    public async Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
+    {
+        var channelId = ParseSnowflake(threadChannelId.Value, "thread channel ID");
+        var channel = _client.GetChannel(channelId);
+        if (channel is not IThreadChannel thread)
+            return;
+
+        await thread.ModifyAsync(props =>
+        {
+            props.Name = name.Length > 100 ? name[..100] : name;
+        }, new RequestOptions { CancelToken = cancellationToken });
+    }
+
     private static ulong ParseSnowflake(string value, string label)
     {
         if (!ulong.TryParse(value, out var id))

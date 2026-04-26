@@ -48,6 +48,8 @@ public interface IDiscordGatewayClient
 public interface IDiscordReplyClient
 {
     Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default);
+
+    Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default);
 }
 
 public sealed record DiscordPostMessage(
@@ -115,4 +117,7 @@ public sealed class UnconfiguredDiscordReplyClient : IDiscordReplyClient
     public Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Discord channel attempted outbound delivery, but no Discord reply client is configured.");
+
+    public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }

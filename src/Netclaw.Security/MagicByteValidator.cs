@@ -128,9 +128,24 @@ public static class MagicByteValidator
 
         if (!rule.Extensions.Contains(extension))
         {
+            // Extension disagrees with declared MIME — Discord CDN declares
+            // image/webp for .png files. Use magic bytes as ground truth:
+            // if they confirm a type matching the extension, accept it.
+            // https://github.com/Aaronontheweb/netclaw/issues/754
+            var detected = DetectMimeType(content);
+            if (detected is not null
+                && RulesByMime.TryGetValue(detected, out var detectedRule)
+                && detectedRule.Extensions.Contains(extension)
+                && detectedRule.Matches(content)
+                && effectivePolicy.AllowedMimeTypes.Contains(detected))
+            {
+                return ContentScanResult.Allowed(new MimeType(detected));
+            }
+
             return ContentScanResult.Rejected(
                 ContentScanError.MimeTypeMismatch,
-                $"Extension '{extension}' does not match declared type '{effectiveMimeType}'");
+                $"Extension '{extension}' does not match declared type '{effectiveMimeType}'",
+                detected is not null ? new MimeType(detected) : null);
         }
 
         if (!rule.Matches(content))

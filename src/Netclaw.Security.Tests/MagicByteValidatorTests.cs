@@ -517,14 +517,15 @@ public sealed class MagicByteValidatorTests
     }
 
     [Fact]
-    public void Validate_MimeTypeMismatch_ExtensionDoesNotMatchDeclaredType()
+    public void Validate_DeclaredMimeMismatch_MagicBytesMatchExtension_Allowed()
     {
-        // PNG bytes but declared as JPEG → mismatch (rule lookup finds jpeg,
-        // extension .png is not in jpeg's {.jpg,.jpeg} set)
+        // PNG bytes declared as JPEG with .png extension — magic bytes confirm
+        // the file is actually PNG, which matches the extension. Accept it
+        // under the detected type (covers Discord CDN transcoding declarations).
         var result = MagicByteValidator.Validate(PngHeader, "image/jpeg", "photo.png");
 
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
+        Assert.True(result.IsAllowed);
+        Assert.Equal("image/png", result.DetectedMimeType!.Value.Value);
     }
 
     [Fact]
@@ -564,6 +565,33 @@ public sealed class MagicByteValidatorTests
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.UnrecognizedFileType, result.Error);
+    }
+
+    [Fact]
+    public void Validate_DiscordCdnWebpDeclaredForPng_MagicBytesOverride()
+    {
+        // Discord CDN declares image/webp for a file with .png extension that
+        // is actually a PNG. Magic bytes should override the declared type.
+        var result = MagicByteValidator.Validate(PngHeader, "image/webp", "old-yeller.png");
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal("image/png", result.DetectedMimeType!.Value.Value);
+    }
+
+    [Fact]
+    public void Validate_MagicBytesOverride_PolicyDisallowsDetectedType_Rejected()
+    {
+        // Extension/declared mismatch AND the detected type is disallowed by policy.
+        var policy = new ContentPolicy
+        {
+            AllowedMimeTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                { "image/webp" }.ToFrozenSet(StringComparer.OrdinalIgnoreCase)
+        };
+
+        var result = MagicByteValidator.Validate(PngHeader, "image/webp", "photo.png", policy);
+
+        Assert.False(result.IsAllowed);
+        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
     }
 
     [Fact]
