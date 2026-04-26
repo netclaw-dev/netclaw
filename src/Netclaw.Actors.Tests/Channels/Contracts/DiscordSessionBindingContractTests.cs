@@ -1,5 +1,6 @@
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Persistence.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
@@ -14,6 +15,11 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     : SessionBindingContractTests(output)
 {
     private RecordingDiscordReplyClient _replyClient = new();
+
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
+    {
+        builder.WithInMemoryJournal().WithInMemorySnapshotStore();
+    }
 
     protected override IActorRef CreateBindingActor(
         SessionId sessionId,
@@ -115,7 +121,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             {
                 SenderId = $"history-user-{i}",
                 ChannelId = "ch-test",
-                MessageId = $"history-msg-{i}",
+                MessageId = (900_000_000_000_000_000UL + (ulong)i).ToString(),
                 Contents = [new Microsoft.Extensions.AI.TextContent($"history message {i}")],
                 ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-count + i)
             });
@@ -124,8 +130,29 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         return items;
     }
 
+    private long _hydrationEventCounter;
+
     protected override object CreateHydrationTriggerInboundMessage(string text, string senderId)
-        => CreateInboundMessage(text, senderId);
+    {
+        var snowflake = 1_000_000_000_000_000_000UL + (ulong)Interlocked.Increment(ref _hydrationEventCounter);
+        return new DiscordThreadInbound(
+            SessionId: new SessionId("ignored"),
+            ChannelId: new DiscordChannelId("ch-test"),
+            ReplyChannelId: new DiscordReplyChannelId("reply-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            RootMessageId: null,
+            EventId: new DiscordEventId(snowflake.ToString()),
+            SenderId: new DiscordUserId(senderId),
+            Audience: TrustAudience.Team,
+            Principal: PrincipalClassification.UntrustedExternal,
+            Provenance: new SourceProvenance
+            {
+                TransportAuthenticity = TransportAuthenticity.Verified,
+                SourceKind = "discord"
+            },
+            Text: text,
+            ReceivedAt: TimeProvider.System.GetUtcNow());
+    }
 
     private void ResetReplyClient()
     {

@@ -11,6 +11,8 @@ internal sealed class RecordingThreadHistoryFetcher : IThreadHistoryFetcher
 
     public int FetchCount => Volatile.Read(ref _fetchCount);
 
+    public void ResetFetchCount() => Interlocked.Exchange(ref _fetchCount, 0);
+
     public void SetHistory(IReadOnlyList<ChannelInput> history) => _history = history;
 
     public void SetThrowOnFetch(Exception ex) => _throwOnFetch = ex;

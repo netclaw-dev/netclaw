@@ -2,6 +2,7 @@ using System.Text;
 using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
@@ -13,7 +14,7 @@ using IOPath = System.IO.Path;
 
 namespace Netclaw.Channels.Discord;
 
-internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedStash, IWithTimers
+internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWithTimers
 {
     private readonly SessionId _sessionId;
     private readonly DiscordChannelId _channelId;
@@ -47,8 +48,9 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
     private int _turnNumber;
     private bool _threadHistoryFetchAttempted;
     private string? _lastSetThreadName;
+    private ulong? _cursorSnowflake;
+    private ulong? _pendingCursorSnowflake;
 
-    public IStash Stash { get; set; } = null!;
     public ITimerScheduler Timers { get; set; } = null!;
 
     public DiscordSessionBindingActor(
@@ -75,8 +77,12 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "discord-session");
 
+        Recover<CursorAdvanced>(ApplyCursorAdvanced);
+
         Initializing();
     }
+
+    public override string PersistenceId => $"discord-session-cursor-{Uri.EscapeDataString(_sessionId.Value)}";
 
     public static Props CreateProps(
         SessionId sessionId,
@@ -123,7 +129,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private void Initializing()
     {
-        ReceiveAsync<InitializePipeline>(async _ =>
+        CommandAsync<InitializePipeline>(async _ =>
         {
             try
             {
@@ -138,7 +144,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             }
         });
 
-        ReceiveAny(msg =>
+        CommandAny(msg =>
         {
             if (msg is not InitializePipeline)
                 Stash.Stash();
@@ -147,12 +153,12 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
     private void Active()
     {
-        ReceiveAsync<DiscordThreadInbound>(HandleInboundAsync);
-        ReceiveAsync<DiscordApprovalResponse>(HandleApprovalResponseAsync);
-        ReceiveAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
-        ReceiveAsync<OutputReceived>(HandleOutputReceivedAsync);
+        CommandAsync<DiscordThreadInbound>(HandleInboundAsync);
+        CommandAsync<DiscordApprovalResponse>(HandleApprovalResponseAsync);
+        CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
+        CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
 
-        Receive<OutputStreamTerminated>(msg =>
+        Command<OutputStreamTerminated>(msg =>
         {
             if (msg.Generation != _handle.Generation)
                 return;
@@ -165,7 +171,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             Self.Tell(new ReinitializePipeline(reason));
         });
 
-        ReceiveAsync<ReinitializePipeline>(async msg =>
+        CommandAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
             await _handle.ReinitializeAsync(
@@ -176,7 +182,7 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                     ReinitializeDelay));
         });
 
-        Receive<ReceiveTimeout>(_ =>
+        Command<ReceiveTimeout>(_ =>
         {
             if (_pendingApprovalRequests.Count > 0)
             {
@@ -295,6 +301,12 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(input, writeCts.Token);
             ChannelTelemetry.RecordDiscordMessageEnqueued();
+
+            if (TryParseSnowflake(message.EventId.Value) is { } eventSnowflake)
+            {
+                if (_pendingCursorSnowflake is not { } pending || eventSnowflake > pending)
+                    _pendingCursorSnowflake = eventSnowflake;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -331,28 +343,56 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         if (history.Count == 0)
             return (liveContents, false);
 
-        // Classify each history message for prompt injection risk.
-        var classifications = await Task.WhenAll(
-            history.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
+        var cursor = _cursorSnowflake;
 
-        var safe = new List<ChannelInput>(history.Count);
+        // Phase 1: filter by cursor bounds (cheap, sync).
+        var candidates = new List<ChannelInput>(history.Count);
+        foreach (var item in history)
+        {
+            if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
+                continue;
+
+            // Keep the cursor message itself during fresh-runtime hydration.
+            // If the daemon restarts while a turn is still in-flight, the
+            // session actor may recover with no completed turns even though the
+            // cursor already advanced to the last inbound user message.
+            if (cursor is { } c && itemSnowflake < c)
+                continue;
+
+            candidates.Add(item);
+        }
+
+        if (candidates.Count == 0)
+        {
+            _log.Info(
+                "Thread history hydrated fetched={FetchedCount} gapCount=0 cursor={Cursor} session={Session}",
+                history.Count, cursor?.ToString() ?? "none", _sessionId.Value);
+            return (liveContents, false);
+        }
+
+        // Phase 2: classify candidates in parallel for prompt injection risk.
+        var classifications = await Task.WhenAll(
+            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
+
+        // Phase 3: assemble gap preserving chronological order.
+        var safe = new List<ChannelInput>(candidates.Count);
         var blockedForRisk = 0;
         var detectorUnavailable = false;
 
-        for (var i = 0; i < history.Count; i++)
+        for (var i = 0; i < candidates.Count; i++)
         {
             switch (classifications[i].Outcome)
             {
                 case ClassificationOutcome.Allow:
-                    safe.Add(history[i]);
+                    safe.Add(candidates[i]);
                     break;
 
                 case ClassificationOutcome.Block:
                     blockedForRisk++;
                     _log.Warning(
                         "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        history[i].SenderId,
-                        history[i].MessageId ?? "none",
+                        candidates[i].SenderId,
+                        candidates[i].MessageId ?? "none",
                         classifications[i].Reason ?? "high-risk pattern detected");
                     break;
 
@@ -364,8 +404,8 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
         }
 
         _log.Info(
-            "Thread history hydrated fetched={FetchedCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} session={Session}",
-            history.Count, safe.Count, blockedForRisk, _sessionId.Value);
+            "Thread history hydrated fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
+            history.Count, candidates.Count, safe.Count, blockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
 
         if (safe.Count == 0)
             return (liveContents, detectorUnavailable);
@@ -609,6 +649,10 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
                 break;
 
             case TurnCompleted completed:
+                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorSnowflake is { } pendingSnowflake)
+                    AdvanceCursor(pendingSnowflake);
+                _pendingCursorSnowflake = null;
+
                 if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
                 {
                     Context.System.EventStream.Publish(new ReminderDeliveryObserved(
@@ -1105,6 +1149,31 @@ internal sealed class DiscordSessionBindingActor : ReceiveActor, IWithUnboundedS
 
         return chunks;
     }
+
+    private void AdvanceCursor(ulong candidateSnowflake)
+    {
+        if (_cursorSnowflake is { } c && candidateSnowflake <= c)
+        {
+            _log.Debug("Discord session cursor did not advance session={Session} snowflake={Snowflake}",
+                _sessionId.Value, candidateSnowflake);
+            return;
+        }
+
+        Persist(new CursorAdvanced(candidateSnowflake), ApplyCursorAdvanced);
+    }
+
+    private void ApplyCursorAdvanced(CursorAdvanced advanced)
+    {
+        _cursorSnowflake = advanced.CursorSnowflake;
+
+        if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
+            DeleteMessages(LastSequenceNr - 1);
+    }
+
+    private static ulong? TryParseSnowflake(string value)
+        => ulong.TryParse(value, out var id) ? id : null;
+
+    private readonly record struct CursorAdvanced(ulong CursorSnowflake);
 
     private sealed record InitializePipeline
     {
