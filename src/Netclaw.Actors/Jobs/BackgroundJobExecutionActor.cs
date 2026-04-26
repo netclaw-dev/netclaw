@@ -128,9 +128,8 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
                 {
                     await File.WriteAllTextAsync(_outputLogPath, fullOutput);
                 }
-                catch
+                catch // slopwatch-ignore: SW003 best-effort log write — output still delivered via actor message
                 {
-                    // Best-effort file write — output still delivered via message
                 }
 
                 self.Tell(new ProcessExited(process.ExitCode, fullOutput));
@@ -179,9 +178,8 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             if (!_process.HasExited)
                 _process.Kill(entireProcessTree: true);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) // slopwatch-ignore: SW003 expected TOCTOU race — process exited between HasExited check and Kill
         {
-            // Process already exited — expected TOCTOU race
         }
         catch (Exception ex)
         {

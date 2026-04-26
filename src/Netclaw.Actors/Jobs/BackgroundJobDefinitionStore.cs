@@ -62,9 +62,8 @@ public sealed class BackgroundJobDefinitionStore
                     if (def is not null && !string.IsNullOrWhiteSpace(def.Id))
                         list.Add(def);
                 }
-                catch
+                catch // slopwatch-ignore: SW003 corrupt job JSON is benign — skip and continue listing
                 {
-                    // Skip invalid definitions
                 }
             }
 

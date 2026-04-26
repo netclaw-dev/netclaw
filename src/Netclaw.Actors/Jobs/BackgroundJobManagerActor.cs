@@ -179,8 +179,8 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             outputFileExists = true;
             outputTail = text.Length > MaxOutputTailChars ? text[^MaxOutputTailChars..] : text;
         }
-        catch (FileNotFoundException) { }
-        catch (DirectoryNotFoundException) { }
+        catch (FileNotFoundException) { } // slopwatch-ignore: SW003 output file may not exist yet for running jobs
+        catch (DirectoryNotFoundException) { } // slopwatch-ignore: SW003 job output directory may not exist yet for running jobs
         catch (Exception ex)
         {
             _log.Warning("Failed to read output log for job {JobId}: {Error}",
