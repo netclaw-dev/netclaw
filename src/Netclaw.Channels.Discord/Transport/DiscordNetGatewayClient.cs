@@ -184,12 +184,38 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     private static (string ChannelId, string ReplyChannelId, string ThreadOrMessageId) ResolveChannelContext(
         ISocketMessageChannel channel, ulong fallbackMessageId)
     {
-        var replyChannelId = channel.Id.ToString();
-
         if (channel is SocketThreadChannel thread)
-            return (thread.ParentChannel.Id.ToString(), replyChannelId, channel.Id.ToString());
+            return ResolveChannelContext(channel.Id, fallbackMessageId, DiscordChannelKind.Thread, thread.ParentChannel.Id);
 
-        return (channel.Id.ToString(), replyChannelId, fallbackMessageId.ToString());
+        var kind = channel is IDMChannel ? DiscordChannelKind.DirectMessage : DiscordChannelKind.GuildChannel;
+        return ResolveChannelContext(channel.Id, fallbackMessageId, kind, parentChannelId: null);
+    }
+
+    internal static (string ChannelId, string ReplyChannelId, string ThreadOrMessageId) ResolveChannelContext(
+        ulong channelId, ulong messageId,
+        DiscordChannelKind kind,
+        ulong? parentChannelId)
+    {
+        var channelIdStr = channelId.ToString();
+
+        return kind switch
+        {
+            DiscordChannelKind.Thread when parentChannelId is not null =>
+                (parentChannelId.Value.ToString(), channelIdStr, channelIdStr),
+            // DMs use the channel ID as the session key so all messages from
+            // one user share a single long-running session.
+            DiscordChannelKind.DirectMessage =>
+                (channelIdStr, channelIdStr, channelIdStr),
+            _ =>
+                (channelIdStr, channelIdStr, messageId.ToString()),
+        };
+    }
+
+    internal enum DiscordChannelKind
+    {
+        GuildChannel,
+        Thread,
+        DirectMessage,
     }
 
     private Task OnDiscordLog(LogMessage logMessage)

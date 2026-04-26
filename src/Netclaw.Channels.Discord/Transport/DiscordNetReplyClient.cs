@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using Discord;
 using Discord.Net;
@@ -8,6 +9,7 @@ namespace Netclaw.Channels.Discord.Transport;
 internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 {
     private readonly DiscordSocketClient _client;
+    private readonly ConcurrentDictionary<ulong, IMessageChannel> _restChannelCache = new();
 
     public DiscordNetReplyClient(DiscordSocketClient client)
     {
@@ -29,19 +31,25 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
     {
         var channelId = ParseSnowflake(message.ReplyChannelId.Value, "reply channel ID");
 
-        var channel = _client.GetChannel(channelId)
-            ?? throw new InvalidOperationException(
-                $"Discord channel {message.ReplyChannelId.Value} not found in cache.");
+        // Socket cache misses for DM channels — fall back to REST API.
+        IMessageChannel? messageChannel = _client.GetChannel(channelId) as IMessageChannel;
+        if (messageChannel is null && !_restChannelCache.TryGetValue(channelId, out messageChannel))
+        {
+            var restChannel = await _client.Rest.GetChannelAsync(channelId);
+            messageChannel = restChannel as IMessageChannel;
+            if (messageChannel is not null)
+                _restChannelCache.TryAdd(channelId, messageChannel);
+        }
 
-        if (channel is not IMessageChannel messageChannel)
+        if (messageChannel is null)
             throw new InvalidOperationException(
-                $"Discord channel {message.ReplyChannelId.Value} is not a message channel.");
+                $"Discord channel {message.ReplyChannelId.Value} not found or is not a message channel.");
 
         IMessageChannel targetChannel = messageChannel;
         DiscordReplyChannelId? createdThreadId = null;
 
         if (message.CreateThreadOnMessage is { } threadAnchor
-            && channel is ITextChannel textChannel)
+            && messageChannel is ITextChannel textChannel)
         {
             var anchorId = ParseSnowflake(threadAnchor.Value, "anchor message ID");
             var threadName = message.ThreadName ?? "Conversation";
