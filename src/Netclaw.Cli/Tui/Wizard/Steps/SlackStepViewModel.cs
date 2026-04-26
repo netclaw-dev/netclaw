@@ -35,10 +35,12 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
     public string? AllowedUserIdsInput { get; set; }
     internal SlackChannelResolutionResult? LastChannelResolution { get; set; }
 
+    internal bool SkipEnableSubStep { get; set; }
+
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => SlackEnabled ? 6 : 1;
+    public int SubStepCount => SlackEnabled ? (SkipEnableSubStep ? 5 : 6) : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -72,7 +74,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
     public bool TryGoBack()
     {
-        if (_currentSubStep > 0)
+        var minSubStep = SkipEnableSubStep ? 1 : 0;
+        if (_currentSubStep > minSubStep)
         {
             _currentSubStep--;
             return true;
@@ -83,10 +86,25 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
         if (direction == NavigationDirection.Back)
             _currentSubStep = _highWaterSubStep;
         else
-            _currentSubStep = 0;
+            _currentSubStep = startSubStep;
+    }
+
+    internal void ResetConfig()
+    {
+        SlackEnabled = false;
+        BotToken = null;
+        AppToken = null;
+        ChannelNamesInput = null;
+        AllowDirectMessages = false;
+        AllowedUserIdsInput = null;
+        LastChannelResolution = null;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
+        _currentSubStep = startSubStep;
+        _highWaterSubStep = startSubStep;
     }
 
     public void OnLeave()

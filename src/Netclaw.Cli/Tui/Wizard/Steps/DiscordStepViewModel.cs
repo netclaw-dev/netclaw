@@ -31,10 +31,12 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
     public string? AllowedUserIdsInput { get; set; }
     internal DiscordChannelResolutionResult? LastChannelResolution { get; set; }
 
+    internal bool SkipEnableSubStep { get; set; }
+
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => DiscordEnabled ? 5 : 1;
+    public int SubStepCount => DiscordEnabled ? (SkipEnableSubStep ? 4 : 5) : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -70,7 +72,8 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
 
     public bool TryGoBack()
     {
-        if (_currentSubStep > 0)
+        var minSubStep = SkipEnableSubStep ? 1 : 0;
+        if (_currentSubStep > minSubStep)
         {
             _currentSubStep--;
             return true;
@@ -82,10 +85,24 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
         if (direction == NavigationDirection.Back)
             _currentSubStep = _highWaterSubStep;
         else
-            _currentSubStep = 0;
+            _currentSubStep = startSubStep;
+    }
+
+    internal void ResetConfig()
+    {
+        DiscordEnabled = false;
+        BotToken = null;
+        ChannelIdsInput = null;
+        AllowDirectMessages = false;
+        AllowedUserIdsInput = null;
+        LastChannelResolution = null;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
+        _currentSubStep = startSubStep;
+        _highWaterSubStep = startSubStep;
     }
 
     public void OnLeave()

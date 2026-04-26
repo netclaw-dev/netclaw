@@ -200,6 +200,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 return providerView.BuildContent(step, CreateCallbacks());
             }
 
+            // Channel picker manages its own state (cursor position, sub-flow mode)
+            // across invalidations — don't clear it on content refresh.
+            if (step is ChannelPickerStepViewModel)
+            {
+                var pickerView = ViewModel.StepViews["channel-picker"];
+                return pickerView.BuildContent(step, CreateCallbacks());
+            }
+
             // Channels step manages its own state (cursor position, add mode)
             // across invalidations — don't clear it on content refresh.
             if (step is ChannelsStepViewModel)
@@ -278,6 +286,21 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
         {
             ViewModel.RequestQuit();
             return true;
+        }
+
+        // Channel picker step (picker mode): intercept keys before stale focus
+        // components consume ↑/↓/Space/D/E. Escape flows through for back-navigation.
+        // In sub-flow mode, let keys flow normally to child view components.
+        if (ViewModel.Orchestrator.CurrentStep is ChannelPickerStepViewModel
+            && ((ChannelPickerStepView)ViewModel.StepViews["channel-picker"]).IsInPickerMode
+            && keyInfo.Key != ConsoleKey.Escape)
+        {
+            var pickerView = ViewModel.StepViews["channel-picker"];
+            if (pickerView.HandleKeyPress(new KeyPressed(keyInfo)))
+            {
+                ViewModel.RequestRedraw();
+                return true;
+            }
         }
 
         // Channels step: intercept keys before the focus manager can consume them.
