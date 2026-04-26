@@ -207,13 +207,18 @@ public sealed class SessionPipelineHandle
     {
         _inputQueue?.TryComplete();
 
-        try
+        if (_session is not null)
         {
-            _session?.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            _log.Debug(ex, "Failed to dispose {0} session during cleanup", _materializerNamePrefix);
+            try
+            {
+                var vt = _session.DisposeAsync();
+                if (!vt.IsCompletedSuccessfully)
+                    vt.AsTask().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                _log.Debug(ex, "Failed to dispose {0} session during cleanup", _materializerNamePrefix);
+            }
         }
 
         _materializer?.Dispose();
