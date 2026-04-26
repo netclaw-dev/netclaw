@@ -120,18 +120,16 @@ internal static class SessionToolExecutionPipeline
         int maxToolTimeoutSeconds = 600,
         ILogger? logger = null)
     {
-        // Extract meta fields before dispatch — tool receives only its defined parameters
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
 
-        // Apply per-call timeout hint if present
         if (meta?.TimeoutHintSeconds is not null)
         {
             timeout = ToolCallMetaExtractor.ComputeEffectiveTimeout(
                 meta.TimeoutHintSeconds, timeout, maxToolTimeoutSeconds);
         }
 
-        // Log background signal (actual routing deferred to background jobs change)
+        // Actual routing deferred to background jobs change
         if (meta is { Background: true })
         {
             logger?.LogInformation(
@@ -223,16 +221,9 @@ internal static class SessionToolExecutionPipeline
             resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
             sw.Stop();
 
-            auditLogger?.Log(new ToolAuditEntry
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
             {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
-                Allowed = true,
-                Duration = sw.Elapsed,
-                Rationale = meta?.Rationale,
-                TimeoutHintSeconds = meta?.TimeoutHintSeconds
+                Allowed = true
             });
         }
         catch (ToolApprovalRequiredException approvalEx)
@@ -280,18 +271,11 @@ internal static class SessionToolExecutionPipeline
                 sw.Stop();
 
                 var patternStr = string.Join(", ", ctx.UnapprovedPatterns);
-                auditLogger?.Log(new ToolAuditEntry
+                auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
                 {
-                    SessionId = sessionId.Value,
-                    ToolName = tc.Name,
-                    CallId = tc.CallId,
-                    Timestamp = timeProvider.GetUtcNow(),
                     Allowed = true,
-                    Duration = sw.Elapsed,
                     ApprovalDecision = decision.ToString(),
-                    ApprovalPattern = patternStr,
-                    Rationale = meta?.Rationale,
-                    TimeoutHintSeconds = meta?.TimeoutHintSeconds
+                    ApprovalPattern = patternStr
                 });
             }
             else
@@ -302,19 +286,12 @@ internal static class SessionToolExecutionPipeline
                 resultText = reason;
 
                 var deniedPatternStr = string.Join(", ", ctx.UnapprovedPatterns);
-                auditLogger?.Log(new ToolAuditEntry
+                auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
                 {
-                    SessionId = sessionId.Value,
-                    ToolName = tc.Name,
-                    CallId = tc.CallId,
-                    Timestamp = timeProvider.GetUtcNow(),
                     Allowed = false,
                     DenyReason = reason,
-                    Duration = sw.Elapsed,
                     ApprovalDecision = decision.ToString(),
-                    ApprovalPattern = deniedPatternStr,
-                    Rationale = meta?.Rationale,
-                    TimeoutHintSeconds = meta?.TimeoutHintSeconds
+                    ApprovalPattern = deniedPatternStr
                 });
             }
         }
@@ -324,17 +301,10 @@ internal static class SessionToolExecutionPipeline
             sw.Stop();
             resultText = $"Tool requires approval but no approval channel is available: {approvalEx.ApprovalContext.ToolName}";
 
-            auditLogger?.Log(new ToolAuditEntry
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
             {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
                 Allowed = false,
-                DenyReason = "no_approval_channel",
-                Duration = sw.Elapsed,
-                Rationale = meta?.Rationale,
-                TimeoutHintSeconds = meta?.TimeoutHintSeconds
+                DenyReason = "no_approval_channel"
             });
         }
         catch (ToolAccessDeniedException ex)
@@ -342,17 +312,10 @@ internal static class SessionToolExecutionPipeline
             sw.Stop();
             resultText = $"Tool access denied: {ex.DenyReason}";
 
-            auditLogger?.Log(new ToolAuditEntry
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
             {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
                 Allowed = false,
-                DenyReason = ex.DenyReason,
-                Duration = sw.Elapsed,
-                Rationale = meta?.Rationale,
-                TimeoutHintSeconds = meta?.TimeoutHintSeconds
+                DenyReason = ex.DenyReason
             });
         }
         catch (Exception ex)
@@ -360,17 +323,10 @@ internal static class SessionToolExecutionPipeline
             sw.Stop();
             resultText = $"Error executing tool: {ex.Message}";
 
-            auditLogger?.Log(new ToolAuditEntry
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
             {
-                SessionId = sessionId.Value,
-                ToolName = tc.Name,
-                CallId = tc.CallId,
-                Timestamp = timeProvider.GetUtcNow(),
                 Allowed = false,
-                DenyReason = $"tool_execution_error:{ex.GetType().Name}",
-                Duration = sw.Elapsed,
-                Rationale = meta?.Rationale,
-                TimeoutHintSeconds = meta?.TimeoutHintSeconds
+                DenyReason = $"tool_execution_error:{ex.GetType().Name}"
             });
         }
 
@@ -497,6 +453,23 @@ internal static class SessionToolExecutionPipeline
 
         return new(SubAgentFindingReviewDecision.Accepted, null);
     }
+
+    private static ToolAuditEntry BuildAuditEntry(
+        SessionId sessionId,
+        FunctionCallContent tc,
+        TimeProvider timeProvider,
+        TimeSpan duration,
+        ToolCallMeta? meta) => new()
+    {
+        SessionId = sessionId.Value,
+        ToolName = tc.Name,
+        CallId = tc.CallId,
+        Timestamp = timeProvider.GetUtcNow(),
+        Allowed = false,
+        Duration = duration,
+        Rationale = meta?.Rationale,
+        TimeoutHintSeconds = meta?.TimeoutHintSeconds
+    };
 
     /// <summary>
     /// Truncates a tool result to fit within the configured inline character limit.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -273,7 +274,7 @@ public static class McpSchemaSanitizer
 
     // ── Meta property injection ──
 
-    private static readonly string[] MetaFieldNames = ["_rationale", "_timeout_seconds", "_background"];
+    private static readonly string[] MetaFieldNames = ToolCallMeta.MetaFieldNames;
 
     private static readonly Dictionary<string, object?> MetaRationale = new()
     {
