@@ -18,6 +18,7 @@ services:
 
   netclaw-sandbox:
     image: netclaw-smoke:local
+    entrypoint: ["sleep", "infinity"]
     depends_on:
       ollama-init:
         condition: service_completed_successfully

@@ -67,7 +67,7 @@ jobs:
         timeout-minutes: 5
         run: >
           docker build
-          -f docker/smoke/Dockerfile
+          -f docker/Dockerfile
           -t netclaw-smoke:local
           .
 
