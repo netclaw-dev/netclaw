@@ -92,7 +92,7 @@ internal sealed record BackgroundJobCompleted
 /// <summary>
 /// Job definition persisted to <c>~/.netclaw/jobs/{id}.json</c>.
 /// </summary>
-public sealed record BackgroundJobDefinition
+public sealed class BackgroundJobDefinition
 {
     public required string Id { get; init; }
     public required string Command { get; init; }
