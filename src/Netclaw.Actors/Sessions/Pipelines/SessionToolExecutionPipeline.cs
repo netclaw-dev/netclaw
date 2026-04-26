@@ -3,6 +3,7 @@ using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
@@ -44,7 +45,8 @@ internal static class SessionToolExecutionPipeline
         Action<ToolInteractionRequest>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
         int maxToolTimeoutSeconds = 600,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IActorRef? backgroundJobManager = null)
     {
         try
         {
@@ -66,7 +68,8 @@ internal static class SessionToolExecutionPipeline
                 emitApprovalRequest,
                 approvalTimeout ?? TimeSpan.FromMinutes(5),
                 maxToolTimeoutSeconds,
-                logger));
+                logger,
+                backgroundJobManager));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -118,7 +121,8 @@ internal static class SessionToolExecutionPipeline
         Action<ToolInteractionRequest>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
         int maxToolTimeoutSeconds = 600,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        IActorRef? backgroundJobManager = null)
     {
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
@@ -129,13 +133,28 @@ internal static class SessionToolExecutionPipeline
                 meta.TimeoutHintSeconds, timeout, maxToolTimeoutSeconds);
         }
 
-        // Actual routing deferred to background jobs change
         if (meta is { Background: true })
         {
-            logger?.LogInformation(
-                "Tool {ToolName} (call {CallId}) requested background execution — " +
-                "executing synchronously until background job infrastructure is available",
-                tc.Name, tc.CallId);
+            if (!string.Equals(tc.Name, "shell_execute", StringComparison.Ordinal))
+            {
+                logger?.LogWarning(
+                    "Tool {ToolName} (call {CallId}) requested background execution — " +
+                    "only shell_execute supports background mode; executing synchronously",
+                    tc.Name, tc.CallId);
+            }
+            else if (backgroundJobManager is null)
+            {
+                logger?.LogWarning(
+                    "Tool {ToolName} (call {CallId}) requested background execution — " +
+                    "no background job manager available; executing synchronously",
+                    tc.Name, tc.CallId);
+            }
+            else
+            {
+                return await RouteToBackgroundJobAsync(
+                    tc, sessionId, source, auditLogger, timeProvider,
+                    meta, backgroundJobManager, timeout, logger);
+            }
         }
 
         var sw = Stopwatch.StartNew();
@@ -452,6 +471,94 @@ internal static class SessionToolExecutionPipeline
             return new(SubAgentFindingReviewDecision.Deferred, "low confidence");
 
         return new(SubAgentFindingReviewDecision.Accepted, null);
+    }
+
+    private static async Task<ToolCallResult> RouteToBackgroundJobAsync(
+        FunctionCallContent tc,
+        SessionId sessionId,
+        MessageSource? source,
+        IToolAuditLogger? auditLogger,
+        TimeProvider timeProvider,
+        ToolCallMeta meta,
+        IActorRef backgroundJobManager,
+        TimeSpan timeout,
+        ILogger? logger)
+    {
+        var command = tc.Arguments?.TryGetValue("command", out var cmdObj) == true
+            ? cmdObj?.ToString()
+            : null;
+
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            var message = new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = "Error: background shell execution requires a 'command' parameter",
+                ToolCallId = tc.CallId,
+                Name = tc.Name
+            };
+            return new ToolCallResult(message, [], [], []);
+        }
+
+        var startCmd = new StartBackgroundJob
+        {
+            Command = command,
+            SessionId = sessionId,
+            Rationale = meta.Rationale ?? "background shell execution",
+            Audience = source?.Audience ?? TrustAudience.Personal,
+            Boundary = source?.Boundary ?? SecurityPolicyDefaults.PersonalBoundary,
+            OriginChannelType = source?.ChannelType ?? ChannelType.Tui,
+            TimeoutSeconds = meta.TimeoutHintSeconds ?? (int)timeout.TotalSeconds,
+            SenderId = source?.SenderId
+        };
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var started = await backgroundJobManager.Ask<BackgroundJobStarted>(
+                startCmd, TimeSpan.FromSeconds(30));
+            sw.Stop();
+
+            logger?.LogInformation(
+                "Background job {JobId} submitted for shell command (session {SessionId})",
+                started.JobId.Value, sessionId.Value);
+
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
+            {
+                Allowed = true
+            });
+
+            var resultText = $"Background job {started.JobId.Value} submitted. " +
+                             "Use check_background_job to monitor progress or cancel.";
+            var resultMessage = new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = resultText,
+                ToolCallId = tc.CallId,
+                Name = tc.Name
+            };
+            return new ToolCallResult(resultMessage, [], [], []);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            logger?.LogError(ex, "Failed to submit background job for {ToolName}", tc.Name);
+
+            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
+            {
+                Allowed = false,
+                DenyReason = $"background_job_submission_failed:{ex.GetType().Name}"
+            });
+
+            var errorMessage = new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = $"Error submitting background job: {ex.Message}",
+                ToolCallId = tc.CallId,
+                Name = tc.Name
+            };
+            return new ToolCallResult(errorMessage, [], [], []);
+        }
     }
 
     private static ToolAuditEntry BuildAuditEntry(

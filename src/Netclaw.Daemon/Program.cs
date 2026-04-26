@@ -554,6 +554,9 @@ static void ConfigureDaemonServices(
     services.AddSingleton<ReminderDefinitionStore>();
     services.AddSingleton<ReminderHistoryStore>();
 
+    // Background jobs — infrastructure singleton for async shell execution
+    services.AddSingleton<Netclaw.Actors.Jobs.BackgroundJobDefinitionStore>();
+
     var webhooksConfig = configuration.GetSection("Webhooks")
         .Get<WebhooksConfig>() ?? new WebhooksConfig();
     services.AddSingleton(webhooksConfig);
@@ -956,6 +959,9 @@ static void ConfigureDaemonServices(
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
             var targetResolvers = sp.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
             toolRegistry.WithReminderTools(reminderManager, tp, historyStore, targetResolvers);
+
+            var bgJobManager = registry.Get<Netclaw.Actors.Hosting.BackgroundJobManagerActorKey>();
+            toolRegistry.WithBackgroundJobTools(bgJobManager);
 
             // Drain all active LLM sessions during any actor system termination (SIGTERM, daemon stop).
             // Runs in an early CoordinatedShutdown phase while actors are still alive.

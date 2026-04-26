@@ -2,6 +2,7 @@ using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Client;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
@@ -88,6 +89,18 @@ public static class ToolRegistrationExtensions
         registry.Register(new CancelReminderTool(reminderManager));
         registry.Register(new ListRemindersTool(reminderManager));
         registry.Register(new GetReminderHistoryTool(historyStore));
+        return registry;
+    }
+
+    /// <summary>
+    /// Registers background job tools that communicate with the
+    /// <see cref="BackgroundJobManagerActor"/> via Ask.
+    /// </summary>
+    public static ToolRegistry WithBackgroundJobTools(
+        this ToolRegistry registry,
+        IActorRef jobManager)
+    {
+        registry.Register(new CheckBackgroundJobTool(jobManager));
         return registry;
     }
 

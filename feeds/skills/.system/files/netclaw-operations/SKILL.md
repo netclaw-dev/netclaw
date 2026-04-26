@@ -1,9 +1,9 @@
 ---
 name: netclaw-operations
-description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
+description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.18.0"
+  version: "1.19.0"
 ---
 
 # Netclaw Operations
@@ -25,6 +25,7 @@ problems, how to update preferences, or how to maintain itself.
 | Update preferences, tone, profile | [Identity](#identity) |
 | Pair remote devices, manage access | [Device Pairing](#device-pairing) |
 | Check health, update self | [Self-Maintenance](#self-maintenance) |
+| Run long shell commands in background | [Background Jobs](#background-jobs) |
 | Manage inbound webhooks | [Webhook Management](#webhook-management) |
 
 ## Project Directory
@@ -101,6 +102,40 @@ audience is always allowed.
 
 Other scheduling tools: `list_reminders`, `cancel_reminder`,
 `get_reminder_history`.
+
+## Background Jobs
+
+Shell commands expected to run longer than the session timeout can be submitted
+as background jobs. Background jobs run independently of the session — results
+are delivered asynchronously when the job completes, even if the session was
+passivated.
+
+To submit: set `_background: true` in the `shell_execute` tool call metadata.
+Approval gates are evaluated before the job starts.
+
+Rules:
+
+- Only `shell_execute` supports background mode. Other tools ignore `_background`.
+- `_timeout_seconds` alone does NOT trigger background execution.
+- The user must approve the command before it starts running in the background.
+- Maximum 5 concurrent background jobs; overflow queues FIFO.
+- Job definitions persist to `~/.netclaw/jobs/{id}.json`.
+- Output captured to `~/.netclaw/jobs/{id}/output.log`.
+
+Monitoring tools:
+
+- `check_background_job(JobId: "id")` — query status, elapsed time, output tail
+- `check_background_job(JobId: "id", Cancel: true)` — cancel a running job
+
+`check_background_job` is only available when shell execution is granted (same
+`shell` grant category). It validates that the requesting session matches the
+submitting session's audience and boundary.
+
+After submitting a background job, schedule a check-back reminder so you report
+results proactively when the job completes.
+
+Active background jobs appear in the `[active-background-jobs]` section of the
+session context on every turn.
 
 ## Tool Discovery
 

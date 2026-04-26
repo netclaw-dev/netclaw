@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -48,21 +49,44 @@ public sealed record SessionState
     public IImmutableSet<string> ProcessedReminderIds { get; init; } =
         ImmutableHashSet<string>.Empty;
 
+    /// <summary>
+    /// Background jobs this session is waiting on. Persisted to snapshot
+    /// because jobs are long-lived and must survive recovery.
+    /// </summary>
+    public ImmutableDictionary<string, ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
+        ImmutableDictionary<string, ActiveJobInfo>.Empty;
+
+    /// <summary>
+    /// In-memory best-effort dedup ledger for background-job-originated turns.
+    /// Same pattern as <see cref="ProcessedReminderIds"/> — not persisted to
+    /// snapshot, rebuilds from event replay.
+    /// </summary>
+    public IImmutableSet<string> ProcessedBackgroundJobIds { get; init; } =
+        ImmutableHashSet<string>.Empty;
+
     // ── Event application (pure functions) ──
 
     public SessionState Apply(TurnRecorded evt)
     {
-        var processed = ProcessedReminderIds;
+        var processedReminders = ProcessedReminderIds;
         if (!string.IsNullOrEmpty(evt.SourceReminderId))
+            processedReminders = processedReminders.Add(evt.SourceReminderId);
+
+        var processedJobs = ProcessedBackgroundJobIds;
+        var activeJobs = ActiveBackgroundJobs;
+        if (!string.IsNullOrEmpty(evt.SourceBackgroundJobId))
         {
-            processed = processed.Add(evt.SourceReminderId);
+            processedJobs = processedJobs.Add(evt.SourceBackgroundJobId);
+            activeJobs = activeJobs.Remove(evt.SourceBackgroundJobId);
         }
 
         return this with
         {
             History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
             TurnCount = TurnCount + 1,
-            ProcessedReminderIds = processed
+            ProcessedReminderIds = processedReminders,
+            ProcessedBackgroundJobIds = processedJobs,
+            ActiveBackgroundJobs = activeJobs
         };
     }
 
@@ -89,14 +113,18 @@ public sealed record SessionState
         return this with
         {
             History = builder.ToImmutable(),
-            // WorkingContext survives compaction. The event MAY carry an
-            // update; if null, retain the existing value on this state.
             WorkingContext = evt.WorkingContext ?? WorkingContext,
-            // ProcessedReminderIds survives compaction so that redeliveries
-            // of reminders whose turns were compacted still dedup. The set
-            // rebuilds from event replay on recovery and is not persisted
-            // to SessionSnapshot.
-            ProcessedReminderIds = ProcessedReminderIds
+            ProcessedReminderIds = ProcessedReminderIds,
+            ProcessedBackgroundJobIds = ProcessedBackgroundJobIds,
+            ActiveBackgroundJobs = ActiveBackgroundJobs
+        };
+    }
+
+    public SessionState TrackBackgroundJob(string jobKey, ActiveJobInfo info)
+    {
+        return this with
+        {
+            ActiveBackgroundJobs = ActiveBackgroundJobs.SetItem(jobKey, info)
         };
     }
 
@@ -239,18 +267,25 @@ public sealed record SessionState
             History = new List<SerializableChatMessage>(History),
             TurnCount = TurnCount,
             Title = Title,
-            WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext
+            WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
+            ActiveBackgroundJobs = ActiveBackgroundJobs.Values.ToList()
         };
     }
 
     public static SessionState FromSnapshot(SessionSnapshot snapshot)
     {
+        var activeJobs = snapshot.ActiveBackgroundJobs.Count > 0
+            ? snapshot.ActiveBackgroundJobs.ToImmutableDictionary(
+                j => $"bg-job:{j.JobId}", j => j)
+            : ImmutableDictionary<string, ActiveJobInfo>.Empty;
+
         return new SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
             TurnCount = snapshot.TurnCount,
             Title = snapshot.Title,
-            WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty
+            WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,
+            ActiveBackgroundJobs = activeJobs
         };
     }
 }

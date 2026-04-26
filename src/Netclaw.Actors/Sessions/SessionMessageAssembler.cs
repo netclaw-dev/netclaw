@@ -171,6 +171,9 @@ public static class SessionMessageAssembler
         if (!input.State.WorkingContext.IsEmpty)
             parts.Add(input.State.WorkingContext.ToContextBlock());
 
+        if (!input.State.ActiveBackgroundJobs.IsEmpty)
+            parts.Add(FormatActiveBackgroundJobs(input.State));
+
         if (input.SlashCommandSkillContent is not null)
             parts.Add(input.SlashCommandSkillContent);
 
@@ -181,6 +184,21 @@ public static class SessionMessageAssembler
             parts.Add(input.TurnRestartNotice);
 
         return string.Join("\n\n", parts);
+    }
+
+    private static string FormatActiveBackgroundJobs(SessionState state)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append("[active-background-jobs]");
+        foreach (var (_, job) in state.ActiveBackgroundJobs)
+        {
+            sb.Append("\n- job_id: ").Append(job.JobId);
+            sb.Append("  command: ").Append(job.Command);
+            if (!string.IsNullOrEmpty(job.Rationale))
+                sb.Append("  rationale: ").Append(job.Rationale);
+        }
+        sb.Append("\nUse check_background_job to query status or cancel.");
+        return sb.ToString();
     }
 
     private static string FormatRecallForLlm(AutomaticRecallResult recall)

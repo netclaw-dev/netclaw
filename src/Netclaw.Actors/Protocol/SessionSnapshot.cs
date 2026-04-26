@@ -1,3 +1,4 @@
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Sessions;
 using ProtoBuf;
 
@@ -40,4 +41,11 @@ public sealed class SessionSnapshot
     /// </summary>
     [ProtoMember(6)]
     public WorkingContext? WorkingContext { get; set; }
+
+    /// <summary>
+    /// Background jobs this session is waiting on. Persisted because jobs
+    /// are long-lived and must survive recovery.
+    /// </summary>
+    [ProtoMember(7)]
+    public List<ActiveJobInfo> ActiveBackgroundJobs { get; set; } = new();
 }

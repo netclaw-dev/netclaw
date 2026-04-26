@@ -79,6 +79,12 @@ public sealed record MessageSource
     public string? ReminderId { get; init; }
 
     /// <summary>
+    /// Ephemeral dedup key for background-job-originated deliveries.
+    /// Format is <c>"bg-job:{jobId}"</c>. Null for regular user messages.
+    /// </summary>
+    public string? BackgroundJobId { get; init; }
+
+    /// <summary>
     /// Optional reply target for ack-gated trusted deliveries. When set,
     /// <see cref="ChannelPipeline"/>'s stream sink uses this ref as the
     /// <c>sender</c> argument on its <c>Tell</c> to the session manager, so

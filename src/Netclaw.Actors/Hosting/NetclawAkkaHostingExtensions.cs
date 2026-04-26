@@ -5,6 +5,7 @@ using Akka.Reminders;
 using Akka.Reminders.Sharding;
 using Akka.Reminders.Sqlite;
 using Akka.Reminders.Sqlite.Configuration;
+using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Routing;
@@ -122,6 +123,18 @@ public static class NetclawAkkaHostingExtensions
         });
     }
 
+    public static AkkaConfigurationBuilder WithBackgroundJobManager(
+        this AkkaConfigurationBuilder builder)
+    {
+        return builder.StartActors((system, registry, resolver) =>
+        {
+            var actor = system.ActorOf(
+                resolver.Props<BackgroundJobManagerActor>(),
+                "background-job-manager");
+            registry.Register<BackgroundJobManagerActorKey>(actor);
+        });
+    }
+
     /// <summary>
     /// Convenience method that registers all Netclaw actor infrastructure.
     /// Requires <c>SessionConfig</c> and <see cref="Microsoft.Extensions.AI.IChatClient"/>
@@ -135,7 +148,8 @@ public static class NetclawAkkaHostingExtensions
             .WithModelCapabilityCache()
             .WithSessionManager()
             .WithToolApprovalActor()
-            .WithReminderManager(reminderStorageOptions);
+            .WithReminderManager(reminderStorageOptions)
+            .WithBackgroundJobManager();
     }
 
     /// <summary>

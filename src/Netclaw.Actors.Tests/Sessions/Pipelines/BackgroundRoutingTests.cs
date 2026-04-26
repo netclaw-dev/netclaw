@@ -1,0 +1,177 @@
+using Akka.Actor;
+using Akka.Hosting;
+using Akka.Hosting.TestKit;
+using Microsoft.Extensions.AI;
+using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Actors.Tools;
+using Netclaw.Tools;
+using Xunit;
+
+namespace Netclaw.Actors.Tests.Sessions.Pipelines;
+
+public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(output: output)
+{
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider) { }
+
+    [Fact]
+    public async Task TimeoutAlone_DoesNotRouteToBackground()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe");
+        var jobManagerProbe = CreateTestProbe("job-manager");
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-1", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "echo test",
+                ["_timeout_seconds"] = 30,
+                ["_rationale"] = "test timeout alone"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/timeout-only"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            backgroundJobManager: jobManagerProbe.Ref);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(completed.ToolResults);
+        Assert.Equal("echo:echo test", completed.ToolResults[0].Content);
+
+        await jobManagerProbe.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(200),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ExplicitBackground_RoutesShellToBackgroundManager()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe");
+        var jobManagerProbe = CreateTestProbe("job-manager");
+
+        var fakeJobManager = Sys.ActorOf(Props.Create(() =>
+            new FakeJobManager(jobManagerProbe.Ref)));
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "sleep 600",
+                ["_background"] = true,
+                ["_rationale"] = "long running build"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/background"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            backgroundJobManager: fakeJobManager);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(completed.ToolResults);
+        Assert.Contains("Background job", completed.ToolResults[0].Content);
+        Assert.Contains("check_background_job", completed.ToolResults[0].Content);
+
+        var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("sleep 600", received.Command);
+        Assert.Equal("long running build", received.Rationale);
+    }
+
+    [Fact]
+    public async Task NonShellToolWithBackground_ExecutesSynchronously()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe");
+        var jobManagerProbe = CreateTestProbe("job-manager");
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-nonsync", "web_search", new Dictionary<string, object?>
+            {
+                ["query"] = "test query",
+                ["_background"] = true,
+                ["_rationale"] = "search in background"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/nonshell-bg"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            backgroundJobManager: jobManagerProbe.Ref);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Single(completed.ToolResults);
+        Assert.Equal("echo:test query", completed.ToolResults[0].Content);
+
+        await jobManagerProbe.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(200),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private sealed class EchoExecutor : IToolExecutor
+    {
+        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+        {
+            var firstArg = toolCall.Arguments?.Values.FirstOrDefault()?.ToString() ?? "no-args";
+            return Task.FromResult($"echo:{firstArg}");
+        }
+    }
+
+    private sealed class FakeJobManager : ReceiveActor
+    {
+        private int _counter;
+
+        public FakeJobManager(IActorRef probe)
+        {
+            Receive<StartBackgroundJob>(cmd =>
+            {
+                probe.Forward(cmd);
+                _counter++;
+                Sender.Tell(new BackgroundJobStarted(new BackgroundJobId($"fake-{_counter:D4}")));
+            });
+        }
+    }
+}

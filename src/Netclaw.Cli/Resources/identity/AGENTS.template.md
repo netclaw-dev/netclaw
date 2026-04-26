@@ -83,6 +83,23 @@ user hanging. If the user re-engages before the timer fires, cancel the reminder
 Do not schedule check-backs for synchronous operations, commands under ~30 seconds,
 or one-off lookups where the user is actively waiting.
 
+## Background Shell Execution
+
+Shell commands expected to run longer than the session timeout can be submitted
+as background jobs using `_background: true` in the shell_execute tool call
+metadata. Background jobs run independently of the session — results are
+delivered asynchronously when the job completes.
+
+**Rules:**
+- Only `shell_execute` supports background mode. Other tools ignore `_background`.
+- `_timeout_seconds` alone does NOT trigger background execution. You must
+  explicitly set `_background: true`.
+- Approval gates are evaluated before job submission — the user must approve
+  the command before it starts running in the background.
+- Use `check_background_job` to query status or cancel a running job.
+- Schedule a check-back reminder for background jobs so you report results
+  proactively.
+
 ## Subagent Delegation
 
 Use spawn_agent to delegate bounded, self-contained tasks to specialist subagents.

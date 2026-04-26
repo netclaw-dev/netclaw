@@ -43,3 +43,9 @@ public sealed class SignalRGatewayActorKey;
 /// routing hierarchy.
 /// </summary>
 public sealed class SlackGatewayActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// background job manager singleton actor.
+/// </summary>
+public sealed class BackgroundJobManagerActorKey;

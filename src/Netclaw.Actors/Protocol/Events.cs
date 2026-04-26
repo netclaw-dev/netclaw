@@ -53,6 +53,15 @@ public sealed class TurnRecorded
     [ProtoMember(5)]
     public string? SourceReminderId { get; set; }
 
+    /// <summary>
+    /// Populated when this turn originated from a background job result delivery.
+    /// Format is <c>"bg-job:{jobId}"</c>, matching the value placed on
+    /// <see cref="Channels.MessageSource.BackgroundJobId"/> by the
+    /// background job manager. Null for regular user turns.
+    /// </summary>
+    [ProtoMember(6)]
+    public string? SourceBackgroundJobId { get; set; }
+
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 }
 

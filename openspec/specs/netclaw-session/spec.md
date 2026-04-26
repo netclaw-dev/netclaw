@@ -50,6 +50,30 @@ resulting `TurnRecorded` event SHALL copy that value into
 in the journal (for forensics) and survive recovery (so the in-memory
 dedup set can be rebuilt via event replay).
 
+The persisted `TurnRecorded` event SHALL carry an optional
+`SourceBackgroundJobId` field (protobuf tag 6, additive). When a
+`SendUserMessage` arrives with `MessageSource.BackgroundJobId` set, the
+resulting `TurnRecorded` event SHALL copy that value into
+`SourceBackgroundJobId` so that background-job-originated turns are
+distinguishable in the journal and survive recovery (so the in-memory
+dedup set can be rebuilt via event replay).
+
+`SessionState` SHALL maintain an `ActiveBackgroundJobs` dictionary
+(`ImmutableDictionary<string, ActiveJobInfo>`) persisted to the Akka journal.
+`ActiveJobInfo` SHALL carry `JobId`, `Command`, `Rationale`, and `StartedAt`.
+When a background job is started, the session SHALL persist an event adding
+the job entry. When a background job result is delivered, the session SHALL
+persist an event removing the job entry and adding the job ID to a dedup
+set (mirroring `ProcessedReminderIds`). The working context SHALL surface
+active background jobs with their rationales so the LLM knows what it is
+waiting for after compaction or session resumption.
+
+Background job completion delivered through `DeliverTrustedSessionTurn` SHALL
+be treated as the trusted completion of the original tool execution, matching
+the trust semantics of synchronous shell results. The session SHALL process the
+delivery only within the originating session and the persisted originating
+audience/boundary captured for that job.
+
 #### Scenario: Persist and emit assistant reply
 
 - **WHEN** the assistant produces a response
@@ -64,6 +88,45 @@ dedup set can be rebuilt via event replay).
 - **THEN** the persisted event has
   `SourceReminderId = "daily-digest:1712000000000"`
 - **AND** the event is replayable as a normal turn on recovery
+
+#### Scenario: Background job started persisted to session state
+
+- **GIVEN** the pipeline routes a tool call to background execution
+- **WHEN** `BackgroundJobStarted` is received by the session
+- **THEN** an `ActiveJobInfo` entry is added to `ActiveBackgroundJobs`
+- **AND** the addition is persisted to the journal
+
+#### Scenario: Background job result delivery removes active job
+
+- **GIVEN** a background job result arrives via `DeliverTrustedSessionTurn`
+- **WHEN** the session processes the delivery
+- **THEN** the job entry is removed from `ActiveBackgroundJobs`
+- **AND** the job ID is added to the dedup set
+- **AND** both changes are persisted to the journal
+
+#### Scenario: Session applies trusted delivery with originating scope
+
+- **GIVEN** a background job result arrives via `DeliverTrustedSessionTurn`
+- **AND** the job has persisted originating audience/boundary metadata
+- **WHEN** the session processes the delivery
+- **THEN** the turn is treated with the same trust semantics as a synchronous
+  shell result for that session
+- **AND** processing remains scoped to the persisted originating
+  audience/boundary
+
+#### Scenario: Active jobs visible in working context
+
+- **GIVEN** a session has active background jobs
+- **WHEN** the working context is built for the LLM
+- **THEN** the context includes a section listing pending jobs with their
+  rationales and start times
+
+#### Scenario: Active jobs survive session recovery
+
+- **GIVEN** a session with active background jobs has been passivated
+- **WHEN** the session rehydrates from the journal
+- **THEN** `ActiveBackgroundJobs` is restored with all entries
+- **AND** the background job dedup set is restored
 
 #### Scenario: Non-reminder turn has null SourceReminderId
 
