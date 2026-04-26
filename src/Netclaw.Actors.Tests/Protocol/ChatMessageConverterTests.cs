@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Tools;
 using Xunit;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -355,6 +356,127 @@ public class ChatMessageConverterTests
         Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/jpeg"));
         Assert.Equal(MediaModality.Audio, ChatMessageConverter.MimeToModality("audio/mpeg"));
         Assert.Equal(MediaModality.Video, ChatMessageConverter.MimeToModality("video/mp4"));
+    }
+
+    // ── Tool call meta extraction tests ──
+
+    [Fact]
+    public void FromAiMessage_extracts_meta_from_tool_call_arguments()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["Command"] = "dotnet test",
+            ["_rationale"] = "running tests to verify refactor",
+            ["_timeout_seconds"] = 300,
+            ["_background"] = false
+        };
+        var contents = new List<AIContent>
+        {
+            new FunctionCallContent("call-1", "shell_execute", args)
+        };
+        var ai = new AiChatMessage(AiChatRole.Assistant, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai);
+
+        var tc = Assert.Single(msg.ToolCalls);
+        Assert.NotNull(tc.MetaJson);
+
+        var meta = ToolCallMeta.Parse(tc.MetaJson);
+        Assert.NotNull(meta);
+        Assert.Equal("running tests to verify refactor", meta.Rationale);
+        Assert.Equal(300, meta.TimeoutHintSeconds);
+        Assert.False(meta.Background);
+
+        // Arguments should be clean (no meta fields)
+        Assert.Contains("Command", tc.ArgumentsJson);
+        Assert.DoesNotContain("_rationale", tc.ArgumentsJson);
+        Assert.DoesNotContain("_timeout_seconds", tc.ArgumentsJson);
+        Assert.DoesNotContain("_background", tc.ArgumentsJson);
+    }
+
+    [Fact]
+    public void FromAiMessage_tool_call_without_meta_has_null_MetaJson()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["Command"] = "ls -la"
+        };
+        var contents = new List<AIContent>
+        {
+            new FunctionCallContent("call-1", "shell_execute", args)
+        };
+        var ai = new AiChatMessage(AiChatRole.Assistant, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai);
+
+        var tc = Assert.Single(msg.ToolCalls);
+        Assert.Null(tc.MetaJson);
+        Assert.Contains("Command", tc.ArgumentsJson);
+    }
+
+    [Fact]
+    public void FromAiMessage_tool_call_with_only_rationale_produces_meta()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["query"] = "Akka.NET persistence",
+            ["_rationale"] = "searching for docs"
+        };
+        var contents = new List<AIContent>
+        {
+            new FunctionCallContent("call-1", "web_search", args)
+        };
+        var ai = new AiChatMessage(AiChatRole.Assistant, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai);
+
+        var tc = Assert.Single(msg.ToolCalls);
+        Assert.NotNull(tc.MetaJson);
+
+        var meta = ToolCallMeta.Parse(tc.MetaJson);
+        Assert.NotNull(meta);
+        Assert.Equal("searching for docs", meta.Rationale);
+        Assert.Null(meta.TimeoutHintSeconds);
+        Assert.False(meta.Background);
+    }
+
+    [Fact]
+    public void FromAiMessage_tool_call_with_background_true()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["Command"] = "dotnet build",
+            ["_rationale"] = "building project",
+            ["_background"] = true
+        };
+        var contents = new List<AIContent>
+        {
+            new FunctionCallContent("call-1", "shell_execute", args)
+        };
+        var ai = new AiChatMessage(AiChatRole.Assistant, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai);
+        var meta = ToolCallMeta.Parse(msg.ToolCalls[0].MetaJson);
+
+        Assert.NotNull(meta);
+        Assert.True(meta.Background);
+    }
+
+    [Fact]
+    public void ExtractMeta_handles_null_arguments()
+    {
+        var (meta, clean) = ChatMessageConverter.ExtractMeta(null);
+        Assert.Null(meta);
+        Assert.Null(clean);
+    }
+
+    [Fact]
+    public void ExtractMeta_handles_empty_arguments()
+    {
+        var args = new Dictionary<string, object?>();
+        var (meta, clean) = ChatMessageConverter.ExtractMeta(args);
+        Assert.Null(meta);
+        Assert.Same(args, clean);
     }
 
     /// <summary>Disposable temp directory for session media tests.</summary>

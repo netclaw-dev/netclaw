@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -23,7 +24,8 @@ public sealed class McpToolAdapter : INetclawTool
         string toolName,
         string? grantCategory = null,
         IMcpToolInvoker? invoker = null,
-        int maxDescriptionChars = 0)
+        int maxDescriptionChars = 0,
+        ILogger? logger = null)
     {
         _mcpTool = mcpTool;
         _toolName = toolName;
@@ -35,8 +37,9 @@ public sealed class McpToolAdapter : INetclawTool
         if (mcpTool is AIFunction func)
         {
             Description = ClampDescription(func.Description ?? "", maxDescriptionChars);
-            // Sanitize schema for LLM compatibility (strips nullable unions, etc.)
-            ParameterSchema = McpSchemaSanitizer.SanitizeSchema(func.JsonSchema);
+            // Sanitize schema for LLM compatibility, then inject meta properties
+            var sanitized = McpSchemaSanitizer.SanitizeSchema(func.JsonSchema);
+            ParameterSchema = McpSchemaSanitizer.InjectMetaProperties(sanitized, Name, logger);
             _sanitizedTool = new SanitizedAIFunction(func, Name, Description, ParameterSchema);
         }
         else
@@ -83,7 +86,8 @@ public sealed class McpToolAdapter : INetclawTool
 
         try
         {
-            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(arguments, ParameterSchema);
+            var stripped = McpSchemaSanitizer.StripMetaFields(arguments);
+            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(stripped, ParameterSchema);
             var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
             return await _invoker.InvokeAsync(ServerName, _toolName, coerced, context, ct);
         }
@@ -103,8 +107,9 @@ public sealed class McpToolAdapter : INetclawTool
 
         try
         {
-            // Coerce arguments — some LLMs send numbers as strings
-            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(arguments, ParameterSchema);
+            // Strip meta fields, then coerce arguments — some LLMs send numbers as strings
+            var stripped = McpSchemaSanitizer.StripMetaFields(arguments);
+            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(stripped, ParameterSchema);
             var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
             var aiArgs = coerced is not null
                 ? new AIFunctionArguments(coerced)
@@ -146,8 +151,9 @@ public sealed class McpToolAdapter : INetclawTool
         protected override ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments, CancellationToken cancellationToken)
         {
-            // Coerce arguments before forwarding to the MCP client
-            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(arguments, _sanitizedSchema);
+            // Strip meta fields and coerce arguments before forwarding to the MCP client
+            var stripped = McpSchemaSanitizer.StripMetaFields(arguments);
+            var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(stripped, _sanitizedSchema);
             var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
             var coercedArgs = coerced is not null
                 ? new AIFunctionArguments(coerced)

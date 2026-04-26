@@ -1,5 +1,6 @@
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -55,5 +56,59 @@ public class CompactionPromptBuilderTests
         var prompt = CompactionPromptBuilder.BuildMemoryExtractionUserPrompt([]);
 
         Assert.Contains("Extract durable memories", prompt);
+    }
+
+    [Fact]
+    public void BuildMemoryExtractionUserPrompt_renders_rationale_format_for_meta_bearing_tool_calls()
+    {
+        var meta = new ToolCallMeta { Rationale = "running full test suite" };
+        var history = new List<SerializableChatMessage>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                ToolCalls =
+                {
+                    new SerializableToolCall
+                    {
+                        CallId = "call-1",
+                        Name = "shell_execute",
+                        ArgumentsJson = """{"Command":"dotnet test"}""",
+                        MetaJson = meta.ToJson()
+                    }
+                }
+            }
+        };
+
+        var prompt = CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history);
+
+        Assert.Contains("→ shell_execute: \"running full test suite\"", prompt);
+        Assert.DoesNotContain("[Called tool:", prompt);
+    }
+
+    [Fact]
+    public void BuildMemoryExtractionUserPrompt_renders_raw_format_for_legacy_tool_calls()
+    {
+        var history = new List<SerializableChatMessage>
+        {
+            new()
+            {
+                Role = ChatRole.Assistant,
+                ToolCalls =
+                {
+                    new SerializableToolCall
+                    {
+                        CallId = "call-1",
+                        Name = "web_search",
+                        ArgumentsJson = """{"query":"test"}"""
+                    }
+                }
+            }
+        };
+
+        var prompt = CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history);
+
+        Assert.Contains("""[Called tool: web_search({"query":"test"})]""", prompt);
+        Assert.DoesNotContain("→", prompt);
     }
 }

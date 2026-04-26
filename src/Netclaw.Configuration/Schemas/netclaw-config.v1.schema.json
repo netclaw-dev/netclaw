@@ -251,6 +251,12 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Additional shell command patterns to add to the hard deny list. Verb-chain prefixes that are categorically blocked and cannot be approved."
+        },
+        "MaxToolTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 600,
+          "description": "Maximum per-call timeout in seconds that the LLM can request via _timeout_seconds meta field. Values above this ceiling are clamped."
         }
       },
       "additionalProperties": false

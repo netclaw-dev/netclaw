@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace Netclaw.Actors.Tools;
 
@@ -268,6 +269,112 @@ public static class McpSchemaSanitizer
         }
 
         return list;
+    }
+
+    // ── Meta property injection ──
+
+    private static readonly string[] MetaFieldNames = ["_rationale", "_timeout_seconds", "_background"];
+
+    private static readonly Dictionary<string, object?> MetaRationale = new()
+    {
+        ["type"] = "string",
+        ["description"] = "State your intent for this tool call in one sentence — what are you trying to accomplish and why?"
+    };
+
+    private static readonly Dictionary<string, object?> MetaTimeoutSeconds = new()
+    {
+        ["type"] = "integer",
+        ["description"] = "Requested timeout in seconds. Only set when the default is insufficient."
+    };
+
+    private static readonly Dictionary<string, object?> MetaBackground = new()
+    {
+        ["type"] = "boolean",
+        ["description"] = "Set to true to run this tool in the background and receive results later."
+    };
+
+    /// <summary>
+    /// Injects <c>_rationale</c>, <c>_timeout_seconds</c>, and <c>_background</c> meta
+    /// properties into an MCP tool schema. Logs a warning for any collision with existing
+    /// properties. Adds <c>_rationale</c> to the required array.
+    /// </summary>
+    public static JsonElement InjectMetaProperties(JsonElement schema, string? toolName = null, ILogger? logger = null)
+    {
+        if (schema.ValueKind != JsonValueKind.Object)
+            return schema;
+
+        var dict = JsonElementToDict(schema);
+
+        // Get or create properties object
+        if (!dict.TryGetValue("properties", out var propsObj) || propsObj is not Dictionary<string, object?> props)
+        {
+            props = new Dictionary<string, object?>();
+            dict["properties"] = props;
+        }
+
+        // Inject meta fields with collision detection
+        InjectField(props, "_rationale", MetaRationale, toolName, logger);
+        InjectField(props, "_timeout_seconds", MetaTimeoutSeconds, toolName, logger);
+        InjectField(props, "_background", MetaBackground, toolName, logger);
+
+        // Add _rationale to required array
+        if (dict.TryGetValue("required", out var reqObj) && reqObj is List<object?> required)
+        {
+            if (!required.Any(r => r is string s && s == "_rationale"))
+                required.Add("_rationale");
+        }
+        else
+        {
+            dict["required"] = new List<object?> { "_rationale" };
+        }
+
+        return JsonSerializer.SerializeToElement(dict);
+    }
+
+    private static void InjectField(
+        Dictionary<string, object?> props, string fieldName,
+        Dictionary<string, object?> fieldSchema, string? toolName, ILogger? logger)
+    {
+        if (props.ContainsKey(fieldName))
+        {
+            logger?.LogWarning(
+                "MCP tool {ToolName} already defines parameter '{FieldName}' — meta interpretation takes precedence",
+                toolName ?? "unknown", fieldName);
+        }
+
+        props[fieldName] = new Dictionary<string, object?>(fieldSchema);
+    }
+
+    /// <summary>
+    /// Strips meta fields (<c>_rationale</c>, <c>_timeout_seconds</c>, <c>_background</c>)
+    /// from an argument dictionary before forwarding to MCP server.
+    /// </summary>
+    public static IDictionary<string, object?>? StripMetaFields(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+            return null;
+
+        var hasMetaFields = false;
+        foreach (var key in MetaFieldNames)
+        {
+            if (arguments.ContainsKey(key))
+            {
+                hasMetaFields = true;
+                break;
+            }
+        }
+
+        if (!hasMetaFields)
+            return arguments;
+
+        var clean = new Dictionary<string, object?>(arguments.Count);
+        foreach (var (key, value) in arguments)
+        {
+            if (!MetaFieldNames.Contains(key))
+                clean[key] = value;
+        }
+
+        return clean;
     }
 
     // ── Argument coercion ──

@@ -312,6 +312,58 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void SerializableChatMessage_round_trips_tool_call_with_MetaJson()
+    {
+        var original = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            {
+                new SerializableToolCall
+                {
+                    CallId = "call-1",
+                    Name = "shell_execute",
+                    ArgumentsJson = """{"Command":"dotnet test"}""",
+                    MetaJson = """{"rationale":"running tests","timeout_seconds":300}"""
+                }
+            }
+        };
+
+        var result = RoundTrip(original);
+
+        var tc = Assert.Single(result.ToolCalls);
+        Assert.Equal("call-1", tc.CallId);
+        Assert.Equal("shell_execute", tc.Name);
+        Assert.Equal("""{"Command":"dotnet test"}""", tc.ArgumentsJson);
+        Assert.Equal("""{"rationale":"running tests","timeout_seconds":300}""", tc.MetaJson);
+    }
+
+    [Fact]
+    public void SerializableChatMessage_round_trips_tool_call_without_MetaJson_backwards_compat()
+    {
+        var original = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            {
+                new SerializableToolCall
+                {
+                    CallId = "call-1",
+                    Name = "web_search",
+                    ArgumentsJson = """{"query":"test"}"""
+                }
+            }
+        };
+
+        var result = RoundTrip(original);
+
+        var tc = Assert.Single(result.ToolCalls);
+        Assert.Equal("call-1", tc.CallId);
+        Assert.Equal("web_search", tc.Name);
+        Assert.Null(tc.MetaJson);
+    }
+
+    [Fact]
     public void Unknown_manifest_throws_on_deserialize()
     {
         var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);

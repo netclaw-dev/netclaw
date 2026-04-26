@@ -1,4 +1,5 @@
 using Netclaw.Actors.Protocol;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -108,8 +109,16 @@ public static class CompactionPromptBuilder
                 sb.AppendLine($"**{roleLabel}:**");
                 foreach (var tc in msg.ToolCalls)
                 {
-                    var args = !string.IsNullOrEmpty(tc.ArgumentsJson) ? $"({tc.ArgumentsJson})" : "";
-                    sb.AppendLine($"[Called tool: {tc.Name}{args}]");
+                    var meta = ToolCallMeta.Parse(tc.MetaJson);
+                    if (meta?.Rationale is { Length: > 0 } rationale)
+                    {
+                        sb.AppendLine($"→ {tc.Name}: \"{rationale}\"");
+                    }
+                    else
+                    {
+                        var args = !string.IsNullOrEmpty(tc.ArgumentsJson) ? $"({tc.ArgumentsJson})" : "";
+                        sb.AppendLine($"[Called tool: {tc.Name}{args}]");
+                    }
                 }
                 if (!string.IsNullOrEmpty(msg.Content))
                 {

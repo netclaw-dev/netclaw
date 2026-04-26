@@ -84,6 +84,13 @@ public sealed class SerializableToolCall
 
     [ProtoMember(3)]
     public string ArgumentsJson { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Opaque JSON envelope for per-call metadata (rationale, timeout hint, background flag).
+    /// Null for legacy tool calls persisted before metadata support was added.
+    /// </summary>
+    [ProtoMember(4)]
+    public string? MetaJson { get; set; }
 }
 
 /// <summary>

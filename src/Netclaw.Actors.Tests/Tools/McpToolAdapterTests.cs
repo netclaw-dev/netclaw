@@ -570,6 +570,132 @@ public class McpSchemaSanitizerTests
 
 
     [Fact]
+    public void InjectMetaProperties_AddsThreeFieldsAndRationaleRequired()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }
+            """).RootElement;
+
+        var injected = McpSchemaSanitizer.InjectMetaProperties(schema);
+        var props = injected.GetProperty("properties");
+
+        Assert.True(props.TryGetProperty("_rationale", out var r));
+        Assert.Equal("string", r.GetProperty("type").GetString());
+
+        Assert.True(props.TryGetProperty("_timeout_seconds", out var t));
+        Assert.Equal("integer", t.GetProperty("type").GetString());
+
+        Assert.True(props.TryGetProperty("_background", out var b));
+        Assert.Equal("boolean", b.GetProperty("type").GetString());
+
+        var required = injected.GetProperty("required").EnumerateArray()
+            .Select(e => e.GetString()).ToList();
+        Assert.Contains("query", required);
+        Assert.Contains("_rationale", required);
+        Assert.DoesNotContain("_timeout_seconds", required);
+        Assert.DoesNotContain("_background", required);
+    }
+
+    [Fact]
+    public void InjectMetaProperties_CollisionDetected_OverwritesWithMeta()
+    {
+        var schema = JsonDocument.Parse("""
+            {
+                "type": "object",
+                "properties": {
+                    "_rationale": { "type": "integer", "description": "custom field" }
+                }
+            }
+            """).RootElement;
+
+        var injected = McpSchemaSanitizer.InjectMetaProperties(schema, "test-tool");
+        var rationale = injected.GetProperty("properties").GetProperty("_rationale");
+
+        // Meta interpretation takes precedence
+        Assert.Equal("string", rationale.GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void StripMetaFields_RemovesMetaKeysOnly()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["query"] = "test",
+            ["_rationale"] = "searching for docs",
+            ["_timeout_seconds"] = 300,
+            ["_background"] = false
+        };
+
+        var stripped = McpSchemaSanitizer.StripMetaFields(args)!;
+
+        Assert.Single(stripped);
+        Assert.Equal("test", stripped["query"]);
+    }
+
+    [Fact]
+    public void StripMetaFields_NoMetaKeys_ReturnsSameInstance()
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["query"] = "test",
+            ["limit"] = 10
+        };
+
+        var stripped = McpSchemaSanitizer.StripMetaFields(args)!;
+        Assert.Same(args, stripped);
+    }
+
+    [Fact]
+    public void StripMetaFields_Null_ReturnsNull()
+    {
+        Assert.Null(McpSchemaSanitizer.StripMetaFields(null));
+    }
+
+    [Fact]
+    public void McpToolAdapter_Schema_IncludesMetaProperties()
+    {
+        var fakeTool = AIFunctionFactory.Create((string query) => "result", "search_memories");
+        var adapter = new McpToolAdapter(fakeTool, "memorizer", "search_memories");
+
+        var schema = adapter.ParameterSchema;
+        var props = schema.GetProperty("properties");
+
+        Assert.True(props.TryGetProperty("_rationale", out _));
+        Assert.True(props.TryGetProperty("_timeout_seconds", out _));
+        Assert.True(props.TryGetProperty("_background", out _));
+    }
+
+    [Fact]
+    public async Task McpToolAdapter_StripsMetaFields_BeforeMcpInvocation()
+    {
+        var invoker = new RecordingMcpToolInvoker("result");
+        string FakeFunc() => throw new InvalidOperationException("should not run");
+        var fakeTool = AIFunctionFactory.Create((Func<string>)FakeFunc, "search_memories");
+        var adapter = new McpToolAdapter(fakeTool, "memorizer", "search_memories", invoker: invoker);
+
+        var context = new ToolExecutionContext("chan/thread", null);
+        var args = new Dictionary<string, object?>
+        {
+            ["query"] = "Akka.NET",
+            ["_rationale"] = "looking up docs",
+            ["_timeout_seconds"] = 30
+        };
+
+        await adapter.ExecuteAsync(args, context, CancellationToken.None);
+
+        Assert.NotNull(invoker.Arguments);
+        Assert.False(invoker.Arguments!.ContainsKey("_rationale"));
+        Assert.False(invoker.Arguments!.ContainsKey("_timeout_seconds"));
+        Assert.True(invoker.Arguments!.ContainsKey("query"));
+    }
+
+    [Fact]
     public void SanitizeSchema_HandlesNotionSearchSchema()
     {
         // Real-world Notion search schema that was causing 502 errors

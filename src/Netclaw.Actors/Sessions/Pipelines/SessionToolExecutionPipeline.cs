@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Akka.Actor;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -41,7 +42,9 @@ internal static class SessionToolExecutionPipeline
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         IApprovalChannel? approvalChannel = null,
         Action<ToolInteractionRequest>? emitApprovalRequest = null,
-        TimeSpan? approvalTimeout = null)
+        TimeSpan? approvalTimeout = null,
+        int maxToolTimeoutSeconds = 600,
+        ILogger? logger = null)
     {
         try
         {
@@ -61,7 +64,9 @@ internal static class SessionToolExecutionPipeline
                 CancellationToken.None,
                 approvalChannel,
                 emitApprovalRequest,
-                approvalTimeout ?? TimeSpan.FromMinutes(5)));
+                approvalTimeout ?? TimeSpan.FromMinutes(5),
+                maxToolTimeoutSeconds,
+                logger));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -111,8 +116,30 @@ internal static class SessionToolExecutionPipeline
         CancellationToken ct,
         IApprovalChannel? approvalChannel = null,
         Action<ToolInteractionRequest>? emitApprovalRequest = null,
-        TimeSpan? approvalTimeout = null)
+        TimeSpan? approvalTimeout = null,
+        int maxToolTimeoutSeconds = 600,
+        ILogger? logger = null)
     {
+        // Extract meta fields before dispatch — tool receives only its defined parameters
+        var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
+        tc = cleanedTc;
+
+        // Apply per-call timeout hint if present
+        if (meta?.TimeoutHintSeconds is not null)
+        {
+            timeout = ToolCallMetaExtractor.ComputeEffectiveTimeout(
+                meta.TimeoutHintSeconds, timeout, maxToolTimeoutSeconds);
+        }
+
+        // Log background signal (actual routing deferred to background jobs change)
+        if (meta is { Background: true })
+        {
+            logger?.LogInformation(
+                "Tool {ToolName} (call {CallId}) requested background execution — " +
+                "executing synchronously until background job infrastructure is available",
+                tc.Name, tc.CallId);
+        }
+
         var sw = Stopwatch.StartNew();
         string resultText;
         var context = new ToolExecutionContext(sessionId.Value, sessionDir);
@@ -203,7 +230,9 @@ internal static class SessionToolExecutionPipeline
                 CallId = tc.CallId,
                 Timestamp = timeProvider.GetUtcNow(),
                 Allowed = true,
-                Duration = sw.Elapsed
+                Duration = sw.Elapsed,
+                Rationale = meta?.Rationale,
+                TimeoutHintSeconds = meta?.TimeoutHintSeconds
             });
         }
         catch (ToolApprovalRequiredException approvalEx)
@@ -260,7 +289,9 @@ internal static class SessionToolExecutionPipeline
                     Allowed = true,
                     Duration = sw.Elapsed,
                     ApprovalDecision = decision.ToString(),
-                    ApprovalPattern = patternStr
+                    ApprovalPattern = patternStr,
+                    Rationale = meta?.Rationale,
+                    TimeoutHintSeconds = meta?.TimeoutHintSeconds
                 });
             }
             else
@@ -281,7 +312,9 @@ internal static class SessionToolExecutionPipeline
                     DenyReason = reason,
                     Duration = sw.Elapsed,
                     ApprovalDecision = decision.ToString(),
-                    ApprovalPattern = deniedPatternStr
+                    ApprovalPattern = deniedPatternStr,
+                    Rationale = meta?.Rationale,
+                    TimeoutHintSeconds = meta?.TimeoutHintSeconds
                 });
             }
         }
@@ -299,7 +332,9 @@ internal static class SessionToolExecutionPipeline
                 Timestamp = timeProvider.GetUtcNow(),
                 Allowed = false,
                 DenyReason = "no_approval_channel",
-                Duration = sw.Elapsed
+                Duration = sw.Elapsed,
+                Rationale = meta?.Rationale,
+                TimeoutHintSeconds = meta?.TimeoutHintSeconds
             });
         }
         catch (ToolAccessDeniedException ex)
@@ -315,7 +350,9 @@ internal static class SessionToolExecutionPipeline
                 Timestamp = timeProvider.GetUtcNow(),
                 Allowed = false,
                 DenyReason = ex.DenyReason,
-                Duration = sw.Elapsed
+                Duration = sw.Elapsed,
+                Rationale = meta?.Rationale,
+                TimeoutHintSeconds = meta?.TimeoutHintSeconds
             });
         }
         catch (Exception ex)
@@ -331,7 +368,9 @@ internal static class SessionToolExecutionPipeline
                 Timestamp = timeProvider.GetUtcNow(),
                 Allowed = false,
                 DenyReason = $"tool_execution_error:{ex.GetType().Name}",
-                Duration = sw.Elapsed
+                Duration = sw.Elapsed,
+                Rationale = meta?.Rationale,
+                TimeoutHintSeconds = meta?.TimeoutHintSeconds
             });
         }
 

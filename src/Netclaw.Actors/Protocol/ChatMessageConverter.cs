@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
@@ -116,13 +117,15 @@ public static class ChatMessageConverter
                     break;
 
                 case FunctionCallContent toolCall:
+                    var (meta, cleanArgs) = ExtractMeta(toolCall.Arguments);
                     result.ToolCalls.Add(new SerializableToolCall
                     {
                         CallId = toolCall.CallId,
                         Name = toolCall.Name,
-                        ArgumentsJson = toolCall.Arguments is not null
-                            ? JsonSerializer.Serialize(toolCall.Arguments)
-                            : string.Empty
+                        ArgumentsJson = cleanArgs is not null
+                            ? JsonSerializer.Serialize(cleanArgs)
+                            : string.Empty,
+                        MetaJson = meta?.ToJson()
                     });
                     break;
 
@@ -196,5 +199,78 @@ public static class ChatMessageConverter
         if (mimeType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
             return MediaModality.Video;
         return MediaModality.Image; // default fallback
+    }
+
+    private static readonly string[] MetaKeys = ["_rationale", "_timeout_seconds", "_background"];
+
+    internal static (ToolCallMeta? Meta, IDictionary<string, object?>? CleanArgs) ExtractMeta(
+        IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+            return (null, arguments);
+
+        string? rationale = null;
+        int? timeoutSeconds = null;
+        bool background = false;
+        var hasAnyMeta = false;
+
+        if (arguments.TryGetValue("_rationale", out var rVal) && rVal is not null)
+        {
+            rationale = rVal switch
+            {
+                string s => s,
+                JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+                _ => rVal.ToString()
+            };
+            hasAnyMeta = true;
+        }
+
+        if (arguments.TryGetValue("_timeout_seconds", out var tVal) && tVal is not null)
+        {
+            timeoutSeconds = tVal switch
+            {
+                int i when i > 0 => i,
+                long l when l > 0 => (int)l,
+                double d when d > 0 => (int)d,
+                JsonElement { ValueKind: JsonValueKind.Number } je when je.GetInt32() > 0 => je.GetInt32(),
+                string s when int.TryParse(s, out var parsed) && parsed > 0 => parsed,
+                _ => null
+            };
+            if (timeoutSeconds.HasValue)
+                hasAnyMeta = true;
+        }
+
+        if (arguments.TryGetValue("_background", out var bVal) && bVal is not null)
+        {
+            background = bVal switch
+            {
+                bool b => b,
+                JsonElement { ValueKind: JsonValueKind.True } => true,
+                JsonElement { ValueKind: JsonValueKind.False } => false,
+                string s when bool.TryParse(s, out var parsed) => parsed,
+                _ => false
+            };
+            if (background)
+                hasAnyMeta = true;
+        }
+
+        if (!hasAnyMeta)
+            return (null, arguments);
+
+        var clean = new Dictionary<string, object?>(arguments.Count, StringComparer.Ordinal);
+        foreach (var kvp in arguments)
+        {
+            if (!MetaKeys.Contains(kvp.Key))
+                clean[kvp.Key] = kvp.Value;
+        }
+
+        var meta = new ToolCallMeta
+        {
+            Rationale = rationale,
+            TimeoutHintSeconds = timeoutSeconds,
+            Background = background
+        };
+
+        return (meta, clean);
     }
 }

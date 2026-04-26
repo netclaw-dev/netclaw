@@ -36,6 +36,16 @@ public sealed record ToolAuditEntry
     /// Null for non-shell tools or tools not in approval mode.
     /// </summary>
     public string? ApprovalPattern { get; init; }
+
+    /// <summary>
+    /// LLM-provided rationale for this tool call. Extracted from <c>_rationale</c> meta field.
+    /// </summary>
+    public string? Rationale { get; init; }
+
+    /// <summary>
+    /// LLM-requested timeout in seconds (pre-clamp). Extracted from <c>_timeout_seconds</c> meta field.
+    /// </summary>
+    public int? TimeoutHintSeconds { get; init; }
 }
 
 /// <summary>

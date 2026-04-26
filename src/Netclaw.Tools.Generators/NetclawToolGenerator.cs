@@ -177,19 +177,33 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
         for (var i = 0; i < model.Parameters.Length; i++)
         {
             var p = model.Parameters[i];
-            var comma = i < model.Parameters.Length - 1 ? "," : "";
             sb.AppendLine($"                \"{p.Name}\": {{");
             sb.AppendLine($"                    \"type\": \"{p.JsonType}\",");
             sb.AppendLine($"                    \"description\": \"{EscapeJson(p.Description)}\"");
-            sb.AppendLine($"                }}{comma}");
+            sb.AppendLine("                },");
         }
+
+        // Meta properties injected after user-defined parameters
+        sb.AppendLine("                \"_rationale\": {");
+        sb.AppendLine("                    \"type\": \"string\",");
+        sb.AppendLine("                    \"description\": \"State your intent for this tool call in one sentence — what are you trying to accomplish and why?\"");
+        sb.AppendLine("                },");
+        sb.AppendLine("                \"_timeout_seconds\": {");
+        sb.AppendLine("                    \"type\": \"integer\",");
+        sb.AppendLine("                    \"description\": \"Requested timeout in seconds. Only set when the default is insufficient.\"");
+        sb.AppendLine("                },");
+        sb.AppendLine("                \"_background\": {");
+        sb.AppendLine("                    \"type\": \"boolean\",");
+        sb.AppendLine("                    \"description\": \"Set to true to run this tool in the background and receive results later.\"");
+        sb.AppendLine("                }");
 
         sb.AppendLine("            },");
 
-        // Required array
+        // Required array — user-required params plus _rationale
         var required = model.Parameters.Where(p => p.IsRequired).ToArray();
+        var requiredNames = required.Select(p => $"\"{p.Name}\"").Append("\"_rationale\"");
         sb.Append("            \"required\": [");
-        sb.Append(string.Join(", ", required.Select(p => $"\"{p.Name}\"")));
+        sb.Append(string.Join(", ", requiredNames));
         sb.AppendLine("]");
 
         sb.AppendLine("        }");
