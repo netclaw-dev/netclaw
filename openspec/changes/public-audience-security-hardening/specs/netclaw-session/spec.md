@@ -12,7 +12,7 @@ session lifetime. Missing files SHALL be omitted without error.
 the filesystem. The system SHALL select the audience-specific variant based
 on the session's `TrustAudience`:
 - `Personal` or `Team`: load the full AGENTS resource
-- `Public`: load the stripped public AGENTS resource
+- `Public`: load the stripped Public AGENTS resource
 
 **TOOLING.md** SHALL be loaded from the filesystem for `Personal` and `Team`
 audiences. For `Public` audiences, TOOLING.md SHALL be suppressed entirely.
@@ -25,13 +25,16 @@ instructions SHALL be suppressed.
 parameter in addition to the optional project directory.
 
 Runtime placeholder substitution SHALL be performed on the embedded AGENTS
-resource using `NetclawPaths` values (e.g., `{{SYSTEM_SKILLS_DIR}}`,
-`{{IDENTITY_DIR}}`).
+resource using `NetclawPaths` values.
+
+The assembled prompt story SHALL be internally consistent with runtime feature
+gates. Prompt layers, discovery hints, and tool exposure SHALL agree on what a
+session can actually access. Public sessions SHALL not be instructed to use
+hidden search, skills, memory, subagent, or workspace/identity capabilities.
 
 #### Scenario: Full layer assembly on session start
 
-- **GIVEN** identity files exist at `~/.netclaw/identity/SOUL.md`,
-  and `~/.netclaw/identity/TOOLING.md`
+- **GIVEN** identity files exist on disk
 - **WHEN** a new Personal-audience session starts
 - **THEN** the system prompt includes SOUL.md from disk, AGENTS.md from
   embedded resource (full variant), and TOOLING.md from disk
@@ -41,7 +44,7 @@ resource using `NetclawPaths` values (e.g., `{{SYSTEM_SKILLS_DIR}}`,
 
 - **GIVEN** identity files exist on disk
 - **WHEN** a new Public-audience session starts
-- **THEN** the system prompt includes SOUL.md from disk and the public
+- **THEN** the system prompt includes SOUL.md from disk and the Public
   AGENTS variant from embedded resource
 - **AND** TOOLING.md is NOT included
 - **AND** project instructions are NOT included
@@ -56,5 +59,12 @@ resource using `NetclawPaths` values (e.g., `{{SYSTEM_SKILLS_DIR}}`,
 #### Scenario: Embedded AGENTS resource has placeholders substituted
 
 - **WHEN** a session loads the embedded AGENTS resource
-- **THEN** placeholders like `{{SYSTEM_SKILLS_DIR}}` are replaced with
-  actual `NetclawPaths` values
+- **THEN** placeholders are replaced with actual `NetclawPaths` values
+
+#### Scenario: Public prompt does not advertise hidden capabilities
+
+- **GIVEN** a new Public-audience session starts
+- **AND** search, skills, memory, and subagents are not exposed to Public
+- **WHEN** the system prompt is assembled
+- **THEN** the prompt does not advertise those hidden capabilities through
+  AGENTS, TOOLING, project instructions, or context layers

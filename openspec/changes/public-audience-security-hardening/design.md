@@ -3,13 +3,20 @@
 Netclaw's public audience posture was designed to restrict tool access (no
 shell, limited filesystem, no MCP servers) but left several context
 injection paths unfiltered. During Discord integration testing, adversarial
-probing revealed that public sessions receive the same AGENTS.md identity
+probing revealed that Public sessions receive the same AGENTS.md identity
 file, the same context layers (skill index, memory index, subagent
 discovery), full filesystem paths in the session block, and can write
 memories that later surface in privileged sessions. The current
 `ISystemPromptProvider` and `IContextLayerProvider` interfaces have no
 audience parameter, and the init wizard applies smart defaults silently
 without operator input.
+
+The remaining gap is not just prompt injection. Several capability-discovery
+and load paths still provide side channels: MCP `search_tools` / `load_tool`,
+skill tools, subagent discovery/spawn, and the global implicit file roots that
+currently expose identity, skills, and workspaces content to all audiences.
+Public hardening is only implementation-ready if these paths use the same
+audience/feature decisions as direct prompt injection and direct invocation.
 
 ### Current Architecture
 
@@ -28,147 +35,186 @@ Each turn
        └─ BuildStaticContextBlock: context layers + session block (paths)
        └─ BuildVolatileContextBlock: recall + working context
        └─ No audience parameter anywhere in this chain
+
+Discovery/load side channels
+  ├─ MCP: search_tools -> load_tool
+  ├─ skills: skill_load -> skill_read_resource
+  ├─ subagents: discovery layer -> spawn_agent
+  └─ files: GlobalReadRoots -> identity / skills / workspaces
 ```
 
 ### Constraints
 
-- AGENTS.md is alignment firmware — its content must match the binary
+- AGENTS.md is alignment firmware. Its content must match the binary
   version, not be operator-editable.
 - SOUL.md and TOOLING.md remain operator-mutable.
 - The wizard uses Termina TUI with `SelectionListNode` and custom checkbox
-  rendering (see `ExternalSkillsStepView` for the pattern).
+  rendering.
 - `IContextLayerProvider` is a simple interface with a single
   `GetContextLayer()` method. Adding a parameter is a breaking interface
   change but all implementations are internal.
-- Config schema uses `additionalProperties: false` — new properties must
-  be added to the schema in the same PR.
+- Config schema uses `additionalProperties: false`.
+- Existing feature config types are uneven. Some subsystems already have a
+  natural config section (`Memory`, `Search`, `SkillSync`, `SubAgents`,
+  `Webhooks`), while scheduling currently relies more on actor/service wiring
+  than an explicit top-level on/off switch.
+- Public currently relies on `ToolAudienceProfiles.CreatePublic()` plus
+  `GlobalReadRoots`, which means some internal roots are implicitly reachable
+  even though Public read/write tool modes are session-scoped.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Eliminate information leakage from public sessions: no internal operating
-  instructions, no filesystem paths, no memory taint vector
-- Give operators explicit control over feature availability per deployment
-  posture via the init wizard
+- Eliminate information leakage from Public sessions: no internal operating
+  instructions, no filesystem paths, no hidden capability discovery, no memory
+  taint vector.
+- Give operators explicit control over deployment-wide feature runtime wiring
+  while keeping audience exposure as a separate allowlist decision.
 - Make AGENTS.md binary-owned so the runtime always uses the correct
-  audience-specific variant
-- Config `Enabled` flags become the runtime source of truth for feature
-  availability, overriding audience profile defaults when disabled
+  audience-specific variant.
+- Make prompt injection, discovery results, direct invocation, implicit file
+  roots, and automatic/background execution all agree on the same audience /
+  feature decisions.
+- Clarify that disabling Public memory makes existing Public memories inert for
+  normal recall/search without introducing a purge feature in this change.
 
 **Non-Goals:**
 
-- Per-channel feature toggles (feature selection is per-deployment, not
-  per-channel)
-- Runtime AGENTS.md hot-reload (loaded once at session start, cached)
-- Custom operator AGENTS.md content (this is explicitly being removed)
-- Memory purge of existing public-audience data (separate concern)
-- Dynamic AGENTS.md section assembly based on config flags at runtime
-  (deferred — for this change, audience variants are static embedded
-  resources)
+- Per-channel feature toggles.
+- Runtime AGENTS.md hot-reload.
+- Custom operator AGENTS.md content.
+- Memory purge of existing Public-audience data.
+- New data migration or cleanup code for existing Public memories.
+- Dynamic AGENTS.md section assembly based on config flags at runtime.
+- Large ACL redesign or a new policy language.
 
 ## Decisions
 
 ### D1: AGENTS.md loaded from embedded resources, not filesystem
 
-**Choice:** Embed audience-specific AGENTS.md files as assembly resources
-in `Netclaw.Configuration`. `FileSystemPromptProvider` loads from the
-embedded resource based on the session's `TrustAudience`.
+**Choice:** Embed audience-specific AGENTS.md files as assembly resources.
+`FileSystemPromptProvider` loads from the embedded resource based on the
+session's `TrustAudience`.
 
 **Rationale:** This prevents operators from editing alignment rules and
-prevents public sessions from seeing personal-audience operating
-instructions. The binary is the single source of truth for agent behavior.
+prevents Public sessions from seeing Personal/Team operating instructions.
 
-**Alternatives considered:**
-- *Filesystem with audience-specific filenames* (AGENTS.public.md): Still
-  operator-editable, doesn't solve the ownership problem.
-- *Runtime section stripping*: Fragile heuristic, hard to maintain, easy
-  to break by editing the template.
+### D2: Deployment-wide `Enabled` switches are distinct from audience allowlists
 
-### D2: Feature Selection wizard step with config `Enabled` flags
+**Choice:** Add deployment-wide `Enabled` switches to the relevant subsystem
+config sections (`Memory`, `Search`, `SkillSync`, `SubAgents`, `Webhooks`) and
+add a new top-level `Scheduling` config section whose only property in this
+change is `Enabled`. These switches decide whether runtime services,
+registries, watchers, and tool registration are active at all. Audience
+profiles continue to decide which audiences may discover or invoke a
+still-enabled subsystem.
+
+**Rationale:** The repo already uses audience profiles for exposure and tool
+allowlisting. The missing piece is an operator-controlled runtime kill switch.
+
+**Consequences:**
+
+- `Search.Enabled = false` means no `web_search`/`web_fetch` registration for
+  any audience.
+- `Search.Enabled = true` with Public `AllowedTools` omitting search still means
+  Public cannot see or use search.
+- `Scheduling.Enabled = false` means reminder tools and scheduled reminder
+  execution are off for all audiences.
+- Background jobs remain governed by shell/background-job policy rather than
+  the new `Scheduling` config section.
+- The same pattern applies to memory, skills, subagents, and webhooks.
+
+### D3: Feature Selection configures deployment-wide switches, not implicit Public allowlists
 
 **Choice:** New `FeatureSelectionStepViewModel` presented after Security
-Posture for non-Personal postures. Toggleable features write `Enabled`
-boolean flags to the config. Runtime code checks these flags to gate
-feature availability.
+Posture for non-Personal postures. Toggleable features write deployment-wide
+`Enabled` flags to config. Public posture defaults search off. Enabling search
+there does not mutate `Tools.AudienceProfiles.Public.AllowedTools`; Public
+search exposure still requires explicit operator allowlisting.
 
-**Rationale:** Operators deploying for public or team use should
-explicitly opt into capabilities rather than discovering restrictions
-after deployment. The checkbox pattern already exists in
-`ExternalSkillsStepView`.
+**Rationale:** The wizard should make runtime posture clear without silently
+rewriting audience policy.
 
-**Alternatives considered:**
-- *Automatic defaults only*: Current approach — operators don't know what's
-  enabled until they test it.
-- *Post-init config editing*: Requires operators to understand the config
-  schema. The wizard is the primary onboarding surface.
-
-### D3: Context layer audience parameter
+### D4: Context layer audience parameter
 
 **Choice:** Add `TrustAudience audience` parameter to
 `IContextLayerProvider.GetContextLayer()` and `ContextAssemblyInput`.
-Each implementation decides what to return per audience.
 
-**Rationale:** Simplest extension point. All implementations are internal,
-so the breaking interface change has no external impact.
+**Rationale:** Smallest useful extension point.
 
-**Alternatives considered:**
-- *Separate filtering layer*: More complex, adds indirection without
-  benefit since each layer knows best what to suppress.
-- *Audience-aware layer registration*: Over-engineered for 3
-  implementations.
+### D5: Discovery/load tools use the same audience and feature gates as direct exposure
 
-### D4: Session block path redaction via audience check
+**Choice:** `search_tools`, `load_tool`, `skill_load`, `skill_read_resource`,
+subagent discovery, and `spawn_agent` resolve visibility from the same
+effective audience + feature flags used by direct tool exposure.
 
-**Choice:** `SessionMessageAssembler.BuildStaticContextBlock()` checks the
-audience from `ContextAssemblyInput`. For Public, emits only the session
-ID. For Team/Personal, includes full paths.
+**Rationale:** Hiding capabilities only in the prompt or initial tool list is
+insufficient if meta-tools can still enumerate or reactivate them.
 
-**Rationale:** Session ID is the channel/thread ID visible in the
-Discord/Slack UI — not an information leak. Filesystem paths reveal
+### D6: Session block path redaction via audience check
+
+**Choice:** `SessionMessageAssembler.BuildStaticContextBlock()` emits only the
+session ID for Public. Team/Personal retain full paths.
+
+**Rationale:** Session ID is already visible in the UI. Filesystem paths reveal
 deployment topology.
 
-### D5: Memory full disable via audience + config flag
+### D7: Public loses implicit internal file roots
 
-**Choice:** Two-layer gate: (1) Public audience profile loses memory
-tools, (2) `MemoryConfig.Enabled` flag gates recall and extraction at
-runtime. Both must be true for memory to function.
+**Choice:** Public file access remains session-root scoped only. Identity,
+skills, and workspaces roots stop being global implicit read roots for Public.
 
-**Rationale:** The audience profile controls what the LLM can invoke. The
-config flag controls whether the infrastructure runs. Belt and suspenders.
+**Rationale:** Public should not pivot from file tools into internal
+identity/skill/workspace content through convenience defaults.
 
-### D6: Error message sanitization for public audience only
+### D8: Memory full disable via audience + config flag
+
+**Choice:** Two-layer gate: Public audience profile loses memory tools, and
+`MemoryConfig.Enabled` gates recall, explicit search/get, extraction, and
+storage-related paths at runtime.
+
+**Rationale:** Audience profile controls invocation. Config controls whether the
+infrastructure runs.
+
+**Historical data rule:** Existing Public-authored memories are not purged by
+this change. Once Public memory is disabled, normal recall/search and storage
+paths for Public are off, and normal recall/search paths stop surfacing those
+historical Public-authored items. Deliberate purge by a higher-privilege
+operator remains an operator action, not a new runtime feature in this change.
+
+### D9: Automatic/background execution keeps persisted originating audience and feature scope
+
+**Choice:** Scheduling, webhook execution, and reminder delivery continue to use
+the persisted originating audience/boundary and must also respect
+deployment-wide `Enabled` switches. Background jobs remain governed by their
+existing shell/background-job controls and are not toggled by
+`Scheduling.Enabled` in this change.
+
+**Rationale:** Autonomous/runtime-owned paths are where policy drift often
+reappears.
+
+### D10: Error message sanitization for Public audience only
 
 **Choice:** `ScopedFileAccessPolicy` omits allowed root paths from error
-messages for Public audience. Team/Personal retain verbose errors.
-
-**Rationale:** Verbose errors help operators debug. Public users don't
-need to know the deployment's directory structure.
+messages for Public. Team/Personal retain verbose errors.
 
 ## Risks / Trade-offs
 
-- **[Risk] Existing AGENTS.md customizations lost** → Migration: document
-  the change. Operators who customized AGENTS.md should move behavioral
-  guidance to SOUL.md. The set of operators who have done this is small
-  (product is pre-1.0).
-
-- **[Risk] Feature flags add config complexity** → Mitigation: wizard
-  handles initial setup; defaults match current behavior for Personal
-  posture. Config is only complex if operators edit it manually.
-
-- **[Risk] IContextLayerProvider interface change breaks external
-  implementations** → Mitigation: all implementations are internal. No
-  public API contract.
-
-- **[Trade-off] Static embedded AGENTS.md vs. runtime section assembly**
-  → We ship two static files (full and public) rather than dynamically
-  assembling sections based on config flags. This means config flag
-  changes (e.g., enabling memory on a public deployment) won't update
-  AGENTS.md guidance until we implement dynamic assembly in a future
-  change. Acceptable for MVP because the audience-specific variants cover
-  the critical security case.
-
-- **[Trade-off] TOOLING.md suppressed entirely for Public** → Public
-  sessions lose environment context. Acceptable because public sessions
-  have minimal tool access anyway, and TOOLING.md exposes deployment
-  details.
+- **Existing AGENTS.md customizations lost**: operators who customized AGENTS.md
+  should move behavioral guidance to SOUL.md.
+- **Feature flags add config complexity**: mitigated by the wizard and by
+  keeping runtime switches separate from audience allowlists.
+- **Distinguishing runtime switches from audience allowlists is easy to
+  implement inconsistently**: mitigated by explicit spec/tasks and tests for
+  both runtime-disabled and audience-not-exposed cases.
+- **IContextLayerProvider interface change breaks implementations**: acceptable
+  because all implementations are internal.
+- **Static audience-specific AGENTS variants vs. fully dynamic prompt
+  assembly**: keep this change minimal by fixing the critical audience split
+  first.
+- **TOOLING.md suppressed entirely for Public**: Public loses environment
+  context, but that content exposes deployment details.
+- **No purge/migration for legacy Public memory rows**: keeps the hardening
+  change implementation-ready while still making the data inert for normal
+  recall/search.

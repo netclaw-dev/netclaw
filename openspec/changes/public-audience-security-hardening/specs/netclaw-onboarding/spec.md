@@ -13,6 +13,10 @@ generation. AGENTS.md is binary-controlled firmware loaded from embedded
 resources at runtime. The wizard SHALL continue to write `SOUL.md` and
 `TOOLING.md` as operator-mutable identity files.
 
+For non-Personal postures, the wizard SHALL also present a Feature Selection
+step that writes deployment-wide `Enabled` switches. These switches SHALL NOT
+implicitly rewrite Public audience allowlists.
+
 #### Scenario: First-time setup
 
 - **WHEN** operator runs `netclaw init` on a fresh install
@@ -28,3 +32,11 @@ resources at runtime. The wizard SHALL continue to write `SOUL.md` and
 - **THEN** `SOUL.md` is written from the embedded SOUL template
 - **AND** `TOOLING.md` is written from the embedded TOOLING template
 - **AND** `AGENTS.md` is NOT written from a template
+
+#### Scenario: Public posture defaults search off without mutating Public tool allowlist
+
+- **GIVEN** the operator selected Public posture
+- **WHEN** the Feature Selection step is shown
+- **THEN** Search defaults to disabled
+- **AND** enabling Search there affects only the deployment-wide runtime switch
+- **AND** `Tools.AudienceProfiles.Public.AllowedTools` is not implicitly widened

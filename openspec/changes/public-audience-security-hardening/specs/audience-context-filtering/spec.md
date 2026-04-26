@@ -6,6 +6,8 @@ The context layer system SHALL accept a `TrustAudience` parameter on
 `IContextLayerProvider.GetContextLayer()`. Each context layer implementation
 SHALL use the audience to determine what content to return. The
 `ContextAssemblyInput` record SHALL include a `TrustAudience Audience` field.
+When a feature is disabled deployment-wide, the corresponding context layer
+SHALL also return empty even for non-Public audiences.
 
 #### Scenario: Public audience receives no skill index
 
@@ -25,16 +27,22 @@ SHALL use the audience to determine what content to return. The
 - **THEN** `SubAgentDiscoveryContextLayer.GetContextLayer(Public)` returns empty string
 - **AND** no subagent index appears in the session's system messages
 
-#### Scenario: Team audience receives all context layers
+#### Scenario: Disabled skills feature suppresses skill index for Team
+
+- **GIVEN** `SkillSync.Enabled` is `false` in config
+- **WHEN** a Team-audience session assembles context
+- **THEN** `SkillIndexContextLayer.GetContextLayer(Team)` returns empty string
+- **AND** no skill index appears in the session's system messages
+
+#### Scenario: Team audience receives all allowed context layers
 
 - **WHEN** a Team-audience session assembles context
-- **THEN** all context layers return their full content
-- **AND** skill index, memory index, and subagent discovery are included
+- **THEN** all enabled context layers return their full content
 
-#### Scenario: Personal audience receives all context layers
+#### Scenario: Personal audience receives all allowed context layers
 
 - **WHEN** a Personal-audience session assembles context
-- **THEN** all context layers return their full content
+- **THEN** all enabled context layers return their full content
 
 ### Requirement: Session block path redaction
 
@@ -53,7 +61,7 @@ audiences.
 - **WHEN** a Team-audience session assembles the static context block
 - **THEN** the session block contains `id`, `session_dir`, and `media_dir`
 
-### Requirement: Working context suppression for public
+### Requirement: Working context suppression for Public
 
 The working context block (project directory, recent files) SHALL NOT be
 injected into Public-audience sessions.
@@ -84,3 +92,16 @@ to receive verbose error messages including allowed roots.
 
 - **WHEN** a Team-audience session attempts to read a file outside allowed roots
 - **THEN** the error message includes the list of allowed root paths
+
+### Requirement: Public audience has no implicit internal file roots
+
+Public file access SHALL NOT implicitly include identity, skills, or workspaces
+roots through global/default file-root configuration.
+
+#### Scenario: Public file access is session-scoped only
+
+- **GIVEN** a Public-audience session with default file access configuration
+- **WHEN** it resolves implicit readable roots
+- **THEN** the resolved roots include only session-scoped locations
+- **AND** identity, skills, and workspaces roots are absent unless explicitly
+  configured for a non-Public audience

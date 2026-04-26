@@ -6,36 +6,59 @@ paths (session directory, project directory, allowed file roots), and can
 inject tainted memories that are later recalled into privileged sessions
 (#755). The current architecture treats AGENTS.md as operator-mutable and
 loads the same identity files for all audiences. There is no mechanism for
-operators to selectively enable or disable capabilities per deployment
-posture, and context layers inject the same content regardless of trust level.
+operators to selectively disable feature subsystems deployment-wide while also
+controlling which audiences may discover or use them. Several discovery and
+load paths still let Public recover hidden internals even when direct prompt
+injection is filtered: `search_tools`, `load_tool`, `skill_load`,
+`skill_read_resource`, `spawn_agent`, and implicit filesystem roots.
+
+Source PRDs: `PRD-002` (SEC-003, SEC-008), `PRD-004`, `PRD-007`, `PRD-008`,
+`PRD-009`. Source issue: `#755`.
 
 ## What Changes
 
 - **AGENTS.md becomes binary-controlled firmware.** The runtime loads
   audience-specific AGENTS variants from embedded resources instead of
-  the filesystem. Operators can no longer edit AGENTS.md — it is alignment
-  firmware analogous to Claude Code's embedded instructions. SOUL.md and
+  the filesystem. Operators can no longer edit AGENTS.md. SOUL.md and
   TOOLING.md remain operator-mutable. **BREAKING**: existing AGENTS.md
   files on disk are no longer read at runtime.
+- **Deployment-wide runtime kill switches become explicit.** Config gains
+  `Enabled` flags for Memory, Search, SkillSync, SubAgents, Scheduling,
+  and Webhooks. `Scheduling` is a new top-level config section whose only
+  property in this change is `Enabled`. It governs reminder/scheduled execution
+  runtime, not background-job shell infrastructure. These switches control
+  whether the subsystem is wired up at all. Audience allowlists remain a
+  separate control plane for what a session may discover or invoke.
 - **New wizard step for feature selection.** When operators select a
   non-Personal deployment posture during `netclaw init`, a new Feature
-  Selection step presents toggleable capabilities (memory, skills,
-  scheduling, subagents, webhooks, web search) with audience-appropriate
-  defaults. Selections write `Enabled` flags to config and drive which
-  sections appear in the runtime AGENTS.md.
-- **Config schema gains `Enabled` flags** for Memory, Skills, Scheduling,
-  SubAgents, and Webhooks sections. These are the runtime source of truth
-  for feature availability.
+  Selection step presents deployment-wide feature toggles with posture-specific
+  defaults. For Public posture, search defaults off. Enabling search there only
+  enables the deployment-wide runtime; it does not automatically expose
+  `web_search` or `web_fetch` to Public sessions.
 - **Context assembly filters by audience.** `IContextLayerProvider` and
   `ContextAssemblyInput` gain a `TrustAudience` parameter. Public sessions
   receive: no skill index, no memory index, no subagent discovery, no
   working context, and a redacted session block (ID only, no filesystem
   paths).
-- **Memory fully disabled for public sessions.** Memory tools removed from
-  public audience profile, automatic recall suppressed, memory
-  extraction/distillation skipped. Eliminates the memory taint vector.
-- **File access error messages sanitized.** Public-audience denial messages
-  no longer enumerate allowed root paths.
+- **Discovery and load paths honor the same audience/feature rules.** Public
+  must not recover hidden internals through `search_tools`, `load_tool`,
+  `skill_load`, `skill_read_resource`, `spawn_agent`, or equivalent capability
+  discovery paths. Blocked tools/skills/subagents must be absent from both
+  prompt guidance and discovery results, not merely denied at final invocation.
+- **Memory fully disabled for Public sessions.** Memory tools removed from the
+  Public audience profile, automatic recall suppressed, memory
+  extraction/distillation skipped, and normal recall/search paths treat
+  existing Public-authored memories as inert going forward. This change does
+  not add purge or cleanup behavior.
+- **Public file access loses implicit internal roots.** Public file access must
+  stay session-scoped by default and must not implicitly reach identity,
+  skills, or workspaces content through global roots or similar defaults.
+- **Automatic/runtime-owned behavior uses the same gates.** Scheduling and
+  webhook entry points must honor both deployment-wide `Enabled` switches and
+  the persisted originating audience without widening capability exposure.
+- **Identity/system-prompt validation is mandatory.** Because this change
+  modifies AGENTS ownership and prompt assembly, the implementation must run
+  the behavioral eval suite in addition to build/test/slopwatch.
 
 ## Capabilities
 
@@ -46,20 +69,31 @@ posture, and context layers inject the same content regardless of trust level.
   Covers the `IContextLayerProvider` audience parameter, session block
   redaction, working context suppression, and error message sanitization.
 - `feature-selection-wizard`: New wizard step for non-Personal postures
-  presenting toggleable feature capabilities. Includes config `Enabled`
-  flags for Memory, Skills, Scheduling, SubAgents, and Webhooks.
+  presenting deployment-wide feature toggles. Includes config `Enabled`
+  flags for Memory, Search, SkillSync, Scheduling, SubAgents, and Webhooks.
 
 ### Modified Capabilities
 
 - `netclaw-session`: System prompt assembly gains audience parameter;
   AGENTS.md loaded from embedded resources by audience instead of from
   disk. `ContextAssemblyInput` gains `TrustAudience Audience` field.
-- `netclaw-tools`: Public audience profile loses memory tools
-  (`store_memory`, `find_memories`, `get_memories`, `update_memory`).
-  File access denial messages sanitized for public audience.
+- `netclaw-tools`: Public audience profile loses memory tools and defaults to
+  `web_search` / `web_fetch` disabled unless explicitly allowlisted. File
+  access denial messages are sanitized for Public audience, and Public loses
+  implicit internal file roots.
 - `netclaw-agent-memory`: Memory recall, extraction, and distillation
   gated on `MemoryConfig.Enabled` and audience. Public sessions are
-  fully amnesic.
+  fully amnesic, and historical Public memories become inert for normal
+  recall/search going forward.
+- `netclaw-mcp`: `search_tools` and `load_tool` must enforce the same
+  audience/feature filters as direct tool exposure and must not reveal blocked
+  tools or servers to Public.
+- `skill-tools`: `skill_load` and `skill_read_resource` become unavailable when
+  the skills subsystem is disabled and for Public sessions.
+- `netclaw-subagents`: Public loses subagent discovery and `spawn_agent`
+  access. Subagent visibility must follow the same allowlist and runtime gates.
+- `netclaw-scheduling`: Scheduling/runtime-owned reminders are gated by a
+  deployment-wide `Scheduling.Enabled` switch plus audience/tool allowlists.
 - `netclaw-onboarding`: Init wizard stops writing AGENTS.md to disk.
   New Feature Selection step inserted after Security Posture.
 - `security-posture-tui`: Feature Selection step reads
@@ -67,21 +101,26 @@ posture, and context layers inject the same content regardless of trust level.
 
 ## Impact
 
-- **Config schema**: New `Enabled` properties on Memory, SkillSync,
-  SubAgents, and Webhooks sections. New `Scheduling` section. Existing
-  deployments unaffected (defaults match current behavior for
-  Personal posture).
+- **Config schema**: New `Enabled` properties on Memory, Search, SkillSync,
+  SubAgents, Webhooks, and a new top-level `Scheduling` section. `Scheduling`
+  contains only `Enabled` in this change. Existing deployments remain
+  enabled-by-default unless operators choose otherwise.
 - **System prompt provider**: `ISystemPromptProvider.GetSystemPrompt()`
   signature changes (adds `TrustAudience` parameter). All callers
   must update.
 - **Context layer interface**: `IContextLayerProvider.GetContextLayer()`
   signature changes (adds `TrustAudience` parameter). All
   implementations must update.
+- **Runtime wiring**: Tool registration, skill sync/watchers, subagent
+  registration, reminder/scheduling services, and webhook startup paths must
+  all observe deployment-wide `Enabled` switches instead of assuming that
+  audience filtering alone is sufficient.
 - **Init wizard**: AGENTS.md no longer written to disk. Existing
   AGENTS.md files ignored at runtime. Operators who customized
-  AGENTS.md need to migrate customizations to SOUL.md or contact
-  support.
+  AGENTS.md need to migrate customizations to SOUL.md.
 - **Breaking for AGENTS.md customizers**: Any operator who edited
   `~/.netclaw/identity/AGENTS.md` after init will lose those
-  customizations. This is intentional — AGENTS.md is alignment
-  firmware and should not be operator-mutable.
+  customizations. This is intentional.
+- **No data purge in scope**: Existing Public-authored memories are not deleted
+  by this change. They simply stop participating in normal Public recall/search
+  paths once Public memory is disabled.
