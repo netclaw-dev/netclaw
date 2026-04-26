@@ -27,7 +27,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private readonly ILoggingAdapter _log;
 
     private readonly HashSet<string> _activeJobIds = [];
-    private readonly Queue<BackgroundJobDefinition> _deferredQueue = new();
+    private readonly Queue<string> _deferredQueue = new();
     private readonly Dictionary<string, BackgroundJobDefinition> _definitions = new();
 
     public BackgroundJobManagerActor(
@@ -78,7 +78,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         {
             _log.Info("Background job concurrency limit reached ({0}), queuing job {1}",
                 MaxConcurrentJobs, jobId.Value);
-            _deferredQueue.Enqueue(definition);
+            _deferredQueue.Enqueue(jobId.Value);
             Sender.Tell(new BackgroundJobStarted(jobId));
             return;
         }
@@ -91,11 +91,15 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     {
         _activeJobIds.Remove(completed.JobId.Value);
 
-        if (_definitions.TryGetValue(completed.JobId.Value, out var def))
+        BackgroundJobDefinition? def = null;
+        if (_definitions.TryGetValue(completed.JobId.Value, out var existing))
         {
-            def.Status = completed.Status;
-            def.ExitCode = completed.ExitCode;
-            def.CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+            def = existing with
+            {
+                Status = completed.Status,
+                ExitCode = completed.ExitCode,
+                CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+            };
             _store.Save(def);
         }
 
@@ -115,9 +119,13 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         else if (_definitions.TryGetValue(cmd.JobId.Value, out var def)
                  && def.Status is BackgroundJobStatus.Pending)
         {
-            def.Status = BackgroundJobStatus.Cancelled;
-            def.CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            _store.Save(def);
+            var updated = def with
+            {
+                Status = BackgroundJobStatus.Cancelled,
+                CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+            };
+            _definitions[cmd.JobId.Value] = updated;
+            _store.Save(updated);
         }
     }
 
@@ -186,18 +194,22 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         foreach (var def in persisted)
         {
+            var current = def;
             if (def.Status is BackgroundJobStatus.Running or BackgroundJobStatus.Pending)
             {
-                def.Status = BackgroundJobStatus.Lost;
-                def.CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-                _store.Save(def);
+                current = def with
+                {
+                    Status = BackgroundJobStatus.Lost,
+                    CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
+                };
+                _store.Save(current);
                 reconciled++;
 
                 _log.Warning("Reconciled orphaned background job {JobId} as lost (process lost during restart)",
                     def.Id);
             }
 
-            _definitions[def.Id] = def;
+            _definitions[current.Id] = current;
         }
 
         if (reconciled > 0)
@@ -206,25 +218,27 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     private void SpawnExecution(BackgroundJobDefinition definition)
     {
-        definition.Status = BackgroundJobStatus.Running;
-        _store.Save(definition);
-        _activeJobIds.Add(definition.Id);
+        var running = definition with { Status = BackgroundJobStatus.Running };
+        _definitions[running.Id] = running;
+        _store.Save(running);
+        _activeJobIds.Add(running.Id);
 
-        var outputLogPath = _store.GetOutputLogPath(new BackgroundJobId(definition.Id));
+        var outputLogPath = _store.GetOutputLogPath(new BackgroundJobId(running.Id));
         var props = DependencyResolver.For(Context.System)
-            .Props<BackgroundJobExecutionActor>(definition, outputLogPath, _timeProvider);
-        Context.ActorOf(props, $"job-{definition.Id}");
+            .Props<BackgroundJobExecutionActor>(running, outputLogPath, _timeProvider);
+        Context.ActorOf(props, $"job-{running.Id}");
     }
 
     private void DispatchDeferred()
     {
         while (_deferredQueue.Count > 0 && _activeJobIds.Count < MaxConcurrentJobs)
         {
-            var next = _deferredQueue.Dequeue();
-            if (next.Status is BackgroundJobStatus.Cancelled)
+            var jobId = _deferredQueue.Dequeue();
+            if (!_definitions.TryGetValue(jobId, out var def)
+                || def.Status is BackgroundJobStatus.Cancelled)
                 continue;
 
-            SpawnExecution(next);
+            SpawnExecution(def);
         }
     }
 

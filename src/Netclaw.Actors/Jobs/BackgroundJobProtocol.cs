@@ -92,17 +92,17 @@ internal sealed record BackgroundJobCompleted
 /// <summary>
 /// Job definition persisted to <c>~/.netclaw/jobs/{id}.json</c>.
 /// </summary>
-public sealed class BackgroundJobDefinition
+public sealed record BackgroundJobDefinition
 {
     public required string Id { get; init; }
     public required string Command { get; init; }
     public required string SessionId { get; init; }
     public required string Rationale { get; init; }
-    public BackgroundJobStatus Status { get; set; } = BackgroundJobStatus.Pending;
-    public int? ExitCode { get; set; }
+    public BackgroundJobStatus Status { get; init; } = BackgroundJobStatus.Pending;
+    public int? ExitCode { get; init; }
     public int TimeoutSeconds { get; init; } = 600;
-    public long StartedAtMs { get; set; }
-    public long? CompletedAtMs { get; set; }
+    public long StartedAtMs { get; init; }
+    public long? CompletedAtMs { get; init; }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public TrustAudience Audience { get; init; } = TrustAudience.Personal;
@@ -114,16 +114,9 @@ public sealed class BackgroundJobDefinition
     public string? SenderId { get; init; }
 
     [JsonIgnore]
-    public DateTimeOffset StartedAt
-    {
-        get => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);
-        set => StartedAtMs = value.ToUnixTimeMilliseconds();
-    }
+    public DateTimeOffset StartedAt => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);
 
     [JsonIgnore]
-    public DateTimeOffset? CompletedAt
-    {
-        get => CompletedAtMs is not null ? DateTimeOffset.FromUnixTimeMilliseconds(CompletedAtMs.Value) : null;
-        set => CompletedAtMs = value?.ToUnixTimeMilliseconds();
-    }
+    public DateTimeOffset? CompletedAt =>
+        CompletedAtMs is not null ? DateTimeOffset.FromUnixTimeMilliseconds(CompletedAtMs.Value) : null;
 }
