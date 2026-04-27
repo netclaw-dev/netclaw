@@ -10,7 +10,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the Discord wizard step.
-/// 5 sub-steps: enable -> bot token -> channel IDs -> DM enabled -> allowed user IDs.
+/// 6 sub-steps: enable -> bot token -> channel IDs -> DM enabled -> user access choice -> allowed user IDs (conditional).
 /// </summary>
 public sealed class DiscordStepView : IWizardStepView
 {
@@ -18,6 +18,7 @@ public sealed class DiscordStepView : IWizardStepView
     private TextInputNode? _botTokenInput;
     private TextInputNode? _channelIdsInput;
     private SelectionListNode<string>? _dmEnabledList;
+    private SelectionListNode<string>? _userAccessChoiceList;
     private TextInputNode? _allowedUserIdsInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
@@ -34,7 +35,8 @@ public sealed class DiscordStepView : IWizardStepView
             1 => BuildBotTokenSubStep(vm, callbacks),
             2 => BuildChannelIdsSubStep(vm, callbacks),
             3 => BuildDmEnabledSubStep(vm, callbacks),
-            4 => BuildAllowedUserIdsSubStep(vm, callbacks),
+            4 => BuildUserAccessChoiceSubStep(vm, callbacks),
+            5 => BuildAllowedUserIdsSubStep(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -156,6 +158,35 @@ public sealed class DiscordStepView : IWizardStepView
             .WithChild(_dmEnabledList);
     }
 
+    private ILayoutNode BuildUserAccessChoiceSubStep(DiscordStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        var restrictLabel = "Restrict to specific users (recommended)";
+        var allowLabel = "Allow anyone in allowed channels";
+
+        _userAccessChoiceList = Layouts.SelectionList(restrictLabel, allowLabel)
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _userAccessChoiceList.OnFocused();
+        _lastFocusedList = _userAccessChoiceList;
+        _lastFocusedInput = null;
+
+        _userAccessChoiceList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                vm.RestrictToSpecificUsers = selected[0] == restrictLabel;
+                callbacks.AdvanceStep();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Who can interact with the bot?").WithForeground(Color.White))
+            .WithChild(_userAccessChoiceList);
+    }
+
     private ILayoutNode BuildAllowedUserIdsSubStep(DiscordStepViewModel vm, StepViewCallbacks callbacks)
     {
         _allowedUserIdsInput = new TextInputNode()
@@ -169,15 +200,16 @@ public sealed class DiscordStepView : IWizardStepView
         _lastFocusedList = null;
 
         _allowedUserIdsInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
-                vm.AllowedUserIdsInput = string.IsNullOrWhiteSpace(text) ? null : text;
+                vm.AllowedUserIdsInput = text;
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Allowed user IDs (press Enter to skip):").WithForeground(Color.White))
+            .WithChild(new TextNode("  Allowed user IDs (at least one required):").WithForeground(Color.White))
             .WithChild(new PanelNode()
                 .WithTitle("Allowed User IDs")
                 .WithBorder(BorderStyle.Rounded)
@@ -216,6 +248,7 @@ public sealed class DiscordStepView : IWizardStepView
         _botTokenInput = null;
         _channelIdsInput = null;
         _dmEnabledList = null;
+        _userAccessChoiceList = null;
         _allowedUserIdsInput = null;
     }
 }

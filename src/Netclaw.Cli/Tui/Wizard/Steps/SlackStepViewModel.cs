@@ -6,7 +6,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Wizard step for configuring Slack integration.
-/// 6 sub-steps: enable → bot token → app token → channel names → DM enabled → allowed user IDs.
+/// 7 sub-steps: enable → bot token → app token → channel names → DM enabled → user access choice → allowed user IDs (conditional).
 /// </summary>
 public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
@@ -41,6 +41,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
     public string? AppToken { get; set; }
     public string? ChannelNamesInput { get; set; }
     public bool AllowDirectMessages { get; set; }
+    public bool RestrictToSpecificUsers { get; set; }
     public string? AllowedUserIdsInput { get; set; }
     internal SlackChannelResolutionResult? LastChannelResolution { get; set; }
 
@@ -49,7 +50,9 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => SlackEnabled ? (SkipEnableSubStep ? 5 : 6) : 1;
+    public int SubStepCount => SlackEnabled
+        ? (SkipEnableSubStep ? 5 : 6) + (RestrictToSpecificUsers ? 1 : 0)
+        : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -58,7 +61,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         2 => "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
         3 => "  Channel names separated by commas. Bot needs channels:read scope to resolve.",
         4 => "  DMs create a private session per conversation. Each top-level DM starts a new session.",
-        5 => "  Restrict Slack access to specific user IDs for both channels and DMs. Leave blank to allow all workspace members.",
+        5 => "  Choose whether to restrict bot interactions to specific Slack user IDs.",
+        6 => "  Enter the Slack user IDs who should have access. At least one ID is required.",
         _ => ""
     };
 
@@ -78,7 +82,21 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
             return true;
         }
 
-        return false; // step complete (disabled at sub-step 0, or sub-step 5 complete)
+        if (_currentSubStep == 5 && SlackEnabled)
+        {
+            if (RestrictToSpecificUsers)
+            {
+                _currentSubStep = 6;
+                _highWaterSubStep = 6;
+                return true;
+            }
+
+            AllowedUserIdsInput = null;
+            _highWaterSubStep = 5;
+            return false;
+        }
+
+        return false;
     }
 
     public bool TryGoBack()
@@ -111,6 +129,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         AppToken = null;
         ChannelNamesInput = null;
         AllowDirectMessages = false;
+        RestrictToSpecificUsers = false;
         AllowedUserIdsInput = null;
         LastChannelResolution = null;
         var startSubStep = SkipEnableSubStep ? 1 : 0;

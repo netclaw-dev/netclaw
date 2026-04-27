@@ -10,7 +10,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the Slack wizard step.
-/// 6 sub-steps: enable → bot token → app token → channel names → DM → user IDs.
+/// 7 sub-steps: enable → bot token → app token → channel names → DM → user access choice → user IDs (conditional).
 /// </summary>
 public sealed class SlackStepView : IWizardStepView
 {
@@ -19,6 +19,7 @@ public sealed class SlackStepView : IWizardStepView
     private TextInputNode? _appTokenInput;
     private TextInputNode? _channelNamesInput;
     private SelectionListNode<string>? _dmEnabledList;
+    private SelectionListNode<string>? _userAccessChoiceList;
     private TextInputNode? _allowedUserIdsInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
@@ -36,7 +37,8 @@ public sealed class SlackStepView : IWizardStepView
             2 => BuildAppTokenSubStep(vm, callbacks),
             3 => BuildChannelNamesSubStep(vm, callbacks),
             4 => BuildDmEnabledSubStep(vm, callbacks),
-            5 => BuildAllowedUserIdsSubStep(vm, callbacks),
+            5 => BuildUserAccessChoiceSubStep(vm, callbacks),
+            6 => BuildAllowedUserIdsSubStep(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -197,6 +199,35 @@ public sealed class SlackStepView : IWizardStepView
             .WithChild(_dmEnabledList);
     }
 
+    private ILayoutNode BuildUserAccessChoiceSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        var restrictLabel = "Restrict to specific users (recommended)";
+        var allowLabel = "Allow anyone in allowed channels";
+
+        _userAccessChoiceList = Layouts.SelectionList(restrictLabel, allowLabel)
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _userAccessChoiceList.OnFocused();
+        _lastFocusedList = _userAccessChoiceList;
+        _lastFocusedInput = null;
+
+        _userAccessChoiceList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                vm.RestrictToSpecificUsers = selected[0] == restrictLabel;
+                callbacks.AdvanceStep();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode("  Who can interact with the bot?").WithForeground(Color.White))
+            .WithChild(_userAccessChoiceList);
+    }
+
     private ILayoutNode BuildAllowedUserIdsSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
     {
         _allowedUserIdsInput = new TextInputNode()
@@ -210,15 +241,16 @@ public sealed class SlackStepView : IWizardStepView
         _lastFocusedList = null;
 
         _allowedUserIdsInput.Submitted
+            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
-                vm.AllowedUserIdsInput = string.IsNullOrWhiteSpace(text) ? null : text;
+                vm.AllowedUserIdsInput = text;
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode("  Allowed user IDs (press Enter to skip):").WithForeground(Color.White))
+            .WithChild(new TextNode("  Allowed user IDs (at least one required):").WithForeground(Color.White))
             .WithChild(new PanelNode()
                 .WithTitle("Allowed User IDs")
                 .WithBorder(BorderStyle.Rounded)
@@ -256,6 +288,7 @@ public sealed class SlackStepView : IWizardStepView
         _appTokenInput = null;
         _channelNamesInput = null;
         _dmEnabledList = null;
+        _userAccessChoiceList = null;
         _allowedUserIdsInput = null;
     }
 }

@@ -51,6 +51,15 @@ public sealed class DiscordStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SubStepCount_IsSix_WhenEnabled_WithRestrict()
+    {
+        using var step = new DiscordStepViewModel(_fakeProbe);
+        step.DiscordEnabled = true;
+        step.RestrictToSpecificUsers = true;
+        Assert.Equal(6, step.SubStepCount);
+    }
+
+    [Fact]
     public void TryAdvance_ThroughAllSubSteps()
     {
         using var step = new DiscordStepViewModel(_fakeProbe);
@@ -68,7 +77,43 @@ public sealed class DiscordStepViewModelTests : IDisposable
         Assert.True(step.TryAdvance());
         Assert.Equal(4, step.CurrentSubStep);
 
+        // Sub-step 4 is UserAccessChoice; default RestrictToSpecificUsers=false completes the step
         Assert.False(step.TryAdvance());
+    }
+
+    [Fact]
+    public void TryAdvance_WithRestrict_AdvancesToAllowedUserIds()
+    {
+        using var step = new DiscordStepViewModel(_fakeProbe);
+        step.DiscordEnabled = true;
+
+        // Advance to sub-step 4 (UserAccessChoice)
+        for (var i = 0; i < 4; i++)
+            step.TryAdvance();
+        Assert.Equal(4, step.CurrentSubStep);
+
+        step.RestrictToSpecificUsers = true;
+        Assert.True(step.TryAdvance());
+        Assert.Equal(5, step.CurrentSubStep);
+
+        // Sub-step 5 (AllowedUserIds) completes the step
+        Assert.False(step.TryAdvance());
+    }
+
+    [Fact]
+    public void TryAdvance_AllowAnyone_ClearsAllowedUserIds()
+    {
+        using var step = new DiscordStepViewModel(_fakeProbe);
+        step.DiscordEnabled = true;
+        step.AllowedUserIdsInput = "129847561203948576";
+
+        // Advance to sub-step 4 (UserAccessChoice)
+        for (var i = 0; i < 4; i++)
+            step.TryAdvance();
+
+        step.RestrictToSpecificUsers = false;
+        Assert.False(step.TryAdvance());
+        Assert.Null(step.AllowedUserIdsInput);
     }
 
     [Fact]

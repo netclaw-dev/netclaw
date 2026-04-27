@@ -51,6 +51,15 @@ public sealed class SlackStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void SubStepCount_IsSeven_WhenEnabled_WithRestrict()
+    {
+        using var step = new SlackStepViewModel(_fakeProbe);
+        step.SlackEnabled = true;
+        step.RestrictToSpecificUsers = true;
+        Assert.Equal(7, step.SubStepCount);
+    }
+
+    [Fact]
     public void TryAdvance_ReturnsFalse_WhenDisabled()
     {
         using var step = new SlackStepViewModel(_fakeProbe);
@@ -84,8 +93,43 @@ public sealed class SlackStepViewModelTests : IDisposable
         Assert.True(step.TryAdvance());
         Assert.Equal(5, step.CurrentSubStep);
 
-        // 5 → complete
+        // Sub-step 5 is UserAccessChoice; default RestrictToSpecificUsers=false completes the step
         Assert.False(step.TryAdvance());
+    }
+
+    [Fact]
+    public void TryAdvance_WithRestrict_AdvancesToAllowedUserIds()
+    {
+        using var step = new SlackStepViewModel(_fakeProbe);
+        step.SlackEnabled = true;
+
+        // Advance to sub-step 5 (UserAccessChoice)
+        for (var i = 0; i < 5; i++)
+            step.TryAdvance();
+        Assert.Equal(5, step.CurrentSubStep);
+
+        step.RestrictToSpecificUsers = true;
+        Assert.True(step.TryAdvance());
+        Assert.Equal(6, step.CurrentSubStep);
+
+        // Sub-step 6 (AllowedUserIds) completes the step
+        Assert.False(step.TryAdvance());
+    }
+
+    [Fact]
+    public void TryAdvance_AllowAnyone_ClearsAllowedUserIds()
+    {
+        using var step = new SlackStepViewModel(_fakeProbe);
+        step.SlackEnabled = true;
+        step.AllowedUserIdsInput = "U01ABC123";
+
+        // Advance to sub-step 5 (UserAccessChoice)
+        for (var i = 0; i < 5; i++)
+            step.TryAdvance();
+
+        step.RestrictToSpecificUsers = false;
+        Assert.False(step.TryAdvance());
+        Assert.Null(step.AllowedUserIdsInput);
     }
 
     [Fact]

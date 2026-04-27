@@ -6,7 +6,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Wizard step for configuring Discord integration.
-/// 5 sub-steps: enable -> bot token -> allowed channel IDs -> DM enabled -> allowed user IDs.
+/// 6 sub-steps: enable -> bot token -> allowed channel IDs -> DM enabled -> user access choice -> allowed user IDs (conditional).
 /// </summary>
 public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
@@ -38,6 +38,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
     public string? BotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
+    public bool RestrictToSpecificUsers { get; set; }
     public string? AllowedUserIdsInput { get; set; }
     internal DiscordChannelResolutionResult? LastChannelResolution { get; set; }
 
@@ -46,7 +47,9 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => DiscordEnabled ? (SkipEnableSubStep ? 4 : 5) : 1;
+    public int SubStepCount => DiscordEnabled
+        ? (SkipEnableSubStep ? 4 : 5) + (RestrictToSpecificUsers ? 1 : 0)
+        : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -54,7 +57,8 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         1 => "  Enter the Discord bot token from your application settings.",
         2 => "  Allowed channel IDs are comma-separated. Leave blank for no guild channel ingress.",
         3 => "  Enable DMs only when you want Discord direct messages to be accepted.",
-        4 => "  Restrict Discord DM/message access to specific user IDs. Leave blank to allow any user in allowed conversations.",
+        4 => "  Choose whether to restrict bot interactions to specific Discord user IDs.",
+        5 => "  Enter the Discord user IDs who should have access. At least one ID is required.",
         _ => ""
     };
 
@@ -75,6 +79,20 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
             _currentSubStep++;
             _highWaterSubStep = _currentSubStep;
             return true;
+        }
+
+        if (_currentSubStep == 4 && DiscordEnabled)
+        {
+            if (RestrictToSpecificUsers)
+            {
+                _currentSubStep = 5;
+                _highWaterSubStep = 5;
+                return true;
+            }
+
+            AllowedUserIdsInput = null;
+            _highWaterSubStep = 4;
+            return false;
         }
 
         return false;
@@ -110,6 +128,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         BotToken = null;
         ChannelIdsInput = null;
         AllowDirectMessages = false;
+        RestrictToSpecificUsers = false;
         AllowedUserIdsInput = null;
         LastChannelResolution = null;
         var startSubStep = SkipEnableSubStep ? 1 : 0;
