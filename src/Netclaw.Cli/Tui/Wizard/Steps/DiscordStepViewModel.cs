@@ -8,7 +8,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for configuring Discord integration.
 /// 5 sub-steps: enable -> bot token -> allowed channel IDs -> DM enabled -> allowed user IDs.
 /// </summary>
-public sealed class DiscordStepViewModel : IWizardStepViewModel
+public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
     private readonly IDiscordProbe _discordProbe;
     private int _currentSubStep;
@@ -25,6 +25,16 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
     public string DisplayTitle => "Discord";
 
     public bool DiscordEnabled { get; set; }
+
+    bool IChannelAdapterViewModel.AdapterEnabled
+    {
+        get => DiscordEnabled;
+        set => DiscordEnabled = value;
+    }
+
+    int IChannelAdapterViewModel.ConfiguredChannelCount =>
+        ParseChannelIds(ChannelIdsInput).Count;
+
     public string? BotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
@@ -91,6 +101,8 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
         else
             _currentSubStep = startSubStep;
     }
+
+    void IChannelAdapterViewModel.ResetConfig() => ResetConfig();
 
     internal void ResetConfig()
     {

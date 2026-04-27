@@ -55,7 +55,12 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     internal bool IsInPickerMode => _mode == Mode.Picker;
     internal bool IsInSubFlow => _mode == Mode.SubFlow;
     internal IReadOnlyList<ChannelAdapterEntry> Adapters => _adapters;
-    internal int CursorIndex { get; set; }
+    private int _cursorIndex;
+    internal int CursorIndex
+    {
+        get => _cursorIndex;
+        set => _cursorIndex = Math.Clamp(value, 0, Math.Max(_adapters.Count - 1, 0));
+    }
     internal IWizardStepViewModel? ActiveAdapterVm => _activeAdapter?.Vm;
     internal IWizardStepView? ActiveAdapterView => _activeAdapter?.View;
 
@@ -230,22 +235,11 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
         _activeAdapter = null;
     }
 
-    private string ComputeSummary(ChannelAdapterEntry adapter)
+    private static string ComputeSummary(ChannelAdapterEntry adapter)
     {
-        var count = 0;
-
-        if (adapter.Type == ChannelType.Slack)
-        {
-            var slackVm = (SlackStepViewModel)adapter.Vm;
-            count = SlackStepViewModel.ParseChannelNames(slackVm.ChannelNamesInput).Count;
-            if (slackVm.AllowDirectMessages) count++;
-        }
-        else if (adapter.Type == ChannelType.Discord)
-        {
-            var discordVm = (DiscordStepViewModel)adapter.Vm;
-            count = DiscordStepViewModel.ParseChannelIds(discordVm.ChannelIdsInput).Count;
-            if (discordVm.AllowDirectMessages) count++;
-        }
+        var adapterVm = (IChannelAdapterViewModel)adapter.Vm;
+        var count = adapterVm.ConfiguredChannelCount;
+        if (adapterVm.AllowDirectMessages) count++;
 
         return count switch
         {
@@ -257,17 +251,11 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
 
     private static void SetChildEnabled(ChannelAdapterEntry adapter, bool enabled)
     {
-        if (adapter.Vm is SlackStepViewModel slack)
-            slack.SlackEnabled = enabled;
-        else if (adapter.Vm is DiscordStepViewModel discord)
-            discord.DiscordEnabled = enabled;
+        ((IChannelAdapterViewModel)adapter.Vm).AdapterEnabled = enabled;
     }
 
     private static void ResetChildConfig(ChannelAdapterEntry adapter)
     {
-        if (adapter.Vm is SlackStepViewModel slack)
-            slack.ResetConfig();
-        else if (adapter.Vm is DiscordStepViewModel discord)
-            discord.ResetConfig();
+        ((IChannelAdapterViewModel)adapter.Vm).ResetConfig();
     }
 }

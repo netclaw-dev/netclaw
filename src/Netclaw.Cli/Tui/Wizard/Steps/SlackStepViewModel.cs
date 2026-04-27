@@ -8,7 +8,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for configuring Slack integration.
 /// 6 sub-steps: enable → bot token → app token → channel names → DM enabled → allowed user IDs.
 /// </summary>
-public sealed class SlackStepViewModel : IWizardStepViewModel
+public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
     private static readonly TimeSpan SlackProbeHardTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ChannelResolutionHardTimeout = TimeSpan.FromSeconds(35);
@@ -28,6 +28,15 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
     // ── State ──
     public bool SlackEnabled { get; set; }
+
+    bool IChannelAdapterViewModel.AdapterEnabled
+    {
+        get => SlackEnabled;
+        set => SlackEnabled = value;
+    }
+
+    int IChannelAdapterViewModel.ConfiguredChannelCount =>
+        ParseChannelNames(ChannelNamesInput).Count;
     public string? BotToken { get; set; }
     public string? AppToken { get; set; }
     public string? ChannelNamesInput { get; set; }
@@ -92,6 +101,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
         else
             _currentSubStep = startSubStep;
     }
+
+    void IChannelAdapterViewModel.ResetConfig() => ResetConfig();
 
     internal void ResetConfig()
     {

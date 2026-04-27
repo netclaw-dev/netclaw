@@ -35,10 +35,6 @@ public sealed class ChannelPickerStepView : IWizardStepView
         var adapters = _vm!.Adapters;
         var cursorIndex = _vm.CursorIndex;
 
-        if (cursorIndex >= adapters.Count) _vm.CursorIndex = adapters.Count - 1;
-        if (cursorIndex < 0) _vm.CursorIndex = 0;
-        cursorIndex = _vm.CursorIndex;
-
         var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Which channels would you like to connect?").WithForeground(Color.White))
             .WithSpacing(1);
