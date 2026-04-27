@@ -781,6 +781,47 @@ public abstract class SessionBindingContractTests : TestKit
     }
 
     [Fact]
+    public async Task Thread_history_preserves_inline_attachment_content()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-attachment");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        var baseItem = Assert.Single(CreateHistoryItems(1));
+        var historyWithAttachment = baseItem with
+        {
+            Contents =
+            [
+                .. baseItem.Contents,
+                new DataContent(new byte[] { 1, 2, 3 }, "image/png")
+            ]
+        };
+        historyFetcher.SetHistory([historyWithAttachment]);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("live message", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.Contains(input.Contents, c => c is DataContent d && d.MediaType == "image/png");
+
+            var textContent = string.Join("\n", input.Contents.OfType<TextContent>().Select(t => t.Text));
+            Assert.Contains("image attachments", textContent, StringComparison.OrdinalIgnoreCase);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
     public async Task Empty_history_delivers_live_message_without_merge()
     {
         if (!SupportsThreadHydration) return;

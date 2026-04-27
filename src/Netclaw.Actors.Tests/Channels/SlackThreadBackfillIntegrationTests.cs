@@ -105,6 +105,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             httpClient,
             new NullContentScanner(),
             new NetclawPaths(Path.GetTempPath()),
+            ToolAudienceProfileDefaults.CreateProfiles(),
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -189,6 +191,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             httpClient,
             new NullContentScanner(),
             new NetclawPaths(Path.GetTempPath()),
+            ToolAudienceProfileDefaults.CreateProfiles(),
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -325,6 +329,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             httpClient,
             new NullContentScanner(),
             new NetclawPaths(Path.GetTempPath()),
+            ToolAudienceProfileDefaults.CreateProfiles(),
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -391,6 +397,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             httpClient,
             new NullContentScanner(),
             new NetclawPaths(Path.GetTempPath()),
+            ToolAudienceProfileDefaults.CreateProfiles(),
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -459,6 +467,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     {
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
         var httpClient = new HttpClient(_httpHandler);
+        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
+        profiles.Public.ChannelAttachments = ToolAudienceProfileDefaults.CreatePublicChannelAttachments();
 
         var fetcher = new SlackThreadHistoryFetcher(
             (channelId, threadTs, limit, cursor, ct) =>
@@ -498,10 +508,9 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             httpClient,
             new NullContentScanner(),
             new NetclawPaths(Path.GetTempPath()),
+            profiles,
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
             NullLogger<SlackThreadHistoryFetcher>.Instance);
-
-        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
-        profiles.Public.ChannelAttachments = ToolAudienceProfileDefaults.CreatePublicChannelAttachments();
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,

@@ -21,13 +21,19 @@ public sealed class SlackThreadHistoryFetcherTests
         BotToken = new SensitiveString("xoxb-test")
     };
 
-    private SlackThreadHistoryFetcher CreateFetcher() => new(
-        _replies.FetchAsync,
-        _options,
-        new HttpClient(new FakeHttpHandler()),
-        new NullContentScanner(),
-        new NetclawPaths(Path.GetTempPath()),
-        NullLogger<SlackThreadHistoryFetcher>.Instance);
+    private SlackThreadHistoryFetcher CreateFetcher(
+        HttpMessageHandler? handler = null,
+        IContentScanner? scanner = null,
+        ToolAudienceProfiles? profiles = null,
+        ModelCapabilities? modelCapabilities = null) => new(
+            _replies.FetchAsync,
+            _options,
+            new HttpClient(handler ?? new FakeHttpHandler()),
+            scanner ?? new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
+            profiles ?? ToolAudienceProfileDefaults.CreateProfiles(),
+            modelCapabilities ?? TestSlackGatewayDeps.DefaultVisionCapableModel,
+            NullLogger<SlackThreadHistoryFetcher>.Instance);
 
     [Fact]
     public async Task Fetches_text_messages_from_thread()
@@ -91,12 +97,9 @@ public sealed class SlackThreadHistoryFetcherTests
     }
 
     [Fact]
-    public async Task Historical_non_image_files_are_downloaded_and_included()
+    public async Task Historical_non_image_files_are_downloaded_and_announced_path_only()
     {
-        // Verify that PDFs and other non-image attachments in thread history are
-        // no longer hard-filtered to image/* — they should be downloaded and
-        // returned as DataContent just like images.
-        _replies.Set("C1", "2000.0", null, new ConversationMessagesResponse
+        _replies.Set("D1", "2000.0", null, new ConversationMessagesResponse
         {
             Messages =
             [
@@ -122,13 +125,99 @@ public sealed class SlackThreadHistoryFetcherTests
         });
 
         var result = await CreateFetcher().FetchThreadHistoryAsync(
-            new SessionId("C1/2000.0"), TestContext.Current.CancellationToken);
+            new SessionId("D1/2000.0"), TestContext.Current.CancellationToken);
 
         Assert.Equal(2, result.Count);
-        var messageWithPdf = result.First(r =>
-            r.Contents.OfType<DataContent>().Any());
-        Assert.Contains(messageWithPdf.Contents,
-            c => c is DataContent d && d.MediaType == "application/pdf");
+        var messageWithPdf = result.First(r => r.MessageId == "D1:2000.1");
+        Assert.DoesNotContain(messageWithPdf.Contents, c => c is DataContent);
+        var attachmentText = Assert.Single(
+            messageWithPdf.Contents.OfType<TextContent>(),
+            t => t.Text.Contains("[attachment]", StringComparison.Ordinal));
+        Assert.Contains("report.pdf", attachmentText.Text, StringComparison.Ordinal);
+        Assert.Contains("inlined=\"false\"", attachmentText.Text, StringComparison.Ordinal);
+        Assert.Contains("path=\"inbox/report", attachmentText.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Historical_scan_failure_is_rejected_fail_closed()
+    {
+        _replies.Set("C1", "2100.0", null, new ConversationMessagesResponse
+        {
+            Messages =
+            [
+                new MessageEvent
+                {
+                    Ts = "2100.1",
+                    User = "U2",
+                    Text = "look at this",
+                    Files =
+                    [
+                        new SlackNet.File
+                        {
+                            Id = "F_IMG",
+                            Name = "photo.png",
+                            Mimetype = "image/png",
+                            Size = 3,
+                            UrlPrivateDownload = "https://files.slack.com/fake/photo.png"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        var result = await CreateFetcher(scanner: new FailingContentScanner()).FetchThreadHistoryAsync(
+            new SessionId("C1/2100.0"), TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.DoesNotContain(item.Contents, c => c is DataContent);
+        Assert.Contains(item.Contents.OfType<TextContent>(),
+            t => t.Text.Contains("attachment rejected", StringComparison.OrdinalIgnoreCase)
+              && t.Text.Contains("content scanning", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Historical_attachment_size_limit_uses_resolved_audience_policy()
+    {
+        var handler = new FakeHttpHandler();
+        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
+        profiles.Public.ChannelAttachments = new ChannelAttachmentPolicy
+        {
+            AllowedCategories = [AttachmentCategory.Pdf],
+            MaxFileBytes = 1,
+            MaxFilesPerMessage = ChannelAttachmentPolicy.DefaultMaxFilesPerMessage
+        };
+
+        _replies.Set("C1", "2200.0", null, new ConversationMessagesResponse
+        {
+            Messages =
+            [
+                new MessageEvent
+                {
+                    Ts = "2200.1",
+                    User = "U2",
+                    Files =
+                    [
+                        new SlackNet.File
+                        {
+                            Id = "F_PDF",
+                            Name = "report.pdf",
+                            Mimetype = "application/pdf",
+                            Size = 3,
+                            UrlPrivateDownload = "https://files.slack.com/fake/report.pdf"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        var result = await CreateFetcher(handler: handler, profiles: profiles).FetchThreadHistoryAsync(
+            new SessionId("C1/2200.0"), TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Equal(0, handler.RequestCount);
+        Assert.Contains(item.Contents.OfType<TextContent>(),
+            t => t.Text.Contains("attachment rejected", StringComparison.OrdinalIgnoreCase)
+              && t.Text.Contains("per-file limit", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -161,13 +250,32 @@ public sealed class SlackThreadHistoryFetcherTests
 
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
+        private int _requestCount;
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _requestCount);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent([1, 2, 3])
             });
+        }
+    }
+
+    private sealed class FailingContentScanner : IContentScanner
+    {
+        public Task<ContentScanResult> ScanAsync(
+            ReadOnlyMemory<byte> content,
+            string filename,
+            string declaredMimeType,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(ContentScanResult.Rejected(
+                ContentScanError.ScanFailure,
+                "Content scan failed: scanner unavailable"));
         }
     }
 

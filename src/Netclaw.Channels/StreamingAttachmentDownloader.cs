@@ -15,12 +15,14 @@ public static class StreamingAttachmentDownloader
     /// <summary>
     /// Downloads the resource at <paramref name="url"/> directly into a temp
     /// file in <paramref name="targetDirectory"/>. Returns the temp file path
-    /// and actual bytes written on success. Deletes the temp file on any failure.
+    /// and actual bytes written on success. Callers typically pass a hidden
+    /// staging directory and only promote the file into the session inbox after
+    /// content scanning succeeds.
     /// </summary>
     /// <param name="httpClient">Pre-configured HttpClient (e.g., from IHttpClientFactory).</param>
     /// <param name="url">Remote file URL.</param>
     /// <param name="configureRequest">Optional callback to set auth headers (e.g., Bearer token for Slack).</param>
-    /// <param name="targetDirectory">Directory to write the temp file into (typically the session inbox).</param>
+    /// <param name="targetDirectory">Directory to write the temp file into (typically a hidden staging directory).</param>
     /// <param name="maxBytes">Operator-configured per-policy byte limit.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task<AttachmentDownloadResult> DownloadToFileAsync(
@@ -29,7 +31,8 @@ public static class StreamingAttachmentDownloader
         Action<HttpRequestMessage>? configureRequest,
         string targetDirectory,
         long maxBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Exception, string>? onCleanupFailure = null)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         configureRequest?.Invoke(request);
@@ -71,7 +74,7 @@ public static class StreamingAttachmentDownloader
         }
         catch
         {
-            TryDeleteTemp(tempPath);
+            TryDeleteTemp(tempPath, onCleanupFailure);
             throw;
         }
         finally
@@ -80,18 +83,16 @@ public static class StreamingAttachmentDownloader
         }
     }
 
-    private static void TryDeleteTemp(string tempPath)
+    private static void TryDeleteTemp(string tempPath, Action<Exception, string>? onCleanupFailure)
     {
         try
         {
             if (File.Exists(tempPath))
                 File.Delete(tempPath);
         }
-        catch (IOException)
+        catch (Exception ex)
         {
-            // Best-effort cleanup during error recovery — the file may be locked
-            // by antivirus or another process. The original exception propagates
-            // regardless; this orphaned temp file is harmless.
+            onCleanupFailure?.Invoke(ex, tempPath);
         }
     }
 }

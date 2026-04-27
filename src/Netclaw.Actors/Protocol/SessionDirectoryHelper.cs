@@ -7,6 +7,13 @@ namespace Netclaw.Actors.Protocol;
 public static class SessionDirectoryHelper
 {
     /// <summary>
+    /// Name of the hidden root directory under the sessions base path where
+    /// attachments are staged before they pass content scanning and are moved
+    /// into the agent-visible session inbox.
+    /// </summary>
+    public const string AttachmentStagingRootSubdirectory = ".attachment-staging";
+
+    /// <summary>
     /// Name of the subdirectory under a session directory where inbound
     /// user-uploaded attachments are written by channel adapters.
     /// </summary>
@@ -40,6 +47,20 @@ public static class SessionDirectoryHelper
         var inboxDir = Path.Combine(sessionDir, InboxSubdirectory);
         Directory.CreateDirectory(inboxDir);
         return inboxDir;
+    }
+
+    /// <summary>
+    /// Computes and creates the hidden per-session staging directory used for
+    /// streamed attachment downloads before they are accepted into
+    /// <c>inbox/</c>. This directory lives outside the session working
+    /// directory so rejected files never appear under <c>{session_dir}</c>.
+    /// </summary>
+    public static string GetOrCreateAttachmentStagingDirectory(SessionId sessionId, string basePath)
+    {
+        var stagingRoot = Path.Combine(basePath, AttachmentStagingRootSubdirectory);
+        var stagingDir = Path.Combine(stagingRoot, SanitizeSessionId(sessionId.Value));
+        Directory.CreateDirectory(stagingDir);
+        return stagingDir;
     }
 
     /// <summary>

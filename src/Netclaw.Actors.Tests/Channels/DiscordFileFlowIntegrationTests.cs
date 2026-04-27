@@ -230,6 +230,12 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
 
         Assert.Contains(_replyClient.Posts,
             m => m.Text.Contains("Couldn't scan `drawing.png`", StringComparison.Ordinal));
+
+        var sessionId = new SessionId("ch-3/msg-3000");
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
+        Assert.Empty(Directory.GetFiles(inboxDir));
+        Assert.Empty(Directory.GetFiles(stagingDir));
     }
 
     [Fact]

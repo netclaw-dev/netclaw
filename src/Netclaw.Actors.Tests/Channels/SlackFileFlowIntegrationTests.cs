@@ -1235,6 +1235,12 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         Assert.Contains(_replyClient.PostedMessages,
             m => m.Text.Contains("Couldn't scan `drawing.png`", StringComparison.Ordinal));
+
+        var sessionId = new SessionId("D_FS/11000.1");
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
+        Assert.Empty(Directory.GetFiles(inboxDir));
+        Assert.Empty(Directory.GetFiles(stagingDir));
     }
 
     /// <summary>

@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -427,46 +428,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static List<AIContent> MergeHistoryWithLiveContents(
         IReadOnlyList<ChannelInput> history,
         IReadOnlyList<AIContent> liveContents)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("[thread history — messages exchanged before this inbound event]");
-        sb.AppendLine();
-
-        foreach (var item in history)
-        {
-            var ts = item.ReceivedAt == default ? string.Empty : $", {item.ReceivedAt:yyyy-MM-dd HH:mm} UTC";
-            sb.AppendLine($"<user: {item.SenderId}{ts}>");
-
-            foreach (var content in item.Contents)
-            {
-                if (content is TextContent text && !string.IsNullOrWhiteSpace(text.Text))
-                    sb.AppendLine(text.Text);
-            }
-
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("[end thread history]");
-
-        var liveText = string.Join("\n", liveContents
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-
-        var mergedText = string.IsNullOrWhiteSpace(liveText)
-            ? sb.ToString()
-            : $"{sb}\n\n{liveText}";
-
-        var merged = new List<AIContent> { new TextContent(mergedText) };
-
-        foreach (var content in liveContents)
-        {
-            if (content is not TextContent)
-                merged.Add(content);
-        }
-
-        return merged;
-    }
+        => ThreadHistoryContentMerger.MergeHistoryWithLiveContents(history, liveContents);
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message, string selectedKey)
     {
@@ -897,11 +859,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var rejections = new List<string>();
 
         var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(_sessionId, _dependencies.Paths.SessionsDirectory);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(_sessionId, _dependencies.Paths.SessionsDirectory);
 
         foreach (var file in files)
         {
             var attachmentResult = await TryIngestSingleAttachmentAsync(
-                file, audience, policy, inlineImages, inboxDir, cancellationToken);
+                file, audience, policy, inlineImages, inboxDir, stagingDir, cancellationToken);
 
             switch (attachmentResult)
             {
@@ -938,6 +901,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         ChannelAttachmentPolicy policy,
         bool inlineImages,
         string inboxDir,
+        string stagingDir,
         CancellationToken cancellationToken)
     {
         var category = AttachmentCategories.FromMime(file.MimeType);
@@ -961,7 +925,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 $"`{file.Name}` ({FormatBytes(file.Size)}) exceeds the {FormatBytes(policy.MaxFileBytes)} per-file limit.");
         }
 
-        if (!IsAllowedAttachmentDomain(file.Url))
+        if (!DiscordAttachmentUrlTrust.IsAllowedAttachmentDomain(file.Url))
         {
             _log.Warning(
                 "discord_attachment_rejected name={Name} url={Url} reason=untrusted-domain",
@@ -977,7 +941,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             downloadCts.CancelAfter(OperationTimeout);
             downloadResult = await StreamingAttachmentDownloader.DownloadToFileAsync(
                 _dependencies.HttpClient!, file.Url, configureRequest: null,
-                inboxDir, policy.MaxFileBytes, downloadCts.Token);
+                stagingDir, policy.MaxFileBytes, downloadCts.Token,
+                (ex, path) => _log.Error(ex, "Failed to clean up staged download file {0}", path));
         }
         catch (AttachmentTooLargeException ex)
         {
@@ -1017,8 +982,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         ContentScanResult scanResult;
         try
         {
+            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            scanCts.CancelAfter(OperationTimeout);
             scanResult = await _dependencies.ContentScanner.ScanFileAsync(
-                downloadResult.FilePath, file.Name, file.MimeType, cancellationToken);
+                downloadResult.FilePath, file.Name, file.MimeType, scanCts.Token);
         }
         catch (Exception ex)
         {
@@ -1073,10 +1040,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 $"Couldn't save `{file.Name}` — please try again later.");
         }
 
-        var (inlined, note) = ResolveInlineDecision(category, inlineImages);
+        var (inlined, note) = AttachmentIngressFormatting.ResolveInlineDecision(category, inlineImages);
 
         var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{IOPath.GetFileName(inboxPath)}";
-        var line = BuildAttachmentLine(file.Name, file.MimeType, downloadResult.BytesWritten, relativePath, inlined, note);
+        var line = AttachmentIngressFormatting.BuildAttachmentLine(
+            file.Name, file.MimeType, downloadResult.BytesWritten, relativePath, inlined, note);
 
         DataContent? inlineContent = null;
         if (inlined)
@@ -1101,89 +1069,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         catch (Exception ex)
         {
-            _log.Debug(ex, "Failed to clean up temp download file {Path}", tempPath);
+            _log.Error(ex, "Failed to clean up staged attachment file {Path}", tempPath);
         }
     }
 
-    private static (bool Inlined, string? Note) ResolveInlineDecision(
-        AttachmentCategory category,
-        bool inlineImages)
-    {
-        return category switch
-        {
-            AttachmentCategory.Image when inlineImages => (true, null),
-            AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
-            AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
-            _ => (false, AttachmentNotes.FormatNotInlineable)
-        };
-    }
-
-    internal static string BuildAttachmentLine(
-        string name,
-        string mimeType,
-        long size,
-        string relativePath,
-        bool inlined,
-        string? note)
-    {
-        var inlinedWire = inlined ? "true" : "false";
-        var sb = new StringBuilder(128);
-        sb.Append("[attachment] name=\"").Append(EscapeQuoted(name)).Append('"');
-        sb.Append(" mime=\"").Append(EscapeQuoted(mimeType)).Append('"');
-        sb.Append(" size=").Append(size);
-        sb.Append(" path=\"").Append(EscapeQuoted(relativePath)).Append('"');
-        sb.Append(" inlined=\"").Append(inlinedWire).Append('"');
-        if (!string.IsNullOrEmpty(note))
-            sb.Append(" note=\"").Append(EscapeQuoted(note)).Append('"');
-        return sb.ToString();
-    }
-
-    internal static string EscapeQuoted(string value)
-    {
-        var needsProcessing = false;
-        foreach (var c in value)
-        {
-            if (c < ' ' || c == '\\' || c == '"')
-            {
-                needsProcessing = true;
-                break;
-            }
-        }
-
-        if (!needsProcessing)
-            return value;
-
-        var sb = new StringBuilder(value.Length + 8);
-        foreach (var c in value)
-        {
-            if (c < ' ')
-                sb.Append(' ');
-            else if (c == '\\')
-                sb.Append("\\\\");
-            else if (c == '"')
-                sb.Append("\\\"");
-            else
-                sb.Append(c);
-        }
-        return sb.ToString();
-    }
-
-    private static bool IsAllowedAttachmentDomain(string url)
-    {
-        return url.StartsWith("https://cdn.discordapp.com/", StringComparison.OrdinalIgnoreCase)
-            || url.StartsWith("https://media.discordapp.net/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string FormatBytes(long size)
-    {
-        const long Mib = 1024 * 1024;
-        const long Kib = 1024;
-        if (size >= Mib)
-            return $"{size / (double)Mib:F1} MiB";
-        if (size >= Kib)
-            return $"{size / (double)Kib:F1} KiB";
-        return $"{size} bytes";
-    }
+    private static string FormatBytes(long size) => AttachmentIngressFormatting.FormatBytes(size);
 
     private abstract record AttachmentIngestResult
     {

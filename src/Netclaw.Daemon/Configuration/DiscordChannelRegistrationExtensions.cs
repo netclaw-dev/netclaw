@@ -4,6 +4,8 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
 using Netclaw.Channels.Discord.Transport;
+using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -35,7 +37,26 @@ public static class DiscordChannelRegistrationExtensions
         services.AddHttpClient("discord-files");
         services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();
         services.AddSingleton<IDiscordReplyClient, DiscordNetReplyClient>();
-        services.AddSingleton<IThreadHistoryFetcher, DiscordThreadHistoryFetcher>();
+        services.AddSingleton<IThreadHistoryFetcher>(sp =>
+        {
+            var client = sp.GetRequiredService<DiscordSocketClient>();
+            var httpFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var contentScanner = sp.GetRequiredService<IContentScanner>();
+            var toolConfig = sp.GetRequiredService<ToolConfig>();
+            var modelCapabilities = sp.GetRequiredService<ModelCapabilities>();
+            var paths = sp.GetRequiredService<NetclawPaths>();
+            var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger<DiscordThreadHistoryFetcher>();
+
+            return new DiscordThreadHistoryFetcher(
+                client,
+                discordOptions,
+                httpFactory.CreateClient("discord-files"),
+                contentScanner,
+                toolConfig.AudienceProfiles,
+                modelCapabilities,
+                paths,
+                logger);
+        });
         services.AddSingleton<IReminderTargetResolver, DiscordReminderTargetResolver>();
 
         services.AddKeyedSingleton<IChannel, DiscordChannel>(DiscordChannelKey);

@@ -16,7 +16,8 @@ internal static class SlackFileDownloader
         SensitiveString? botToken,
         string targetDirectory,
         long maxBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<Exception, string>? onCleanupFailure = null)
     {
         return StreamingAttachmentDownloader.DownloadToFileAsync(
             httpClient, url,
@@ -27,6 +28,7 @@ internal static class SlackFileDownloader
             },
             targetDirectory,
             maxBytes,
-            cancellationToken);
+            cancellationToken,
+            onCleanupFailure);
     }
 }
