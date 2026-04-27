@@ -554,7 +554,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 ex,
                 "Failed to update resolved approval prompt for call {CallId} messageId={MessageId}",
                 pending.CallId,
-                pending.PromptMessageId?.Value);
+                promptMessageId.Value);
         }
     }
 

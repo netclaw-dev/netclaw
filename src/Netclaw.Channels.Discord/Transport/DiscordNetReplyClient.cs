@@ -9,6 +9,7 @@ namespace Netclaw.Channels.Discord.Transport;
 internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 {
     private const int MaxRestChannelCacheSize = 1000;
+    private static readonly MessageComponent EmptyComponents = new ComponentBuilder().Build();
 
     private readonly DiscordSocketClient _client;
     private readonly ConcurrentDictionary<ulong, IMessageChannel> _restChannelCache = new();
@@ -32,27 +33,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
     public async Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
     {
         var channelId = ParseSnowflake(message.ReplyChannelId.Value, "reply channel ID");
-
-        // Socket cache misses for DM channels — fall back to REST API.
-        IMessageChannel? messageChannel = _client.GetChannel(channelId) as IMessageChannel;
-        if (messageChannel is null && !_restChannelCache.TryGetValue(channelId, out messageChannel))
-        {
-            var restChannel = await _client.Rest.GetChannelAsync(channelId);
-            messageChannel = restChannel as IMessageChannel;
-            if (messageChannel is not null)
-            {
-                // Safety valve — evict stale entries if the cache grows too large.
-                // Full clear is acceptable here because the cache repopulates lazily
-                // and only DM channels (socket cache misses) land here.
-                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
-                    _restChannelCache.Clear();
-                _restChannelCache[channelId] = messageChannel;
-            }
-        }
-
-        if (messageChannel is null)
-            throw new InvalidOperationException(
-                $"Discord channel {message.ReplyChannelId.Value} not found or is not a message channel.");
+        var messageChannel = await ResolveMessageChannelAsync(channelId, message.ReplyChannelId.Value);
 
         IMessageChannel targetChannel = messageChannel;
         DiscordReplyChannelId? createdThreadId = null;
@@ -142,30 +123,37 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
     {
         var channelSnowflake = ParseSnowflake(channelId.Value, "reply channel ID");
         var messageSnowflake = ParseSnowflake(messageId.Value, "message ID");
-
-        IMessageChannel? messageChannel = _client.GetChannel(channelSnowflake) as IMessageChannel;
-        if (messageChannel is null && !_restChannelCache.TryGetValue(channelSnowflake, out messageChannel))
-        {
-            var restChannel = await _client.Rest.GetChannelAsync(channelSnowflake);
-            messageChannel = restChannel as IMessageChannel;
-            if (messageChannel is not null)
-            {
-                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
-                    _restChannelCache.Clear();
-                _restChannelCache[channelSnowflake] = messageChannel;
-            }
-        }
-
-        if (messageChannel is null)
-            throw new InvalidOperationException(
-                $"Discord channel {channelId.Value} not found or is not a message channel.");
+        var messageChannel = await ResolveMessageChannelAsync(channelSnowflake, channelId.Value);
 
         await messageChannel.ModifyMessageAsync(messageSnowflake, props =>
         {
             props.Content = text;
             if (removeComponents)
-                props.Components = new ComponentBuilder().Build();
+                props.Components = EmptyComponents;
         }, new RequestOptions { CancelToken = cancellationToken });
+    }
+
+    private async Task<IMessageChannel> ResolveMessageChannelAsync(ulong channelSnowflake, string channelIdForError)
+    {
+        // Socket cache misses for DM channels — fall back to REST API.
+        IMessageChannel? channel = _client.GetChannel(channelSnowflake) as IMessageChannel;
+        if (channel is null && !_restChannelCache.TryGetValue(channelSnowflake, out channel))
+        {
+            var restChannel = await _client.Rest.GetChannelAsync(channelSnowflake);
+            channel = restChannel as IMessageChannel;
+            if (channel is not null)
+            {
+                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
+                    _restChannelCache.Clear();
+                _restChannelCache[channelSnowflake] = channel;
+            }
+        }
+
+        if (channel is null)
+            throw new InvalidOperationException(
+                $"Discord channel {channelIdForError} not found or is not a message channel.");
+
+        return channel;
     }
 
     private static ulong ParseSnowflake(string value, string label)

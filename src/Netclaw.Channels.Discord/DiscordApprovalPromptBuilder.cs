@@ -29,22 +29,7 @@ internal static class DiscordApprovalPromptBuilder
     {
         var sb = new StringBuilder();
         sb.AppendLine(":lock: **Tool approval required**");
-        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
-
-        if (request.Patterns.Count > 0)
-        {
-            if (request.Patterns.Count == 1)
-            {
-                sb.Append("**Pattern:** `").Append(request.Patterns[0]).AppendLine("`");
-            }
-            else
-            {
-                sb.AppendLine("**Patterns:**");
-                foreach (var pattern in request.Patterns)
-                    sb.Append("  • `").Append(pattern).AppendLine("`");
-            }
-        }
+        AppendToolSummary(sb, request);
 
         sb.AppendLine();
         sb.Append("You can also reply with `A`, `B`, `C`, or `D` in this thread.");
@@ -77,6 +62,15 @@ internal static class DiscordApprovalPromptBuilder
 
         var sb = new StringBuilder();
         sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        AppendToolSummary(sb, request);
+
+        sb.Append("**Decision:** ").Append(decisionLabel);
+        sb.Append(" (by <@").Append(senderId).Append(">)");
+        return sb.ToString();
+    }
+
+    private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
+    {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
         sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
 
@@ -93,10 +87,6 @@ internal static class DiscordApprovalPromptBuilder
                     sb.Append("  • `").Append(pattern).AppendLine("`");
             }
         }
-
-        sb.Append("**Decision:** ").Append(decisionLabel);
-        sb.Append(" (by <@").Append(senderId).Append(">)");
-        return sb.ToString();
     }
 
     private static string GetDecisionLabel(string selectedKey)
