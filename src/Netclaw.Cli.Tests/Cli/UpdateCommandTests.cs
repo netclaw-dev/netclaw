@@ -51,9 +51,9 @@ public sealed class UpdateCommandTests : IDisposable
             if (Directory.Exists(_tempDir))
                 Directory.Delete(_tempDir, recursive: true);
         }
-        catch
+        catch (IOException)
         {
-            // Best-effort temp cleanup for tests.
+            // Best-effort temp cleanup — locked files on Windows are expected.
         }
     }
 
