@@ -279,9 +279,11 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
             }
             catch (OperationCanceledException)
             {
+                // slopwatch:suppress SW003 — fire-and-forget; health check retries and reports errors
             }
             catch (HttpRequestException)
             {
+                // slopwatch:suppress SW003 — fire-and-forget; health check retries and reports errors
             }
         }, ct);
     }
