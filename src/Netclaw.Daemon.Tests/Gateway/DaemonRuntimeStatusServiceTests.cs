@@ -276,22 +276,23 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task StatusIncludesSlackCountersSnapshot()
+    public async Task StatusIncludesChannelCountersForEnabledChannels()
     {
-        var before = ChannelTelemetry.GetSnapshot();
+        var slack = ChannelTelemetry.For(Netclaw.Actors.Channels.ChannelType.Slack);
+        var before = slack.GetSnapshot();
 
-        ChannelTelemetry.RecordSlackEventReceived("message");
-        ChannelTelemetry.RecordSlackEventDropped("channel_not_allowed");
-        ChannelTelemetry.RecordSlackEventRouted("message");
-        ChannelTelemetry.RecordSlackMessageEnqueued();
-        ChannelTelemetry.RecordSlackReplyPosted(42);
-        ChannelTelemetry.RecordSlackReplyFailed(77);
+        slack.RecordEventReceived("message");
+        slack.RecordEventDropped("channel_not_allowed");
+        slack.RecordEventRouted("message");
+        slack.RecordMessageEnqueued();
+        slack.RecordReplyPosted(42);
+        slack.RecordReplyFailed(77);
 
         var service = new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channels: Array.Empty<IChannel>(),
-            slackOptions: new SlackChannelOptions { Enabled = false },
+            slackOptions: new SlackChannelOptions { Enabled = true },
             discordOptions: new DiscordChannelOptions { Enabled = false },
             persistenceOptions: new DaemonPersistenceOptions(),
             telemetryOptions: Options.Create(new TelemetryOptions()),
@@ -301,12 +302,12 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
 
-        Assert.NotNull(status.Telemetry.SlackCounters);
-        Assert.True(status.Telemetry.SlackCounters!.EventsReceived >= before.SlackEventsReceived + 1);
-        Assert.True(status.Telemetry.SlackCounters.EventsDropped >= before.SlackEventsDropped + 1);
-        Assert.True(status.Telemetry.SlackCounters.EventsRouted >= before.SlackEventsRouted + 1);
-        Assert.True(status.Telemetry.SlackCounters.MessagesEnqueued >= before.SlackMessagesEnqueued + 1);
-        Assert.True(status.Telemetry.SlackCounters.RepliesPosted >= before.SlackRepliesPosted + 1);
-        Assert.True(status.Telemetry.SlackCounters.RepliesFailed >= before.SlackRepliesFailed + 1);
+        var slackActivity = Assert.Single(status.Telemetry.Channels);
+        Assert.Equal("slack", slackActivity.ChannelType);
+        Assert.True(slackActivity.EventsReceived >= before.EventsReceived + 1);
+        Assert.True(slackActivity.EventsDropped >= before.EventsDropped + 1);
+        Assert.True(slackActivity.EventsRouted >= before.EventsRouted + 1);
+        Assert.True(slackActivity.RepliesPosted >= before.RepliesPosted + 1);
+        Assert.True(slackActivity.RepliesFailed >= before.RepliesFailed + 1);
     }
 }

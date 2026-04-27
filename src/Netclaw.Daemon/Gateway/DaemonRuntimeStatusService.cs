@@ -2,6 +2,7 @@ using System.Diagnostics;
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.Options;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Reminders;
@@ -90,33 +91,20 @@ internal sealed class DaemonRuntimeStatusService(
 
     private DaemonRuntimeStatus.Telemetry BuildTelemetry()
     {
-        var snapshot = ChannelTelemetry.GetSnapshot();
+        var enabledChannelTypes = new HashSet<Actors.Channels.ChannelType>();
+        if (slackOptions.Enabled) enabledChannelTypes.Add(Actors.Channels.ChannelType.Slack);
+        if (discordOptions.Enabled) enabledChannelTypes.Add(Actors.Channels.ChannelType.Discord);
+
+        var channelActivities = ChannelTelemetry.GetAllSnapshots()
+            .Where(s => enabledChannelTypes.Contains(s.ChannelType))
+            .Select(s => s.ToWireActivity())
+            .ToList();
+
         return new DaemonRuntimeStatus.Telemetry
         {
             Enabled = telemetryOptions.Value.Enabled,
             OtlpEndpoint = telemetryOptions.Value.Otlp.Endpoint,
-            SlackCounters = new DaemonRuntimeStatus.SlackCounters
-            {
-                EventsReceived = snapshot.SlackEventsReceived,
-                EventsDropped = snapshot.SlackEventsDropped,
-                EventsRouted = snapshot.SlackEventsRouted,
-                MessagesEnqueued = snapshot.SlackMessagesEnqueued,
-                RepliesPosted = snapshot.SlackRepliesPosted,
-                RepliesRejected = snapshot.SlackRepliesRejected,
-                RepliesFailed = snapshot.SlackRepliesFailed
-            },
-            DiscordCounters = new DaemonRuntimeStatus.DiscordCounters
-            {
-                EventsReceived = snapshot.DiscordEventsReceived,
-                EventsDropped = snapshot.DiscordEventsDropped,
-                EventsRouted = snapshot.DiscordEventsRouted,
-                MessagesEnqueued = snapshot.DiscordMessagesEnqueued,
-                RepliesPosted = snapshot.DiscordRepliesPosted,
-                RepliesRejected = snapshot.DiscordRepliesRejected,
-                RepliesFailed = snapshot.DiscordRepliesFailed,
-                InteractionErrors = snapshot.DiscordInteractionErrors,
-                ApprovalFallbackActivated = snapshot.DiscordApprovalFallbackActivated
-            }
+            Channels = channelActivities
         };
     }
 

@@ -18,7 +18,7 @@ public static class DaemonStats
 
         public required Skills Skills { get; init; }
 
-        public required SlackActivity SlackActivity { get; init; }
+        public List<ChannelActivity> Channels { get; init; } = [];
 
         public required Webhooks Webhooks { get; init; }
 
@@ -88,8 +88,12 @@ public static class DaemonStats
         public int TotalAvailable { get; init; }
     }
 
-    public sealed class SlackActivity : IWireType
+    public sealed class ChannelActivity : IWireType
     {
+        public required string ChannelType { get; init; }
+
+        public required string DisplayName { get; init; }
+
         public long EventsReceived { get; init; }
 
         public long EventsRouted { get; init; }
@@ -101,6 +105,8 @@ public static class DaemonStats
         public long RepliesRejected { get; init; }
 
         public long RepliesFailed { get; init; }
+
+        public Dictionary<string, long>? Extras { get; init; }
     }
 
     public sealed class Webhooks : IWireType

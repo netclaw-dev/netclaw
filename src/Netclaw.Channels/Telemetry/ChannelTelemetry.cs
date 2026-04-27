@@ -1,265 +1,209 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Threading;
+using Netclaw.Actors.Channels;
+using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Telemetry;
 
+/// <summary>
+/// Per-channel metrics instance. Each channel type gets its own counters
+/// via <see cref="ChannelTelemetry.For"/>. Standard counters are shared
+/// across all channel types; channel-specific counters use <see cref="RecordExtra"/>.
+/// </summary>
+public sealed class ChannelMetrics
+{
+    private static readonly Meter Meter = new(ChannelTelemetry.MeterName);
+
+    private readonly Counter<long> _eventsReceived;
+    private readonly Counter<long> _eventsDropped;
+    private readonly Counter<long> _eventsFiltered;
+    private readonly Counter<long> _eventsRouted;
+    private readonly Counter<long> _messagesEnqueued;
+    private readonly Counter<long> _repliesPosted;
+    private readonly Counter<long> _repliesRejected;
+    private readonly Counter<long> _repliesFailed;
+    private readonly Histogram<double> _replyDurationMs;
+
+    private long _eventsReceivedTotal;
+    private long _eventsDroppedTotal;
+    private long _eventsFilteredTotal;
+    private long _eventsRoutedTotal;
+    private long _messagesEnqueuedTotal;
+    private long _repliesPostedTotal;
+    private long _repliesRejectedTotal;
+    private long _repliesFailedTotal;
+
+    private readonly ConcurrentDictionary<string, long> _extras = new(StringComparer.Ordinal);
+
+    internal ChannelMetrics(ChannelType channelType)
+    {
+        ChannelType = channelType;
+        DisplayName = channelType.ToString();
+
+        var wireValue = channelType.ToWireValue();
+        var prefix = $"netclaw.channel.{wireValue}";
+        _eventsReceived = Meter.CreateCounter<long>($"{prefix}.events.received");
+        _eventsDropped = Meter.CreateCounter<long>($"{prefix}.events.dropped");
+        _eventsFiltered = Meter.CreateCounter<long>($"{prefix}.events.filtered");
+        _eventsRouted = Meter.CreateCounter<long>($"{prefix}.events.routed");
+        _messagesEnqueued = Meter.CreateCounter<long>($"{prefix}.messages.enqueued");
+        _repliesPosted = Meter.CreateCounter<long>($"{prefix}.replies.posted");
+        _repliesRejected = Meter.CreateCounter<long>($"{prefix}.replies.rejected");
+        _repliesFailed = Meter.CreateCounter<long>($"{prefix}.replies.failed");
+        _replyDurationMs = Meter.CreateHistogram<double>($"{prefix}.reply.duration.ms", unit: "ms");
+    }
+
+    public ChannelType ChannelType { get; }
+
+    public string DisplayName { get; }
+
+    public void RecordEventReceived(string kind)
+    {
+        Interlocked.Increment(ref _eventsReceivedTotal);
+        _eventsReceived.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    }
+
+    public void RecordEventDropped(string reason)
+    {
+        Interlocked.Increment(ref _eventsDroppedTotal);
+        _eventsDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public void RecordEventFiltered(string reason)
+    {
+        Interlocked.Increment(ref _eventsFilteredTotal);
+        _eventsFiltered.Add(1, new KeyValuePair<string, object?>("reason", reason));
+    }
+
+    public void RecordEventRouted(string kind)
+    {
+        Interlocked.Increment(ref _eventsRoutedTotal);
+        _eventsRouted.Add(1, new KeyValuePair<string, object?>("kind", kind));
+    }
+
+    public void RecordMessageEnqueued()
+    {
+        Interlocked.Increment(ref _messagesEnqueuedTotal);
+        _messagesEnqueued.Add(1);
+    }
+
+    public void RecordReplyPosted(double durationMs)
+    {
+        Interlocked.Increment(ref _repliesPostedTotal);
+        _repliesPosted.Add(1);
+        _replyDurationMs.Record(durationMs);
+    }
+
+    public void RecordReplyRejected(string? errorCode)
+    {
+        Interlocked.Increment(ref _repliesRejectedTotal);
+        _repliesRejected.Add(1, new KeyValuePair<string, object?>("error_code", errorCode ?? "unknown"));
+    }
+
+    public void RecordReplyFailed(double durationMs)
+    {
+        Interlocked.Increment(ref _repliesFailedTotal);
+        _repliesFailed.Add(1);
+        _replyDurationMs.Record(durationMs);
+    }
+
+    /// <summary>
+    /// Record a channel-specific counter that doesn't exist on the standard base.
+    /// When <paramref name="tag"/> is provided, the key becomes "metricName:tag".
+    /// </summary>
+    public void RecordExtra(string metricName, string? tag = null)
+    {
+        var key = tag is null ? metricName : $"{metricName}:{tag}";
+        _extras.AddOrUpdate(key, 1, (_, existing) => existing + 1);
+    }
+
+    private static readonly IReadOnlyDictionary<string, long> EmptyExtras =
+        new Dictionary<string, long>();
+
+    public ChannelMetricsSnapshot GetSnapshot()
+        => new(
+            ChannelType: ChannelType,
+            DisplayName: DisplayName,
+            EventsReceived: Interlocked.Read(ref _eventsReceivedTotal),
+            EventsDropped: Interlocked.Read(ref _eventsDroppedTotal),
+            EventsFiltered: Interlocked.Read(ref _eventsFilteredTotal),
+            EventsRouted: Interlocked.Read(ref _eventsRoutedTotal),
+            MessagesEnqueued: Interlocked.Read(ref _messagesEnqueuedTotal),
+            RepliesPosted: Interlocked.Read(ref _repliesPostedTotal),
+            RepliesRejected: Interlocked.Read(ref _repliesRejectedTotal),
+            RepliesFailed: Interlocked.Read(ref _repliesFailedTotal),
+            Extras: _extras.IsEmpty
+                ? EmptyExtras
+                : new Dictionary<string, long>(_extras));
+
+    internal void Reset()
+    {
+        Interlocked.Exchange(ref _eventsReceivedTotal, 0);
+        Interlocked.Exchange(ref _eventsDroppedTotal, 0);
+        Interlocked.Exchange(ref _eventsFilteredTotal, 0);
+        Interlocked.Exchange(ref _eventsRoutedTotal, 0);
+        Interlocked.Exchange(ref _messagesEnqueuedTotal, 0);
+        Interlocked.Exchange(ref _repliesPostedTotal, 0);
+        Interlocked.Exchange(ref _repliesRejectedTotal, 0);
+        Interlocked.Exchange(ref _repliesFailedTotal, 0);
+        _extras.Clear();
+    }
+}
+
+public sealed record ChannelMetricsSnapshot(
+    ChannelType ChannelType,
+    string DisplayName,
+    long EventsReceived,
+    long EventsDropped,
+    long EventsFiltered,
+    long EventsRouted,
+    long MessagesEnqueued,
+    long RepliesPosted,
+    long RepliesRejected,
+    long RepliesFailed,
+    IReadOnlyDictionary<string, long> Extras)
+{
+    public DaemonStats.ChannelActivity ToWireActivity() => new()
+    {
+        ChannelType = ChannelType.ToWireValue(),
+        DisplayName = DisplayName,
+        EventsReceived = EventsReceived,
+        EventsRouted = EventsRouted,
+        EventsDropped = EventsDropped,
+        RepliesPosted = RepliesPosted,
+        RepliesRejected = RepliesRejected,
+        RepliesFailed = RepliesFailed,
+        Extras = Extras.Count > 0 ? new Dictionary<string, long>(Extras) : null
+    };
+}
+
+/// <summary>
+/// Static registry of per-channel metrics instances. Call <see cref="For"/>
+/// to get a channel's <see cref="ChannelMetrics"/> — instances are created
+/// on first access and cached for the process lifetime.
+/// </summary>
 public static class ChannelTelemetry
 {
     public const string MeterName = "Netclaw.Channels";
 
-    private static readonly Meter Meter = new(MeterName);
+    private static readonly ConcurrentDictionary<ChannelType, ChannelMetrics> Registry = new();
 
-    private static readonly Counter<long> SlackEventsReceived =
-        Meter.CreateCounter<long>("netclaw.slack.events.received");
+    /// <summary>
+    /// Get the metrics instance for a channel type. Creates on first call.
+    /// </summary>
+    public static ChannelMetrics For(ChannelType channelType)
+        => Registry.GetOrAdd(channelType, static ct => new ChannelMetrics(ct));
 
-    private static readonly Counter<long> SlackEventsDropped =
-        Meter.CreateCounter<long>("netclaw.slack.events.dropped");
-
-    private static readonly Counter<long> SlackEventsFiltered =
-        Meter.CreateCounter<long>("netclaw.slack.events.filtered");
-
-    private static readonly Counter<long> SlackEventsRouted =
-        Meter.CreateCounter<long>("netclaw.slack.events.routed");
-
-    private static readonly Counter<long> SlackMessagesEnqueued =
-        Meter.CreateCounter<long>("netclaw.slack.messages.enqueued");
-
-    private static readonly Counter<long> SlackRepliesPosted =
-        Meter.CreateCounter<long>("netclaw.slack.replies.posted");
-
-    private static readonly Counter<long> SlackRepliesRejected =
-        Meter.CreateCounter<long>("netclaw.slack.replies.rejected");
-
-    private static readonly Counter<long> SlackRepliesFailed =
-        Meter.CreateCounter<long>("netclaw.slack.replies.failed");
-
-    private static readonly Histogram<double> SlackReplyDurationMs =
-        Meter.CreateHistogram<double>("netclaw.slack.reply.duration.ms", unit: "ms");
-
-    private static readonly Counter<long> DiscordEventsReceived =
-        Meter.CreateCounter<long>("netclaw.discord.events.received");
-
-    private static readonly Counter<long> DiscordEventsDropped =
-        Meter.CreateCounter<long>("netclaw.discord.events.dropped");
-
-    private static readonly Counter<long> DiscordEventsFiltered =
-        Meter.CreateCounter<long>("netclaw.discord.events.filtered");
-
-    private static readonly Counter<long> DiscordEventsRouted =
-        Meter.CreateCounter<long>("netclaw.discord.events.routed");
-
-    private static readonly Counter<long> DiscordMessagesEnqueued =
-        Meter.CreateCounter<long>("netclaw.discord.messages.enqueued");
-
-    private static readonly Counter<long> DiscordRepliesPosted =
-        Meter.CreateCounter<long>("netclaw.discord.replies.posted");
-
-    private static readonly Counter<long> DiscordRepliesRejected =
-        Meter.CreateCounter<long>("netclaw.discord.replies.rejected");
-
-    private static readonly Counter<long> DiscordRepliesFailed =
-        Meter.CreateCounter<long>("netclaw.discord.replies.failed");
-
-    private static readonly Counter<long> DiscordInteractionErrors =
-        Meter.CreateCounter<long>("netclaw.discord.interactions.errors");
-
-    private static readonly Counter<long> DiscordApprovalFallbackActivated =
-        Meter.CreateCounter<long>("netclaw.discord.approval.fallback_activated");
-
-    private static readonly Histogram<double> DiscordReplyDurationMs =
-        Meter.CreateHistogram<double>("netclaw.discord.reply.duration.ms", unit: "ms");
-
-    private static long _slackEventsReceivedTotal;
-    private static long _slackEventsDroppedTotal;
-    private static long _slackEventsFilteredTotal;
-    private static long _slackEventsRoutedTotal;
-    private static long _slackMessagesEnqueuedTotal;
-    private static long _slackRepliesPostedTotal;
-    private static long _slackRepliesRejectedTotal;
-    private static long _slackRepliesFailedTotal;
-    private static long _discordEventsReceivedTotal;
-    private static long _discordEventsDroppedTotal;
-    private static long _discordEventsFilteredTotal;
-    private static long _discordEventsRoutedTotal;
-    private static long _discordMessagesEnqueuedTotal;
-    private static long _discordRepliesPostedTotal;
-    private static long _discordRepliesRejectedTotal;
-    private static long _discordRepliesFailedTotal;
-    private static long _discordInteractionErrorsTotal;
-    private static long _discordApprovalFallbackActivatedTotal;
-
-    public sealed record Snapshot(
-        long SlackEventsReceived,
-        long SlackEventsDropped,
-        long SlackEventsFiltered,
-        long SlackEventsRouted,
-        long SlackMessagesEnqueued,
-        long SlackRepliesPosted,
-        long SlackRepliesRejected,
-        long SlackRepliesFailed,
-        long DiscordEventsReceived,
-        long DiscordEventsDropped,
-        long DiscordEventsFiltered,
-        long DiscordEventsRouted,
-        long DiscordMessagesEnqueued,
-        long DiscordRepliesPosted,
-        long DiscordRepliesRejected,
-        long DiscordRepliesFailed,
-        long DiscordInteractionErrors,
-        long DiscordApprovalFallbackActivated);
-
-    public static void RecordSlackEventReceived(string kind)
-    {
-        Interlocked.Increment(ref _slackEventsReceivedTotal);
-        SlackEventsReceived.Add(1, new KeyValuePair<string, object?>("kind", kind));
-    }
-
-    public static void RecordSlackEventDropped(string reason)
-    {
-        Interlocked.Increment(ref _slackEventsDroppedTotal);
-        SlackEventsDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
-    public static void RecordSlackEventFiltered(string reason)
-    {
-        Interlocked.Increment(ref _slackEventsFilteredTotal);
-        SlackEventsFiltered.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
-    public static void RecordSlackEventRouted(string kind)
-    {
-        Interlocked.Increment(ref _slackEventsRoutedTotal);
-        SlackEventsRouted.Add(1, new KeyValuePair<string, object?>("kind", kind));
-    }
-
-    public static void RecordSlackMessageEnqueued()
-    {
-        Interlocked.Increment(ref _slackMessagesEnqueuedTotal);
-        SlackMessagesEnqueued.Add(1);
-    }
-
-    public static void RecordSlackReplyPosted(double durationMs)
-    {
-        Interlocked.Increment(ref _slackRepliesPostedTotal);
-        SlackRepliesPosted.Add(1);
-        SlackReplyDurationMs.Record(durationMs);
-    }
-
-    public static void RecordSlackReplyRejected(string? errorCode)
-    {
-        Interlocked.Increment(ref _slackRepliesRejectedTotal);
-        SlackRepliesRejected.Add(1, new KeyValuePair<string, object?>("error_code", errorCode ?? "unknown"));
-    }
-
-    public static void RecordSlackReplyFailed(double durationMs)
-    {
-        Interlocked.Increment(ref _slackRepliesFailedTotal);
-        SlackRepliesFailed.Add(1);
-        SlackReplyDurationMs.Record(durationMs);
-    }
-
-    public static void RecordDiscordEventReceived(string kind)
-    {
-        Interlocked.Increment(ref _discordEventsReceivedTotal);
-        DiscordEventsReceived.Add(1, new KeyValuePair<string, object?>("kind", kind));
-    }
-
-    public static void RecordDiscordEventDropped(string reason)
-    {
-        Interlocked.Increment(ref _discordEventsDroppedTotal);
-        DiscordEventsDropped.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
-    public static void RecordDiscordEventFiltered(string reason)
-    {
-        Interlocked.Increment(ref _discordEventsFilteredTotal);
-        DiscordEventsFiltered.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
-    public static void RecordDiscordEventRouted(string kind)
-    {
-        Interlocked.Increment(ref _discordEventsRoutedTotal);
-        DiscordEventsRouted.Add(1, new KeyValuePair<string, object?>("kind", kind));
-    }
-
-    public static void RecordDiscordMessageEnqueued()
-    {
-        Interlocked.Increment(ref _discordMessagesEnqueuedTotal);
-        DiscordMessagesEnqueued.Add(1);
-    }
-
-    public static void RecordDiscordReplyPosted(double durationMs)
-    {
-        Interlocked.Increment(ref _discordRepliesPostedTotal);
-        DiscordRepliesPosted.Add(1);
-        DiscordReplyDurationMs.Record(durationMs);
-    }
-
-    public static void RecordDiscordReplyRejected(string? errorCode)
-    {
-        Interlocked.Increment(ref _discordRepliesRejectedTotal);
-        DiscordRepliesRejected.Add(1, new KeyValuePair<string, object?>("error_code", errorCode ?? "unknown"));
-    }
-
-    public static void RecordDiscordReplyFailed(double durationMs)
-    {
-        Interlocked.Increment(ref _discordRepliesFailedTotal);
-        DiscordRepliesFailed.Add(1);
-        DiscordReplyDurationMs.Record(durationMs);
-    }
-
-    public static void RecordDiscordInteractionError(string reason)
-    {
-        Interlocked.Increment(ref _discordInteractionErrorsTotal);
-        DiscordInteractionErrors.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
-    public static void RecordDiscordApprovalFallbackActivated(string reason)
-    {
-        Interlocked.Increment(ref _discordApprovalFallbackActivatedTotal);
-        DiscordApprovalFallbackActivated.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
-    public static Snapshot GetSnapshot()
-        => new(
-            SlackEventsReceived: Interlocked.Read(ref _slackEventsReceivedTotal),
-            SlackEventsDropped: Interlocked.Read(ref _slackEventsDroppedTotal),
-            SlackEventsFiltered: Interlocked.Read(ref _slackEventsFilteredTotal),
-            SlackEventsRouted: Interlocked.Read(ref _slackEventsRoutedTotal),
-            SlackMessagesEnqueued: Interlocked.Read(ref _slackMessagesEnqueuedTotal),
-            SlackRepliesPosted: Interlocked.Read(ref _slackRepliesPostedTotal),
-            SlackRepliesRejected: Interlocked.Read(ref _slackRepliesRejectedTotal),
-            SlackRepliesFailed: Interlocked.Read(ref _slackRepliesFailedTotal),
-            DiscordEventsReceived: Interlocked.Read(ref _discordEventsReceivedTotal),
-            DiscordEventsDropped: Interlocked.Read(ref _discordEventsDroppedTotal),
-            DiscordEventsFiltered: Interlocked.Read(ref _discordEventsFilteredTotal),
-            DiscordEventsRouted: Interlocked.Read(ref _discordEventsRoutedTotal),
-            DiscordMessagesEnqueued: Interlocked.Read(ref _discordMessagesEnqueuedTotal),
-            DiscordRepliesPosted: Interlocked.Read(ref _discordRepliesPostedTotal),
-            DiscordRepliesRejected: Interlocked.Read(ref _discordRepliesRejectedTotal),
-            DiscordRepliesFailed: Interlocked.Read(ref _discordRepliesFailedTotal),
-            DiscordInteractionErrors: Interlocked.Read(ref _discordInteractionErrorsTotal),
-            DiscordApprovalFallbackActivated: Interlocked.Read(ref _discordApprovalFallbackActivatedTotal));
+    /// <summary>
+    /// Returns snapshots for all channel types that have been accessed.
+    /// </summary>
+    public static IReadOnlyList<ChannelMetricsSnapshot> GetAllSnapshots()
+        => Registry.Values.Select(m => m.GetSnapshot()).ToList();
 
     internal static void ResetForTests()
     {
-        Interlocked.Exchange(ref _slackEventsReceivedTotal, 0);
-        Interlocked.Exchange(ref _slackEventsDroppedTotal, 0);
-        Interlocked.Exchange(ref _slackEventsFilteredTotal, 0);
-        Interlocked.Exchange(ref _slackEventsRoutedTotal, 0);
-        Interlocked.Exchange(ref _slackMessagesEnqueuedTotal, 0);
-        Interlocked.Exchange(ref _slackRepliesPostedTotal, 0);
-        Interlocked.Exchange(ref _slackRepliesRejectedTotal, 0);
-        Interlocked.Exchange(ref _slackRepliesFailedTotal, 0);
-        Interlocked.Exchange(ref _discordEventsReceivedTotal, 0);
-        Interlocked.Exchange(ref _discordEventsDroppedTotal, 0);
-        Interlocked.Exchange(ref _discordEventsFilteredTotal, 0);
-        Interlocked.Exchange(ref _discordEventsRoutedTotal, 0);
-        Interlocked.Exchange(ref _discordMessagesEnqueuedTotal, 0);
-        Interlocked.Exchange(ref _discordRepliesPostedTotal, 0);
-        Interlocked.Exchange(ref _discordRepliesRejectedTotal, 0);
-        Interlocked.Exchange(ref _discordRepliesFailedTotal, 0);
-        Interlocked.Exchange(ref _discordInteractionErrorsTotal, 0);
-        Interlocked.Exchange(ref _discordApprovalFallbackActivatedTotal, 0);
+        foreach (var metrics in Registry.Values)
+            metrics.Reset();
     }
 }

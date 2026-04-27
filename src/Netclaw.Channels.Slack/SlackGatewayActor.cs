@@ -24,12 +24,12 @@ public sealed class SlackGatewayActor : ReceiveActor
 
         Receive<SlackInboundMessage>(message =>
         {
-            ChannelTelemetry.RecordSlackEventReceived(message.Kind.ToString());
+            ChannelTelemetry.For(ChannelType.Slack).RecordEventReceived(message.Kind.ToString());
 
             if (!TryMarkEventProcessed(message.EventId))
             {
                 _log.Debug("Dropping duplicate Slack event {0}", message.EventId);
-                ChannelTelemetry.RecordSlackEventFiltered("duplicate_event");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("duplicate_event");
                 return;
             }
 
@@ -42,7 +42,7 @@ public sealed class SlackGatewayActor : ReceiveActor
                     actorName));
 
             _log.Debug("Routing Slack event {0} to conversation {1}", message.EventId, message.ChannelId);
-            ChannelTelemetry.RecordSlackEventRouted(message.Kind.ToString());
+            ChannelTelemetry.For(ChannelType.Slack).RecordEventRouted(message.Kind.ToString());
             conversation.Forward(message);
         });
 

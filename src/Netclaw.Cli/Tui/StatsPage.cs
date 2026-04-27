@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using R3;
 using Termina.Extensions;
@@ -93,7 +94,7 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
         }
         else
         {
-            // Middle row: Memory + Slack side by side
+            // Middle row: Memory + channel panels side by side
             var middleRow = Layouts.Horizontal();
 
             middleRow.WithChild(
@@ -104,13 +105,16 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
                     .WithContent(BuildMemoryPanel(stats))
                     .Fill());
 
-            middleRow.WithChild(
-                new PanelNode()
-                    .WithTitle("Slack")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Cyan)
-                    .WithContent(BuildSlackPanel(stats))
-                    .Fill());
+            foreach (var channel in stats.Channels)
+            {
+                middleRow.WithChild(
+                    new PanelNode()
+                        .WithTitle(channel.DisplayName)
+                        .WithBorder(BorderStyle.Rounded)
+                        .WithBorderColor(GetChannelColor(channel.ChannelType))
+                        .WithContent(BuildChannelPanel(channel))
+                        .Fill());
+            }
 
             root.WithChild(middleRow.Height(6));
 
@@ -176,13 +180,32 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
         return content;
     }
 
-    private static ILayoutNode BuildSlackPanel(DaemonStats.Response stats)
+    private static ILayoutNode BuildChannelPanel(DaemonStats.ChannelActivity channel)
     {
-        var sl = stats.SlackActivity;
         var content = Layouts.Vertical();
-        content.WithChild(new TextNode($"  Events: recv={sl.EventsReceived} routed={sl.EventsRouted} dropped={sl.EventsDropped}").WithForeground(Color.White).Height(1));
-        content.WithChild(new TextNode($"  Replies: posted={sl.RepliesPosted} rejected={sl.RepliesRejected} failed={sl.RepliesFailed}").WithForeground(sl.RepliesFailed > 0 || sl.RepliesRejected > 0 ? Color.Yellow : Color.White).Height(1));
+        content.WithChild(new TextNode($"  Events: recv={channel.EventsReceived} routed={channel.EventsRouted} dropped={channel.EventsDropped}").WithForeground(Color.White).Height(1));
+        content.WithChild(new TextNode($"  Replies: posted={channel.RepliesPosted} rejected={channel.RepliesRejected} failed={channel.RepliesFailed}").WithForeground(channel.RepliesFailed > 0 || channel.RepliesRejected > 0 ? Color.Yellow : Color.White).Height(1));
+
+        if (channel.Extras is { Count: > 0 })
+        {
+            var extraLine = string.Join("  ", channel.Extras.Select(kv => $"{kv.Key}={kv.Value}"));
+            content.WithChild(new TextNode($"  {extraLine}").WithForeground(Color.White).Height(1));
+        }
+
         return content;
+    }
+
+    private static Color GetChannelColor(string channelType)
+    {
+        if (!ChannelTypeExtensions.TryFromWireValue(channelType, out var ct))
+            return Color.White;
+
+        return ct switch
+        {
+            ChannelType.Slack => Color.Cyan,
+            ChannelType.Discord => Color.Magenta,
+            _ => Color.White
+        };
     }
 
     private static ILayoutNode BuildWebhooksPanel(DaemonStats.Response stats)

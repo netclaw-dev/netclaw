@@ -4,6 +4,9 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Channels;
+using Netclaw.Channels.Slack;
+using Netclaw.Channels.Discord;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
@@ -18,6 +21,8 @@ internal sealed class DaemonStatsService(
     SkillRegistry skillRegistry,
     IRequiredActor<DailyStatsActorKey> dailyStatsActor,
     WebhookRouteCatalog webhookRouteCatalog,
+    SlackChannelOptions slackOptions,
+    DiscordChannelOptions discordOptions,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
@@ -38,7 +43,6 @@ internal sealed class DaemonStatsService(
         var processStats = await processTask;
         var dailyBreakdown = await dailyTask;
 
-        var slackSnapshot = ChannelTelemetry.GetSnapshot();
         var sessionStats = sessionCatalog.GetStats();
         var allSkills = skillRegistry.GetAll();
 
@@ -69,15 +73,7 @@ internal sealed class DaemonStatsService(
             {
                 TotalAvailable = allSkills.Count
             },
-            SlackActivity = new DaemonStats.SlackActivity
-            {
-                EventsReceived = slackSnapshot.SlackEventsReceived,
-                EventsRouted = slackSnapshot.SlackEventsRouted,
-                EventsDropped = slackSnapshot.SlackEventsDropped,
-                RepliesPosted = slackSnapshot.SlackRepliesPosted,
-                RepliesRejected = slackSnapshot.SlackRepliesRejected,
-                RepliesFailed = slackSnapshot.SlackRepliesFailed
-            },
+            Channels = BuildChannelActivityList(),
             Webhooks = BuildWebhookStats(),
             Reminders = await BuildReminderStatsAsync(ct),
             DailyBreakdown = dailyBreakdown
@@ -133,6 +129,18 @@ internal sealed class DaemonStatsService(
         {
             Daily = daily
         };
+    }
+
+    private List<DaemonStats.ChannelActivity> BuildChannelActivityList()
+    {
+        var enabledChannelTypes = new HashSet<ChannelType>();
+        if (slackOptions.Enabled) enabledChannelTypes.Add(ChannelType.Slack);
+        if (discordOptions.Enabled) enabledChannelTypes.Add(ChannelType.Discord);
+
+        return ChannelTelemetry.GetAllSnapshots()
+            .Where(s => enabledChannelTypes.Contains(s.ChannelType))
+            .Select(s => s.ToWireActivity())
+            .ToList();
     }
 
     private static async Task<List<DaemonStats.DailyRow>> QueryDailyStatsAsync(IActorRef actorRef, int days, CancellationToken ct)

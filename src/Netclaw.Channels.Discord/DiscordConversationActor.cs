@@ -69,7 +69,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         {
             var reason = aclDecision.DenyReason ?? "acl_denied";
             _log.Info("discord_event_dropped event={0} reason={1}", message.EventId.Value, reason);
-            ChannelTelemetry.RecordDiscordEventDropped(reason);
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped(reason);
             return;
         }
 
@@ -77,7 +77,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         if (message.IsBotMessage)
         {
             _log.Info("discord_event_filtered event={0} reason=bot_message", message.EventId.Value);
-            ChannelTelemetry.RecordDiscordEventFiltered("bot_message");
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("bot_message");
             return;
         }
 
@@ -85,7 +85,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
         {
             _log.Info("discord_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
-            ChannelTelemetry.RecordDiscordEventFiltered("restart_drain_active");
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("restart_drain_active");
             // Safe fire-and-forget: PostIngressClosedReplyAsync wraps everything in try/catch,
             // and no synchronous code precedes the first await, so exceptions cannot escape.
             _ = PostIngressClosedReplyAsync(message.ReplyChannelId, closedReason);
@@ -112,7 +112,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
                 "discord_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
                 message.EventId.Value,
                 ignoreReason);
-            ChannelTelemetry.RecordDiscordEventFiltered(
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered(
                 DiscordRoutingDecision.TelemetryLabelFor(ignoreReason));
             return;
         }
@@ -120,7 +120,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         if (decision.Kind is DiscordRoutingDecisionKind.ContinueOnly && !threadExists)
         {
             _log.Info("discord_event_dropped event={0} reason=thread_not_initialized", message.EventId.Value);
-            ChannelTelemetry.RecordDiscordEventDropped("thread_not_initialized");
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped("thread_not_initialized");
             return;
         }
 
@@ -136,7 +136,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         if (string.IsNullOrWhiteSpace(normalizedText) && !hasAttachments)
         {
             _log.Info("discord_event_filtered event={0} reason=empty_text", message.EventId.Value);
-            ChannelTelemetry.RecordDiscordEventFiltered("empty_text");
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("empty_text");
             return;
         }
 
@@ -165,7 +165,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
             message.EventId.Value,
             normalizedText.Length);
 
-        ChannelTelemetry.RecordDiscordEventRouted("message");
+        ChannelTelemetry.For(ChannelType.Discord).RecordEventRouted("message");
         sessionBinding.Forward(new DiscordThreadInbound(
             SessionId: sessionId,
             ChannelId: _channelId,
@@ -192,11 +192,11 @@ internal sealed class DiscordConversationActor : ReceiveActor
                 "Ignoring Discord interaction for missing session binding channel={0} threadOrMessage={1}",
                 _channelId.Value,
                 interaction.ThreadOrMessageId.Value);
-            ChannelTelemetry.RecordDiscordInteractionError("missing_session_binding");
+            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "missing_session_binding");
             return;
         }
 
-        ChannelTelemetry.RecordDiscordEventRouted("interaction");
+        ChannelTelemetry.For(ChannelType.Discord).RecordEventRouted("interaction");
         sessionBinding.Forward(new DiscordApprovalResponse(
             ChannelId: _channelId,
             ThreadOrMessageId: interaction.ThreadOrMessageId,
