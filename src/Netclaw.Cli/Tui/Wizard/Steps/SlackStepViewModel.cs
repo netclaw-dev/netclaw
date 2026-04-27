@@ -6,7 +6,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Wizard step for configuring Slack integration.
-/// 7 sub-steps: enable → bot token → app token → channel names → DM enabled → allowed user IDs → owner identity.
+/// 6 sub-steps: enable → bot token → app token → channel names → DM enabled → allowed user IDs.
 /// </summary>
 public sealed class SlackStepViewModel : IWizardStepViewModel
 {
@@ -33,13 +33,12 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
     public string? ChannelNamesInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public string? AllowedUserIdsInput { get; set; }
-    public string? OwnerIdentity { get; set; }
     internal SlackChannelResolutionResult? LastChannelResolution { get; set; }
 
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => SlackEnabled ? 7 : 1;
+    public int SubStepCount => SlackEnabled ? 6 : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -49,7 +48,6 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
         3 => "  Channel names separated by commas. Bot needs channels:read scope to resolve.",
         4 => "  DMs create a private session per conversation. Each top-level DM starts a new session.",
         5 => "  Restrict Slack access to specific user IDs for both channels and DMs. Leave blank to allow all workspace members.",
-        6 => "  Socket Mode requires both tokens. See: https://api.slack.com/apis/socket-mode",
         _ => ""
     };
 
@@ -62,14 +60,14 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
             return true;
         }
 
-        if (_currentSubStep >= 1 && _currentSubStep < 6 && SlackEnabled)
+        if (_currentSubStep >= 1 && _currentSubStep < 5 && SlackEnabled)
         {
             _currentSubStep++;
             _highWaterSubStep = _currentSubStep;
             return true;
         }
 
-        return false; // step complete (disabled at sub-step 0, or sub-step 6 complete)
+        return false; // step complete (disabled at sub-step 0, or sub-step 5 complete)
     }
 
     public bool TryGoBack()

@@ -43,11 +43,11 @@ public sealed class SlackStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void SubStepCount_IsSeven_WhenEnabled()
+    public void SubStepCount_IsSix_WhenEnabled()
     {
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = true;
-        Assert.Equal(7, step.SubStepCount);
+        Assert.Equal(6, step.SubStepCount);
     }
 
     [Fact]
@@ -84,11 +84,7 @@ public sealed class SlackStepViewModelTests : IDisposable
         Assert.True(step.TryAdvance());
         Assert.Equal(5, step.CurrentSubStep);
 
-        // 5 → 6
-        Assert.True(step.TryAdvance());
-        Assert.Equal(6, step.CurrentSubStep);
-
-        // 6 → complete
+        // 5 → complete
         Assert.False(step.TryAdvance());
     }
 
@@ -125,13 +121,13 @@ public sealed class SlackStepViewModelTests : IDisposable
         step.SlackEnabled = true;
 
         // Advance through all sub-steps
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 5; i++)
             step.TryAdvance();
-        Assert.Equal(6, step.CurrentSubStep);
+        Assert.Equal(5, step.CurrentSubStep);
 
         // Re-enter from back
         step.OnEnter(_context, NavigationDirection.Back);
-        Assert.Equal(6, step.CurrentSubStep);
+        Assert.Equal(5, step.CurrentSubStep);
     }
 
     [Fact]

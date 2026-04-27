@@ -10,7 +10,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the Slack wizard step.
-/// 7 sub-steps: enable → bot token → app token → channel names → DM → user IDs → owner identity.
+/// 6 sub-steps: enable → bot token → app token → channel names → DM → user IDs.
 /// </summary>
 public sealed class SlackStepView : IWizardStepView
 {
@@ -20,7 +20,6 @@ public sealed class SlackStepView : IWizardStepView
     private TextInputNode? _channelNamesInput;
     private SelectionListNode<string>? _dmEnabledList;
     private TextInputNode? _allowedUserIdsInput;
-    private TextInputNode? _ownerIdentityInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
 
@@ -38,7 +37,6 @@ public sealed class SlackStepView : IWizardStepView
             3 => BuildChannelNamesSubStep(vm, callbacks),
             4 => BuildDmEnabledSubStep(vm, callbacks),
             5 => BuildAllowedUserIdsSubStep(vm, callbacks),
-            6 => BuildOwnerIdentitySubStep(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -229,36 +227,6 @@ public sealed class SlackStepView : IWizardStepView
                 .Height(3));
     }
 
-    private ILayoutNode BuildOwnerIdentitySubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
-    {
-        _ownerIdentityInput = new TextInputNode()
-            .WithPlaceholder("U01234ABCDE (your Slack user ID)");
-
-        if (!string.IsNullOrWhiteSpace(vm.OwnerIdentity))
-            _ownerIdentityInput.Text = vm.OwnerIdentity;
-
-        _ownerIdentityInput.OnFocused();
-        _lastFocusedInput = _ownerIdentityInput;
-        _lastFocusedList = null;
-
-        _ownerIdentityInput.Submitted
-            .Subscribe(text =>
-            {
-                vm.OwnerIdentity = string.IsNullOrWhiteSpace(text) ? null : text;
-                callbacks.AdvanceStep();
-            })
-            .DisposeWith(callbacks.Subscriptions);
-
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Owner identity (press Enter to skip):").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Owner ID")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_ownerIdentityInput)
-                .Height(3));
-    }
-
     public bool HandleKeyPress(KeyPressed key)
     {
         if (_lastFocusedList is not null)
@@ -289,6 +257,5 @@ public sealed class SlackStepView : IWizardStepView
         _channelNamesInput = null;
         _dmEnabledList = null;
         _allowedUserIdsInput = null;
-        _ownerIdentityInput = null;
     }
 }
