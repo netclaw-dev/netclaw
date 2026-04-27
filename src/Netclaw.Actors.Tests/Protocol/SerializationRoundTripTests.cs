@@ -374,4 +374,17 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.NotNull(ex);
         Assert.Contains("Unknown manifest", ex.Message);
     }
+
+    [Fact]
+    public void Unregistered_type_throws_on_serialize()
+    {
+        var serialization = Sys.Serialization;
+
+        // UnregisteredMessage is NOT in the boundTypes list for NetclawProtobufSerializer,
+        // so strict serialization mode should throw instead of falling back to JSON.
+        Assert.Throws<System.Runtime.Serialization.SerializationException>(
+            () => serialization.FindSerializerFor(new UnregisteredMessage("test")));
+    }
+
+    private sealed record UnregisteredMessage(string Value);
 }

@@ -180,9 +180,11 @@ public static class NetclawAkkaHostingExtensions
             typeof(ReminderPayload),
         };
 
-        return builder.WithCustomSerializer(
-            serializerIdentifier: "netclaw-protobuf",
-            boundTypes: boundTypes,
-            serializerFactory: system => new NetclawProtobufSerializer(system));
+        return builder
+            .WithCustomSerializer(
+                serializerIdentifier: "netclaw-protobuf",
+                boundTypes: boundTypes,
+                serializerFactory: system => new NetclawProtobufSerializer(system))
+            .WithStrictSerialization();
     }
 }
