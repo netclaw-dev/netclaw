@@ -53,17 +53,6 @@ public sealed record DaemonConfig
     }
 
     /// <summary>
-    /// Checks whether self-update is disabled via the <c>NETCLAW_Daemon__DisableSelfUpdate</c>
-    /// environment variable. Used by CLI paths that run before full configuration
-    /// infrastructure is available.
-    /// </summary>
-    public static bool IsSelfUpdateDisabledByEnv()
-    {
-        var value = Environment.GetEnvironmentVariable("NETCLAW_Daemon__DisableSelfUpdate");
-        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>
     /// Parses an <see cref="ExposureMode"/> from a config string value.
     /// Accepts kebab-case (<c>tailscale-serve</c>) and PascalCase (<c>TailscaleServe</c>).
     /// Returns <see cref="ExposureMode.Local"/> for null/empty input.

@@ -149,4 +149,22 @@ public class MinisignVerifierTests
         Assert.True(parsed.Key.AsSpan().SequenceEqual(MinisignVerifier.EmbeddedPublicKey));
         Assert.True(parsed.KeyId.AsSpan().SequenceEqual(MinisignVerifier.EmbeddedKeyId));
     }
+
+    [Fact]
+    public void Verify_ReturnsPlatformUnavailable_WhenTestOverrideForcesIt()
+    {
+        MinisignVerifier.TestVerifyResultOverride = MinisignVerifier.VerifyResult.PlatformUnavailable;
+
+        try
+        {
+            var data = System.Text.Encoding.UTF8.GetBytes("test");
+            var result = MinisignVerifier.Verify(data, TestSignatureFile);
+
+            Assert.Equal(MinisignVerifier.VerifyResult.PlatformUnavailable, result);
+        }
+        finally
+        {
+            MinisignVerifier.TestVerifyResultOverride = null;
+        }
+    }
 }

@@ -97,6 +97,8 @@ public static class DaemonRuntimeStatus
     {
         public bool Available { get; init; }
 
+        public bool SelfUpdateDisabled { get; init; }
+
         /// <summary>
         /// Update availability state: "up-to-date", "update-available", or "unknown" (check failed or not yet run).
         /// </summary>

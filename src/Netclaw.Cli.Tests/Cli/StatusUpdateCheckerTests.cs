@@ -8,6 +8,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
+[Collection("Update verification")]
 public sealed class StatusUpdateCheckerTests : IDisposable
 {
     private readonly Key _testSigningKey;

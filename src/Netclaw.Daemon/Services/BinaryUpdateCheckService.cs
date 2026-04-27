@@ -84,6 +84,10 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
 
                 EmitUpdateAlert(result);
             }
+            else if (!result.CheckSucceeded)
+            {
+                _logger.LogInformation("Netclaw update check failed: {ErrorDetail}", result.ErrorDetail);
+            }
             else
             {
                 _logger.LogInformation("Netclaw is up to date (v{Version})", _currentVersion);

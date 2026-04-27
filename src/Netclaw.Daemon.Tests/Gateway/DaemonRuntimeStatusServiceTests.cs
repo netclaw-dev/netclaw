@@ -93,6 +93,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig(),
             paths: CreatePaths());
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
@@ -115,6 +116,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig(),
             paths: CreatePaths());
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
@@ -137,6 +139,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig(),
             paths: CreatePaths());
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
@@ -198,6 +201,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
                 telemetryOptions: Options.Create(new TelemetryOptions()),
                 modelCapabilities: DefaultModelCapabilities,
                 modelSelection: DefaultModelSelection,
+                daemonConfig: new DaemonConfig(),
                 paths: CreatePaths(),
                 mcpClientManager: manager);
 
@@ -263,6 +267,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig(),
             paths: paths,
             sqliteMemoryStore: sqliteStore);
 
@@ -298,6 +303,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             telemetryOptions: Options.Create(new TelemetryOptions()),
             modelCapabilities: DefaultModelCapabilities,
             modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig(),
             paths: CreatePaths());
 
         var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
@@ -309,5 +315,27 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         Assert.True(slackActivity.EventsRouted >= before.EventsRouted + 1);
         Assert.True(slackActivity.RepliesPosted >= before.RepliesPosted + 1);
         Assert.True(slackActivity.RepliesFailed >= before.RepliesFailed + 1);
+    }
+
+    [Fact]
+    public async Task StatusIncludesSelfUpdateDisabledFlag()
+    {
+        var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
+            TimeProvider.System,
+            channels: Array.Empty<IChannel>(),
+            slackOptions: new SlackChannelOptions { Enabled = false },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
+            persistenceOptions: new DaemonPersistenceOptions(),
+            telemetryOptions: Options.Create(new TelemetryOptions()),
+            modelCapabilities: DefaultModelCapabilities,
+            modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig { DisableSelfUpdate = true },
+            paths: CreatePaths());
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(status.Update);
+        Assert.True(status.Update!.SelfUpdateDisabled);
     }
 }

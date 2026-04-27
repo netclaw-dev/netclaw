@@ -36,6 +36,12 @@ public static class MinisignVerifier
     internal static byte[]? TestPublicKeyOverride { get; set; }
 
     /// <summary>
+    /// Test seam: forces <see cref="Verify"/> to return this result before any parsing
+    /// or cryptographic work. Reset to null after tests.
+    /// </summary>
+    internal static VerifyResult? TestVerifyResultOverride { get; set; }
+
+    /// <summary>
     /// The embedded Ed25519 public key ID (8 bytes) for matching against signatures.
     /// </summary>
     internal static ReadOnlySpan<byte> EmbeddedKeyId => EmbeddedPublicKeyBlob.Slice(2, 8);
@@ -150,6 +156,9 @@ public static class MinisignVerifier
     /// <returns>The verification result.</returns>
     public static VerifyResult Verify(ReadOnlySpan<byte> data, string signatureFileContent)
     {
+        if (TestVerifyResultOverride is { } overrideResult)
+            return overrideResult;
+
         var sig = ParseSignature(signatureFileContent);
         if (sig is null)
             return VerifyResult.MalformedSignature;

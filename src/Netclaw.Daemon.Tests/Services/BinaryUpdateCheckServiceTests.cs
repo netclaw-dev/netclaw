@@ -241,6 +241,20 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FetchVerifiedManifestAsync_ReturnsPlatformUnavailableWhenVerifierCannotRun()
+    {
+        MinisignVerifier.TestVerifyResultOverride = MinisignVerifier.VerifyResult.PlatformUnavailable;
+        var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
+        var handler = CreateSignedHandler(manifest);
+
+        using var httpClient = new HttpClient(handler);
+        var result = await UpdateCheckService.FetchVerifiedManifestAsync(httpClient, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(ManifestFetchStatus.PlatformUnavailable, result.Status);
+    }
+
+    [Fact]
     public void EvaluateManifest_MatchesAssetsByRid()
     {
         var manifest = new BinaryFeedManifest
@@ -395,6 +409,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public void Dispose()
     {
         MinisignVerifier.TestPublicKeyOverride = null;
+        MinisignVerifier.TestVerifyResultOverride = null;
         UpdateCheckService.ResetCache();
         _testSigningKey.Dispose();
         if (Directory.Exists(_tempDir))

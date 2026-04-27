@@ -29,6 +29,7 @@ internal sealed class DaemonRuntimeStatusService(
     IOptions<TelemetryOptions> telemetryOptions,
     ModelCapabilities modelCapabilities,
     ModelSelection modelSelection,
+    DaemonConfig daemonConfig,
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
@@ -249,7 +250,7 @@ internal sealed class DaemonRuntimeStatusService(
         };
     }
 
-    private static DaemonRuntimeStatus.Update BuildUpdateStatus()
+    private DaemonRuntimeStatus.Update BuildUpdateStatus()
     {
         var result = UpdateCheckService.GetLastResult();
         if (result is null)
@@ -259,6 +260,7 @@ internal sealed class DaemonRuntimeStatusService(
                 Available = false,
                 State = "unknown",
                 CurrentVersion = BuildInfo.Version,
+                SelfUpdateDisabled = daemonConfig.DisableSelfUpdate,
             };
         }
 
@@ -272,6 +274,7 @@ internal sealed class DaemonRuntimeStatusService(
         return new DaemonRuntimeStatus.Update
         {
             Available = result.IsUpdateAvailable,
+            SelfUpdateDisabled = daemonConfig.DisableSelfUpdate,
             State = state,
             CurrentVersion = result.CurrentVersion,
             LatestVersion = result.IsUpdateAvailable ? result.LatestVersion : null,
