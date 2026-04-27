@@ -216,7 +216,7 @@ public class SubAgentSpawnIntegrationTests : TestKit
                 })
         ];
 
-        var sessionId = new SessionId("test-channel/subagent-integration");
+        var sessionId = new SessionId("console/subagent-integration");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("subagent-events");
 
@@ -231,7 +231,8 @@ public class SubAgentSpawnIntegrationTests : TestKit
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Use a subagent to summarize the file"
+            Content = "Use a subagent to summarize the file",
+            Source = BuildPersonalSource()
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -540,6 +541,18 @@ public class SubAgentSpawnIntegrationTests : TestKit
         Assert.Equal(source.Boundary, _recordingFileReadTool.LastContext?.Boundary);
     }
 
+    private static MessageSource BuildPersonalSource()
+    {
+        return new MessageSource
+        {
+            ChannelType = ChannelType.Tui,
+            SenderId = "test-user",
+            Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.ResolveBoundaryFromChannelType(ChannelType.Tui.ToWireValue(), TrustAudience.Personal),
+            ReceivedAt = DateTimeOffset.UtcNow
+        };
+    }
+
     private static MessageSource BuildReminderSource(string? reminderId = null)
     {
         return new MessageSource
@@ -613,6 +626,6 @@ public class SubAgentSpawnIntegrationTests : TestKit
     {
         public ContextLayerTiming Timing => timing;
 
-        public string GetContextLayer() => content;
+        public string GetContextLayer(TrustAudience audience) => content;
     }
 }

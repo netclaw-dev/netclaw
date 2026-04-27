@@ -30,6 +30,7 @@ internal static class SkillToolRegistration
         var metrics = services.GetService<ISessionMetrics>();
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
         var subAgentSpawner = services.GetService<SubAgentSpawner>();
+        var skillSyncConfig = services.GetService<SkillSyncConfig>();
 
         registry.Replace(new FileReadTool(toolConfig, pathPolicy, paths, skillRegistry, metrics));
 
@@ -41,6 +42,7 @@ internal static class SkillToolRegistration
             externalSources,
             metrics,
             subAgentRegistry,
-            subAgentSpawner);
+            subAgentSpawner,
+            skillSyncConfig);
     }
 }

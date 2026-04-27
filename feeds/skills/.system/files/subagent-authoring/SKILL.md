@@ -3,12 +3,25 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.0.0"
+  version: "1.1.0"
 ---
 
 # Subagent Authoring
 
 Use this skill when you need to create, update, or debug subagent definitions.
+
+## Audience and Feature Gating
+
+Subagents are subject to two independent gates:
+
+- **Audience gate:** Public sessions cannot spawn subagents or see the
+  subagent discovery context layer. `spawn_agent` returns a generic denial
+  for Public.
+- **Deployment gate:** `SubAgents.Enabled` in `netclaw.json` (default `true`).
+  When `false`, `spawn_agent` is hidden from discovery for ALL audiences and
+  the subagent discovery context layer returns empty.
+
+Both gates must pass for subagent features to be available.
 
 ## When to use
 

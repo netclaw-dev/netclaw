@@ -66,10 +66,11 @@ public static class ToolRegistrationExtensions
         IReadOnlyList<ResolvedExternalSource> externalSources,
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
-        SubAgentSpawner? subAgentSpawner = null)
+        SubAgentSpawner? subAgentSpawner = null,
+        SkillSyncConfig? skillSyncConfig = null)
     {
-        registry.Register(new SkillLoadTool(skillRegistry, scanner, sessionMetrics, subAgentRegistry, subAgentSpawner));
-        registry.Register(new SkillReadResourceTool(skillRegistry, scanner));
+        registry.Register(new SkillLoadTool(skillRegistry, scanner, sessionMetrics, subAgentRegistry, subAgentSpawner, skillSyncConfig));
+        registry.Register(new SkillReadResourceTool(skillRegistry, scanner, skillSyncConfig));
         registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, externalSources));
         return registry;
     }
@@ -83,12 +84,13 @@ public static class ToolRegistrationExtensions
         IActorRef reminderManager,
         TimeProvider timeProvider,
         ReminderHistoryStore historyStore,
+        SchedulingConfig schedulingConfig,
         IEnumerable<IReminderTargetResolver>? targetResolvers = null)
     {
-        registry.Register(new SetReminderTool(reminderManager, timeProvider, targetResolvers));
-        registry.Register(new CancelReminderTool(reminderManager));
-        registry.Register(new ListRemindersTool(reminderManager));
-        registry.Register(new GetReminderHistoryTool(historyStore));
+        registry.Register(new SetReminderTool(reminderManager, timeProvider, schedulingConfig, targetResolvers));
+        registry.Register(new CancelReminderTool(reminderManager, schedulingConfig));
+        registry.Register(new ListRemindersTool(reminderManager, schedulingConfig));
+        registry.Register(new GetReminderHistoryTool(historyStore, schedulingConfig));
         return registry;
     }
 

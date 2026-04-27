@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Reminders;
@@ -17,6 +18,7 @@ public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHist
     private const int MaxRecordsHardCap = 100;
 
     private readonly ReminderHistoryStore _historyStore;
+    private readonly SchedulingConfig _schedulingConfig;
 
     public record Params(
         [property: Description("The reminder ID to fetch history for (use list_reminders to find IDs).")]
@@ -24,13 +26,17 @@ public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHist
         [property: Description("Maximum number of records to return. Defaults to 20, capped at 100.")]
         int? Last = null);
 
-    public GetReminderHistoryTool(ReminderHistoryStore historyStore)
+    public GetReminderHistoryTool(ReminderHistoryStore historyStore, SchedulingConfig schedulingConfig)
     {
         _historyStore = historyStore;
+        _schedulingConfig = schedulingConfig;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
+        if (!_schedulingConfig.Enabled)
+            return "Error: Scheduling is disabled for this deployment.";
+
         if (string.IsNullOrWhiteSpace(args.ReminderId))
             return "Error: 'reminder_id' is required.";
 

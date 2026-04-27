@@ -117,9 +117,10 @@ public sealed class InitWizardPageTests : IDisposable
         // Make Channels step applicable before the picker's OnLeave
         vm.Context.AnyChatServicesEnabled = true;
 
-        // Skip: provider -> security-posture -> channel-picker -> channels
+        // Skip: provider -> security-posture -> feature-selection -> channel-picker -> channels
         vm.Orchestrator.GoNext(); // provider → security-posture
-        vm.Orchestrator.GoNext(); // security-posture → channel-picker
+        vm.Orchestrator.GoNext(); // security-posture → feature-selection
+        vm.Orchestrator.GoNext(); // feature-selection → channel-picker
         vm.Orchestrator.GoNext(); // channel-picker → channels (additive flag preserved)
 
         Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
@@ -156,7 +157,8 @@ public sealed class InitWizardPageTests : IDisposable
         // Make Channels step applicable before the picker's OnLeave
         vm.Context.AnyChatServicesEnabled = true;
 
-        // Skip: provider -> security-posture -> channel-picker -> channels
+        // Skip: provider -> security-posture -> feature-selection -> channel-picker -> channels
+        vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();

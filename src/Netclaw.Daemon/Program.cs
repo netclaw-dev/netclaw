@@ -568,10 +568,10 @@ static void ConfigureDaemonServices(
     services.AddSingleton<WebhookExecutionService>();
     services.AddSingleton<IWebhookExecutionService>(sp => sp.GetRequiredService<WebhookExecutionService>());
 
-    // Search backend selection
+    // Search backend selection — gated on SearchConfig.Enabled
     var searchConfig = configuration.GetSection("Search")
         .Get<SearchConfig>() ?? new SearchConfig();
-    var searchBackend = CreateSearchBackend(searchConfig);
+    var searchBackend = searchConfig.Enabled ? CreateSearchBackend(searchConfig) : null;
 
     var writeDenyList = new[]
     {
@@ -604,13 +604,41 @@ static void ConfigureDaemonServices(
     var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns);
     services.AddSingleton(shellCommandPolicy);
 
+    // Subagent timeout configuration
+    var subAgentConfig = configuration.GetSection("SubAgents")
+        .Get<SubAgentConfig>() ?? new SubAgentConfig();
+    services.AddSingleton(subAgentConfig);
+
+    // Cross-session memory: provider-based wiring
+    var memoryConfig = configuration.GetSection("Memory")
+        .Get<MemoryConfig>() ?? new MemoryConfig();
+    services.AddSingleton(memoryConfig);
+
+    // System skill sync behavior
+    var skillSyncConfig = configuration.GetSection("SkillSync")
+        .Get<SkillSyncConfig>() ?? new SkillSyncConfig();
+    services.AddSingleton(skillSyncConfig);
+
+    // Scheduling / reminders subsystem kill switch
+    var schedulingConfig = configuration.GetSection("Scheduling")
+        .Get<SchedulingConfig>() ?? new SchedulingConfig();
+    services.AddSingleton(schedulingConfig);
+
+    // Feature gates control which subsystem tools are exposed
+    var featureGates = new FeatureGates(
+        MemoryEnabled: memoryConfig.Enabled,
+        SearchEnabled: searchConfig.Enabled,
+        SkillSyncEnabled: skillSyncConfig.Enabled,
+        SubAgentsEnabled: subAgentConfig.Enabled,
+        SchedulingEnabled: schedulingConfig.Enabled);
     var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
     var toolAccessPolicy = new ToolAccessPolicy(
         toolConfig,
         effectivePolicyDefaults,
         shellCommandPolicy,
         fileApprovalMatcher,
-        toolPathPolicy);
+        toolPathPolicy,
+        featureGates);
     services.AddSingleton(toolAccessPolicy);
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);
@@ -618,7 +646,8 @@ static void ConfigureDaemonServices(
     services.AddSingleton<IToolApprovalService, AkkaToolApprovalService>();
 
     var toolRegistry = new ToolRegistry();
-    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, shellCommandPolicy, toolAccessPolicy, paths, webhookRouteStore);
+    toolRegistry.WithFirstPartyTools(toolConfig, searchBackend, toolPathPolicy, shellCommandPolicy, toolAccessPolicy, paths,
+        webhooksConfig.Enabled ? webhookRouteStore : null);
 
     // Skills system: seed built-in skills to .system/, register sync service
     CopyBuiltInSkills(paths.SystemSkillsDirectory);
@@ -636,36 +665,16 @@ static void ConfigureDaemonServices(
     skillRegistry.ReplaceAll(initialSkillScan.AcceptedSkills, initialSkillScan.Issues);
     services.AddSingleton(skillRegistry);
 
-    // Subagent timeout configuration
-    var subAgentConfig = configuration.GetSection("SubAgents")
-        .Get<SubAgentConfig>() ?? new SubAgentConfig();
-    services.AddSingleton(subAgentConfig);
-
     // Subagent definition registry and file loader
     var subAgentRegistry = new SubAgentDefinitionRegistry();
     services.AddSingleton(subAgentRegistry);
     services.AddSingleton<FileSubAgentDefinitionLoader>();
     services.AddSingleton<SubAgentSpawner>();
 
-    // Cross-session memory: provider-based wiring
-    var memoryConfig = configuration.GetSection("Memory")
-        .Get<MemoryConfig>() ?? new MemoryConfig();
-    services.AddSingleton(memoryConfig);
-
-    // System skill sync behavior
-    var skillSyncConfig = configuration.GetSection("SkillSync")
-        .Get<SkillSyncConfig>() ?? new SkillSyncConfig();
-    services.AddSingleton(skillSyncConfig);
-
     // New SQLite-backed memory substrate (uses existing daemon SQLite file by design)
+    // Store is always created for schema migration; memory services are gated on MemoryConfig.Enabled.
     var memoryStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
     services.AddSingleton(memoryStore);
-    services.AddSingleton<IMemoryRecallCoordinator, SQLiteMemoryRecallCoordinator>();
-    services.AddSingleton<MemoryPolicyEvaluator>();
-    services.AddSingleton<MemoryRulesFirstExtractor>();
-    services.AddSingleton<MemoryCurationEngine>();
-    services.AddSingleton<IMemoryCheckpointSink, SQLiteMemoryCheckpointSink>();
-    services.AddSingleton<MemoryCurationWorkerService>();
 
     // Schema migration hosted service must start before any memory consumer so
     // both akka-persistence migrations and memory table creation run first.
@@ -673,16 +682,26 @@ static void ConfigureDaemonServices(
     services.AddSingleton<SchemaMigrationHostedService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SchemaMigrationHostedService>());
 
-    services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MemoryCurationWorkerService>());
+    if (memoryConfig.Enabled)
+    {
+        services.AddSingleton<IMemoryRecallCoordinator, SQLiteMemoryRecallCoordinator>();
+        services.AddSingleton<MemoryPolicyEvaluator>();
+        services.AddSingleton<MemoryRulesFirstExtractor>();
+        services.AddSingleton<MemoryCurationEngine>();
+        services.AddSingleton<IMemoryCheckpointSink, SQLiteMemoryCheckpointSink>();
+        services.AddSingleton<MemoryCurationWorkerService>();
+        services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<MemoryCurationWorkerService>());
 
-    // SQLite-first mode: explicit manual-control memory tools are always routed
-    // through the SQLite memory + checkpoint/policy pipeline.
-    toolRegistry.Register(new SqliteFindMemoriesTool(memoryStore));
-    toolRegistry.Register(new SqliteGetMemoriesTool(memoryStore));
-    toolRegistry.Register(new SqliteStoreMemoryTool(new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
-    toolRegistry.Register(new SqliteUpdateMemoryTool(
-        memoryStore,
-        new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
+        // SQLite-first mode: explicit manual-control memory tools are always routed
+        // through the SQLite memory + checkpoint/policy pipeline.
+        toolRegistry.Register(new SqliteFindMemoriesTool(memoryStore));
+        toolRegistry.Register(new SqliteGetMemoriesTool(memoryStore));
+        toolRegistry.Register(new SqliteStoreMemoryTool(new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
+        toolRegistry.Register(new SqliteUpdateMemoryTool(
+            memoryStore,
+            new SQLiteMemoryCheckpointSink(memoryStore, TimeProvider.System)));
+    }
+
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
 
     services.AddSingleton(toolRegistry);
@@ -739,14 +758,15 @@ static void ConfigureDaemonServices(
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 
     // Dynamic tool index context layer — NOT part of the persisted system prompt.
-    // Backed by system-managed shadow files on disk so tool metadata remains
-    // discoverable and inspectable across daemon restarts.
+    // The prompt-facing layer is computed from the live registry with audience
+    // filtering so startup context matches actual discoverable capabilities.
+    // Shadow files remain on disk for operator inspection across daemon restarts.
     services.AddSingleton<McpShadowCatalogWriter>();
-    services.AddSingleton<IContextLayerProvider>(_ =>
-        new FileContextLayerProvider(paths.ToolIndexShadowPath, ContextLayerTiming.OnceAtStart));
+    services.AddSingleton<ToolIndexContextLayer>();
+    services.AddSingleton<IContextLayerProvider>(sp => sp.GetRequiredService<ToolIndexContextLayer>());
 
     // Skill index context layer — compressed format pointing at files on disk, rebuilt by sync service
-    var skillIndexLayer = new SkillIndexContextLayer();
+    var skillIndexLayer = new SkillIndexContextLayer(skillSyncConfig);
     skillIndexLayer.Update(skillRegistry.GenerateIndex(paths.SkillsDirectory, resolvedExternalSources));
     services.AddSingleton(skillIndexLayer);
     services.AddSingleton<IContextLayerProvider>(skillIndexLayer);
@@ -776,12 +796,12 @@ static void ConfigureDaemonServices(
     // See SkillToolRegistration call after app.Build().
 
     // Memory context layer — status is updated by ToolIndexUpdater after MCP discovery
-    var memoryIndexLayer = new MemoryIndexContextLayer();
+    var memoryIndexLayer = new MemoryIndexContextLayer(memoryConfig);
     services.AddSingleton(memoryIndexLayer);
     services.AddSingleton<IContextLayerProvider>(memoryIndexLayer);
 
     // Subagent discovery context layer — updated by ToolIndexUpdater after file-based agents load
-    var subAgentDiscoveryLayer = new SubAgentDiscoveryContextLayer();
+    var subAgentDiscoveryLayer = new SubAgentDiscoveryContextLayer(subAgentConfig);
     services.AddSingleton(subAgentDiscoveryLayer);
     services.AddSingleton<IContextLayerProvider>(subAgentDiscoveryLayer);
 
@@ -797,9 +817,13 @@ static void ConfigureDaemonServices(
     // Runs after initial skill scan; re-scans and updates the index if any skills changed.
     // Also enriches skills with keyword indexes for deterministic auto-loading.
     // Never blocks startup on network failures.
-    services.AddHttpClient<SystemSkillSyncService>(client =>
-        client.Timeout = FeedConstants.FeedHttpTimeout);
-    services.AddHostedService<SystemSkillSyncService>();
+    // Gated on SkillSyncConfig.Enabled — when disabled, no CDN sync occurs.
+    if (skillSyncConfig.Enabled)
+    {
+        services.AddHttpClient<SystemSkillSyncService>(client =>
+            client.Timeout = FeedConstants.FeedHttpTimeout);
+        services.AddHostedService<SystemSkillSyncService>();
+    }
 
     // Skill directory watcher — auto-rescan when skill files change on disk.
     // Covers native skills directory and all external sources.
@@ -894,7 +918,8 @@ static void ConfigureDaemonServices(
         sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
         sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
         sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-        sp.GetService<SQLiteMemoryStore>()));
+        sp.GetService<SQLiteMemoryStore>(),
+        sp.GetService<MemoryConfig>()));
 
     services.AddSingleton(sp => new SessionObservability(
         sp.GetService<Netclaw.Actors.Telemetry.ISessionMetrics>(),
@@ -959,7 +984,8 @@ static void ConfigureDaemonServices(
             var tp = sp.GetRequiredService<TimeProvider>();
             var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
             var targetResolvers = sp.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
-            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, targetResolvers);
+            var schedulingCfg = sp.GetRequiredService<SchedulingConfig>();
+            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, schedulingCfg, targetResolvers);
 
             var bgJobManager = registry.Get<Netclaw.Actors.Hosting.BackgroundJobManagerActorKey>();
             toolRegistry.WithBackgroundJobTools(bgJobManager);
@@ -1236,7 +1262,8 @@ static void MapReminderEndpoints(WebApplication app)
         var deliveryAddress = request.Delivery?.Address ?? request.DeliveryAddress;
 
         var reminderResolvers = serviceProvider.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
-        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, reminderResolvers);
+        var restSchedulingConfig = serviceProvider.GetRequiredService<SchedulingConfig>();
+        var tool = new Netclaw.Actors.Reminders.SetReminderTool(manager, timeProvider, restSchedulingConfig, reminderResolvers);
         var toolContext = new Netclaw.Tools.ToolExecutionContext(sessionId: null, sessionDirectory: null);
         toolContext.Audience = authorization?.SourceAudience?.ToWireValue();
         toolContext.ChannelType = "manual";

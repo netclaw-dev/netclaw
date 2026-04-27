@@ -84,9 +84,10 @@ public partial class InitWizardViewModel : ReactiveViewModel
         };
 
         // Create step VMs in the canonical order:
-        // provider -> security-posture -> channel-picker -> channels -> search -> browser-automation -> identity -> external-skills -> exposure-mode -> health-check
+        // provider -> security-posture -> feature-selection -> channel-picker -> channels -> search -> browser-automation -> identity -> external-skills -> exposure-mode -> health-check
         ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory);
         var securityPostureStep = new SecurityPostureStepViewModel();
+        var featureSelectionStep = new FeatureSelectionStepViewModel();
         var exposureModeStep = new ExposureModeStepViewModel();
         var channelPickerStep = new ChannelPickerStepViewModel(slackProbe, discordProbe);
         var channelsStep = new ChannelsStepViewModel();
@@ -100,6 +101,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         {
             ProviderStep,
             securityPostureStep,
+            featureSelectionStep,
             channelPickerStep,
             channelsStep,
             searchStep,
@@ -127,6 +129,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         {
             ["provider"] = new ProviderStepView(clipboardService),
             ["security-posture"] = new SecurityPostureStepView(),
+            ["feature-selection"] = new FeatureSelectionStepView(),
             ["exposure-mode"] = new ExposureModeStepView(),
             ["channel-picker"] = new ChannelPickerStepView(),
             ["channels"] = new ChannelsStepView(),

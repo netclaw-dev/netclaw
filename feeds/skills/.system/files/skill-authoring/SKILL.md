@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.6.1"
+  version: "1.7.0"
 ---
 
 # Skill Authoring
@@ -11,6 +11,19 @@ metadata:
 This skill documents the complete Netclaw skill format and how to create
 skills. Load it when you need to synthesize a skill from a session or help
 the user create one.
+
+## Audience and Feature Gating
+
+Skills are subject to two independent gates:
+
+- **Audience gate:** Public sessions cannot load skills (`skill_load`),
+  read skill resources (`skill_read_resource`), or see the skill index
+  context layer. Skills are fully invisible to Public.
+- **Deployment gate:** `SkillSync.Enabled` in `netclaw.json` (default `true`).
+  When `false`, skill tools are hidden from discovery for ALL audiences and
+  the skill index context layer returns empty.
+
+Both gates must pass for skill features to be available.
 
 ## When to Create a Skill
 

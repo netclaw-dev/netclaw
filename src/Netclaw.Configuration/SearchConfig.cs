@@ -7,6 +7,12 @@ namespace Netclaw.Configuration;
 public sealed class SearchConfig
 {
     /// <summary>
+    /// When false, the web search subsystem is disabled.
+    /// Search tools are not registered regardless of audience profile.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// Search backend identifier.
     /// </summary>
     public SearchBackend Backend { get; set; } = SearchBackend.DuckDuckGo;

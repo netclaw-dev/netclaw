@@ -19,6 +19,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     private readonly SubAgentDefinitionRegistry _registry;
     private readonly SubAgentSpawner _spawner;
     private readonly NetclawPaths _paths;
+    private readonly SubAgentConfig _subAgentConfig;
 
     public record Params(
         [property: Description("Name of the subagent to invoke (see available-subagents in context)")]
@@ -32,11 +33,13 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
             + "instructions; use this for THIS invocation's situation.")]
         string? Context = null);
 
-    public SpawnAgentTool(SubAgentDefinitionRegistry registry, SubAgentSpawner spawner, NetclawPaths paths)
+    public SpawnAgentTool(SubAgentDefinitionRegistry registry, SubAgentSpawner spawner, NetclawPaths paths,
+        SubAgentConfig? subAgentConfig = null)
     {
         _registry = registry;
         _spawner = spawner;
         _paths = paths;
+        _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -44,6 +47,11 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
 
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
+        // Defense-in-depth: block subagent spawning for Public audience or when subagent subsystem is disabled
+        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
+        if (audience == TrustAudience.Public || !_subAgentConfig.Enabled)
+            return "Error: This tool is not available.";
+
         if (string.IsNullOrWhiteSpace(args.Agent))
             return "Error: 'agent' parameter is required.";
 
@@ -61,7 +69,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
             return $"Error: Unknown agent '{args.Agent}'. Available agents: {names}";
         }
 
-        var result = await _spawner.SpawnAsync(profile, args.Task, args.Context, context, ct);
+        var result = await _spawner.SpawnAsync(profile, args.Task, args.Context, context!, ct);
 
         return result.Success
             ? result.Output

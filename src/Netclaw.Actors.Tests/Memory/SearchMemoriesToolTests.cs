@@ -15,12 +15,47 @@ public class MemoryIndexContextLayerTests
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.SqlitePrimary);
 
-        var content = layer.GetContextLayer();
+        var content = layer.GetContextLayer(TrustAudience.Personal);
 
         Assert.Contains("sqlite-backed", content);
         Assert.Contains("automatic", content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("find_memories", content);
         Assert.Contains("store_memory", content);
         Assert.Contains("manual", content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetContextLayer_ReturnsEmptyForPublicAudience()
+    {
+        var layer = new MemoryIndexContextLayer();
+        layer.Update(MemoryContextState.SqlitePrimary);
+
+        var content = layer.GetContextLayer(TrustAudience.Public);
+
+        Assert.Equal(string.Empty, content);
+    }
+
+    [Fact]
+    public void GetContextLayer_ReturnsEmptyWhenMemoryDisabled()
+    {
+        var config = new MemoryConfig { Enabled = false };
+        var layer = new MemoryIndexContextLayer(config);
+        layer.Update(MemoryContextState.SqlitePrimary);
+
+        // Even for Personal audience, disabled config returns empty
+        var content = layer.GetContextLayer(TrustAudience.Personal);
+
+        Assert.Equal(string.Empty, content);
+    }
+
+    [Fact]
+    public void GetContextLayer_ReturnsContentForTeamAudience()
+    {
+        var layer = new MemoryIndexContextLayer();
+        layer.Update(MemoryContextState.SqlitePrimary);
+
+        var content = layer.GetContextLayer(TrustAudience.Team);
+
+        Assert.Contains("sqlite-backed", content);
     }
 }

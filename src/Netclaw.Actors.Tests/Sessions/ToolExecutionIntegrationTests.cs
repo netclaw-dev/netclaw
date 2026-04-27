@@ -310,7 +310,7 @@ public class ToolExecutionIntegrationTests : TestKit
         ];
         _fakeToolExecutor.Results["file_read"] = "public readonly record struct Rect { ... }";
 
-        var sessionId = new SessionId("test-channel/working-context-populated");
+        var sessionId = new SessionId("console/working-context-populated");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("wc-populated-sub");
 

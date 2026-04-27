@@ -10,8 +10,9 @@ public interface ISystemPromptProvider
     /// <summary>
     /// Get the assembled system prompt. Returns empty string if no layers are available.
     /// </summary>
+    /// <param name="audience">The trust audience for the current session.</param>
     /// <param name="projectDirectory">Optional project root for loading project-scoped identity files.</param>
-    string GetSystemPrompt(string? projectDirectory = null);
+    string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null);
 }
 
 /// <summary>
@@ -44,7 +45,8 @@ public interface IContextLayerProvider
     /// <summary>
     /// Returns the context layer content, or empty string if nothing to inject.
     /// </summary>
-    string GetContextLayer();
+    /// <param name="audience">The trust audience for the current session turn.</param>
+    string GetContextLayer(TrustAudience audience);
 
     /// <summary>
     /// Controls injection frequency. Defaults to <see cref="ContextLayerTiming.EveryTurn"/>
@@ -65,7 +67,7 @@ public sealed class StaticSystemPromptProvider : ISystemPromptProvider
         _prompt = prompt;
     }
 
-    public string GetSystemPrompt(string? projectDirectory = null) => _prompt;
+    public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => _prompt;
 }
 
 /// <summary>
@@ -75,7 +77,7 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
 {
     public static readonly NullSystemPromptProvider Instance = new();
 
-    public string GetSystemPrompt(string? projectDirectory = null) => string.Empty;
+    public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => string.Empty;
 }
 
 /// <summary>
@@ -85,8 +87,9 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
 /// </summary>
 public sealed class CurrentTimeContextLayer(TimeProvider timeProvider) : IContextLayerProvider
 {
-    public string GetContextLayer()
+    public string GetContextLayer(TrustAudience audience)
     {
+        // All audiences need time grounding.
         var now = timeProvider.GetUtcNow();
         var local = TimeZoneInfo.ConvertTime(now, TimeZoneInfo.Local);
         return $"""
@@ -116,8 +119,9 @@ public sealed class FileContextLayerProvider : IContextLayerProvider
 
     public ContextLayerTiming Timing => _timing;
 
-    public string GetContextLayer()
+    public string GetContextLayer(TrustAudience audience)
     {
+        // File-backed layers serve all audiences (e.g. tool index shadow file).
         try
         {
             return File.Exists(_filePath) ? File.ReadAllText(_filePath) : string.Empty;
@@ -131,13 +135,21 @@ public sealed class FileContextLayerProvider : IContextLayerProvider
 
 /// <summary>
 /// Loads system prompt layers from the filesystem under <see cref="NetclawPaths.IdentityDirectory"/>.
-/// Missing files are silently skipped. Falls back to legacy <c>soul/</c> paths if identity
+/// AGENTS.md is loaded from embedded resources per audience — Public gets a stripped-down version,
+/// Team/Personal get the full version with placeholder substitution.
+/// Missing files are silently skipped. Falls back to legacy <c>soul/</c> paths for SOUL.md if identity
 /// files don't exist yet.
 /// </summary>
 public sealed class FileSystemPromptProvider : ISystemPromptProvider
 {
     private static readonly string[] ProjectIdentityFileNames =
         [".netclaw/AGENTS.md", "CLAUDE.md", "AGENTS.md", "CONTEXT.md"];
+
+    private const string EmbeddedAgentsResource = "Netclaw.Configuration.Resources.AGENTS.md";
+    private const string EmbeddedAgentsPublicResource = "Netclaw.Configuration.Resources.AGENTS.public.md";
+
+    private static readonly Lazy<string?> CachedAgents = new(() => ReadEmbeddedResource(EmbeddedAgentsResource));
+    private static readonly Lazy<string?> CachedAgentsPublic = new(() => ReadEmbeddedResource(EmbeddedAgentsPublicResource));
 
     private readonly NetclawPaths _paths;
 
@@ -146,13 +158,24 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
         _paths = paths;
     }
 
-    public string GetSystemPrompt(string? projectDirectory = null)
+    public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null)
     {
-        // Try new identity paths first, fall back to legacy soul/ paths
+        // SOUL.md: always from disk, all audiences
         var soul = TryReadFile(_paths.SoulPath) ?? TryReadFile(_paths.PersonalityPath);
-        var agents = TryReadFile(_paths.AgentsPath) ?? TryReadFile(_paths.InstructionsPath);
-        var tooling = TryReadFile(_paths.ToolingPath) ?? TryReadFile(_paths.UserPreferencesPath);
-        var projectInstructions = TryReadProjectIdentityFile(projectDirectory);
+
+        // AGENTS.md: from embedded resources, audience-dependent
+        var agents = audience == TrustAudience.Public
+            ? CachedAgentsPublic.Value
+            : SubstitutePlaceholders(CachedAgents.Value);
+
+        // TOOLING.md and project instructions: suppressed for Public
+        string? tooling = null;
+        string? projectInstructions = null;
+        if (audience != TrustAudience.Public)
+        {
+            tooling = TryReadFile(_paths.ToolingPath) ?? TryReadFile(_paths.UserPreferencesPath);
+            projectInstructions = TryReadProjectIdentityFile(projectDirectory);
+        }
 
         return SystemPromptAssembler.Assemble(
             soul: soul,
@@ -177,6 +200,34 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
         }
 
         return null;
+    }
+
+    private string SubstitutePlaceholders(string? template)
+    {
+        if (template is null)
+            return string.Empty;
+
+        return template
+            .Replace("{{SYSTEM_SKILLS_DIR}}", _paths.SystemSkillsDirectory, StringComparison.Ordinal)
+            .Replace("{{IDENTITY_DIR}}", _paths.IdentityDirectory, StringComparison.Ordinal)
+            .Replace("{{SOUL_PATH}}", _paths.SoulPath, StringComparison.Ordinal)
+            .Replace("{{AGENTS_PATH}}", _paths.AgentsPath, StringComparison.Ordinal)
+            .Replace("{{TOOLING_PATH}}", _paths.ToolingPath, StringComparison.Ordinal)
+            .Replace("{{SOUL_DETAIL_DIR}}", _paths.SoulDetailDirectory, StringComparison.Ordinal)
+            .Replace("{{AGENTS_DETAIL_DIR}}", _paths.AgentsDetailDirectory, StringComparison.Ordinal)
+            .Replace("{{TOOLING_DETAIL_DIR}}", _paths.ToolingDetailDirectory, StringComparison.Ordinal)
+            .Replace("{{SKILLS_DIR}}", _paths.SkillsDirectory, StringComparison.Ordinal)
+            .Replace("{{WORKSPACES_DIR}}", _paths.WorkspacesDirectory, StringComparison.Ordinal);
+    }
+
+    private static string? ReadEmbeddedResource(string resourceName)
+    {
+        using var stream = typeof(FileSystemPromptProvider).Assembly
+            .GetManifestResourceStream(resourceName);
+        if (stream is null)
+            return null;
+        using var reader = new StreamReader(stream);
+        return reader.ReadToEnd();
     }
 
     private static string? TryReadFile(string path)
