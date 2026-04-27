@@ -95,7 +95,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             return [];
         }
 
-        var audienceResult = ResolveHistoricalAudience(channelId);
+        var audienceResult = ResolveHistoricalAudience(channelId, threadOrMessageId);
         if (audienceResult.Error is { } audienceError)
         {
             _logger.LogWarning(
@@ -402,18 +402,18 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         return [line, new DataContent(bytes, mimeType)];
     }
 
-    private AudienceResult ResolveHistoricalAudience(DiscordChannelId channelId)
+    private AudienceResult ResolveHistoricalAudience(
+        DiscordChannelId channelId,
+        DiscordThreadOrMessageId threadOrMessageId)
     {
-        var isDefaultChannel = !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
-            && string.Equals(channelId.Value, _options.DefaultChannelId, StringComparison.Ordinal);
         var isExplicitChannel = _options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
-        var isDirectMessage = !isDefaultChannel && !isExplicitChannel && _options.AllowDirectMessages;
+        var isDirectMessage = string.Equals(channelId.Value, threadOrMessageId.Value, StringComparison.Ordinal);
         var syntheticMessage = new DiscordGatewayMessage(
             EventId: new DiscordEventId($"history-{channelId.Value}"),
             ChannelId: channelId,
-            ReplyChannelId: new DiscordReplyChannelId(channelId.Value),
+            ReplyChannelId: new DiscordReplyChannelId(threadOrMessageId.Value),
             MessageId: new DiscordMessageId($"history-{channelId.Value}"),
-            ThreadOrMessageId: new DiscordThreadOrMessageId($"history-{channelId.Value}"),
+            ThreadOrMessageId: threadOrMessageId,
             RootMessageId: null,
             SenderId: new DiscordUserId("history"),
             IsBotMessage: false,

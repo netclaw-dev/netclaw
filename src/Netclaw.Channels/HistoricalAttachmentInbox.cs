@@ -41,8 +41,16 @@ public static class HistoricalAttachmentInbox
             return targetPath;
         }
 
-        File.Move(stagedFilePath, targetPath);
-        return targetPath;
+        try
+        {
+            File.Move(stagedFilePath, targetPath);
+            return targetPath;
+        }
+        catch (IOException) when (File.Exists(targetPath))
+        {
+            File.Delete(stagedFilePath);
+            return targetPath;
+        }
     }
 
     private static string BuildStablePath(string inboxDir, string rawFilename, string sourceKey)

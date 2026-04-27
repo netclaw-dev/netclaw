@@ -165,7 +165,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             options: options);
 
         var result = await fetcher.FetchThreadHistoryAsync(
-            new SessionId("dm-channel/100000000000000004"),
+            new SessionId("100000000000000004/100000000000000004"),
             TestContext.Current.CancellationToken);
 
         var item = Assert.Single(result);
@@ -174,6 +174,58 @@ public sealed class DiscordThreadHistoryFetcherTests
               && t.Text.Contains("report.pdf", StringComparison.Ordinal)
               && t.Text.Contains("inlined=\"false\"", StringComparison.Ordinal));
         Assert.DoesNotContain(item.Contents, c => c is DataContent);
+    }
+
+    [Fact]
+    public async Task Unknown_channel_is_not_treated_as_dm_when_dm_enabled()
+    {
+        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
+        profiles.Team.ChannelAttachments = new ChannelAttachmentPolicy
+        {
+            AllowedCategories = [AttachmentCategory.Pdf],
+            MaxFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes,
+            MaxFilesPerMessage = ChannelAttachmentPolicy.DefaultMaxFilesPerMessage
+        };
+        profiles.Public.ChannelAttachments = ChannelAttachmentPolicy.Empty;
+
+        var options = new DiscordChannelOptions
+        {
+            AllowDirectMessages = true,
+            ChannelAudiences = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dm"] = "team"
+            }
+        };
+
+        var fetcher = CreateFetcher(
+            (_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>(
+            [
+                new DiscordThreadHistoryFetcher.HistoricalMessage(
+                    MessageId: "1006",
+                    SenderId: "user-6",
+                    IsBot: false,
+                    Text: string.Empty,
+                    Timestamp: TimeProvider.System.GetUtcNow(),
+                    Attachments:
+                    [
+                        new DiscordFileReference(
+                            "report.pdf",
+                            "application/pdf",
+                            3,
+                            "https://cdn.discordapp.com/attachments/1/2/report.pdf")
+                    ])
+            ]),
+            profiles: profiles,
+            options: options);
+
+        var result = await fetcher.FetchThreadHistoryAsync(
+            new SessionId("100000000000000006/100000000000000007"),
+            TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Contains(item.Contents.OfType<TextContent>(),
+            t => t.Text.Contains("attachment rejected", StringComparison.OrdinalIgnoreCase)
+              && t.Text.Contains("exceed the 0 per-message limit", StringComparison.Ordinal));
     }
 
     [Fact]
