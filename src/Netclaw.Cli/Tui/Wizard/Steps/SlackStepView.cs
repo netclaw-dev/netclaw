@@ -76,9 +76,6 @@ public sealed class SlackStepView : IWizardStepView
             .AsPassword()
             .WithPlaceholder("xoxb-...");
 
-        if (!string.IsNullOrWhiteSpace(vm.BotToken))
-            _botTokenInput.Text = vm.BotToken;
-
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
         _lastFocusedList = null;
@@ -112,9 +109,6 @@ public sealed class SlackStepView : IWizardStepView
         _appTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("xapp-...");
-
-        if (!string.IsNullOrWhiteSpace(vm.AppToken))
-            _appTokenInput.Text = vm.AppToken;
 
         _appTokenInput.OnFocused();
         _lastFocusedInput = _appTokenInput;
