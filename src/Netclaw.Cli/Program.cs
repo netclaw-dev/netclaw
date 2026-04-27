@@ -1275,7 +1275,8 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
         }
         else
         {
-            WriteStatusResult(status, api.Endpoint, cliUpdate);
+            WriteStatusResult(status, api.Endpoint, cliUpdate,
+                selfUpdateDisabled: DaemonConfig.IsSelfUpdateDisabledByEnv());
         }
 
         return status.Overall.ToLowerInvariant() switch
@@ -1363,7 +1364,7 @@ static void WriteSessionsHelp()
     Console.WriteLine("  1  daemon unavailable or request failed");
 }
 
-static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint, StatusUpdateResult? cliUpdate = null)
+static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoint, StatusUpdateResult? cliUpdate = null, bool selfUpdateDisabled = false)
 {
     Console.WriteLine($"overall: {status.Overall}");
     Console.WriteLine($"version: {status.Build.Version} (commit {status.Build.CommitHash}, built {status.Build.BuildTimestamp})");
@@ -1414,7 +1415,9 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
     {
         case "update-available":
             Console.WriteLine($"update: UPDATE AVAILABLE — v{updateCurrentVersion} → v{updateLatestVersion}");
-            Console.WriteLine("  Run: netclaw update");
+            Console.WriteLine(selfUpdateDisabled
+                ? "  Pull a newer container image to upgrade."
+                : "  Run: netclaw update");
             if (updateReleaseNotesUrl is not null)
                 Console.WriteLine($"  Release notes: {updateReleaseNotesUrl}");
             break;

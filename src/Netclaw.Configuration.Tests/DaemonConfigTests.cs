@@ -21,6 +21,7 @@ public sealed class DaemonConfigTests
         Assert.Equal("127.0.0.1", result.Host);
         Assert.Equal(5199, result.Port);
         Assert.Equal(ExposureMode.Local, result.ExposureMode);
+        Assert.False(result.DisableSelfUpdate);
     }
 
     [Fact]
@@ -31,6 +32,7 @@ public sealed class DaemonConfigTests
         Assert.Equal("127.0.0.1", result.Host);
         Assert.Equal(5199, result.Port);
         Assert.Equal(ExposureMode.Local, result.ExposureMode);
+        Assert.False(result.DisableSelfUpdate);
     }
 
     [Theory]
@@ -82,6 +84,21 @@ public sealed class DaemonConfigTests
     public void ParseExposureMode_returns_local_for_null()
     {
         Assert.Equal(ExposureMode.Local, DaemonConfig.ParseExposureMode(null));
+    }
+
+    [Fact]
+    public void BindFromConfiguration_reads_DisableSelfUpdate_true()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Daemon:DisableSelfUpdate"] = "true"
+            })
+            .Build();
+
+        var result = DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
+
+        Assert.True(result.DisableSelfUpdate);
     }
 
     // ── System.Text.Json serialization path ──────────────────────────────────

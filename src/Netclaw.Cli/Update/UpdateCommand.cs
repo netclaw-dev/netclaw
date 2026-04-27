@@ -74,6 +74,14 @@ internal static class UpdateCommand
         if (checkOnly)
             return 0;
 
+        if (DaemonConfig.IsSelfUpdateDisabledByEnv())
+        {
+            Console.WriteLine();
+            Console.WriteLine("Self-update is disabled (Daemon.DisableSelfUpdate=true).");
+            Console.WriteLine("Pull a newer container image to upgrade.");
+            return 1;
+        }
+
         // Show what will be downloaded
         Console.WriteLine();
         foreach (var asset in result.MatchingAssets)
@@ -348,8 +356,11 @@ internal static class UpdateCommand
 
             if (result.IsUpdateAvailable)
             {
+                var hint = DaemonConfig.IsSelfUpdateDisabledByEnv()
+                    ? "pull a newer container image to upgrade"
+                    : "run 'netclaw update'";
                 Console.Error.WriteLine(
-                    $"Update available: v{result.CurrentVersion} → v{result.LatestVersion} — run 'netclaw update'");
+                    $"Update available: v{result.CurrentVersion} → v{result.LatestVersion} — {hint}");
             }
         }
         catch (Exception ex)

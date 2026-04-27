@@ -415,6 +415,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
             httpClient,
             NullLogger<BinaryUpdateCheckService>.Instance,
             currentVersion,
+            selfUpdateDisabled: false,
             sink);
     }
 

@@ -64,6 +64,12 @@ public static class MinisignVerifier
 
         /// <summary>Signature does not match the provided data.</summary>
         InvalidSignature,
+
+        /// <summary>
+        /// The cryptographic platform (NSec) failed to initialize.
+        /// Non-fatal — callers should treat this as equivalent to a network error.
+        /// </summary>
+        PlatformUnavailable,
     }
 
     /// <summary>
@@ -172,7 +178,17 @@ public static class MinisignVerifier
             return VerifyResult.KeyMismatch;
 
         // Try raw Ed25519 first (works with test keys and legacy minisign).
-        if (VerifyEd25519(activePublicKey, data, sig.Signature))
+        bool rawResult;
+        try
+        {
+            rawResult = VerifyEd25519(activePublicKey, data, sig.Signature);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or TypeInitializationException or PlatformNotSupportedException)
+        {
+            return VerifyResult.PlatformUnavailable;
+        }
+
+        if (rawResult)
             return VerifyResult.Valid;
 
         // Modern minisign (1.0.18+) always prehashes with BLAKE2b-512 before
@@ -181,9 +197,16 @@ public static class MinisignVerifier
         Span<byte> hash = stackalloc byte[64];
         Blake2b512(data, hash);
 
-        return VerifyEd25519(activePublicKey, hash, sig.Signature)
-            ? VerifyResult.Valid
-            : VerifyResult.InvalidSignature;
+        try
+        {
+            return VerifyEd25519(activePublicKey, hash, sig.Signature)
+                ? VerifyResult.Valid
+                : VerifyResult.InvalidSignature;
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or TypeInitializationException or PlatformNotSupportedException)
+        {
+            return VerifyResult.PlatformUnavailable;
+        }
     }
 
     /// <summary>

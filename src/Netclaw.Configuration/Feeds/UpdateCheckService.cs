@@ -174,6 +174,15 @@ public static class UpdateCheckService
 
         var verifyResult = MinisignVerifier.Verify(manifestBytes, signatureContent);
 
+        if (verifyResult == MinisignVerifier.VerifyResult.PlatformUnavailable)
+        {
+            return new ManifestFetchResult
+            {
+                Status = ManifestFetchStatus.NetworkFailure,
+                ErrorMessage = "Cryptographic library unavailable on this platform — signature verification skipped",
+            };
+        }
+
         if (verifyResult != MinisignVerifier.VerifyResult.Valid)
         {
             return new ManifestFetchResult

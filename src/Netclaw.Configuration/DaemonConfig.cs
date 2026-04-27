@@ -26,6 +26,14 @@ public sealed record DaemonConfig
     public ExposureMode ExposureMode { get; init; } = ExposureMode.Local;
 
     /// <summary>
+    /// When true, in-place binary self-update via <c>netclaw update</c> is blocked.
+    /// Update availability checks still run so operators see when a new version exists.
+    /// Intended for container deployments where the image tag IS the version.
+    /// Defaults to <c>false</c>.
+    /// </summary>
+    public bool DisableSelfUpdate { get; init; }
+
+    /// <summary>
     /// Bind <see cref="DaemonConfig"/> from an <see cref="IConfigurationSection"/>.
     /// Handles kebab-case <c>ExposureMode</c> values (e.g., <c>tailscale-serve</c>).
     /// Returns defaults when the section is missing or empty.
@@ -39,8 +47,20 @@ public sealed record DaemonConfig
         var port = section.GetValue<int?>("Port") ?? 5199;
         var modeStr = section["ExposureMode"];
         var mode = ParseExposureMode(modeStr);
+        var disableSelfUpdate = section.GetValue<bool?>("DisableSelfUpdate") ?? false;
 
-        return new DaemonConfig { Host = host, Port = port, ExposureMode = mode };
+        return new DaemonConfig { Host = host, Port = port, ExposureMode = mode, DisableSelfUpdate = disableSelfUpdate };
+    }
+
+    /// <summary>
+    /// Checks whether self-update is disabled via the <c>NETCLAW_Daemon__DisableSelfUpdate</c>
+    /// environment variable. Used by CLI paths that run before full configuration
+    /// infrastructure is available.
+    /// </summary>
+    public static bool IsSelfUpdateDisabledByEnv()
+    {
+        var value = Environment.GetEnvironmentVariable("NETCLAW_Daemon__DisableSelfUpdate");
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

@@ -546,6 +546,11 @@
           "enum": ["local", "tailscale-serve", "tailscale-funnel", "cloudflare-tunnel"],
           "default": "local",
           "description": "Tunnel infrastructure in front of the daemon. Defaults to local (loopback only, no tunnel)."
+        },
+        "DisableSelfUpdate": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, in-place binary self-update via 'netclaw update' is blocked. Update availability checks still run. Intended for container deployments where the image tag is the version."
         }
       },
       "additionalProperties": false

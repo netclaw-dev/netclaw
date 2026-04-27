@@ -33,6 +33,7 @@ ARG NETCLAW_VERSION=unknown
 #   Data/JSON:   jq, sqlite3
 #   VCS/GitHub:  git, gh
 #   Python:      python3, python3-pip, python3-venv
+#   Crypto:      libsodium23 (required by NSec for Ed25519 signature verification)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates \
@@ -47,6 +48,7 @@ RUN apt-get update \
       python3-venv \
       gh \
       libicu74 \
+      libsodium23 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/netclaw
@@ -62,6 +64,9 @@ RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/
  && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
 
 ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
+# Block in-place binary self-update — the image tag IS the version.
+# Update availability checks still run so operators see when a new version exists.
+ENV NETCLAW_Daemon__DisableSelfUpdate=true
 
 # Persist identity, config, data, and session state on an operator-mounted
 # volume. Real operators must `netclaw init` (or bind-mount a pre-initialized
