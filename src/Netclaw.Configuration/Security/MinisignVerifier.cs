@@ -178,17 +178,10 @@ public static class MinisignVerifier
             return VerifyResult.KeyMismatch;
 
         // Try raw Ed25519 first (works with test keys and legacy minisign).
-        bool rawResult;
-        try
-        {
-            rawResult = VerifyEd25519(activePublicKey, data, sig.Signature);
-        }
-        catch (Exception ex) when (ex is DllNotFoundException or TypeInitializationException or PlatformNotSupportedException)
-        {
-            return VerifyResult.PlatformUnavailable;
-        }
-
-        if (rawResult)
+        var (rawSuccess, rawEarlyReturn) = TryVerifyEd25519(activePublicKey, data, sig.Signature);
+        if (rawEarlyReturn is not null)
+            return rawEarlyReturn.Value;
+        if (rawSuccess)
             return VerifyResult.Valid;
 
         // Modern minisign (1.0.18+) always prehashes with BLAKE2b-512 before
@@ -197,15 +190,22 @@ public static class MinisignVerifier
         Span<byte> hash = stackalloc byte[64];
         Blake2b512(data, hash);
 
+        var (hashSuccess, hashEarlyReturn) = TryVerifyEd25519(activePublicKey, hash, sig.Signature);
+        if (hashEarlyReturn is not null)
+            return hashEarlyReturn.Value;
+        return hashSuccess ? VerifyResult.Valid : VerifyResult.InvalidSignature;
+    }
+
+    private static (bool success, VerifyResult? earlyReturn) TryVerifyEd25519(
+        ReadOnlySpan<byte> publicKey, ReadOnlySpan<byte> data, ReadOnlySpan<byte> signature)
+    {
         try
         {
-            return VerifyEd25519(activePublicKey, hash, sig.Signature)
-                ? VerifyResult.Valid
-                : VerifyResult.InvalidSignature;
+            return (VerifyEd25519(publicKey, data, signature), null);
         }
         catch (Exception ex) when (ex is DllNotFoundException or TypeInitializationException or PlatformNotSupportedException)
         {
-            return VerifyResult.PlatformUnavailable;
+            return (false, VerifyResult.PlatformUnavailable);
         }
     }
 

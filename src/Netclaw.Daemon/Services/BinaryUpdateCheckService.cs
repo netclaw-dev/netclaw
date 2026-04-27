@@ -25,7 +25,7 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
     private readonly IOperationalNotificationSink? _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly string _currentVersion;
-    private readonly bool _selfUpdateDisabled;
+    private readonly string _upgradeHint;
 
     public BinaryUpdateCheckService(
         HttpClient httpClient,
@@ -49,7 +49,9 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
         _httpClient = httpClient;
         _logger = logger;
         _currentVersion = currentVersion;
-        _selfUpdateDisabled = selfUpdateDisabled;
+        _upgradeHint = selfUpdateDisabled
+            ? "Pull a newer container image to upgrade."
+            : "Run 'netclaw update' to upgrade.";
         _notificationSink = notificationSink;
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
@@ -76,13 +78,9 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
 
             if (result.IsUpdateAvailable)
             {
-                var upgradeHint = _selfUpdateDisabled
-                    ? "Pull a newer container image to upgrade."
-                    : "Run 'netclaw update' to upgrade.";
-
                 _logger.LogWarning(
                     "Netclaw update available: {CurrentVersion} → {LatestVersion}. {UpgradeHint}",
-                    result.CurrentVersion, result.LatestVersion, upgradeHint);
+                    result.CurrentVersion, result.LatestVersion, _upgradeHint);
 
                 EmitUpdateAlert(result);
             }
@@ -99,15 +97,11 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
 
     private void EmitUpdateAlert(UpdateCheckResult result)
     {
-        var upgradeHint = _selfUpdateDisabled
-            ? "Pull a newer container image to upgrade."
-            : "Run 'netclaw update' to upgrade.";
-
         _notificationSink?.Emit(OperationalAlert.Create(
             _timeProvider,
             "update.available",
             AlertType.UpdateAvailable,
-            $"Netclaw update available: {result.CurrentVersion} → {result.LatestVersion}. {upgradeHint}",
+            $"Netclaw update available: {result.CurrentVersion} → {result.LatestVersion}. {_upgradeHint}",
             AlertSeverity.Info,
             source: result.LatestVersion,
             context: new Dictionary<string, string>
