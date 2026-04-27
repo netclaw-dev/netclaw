@@ -35,6 +35,21 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
         }
     }
 
+    public bool HasMultipleSources =>
+        _context is not null && _context.ChannelEntries.Count > 1;
+
+    public IReadOnlyList<(ChannelType Source, List<ChannelEntry> Entries)> GroupedEntries
+    {
+        get
+        {
+            if (_context is null) return [];
+            return _context.ChannelEntries
+                .Where(kv => kv.Value.Count > 0)
+                .Select(kv => (kv.Key, kv.Value))
+                .ToList();
+        }
+    }
+
     /// <summary>The selected posture from the shared context, for deriving audience defaults.</summary>
     public DeploymentPosture SelectedPosture => _context?.SelectedPosture ?? DeploymentPosture.Personal;
 
