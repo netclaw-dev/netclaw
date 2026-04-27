@@ -71,12 +71,14 @@ public sealed class ChannelsStepView : IWizardStepView
             .WithChild(new TextNode("  Chat channels:").WithForeground(Color.White))
             .WithSpacing(1);
 
+        var nameColumnWidth = Math.Max(20, entries.Max(e => e.DisplayName.Length) + 2);
+
         for (var i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
             var isFocused = i == _cursorIndex;
             var prefix = isFocused ? " \u25b6 " : "   ";
-            var name = entry.DisplayName.PadRight(20);
+            var name = entry.DisplayName.PadRight(nameColumnWidth);
             var audience = $"[\u25c0 {entry.Audience.ToWireValue(),-8} \u25b6]";
             var line = $"{prefix}{name} {audience}";
 

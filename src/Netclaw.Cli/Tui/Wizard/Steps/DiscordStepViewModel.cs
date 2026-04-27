@@ -1,4 +1,5 @@
 using Netclaw.Actors.Channels;
+using Netclaw.Cli.Discord;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -9,9 +10,18 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class DiscordStepViewModel : IWizardStepViewModel
 {
+    private static readonly TimeSpan DiscordProbeHardTimeout = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan ChannelResolutionHardTimeout = TimeSpan.FromSeconds(35);
+
+    private readonly IDiscordProbe _discordProbe;
     private int _currentSubStep;
     private int _highWaterSubStep;
     private WizardContext? _context;
+
+    public DiscordStepViewModel(IDiscordProbe discordProbe)
+    {
+        _discordProbe = discordProbe;
+    }
 
     public string StepId => "discord";
     public string DisplayTitle => "Discord";
@@ -21,6 +31,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public string? AllowedUserIdsInput { get; set; }
+    internal DiscordChannelResolutionResult? LastChannelResolution { get; set; }
 
     public bool IsApplicable(WizardContext context) => true;
 
@@ -109,10 +120,13 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
             ? TrustAudience.Public
             : TrustAudience.Team;
 
-        foreach (var channelId in ParseChannelIds(ChannelIdsInput))
+        var channelIds = ParseChannelIds(ChannelIdsInput);
+        foreach (var channelId in channelIds)
             entries.Add(new ChannelEntry($"Discord:{channelId}", channelId, channelAudience));
 
         _context.ChannelEntries[ChannelType.Discord] = entries;
+
+        ResolveChannelDisplayNames(channelIds, entries);
     }
 
     public void ContributeConfig(WizardConfigBuilder builder)
@@ -145,24 +159,133 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
         });
     }
 
-    public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
+    public async Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
         runner.Add(new HealthCheckItem("Discord configuration", null));
 
         if (!DiscordEnabled)
         {
             runner.UpdateLast(new HealthCheckItem("Discord configuration (disabled)", true));
-            return Task.CompletedTask;
+            return;
         }
 
         if (string.IsNullOrWhiteSpace(BotToken))
         {
             runner.UpdateLast(new HealthCheckItem("Discord configuration (bot token missing)", false));
-            return Task.CompletedTask;
+            return;
         }
 
-        runner.UpdateLast(new HealthCheckItem("Discord bot token configured", true));
-        return Task.CompletedTask;
+        bool discordAuthOk;
+        try
+        {
+            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            probeCts.CancelAfter(DiscordProbeHardTimeout);
+            var probeResult = await _discordProbe.ProbeAsync(BotToken!, probeCts.Token);
+            if (probeResult.Success)
+            {
+                runner.UpdateLast(new HealthCheckItem(
+                    $"Discord bot authenticated (user: {probeResult.BotUsername})", true));
+                discordAuthOk = true;
+            }
+            else
+            {
+                runner.UpdateLast(new HealthCheckItem(
+                    $"Discord auth failed: {probeResult.ErrorMessage}", false));
+                discordAuthOk = false;
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            runner.UpdateLast(new HealthCheckItem(
+                "Discord auth timed out (15s). Check your network connection.", false));
+            discordAuthOk = false;
+        }
+
+        var parsedChannelIds = ParseChannelIds(ChannelIdsInput);
+        if (discordAuthOk && parsedChannelIds.Count > 0)
+        {
+            runner.Add(new HealthCheckItem("Resolving Discord channels", null));
+
+            try
+            {
+                using var channelCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                channelCts.CancelAfter(ChannelResolutionHardTimeout);
+                LastChannelResolution = await _discordProbe.ResolveChannelIdsAsync(
+                    BotToken!, parsedChannelIds, channelCts.Token);
+
+                if (LastChannelResolution.ErrorMessage is not null)
+                {
+                    runner.UpdateLast(new HealthCheckItem(
+                        $"Discord channel lookup failed: {LastChannelResolution.ErrorMessage}", false));
+                }
+                else if (LastChannelResolution.Unresolved.Count > 0)
+                {
+                    var notFound = string.Join(", ", LastChannelResolution.Unresolved);
+                    runner.UpdateLast(new HealthCheckItem(
+                        $"Discord channels: resolved {LastChannelResolution.Resolved.Count}/{parsedChannelIds.Count}, not found: {notFound}",
+                        false));
+                }
+                else
+                {
+                    runner.UpdateLast(new HealthCheckItem(
+                        $"Discord channels resolved ({LastChannelResolution.Resolved.Count})", true));
+                }
+
+                UpdateChannelDisplayNames();
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                runner.UpdateLast(new HealthCheckItem(
+                    "Discord channel resolution timed out (35s). Check your network connection.", false));
+            }
+        }
+    }
+
+    private void ResolveChannelDisplayNames(List<string> channelIds, List<ChannelEntry> entries)
+    {
+        if (string.IsNullOrWhiteSpace(BotToken) || channelIds.Count == 0)
+            return;
+
+        try
+        {
+            LastChannelResolution = _discordProbe
+                .ResolveChannelIdsAsync(BotToken!, channelIds, CancellationToken.None)
+                .GetAwaiter().GetResult();
+
+            var resolvedLookup = LastChannelResolution.Resolved
+                .ToDictionary(r => r.ChannelId, r => r, StringComparer.Ordinal);
+
+            foreach (var entry in entries)
+            {
+                if (!entry.IsDmRow && resolvedLookup.TryGetValue(entry.Id, out var resolved))
+                    entry.DisplayName = resolved.ToDisplayName();
+            }
+        }
+        catch
+        {
+            // Fallback to raw IDs — health check will retry and report the error
+        }
+    }
+
+    private void UpdateChannelDisplayNames()
+    {
+        if (_context is null || LastChannelResolution is null)
+            return;
+
+        if (!_context.ChannelEntries.TryGetValue(ChannelType.Discord, out var entries))
+            return;
+
+        var resolvedLookup = LastChannelResolution.Resolved
+            .ToDictionary(r => r.ChannelId, r => r, StringComparer.Ordinal);
+
+        foreach (var entry in entries)
+        {
+            if (entry.IsDmRow)
+                continue;
+
+            if (resolvedLookup.TryGetValue(entry.Id, out var resolved))
+                entry.DisplayName = resolved.ToDisplayName();
+        }
     }
 
     private Dictionary<string, string>? BuildChannelAudiences()

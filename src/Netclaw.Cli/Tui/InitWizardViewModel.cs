@@ -1,5 +1,6 @@
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Discord;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
@@ -46,12 +47,14 @@ public partial class InitWizardViewModel : ReactiveViewModel
         NetclawPaths paths,
         ProviderDescriptorRegistry registry,
         ISlackProbe slackProbe,
+        IDiscordProbe discordProbe,
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         DaemonApi? daemonApi = null,
         IClipboardService? clipboardService = null)
-        : this(paths, registry, registry, slackProbe, navigationState: navigationState,
+        : this(paths, registry, registry, slackProbe, discordProbe,
+            navigationState: navigationState,
             oauthFactory: oauthFactory, daemonManager: daemonManager, daemonApi: daemonApi,
             clipboardService: clipboardService)
     {
@@ -65,6 +68,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         ProviderDescriptorRegistry registry,
         IProviderProbe probe,
         ISlackProbe slackProbe,
+        IDiscordProbe discordProbe,
         ChatNavigationState? navigationState = null,
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
@@ -85,7 +89,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var securityPostureStep = new SecurityPostureStepViewModel();
         var exposureModeStep = new ExposureModeStepViewModel();
         var slackStep = new SlackStepViewModel(slackProbe);
-        var discordStep = new DiscordStepViewModel();
+        var discordStep = new DiscordStepViewModel(discordProbe);
         var channelsStep = new ChannelsStepViewModel();
         var searchStep = new SearchStepViewModel();
         var browserStep = new BrowserAutomationStepViewModel();
@@ -223,7 +227,7 @@ public sealed record HealthCheckItem(string Label, bool? Passed);
 /// </summary>
 public sealed class ChannelEntry
 {
-    public string DisplayName { get; }
+    public string DisplayName { get; set; }
     public string Id { get; }
     public TrustAudience Audience { get; set; }
     public bool IsDmRow { get; }

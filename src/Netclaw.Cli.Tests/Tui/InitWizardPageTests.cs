@@ -24,6 +24,7 @@ public sealed class InitWizardPageTests : IDisposable
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
     private readonly FakeSlackProbe _fakeSlackProbe = new();
+    private readonly FakeDiscordProbe _fakeDiscordProbe = new();
     private readonly ProviderDescriptorRegistry _registry = ProviderCommand.CreateDefaultRegistry();
 
     public InitWizardPageTests()
@@ -201,7 +202,7 @@ public sealed class InitWizardPageTests : IDisposable
                 _ =>
                 {
                     capturedVm = new InitWizardViewModel(
-                        _paths, _registry, _fakeProbe, _fakeSlackProbe);
+                        _paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);
                     return capturedVm;
                 });
         });

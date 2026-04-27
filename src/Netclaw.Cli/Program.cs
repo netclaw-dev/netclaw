@@ -10,6 +10,7 @@ using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Discord;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
@@ -103,6 +104,7 @@ static async Task RunAsync(string[] args)
         if (mode is "doctor")
         {
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+            builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
             builder.Services.AddDoctorChecks();
         }
 
@@ -130,6 +132,7 @@ static async Task RunAsync(string[] args)
                     sp.GetService<TimeProvider>()));
             builder.Services.AddSingleton<DeviceFlowServiceFactory>();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+            builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
             var initPaths = new NetclawPaths();
