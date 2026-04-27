@@ -74,6 +74,9 @@ public sealed class DiscordStepView : IWizardStepView
             .AsPassword()
             .WithPlaceholder("Discord bot token");
 
+        if (!string.IsNullOrWhiteSpace(vm.BotToken))
+            _botTokenInput.Text = vm.BotToken;
+
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
         _lastFocusedList = null;
