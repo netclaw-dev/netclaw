@@ -279,11 +279,11 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
             }
             catch (OperationCanceledException)
             {
-                // slopwatch:suppress SW003 — fire-and-forget; health check retries and reports errors
+                LastChannelResolution = null;
             }
             catch (HttpRequestException)
             {
-                // slopwatch:suppress SW003 — fire-and-forget; health check retries and reports errors
+                LastChannelResolution = null;
             }
         }, ct);
     }

@@ -224,7 +224,7 @@ public sealed class DiscordProbe : IDiscordProbe
         }
         catch (JsonException)
         {
-            // slopwatch:suppress SW003 — best-effort extraction from untrusted response body
+            return null;
         }
         return null;
     }
