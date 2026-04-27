@@ -10,13 +10,11 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class DiscordStepViewModel : IWizardStepViewModel
 {
-    private static readonly TimeSpan DiscordProbeHardTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan ChannelResolutionHardTimeout = TimeSpan.FromSeconds(35);
-
     private readonly IDiscordProbe _discordProbe;
     private int _currentSubStep;
     private int _highWaterSubStep;
     private WizardContext? _context;
+    private CancellationTokenSource? _resolutionCts;
 
     public DiscordStepViewModel(IDiscordProbe discordProbe)
     {
@@ -59,6 +57,9 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
 
         if (_currentSubStep >= 1 && _currentSubStep < 4 && DiscordEnabled)
         {
+            if (_currentSubStep == 2)
+                StartBackgroundChannelResolution();
+
             _currentSubStep++;
             _highWaterSubStep = _currentSubStep;
             return true;
@@ -126,7 +127,8 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
 
         _context.ChannelEntries[ChannelType.Discord] = entries;
 
-        ResolveChannelDisplayNames(channelIds, entries);
+        if (LastChannelResolution is not null)
+            ApplyResolvedDisplayNames(entries);
     }
 
     public void ContributeConfig(WizardConfigBuilder builder)
@@ -178,9 +180,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
         bool discordAuthOk;
         try
         {
-            using var probeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            probeCts.CancelAfter(DiscordProbeHardTimeout);
-            var probeResult = await _discordProbe.ProbeAsync(BotToken!, probeCts.Token);
+            var probeResult = await _discordProbe.ProbeAsync(BotToken!, ct);
             if (probeResult.Success)
             {
                 runner.UpdateLast(new HealthCheckItem(
@@ -197,21 +197,27 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             runner.UpdateLast(new HealthCheckItem(
-                "Discord auth timed out (15s). Check your network connection.", false));
+                "Discord auth timed out. Check your network connection.", false));
             discordAuthOk = false;
         }
 
         var parsedChannelIds = ParseChannelIds(ChannelIdsInput);
         if (discordAuthOk && parsedChannelIds.Count > 0)
         {
+            if (LastChannelResolution is { Success: true })
+            {
+                runner.Add(new HealthCheckItem(
+                    $"Discord channels resolved ({LastChannelResolution.Resolved.Count})", true));
+                ApplyResolvedDisplayNamesToContext();
+                return;
+            }
+
             runner.Add(new HealthCheckItem("Resolving Discord channels", null));
 
             try
             {
-                using var channelCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                channelCts.CancelAfter(ChannelResolutionHardTimeout);
                 LastChannelResolution = await _discordProbe.ResolveChannelIdsAsync(
-                    BotToken!, parsedChannelIds, channelCts.Token);
+                    BotToken!, parsedChannelIds, ct);
 
                 if (LastChannelResolution.ErrorMessage is not null)
                 {
@@ -231,48 +237,58 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
                         $"Discord channels resolved ({LastChannelResolution.Resolved.Count})", true));
                 }
 
-                UpdateChannelDisplayNames();
+                ApplyResolvedDisplayNamesToContext();
             }
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 runner.UpdateLast(new HealthCheckItem(
-                    "Discord channel resolution timed out (35s). Check your network connection.", false));
+                    "Discord channel resolution timed out. Check your network connection.", false));
             }
         }
     }
 
-    private void ResolveChannelDisplayNames(List<string> channelIds, List<ChannelEntry> entries)
+    private void StartBackgroundChannelResolution()
     {
+        var channelIds = ParseChannelIds(ChannelIdsInput);
         if (string.IsNullOrWhiteSpace(BotToken) || channelIds.Count == 0)
             return;
 
-        try
+        _resolutionCts?.Cancel();
+        _resolutionCts?.Dispose();
+        _resolutionCts = new CancellationTokenSource();
+        var ct = _resolutionCts.Token;
+        var token = BotToken!;
+        var context = _context;
+
+        _ = Task.Run(async () =>
         {
-            LastChannelResolution = _discordProbe
-                .ResolveChannelIdsAsync(BotToken!, channelIds, CancellationToken.None)
-                .GetAwaiter().GetResult();
-
-            var resolvedLookup = LastChannelResolution.Resolved
-                .ToDictionary(r => r.ChannelId, r => r, StringComparer.Ordinal);
-
-            foreach (var entry in entries)
+            try
             {
-                if (!entry.IsDmRow && resolvedLookup.TryGetValue(entry.Id, out var resolved))
-                    entry.DisplayName = resolved.ToDisplayName();
+                var result = await _discordProbe.ResolveChannelIdsAsync(token, channelIds, ct);
+                if (ct.IsCancellationRequested)
+                    return;
+
+                LastChannelResolution = result;
+
+                if (context is not null &&
+                    context.ChannelEntries.TryGetValue(ChannelType.Discord, out var entries))
+                {
+                    ApplyResolvedDisplayNames(entries);
+                    context.RequestRedraw();
+                }
             }
-        }
-        catch
-        {
-            // Fallback to raw IDs — health check will retry and report the error
-        }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (HttpRequestException)
+            {
+            }
+        }, ct);
     }
 
-    private void UpdateChannelDisplayNames()
+    private void ApplyResolvedDisplayNames(List<ChannelEntry> entries)
     {
-        if (_context is null || LastChannelResolution is null)
-            return;
-
-        if (!_context.ChannelEntries.TryGetValue(ChannelType.Discord, out var entries))
+        if (LastChannelResolution is null)
             return;
 
         var resolvedLookup = LastChannelResolution.Resolved
@@ -280,12 +296,18 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
 
         foreach (var entry in entries)
         {
-            if (entry.IsDmRow)
-                continue;
-
-            if (resolvedLookup.TryGetValue(entry.Id, out var resolved))
+            if (!entry.IsDmRow && resolvedLookup.TryGetValue(entry.Id, out var resolved))
                 entry.DisplayName = resolved.ToDisplayName();
         }
+    }
+
+    private void ApplyResolvedDisplayNamesToContext()
+    {
+        if (_context is null || LastChannelResolution is null)
+            return;
+
+        if (_context.ChannelEntries.TryGetValue(ChannelType.Discord, out var entries))
+            ApplyResolvedDisplayNames(entries);
     }
 
     private Dictionary<string, string>? BuildChannelAudiences()
@@ -321,5 +343,9 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        _resolutionCts?.Cancel();
+        _resolutionCts?.Dispose();
+    }
 }

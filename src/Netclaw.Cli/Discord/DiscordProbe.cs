@@ -100,34 +100,40 @@ public sealed class DiscordProbe : IDiscordProbe
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(ResolveTimeout);
 
-        var resolved = new List<ResolvedDiscordChannel>();
-        var unresolved = new List<string>();
-        var guildNameCache = new Dictionary<string, string>(StringComparer.Ordinal);
-
         try
         {
-            foreach (var channelId in normalized)
+            var channelTasks = normalized.Select(id =>
+                FetchChannelAsync(botToken, id, timeoutCts.Token));
+            var channelResults = await Task.WhenAll(channelTasks);
+
+            var channelPairs = normalized.Zip(channelResults).ToList();
+
+            var uniqueGuildIds = channelPairs
+                .Where(p => p.Second is not null && p.Second.Value.GuildId is not null)
+                .Select(p => p.Second!.Value.GuildId!)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+
+            var guildTasks = uniqueGuildIds.Select(async gid =>
+                (GuildId: gid, Name: await FetchGuildNameAsync(botToken, gid, timeoutCts.Token)));
+            var guildResults = await Task.WhenAll(guildTasks);
+            var guildNames = guildResults
+                .Where(g => g.Name is not null)
+                .ToDictionary(g => g.GuildId, g => g.Name!, StringComparer.Ordinal);
+
+            var resolved = new List<ResolvedDiscordChannel>();
+            var unresolved = new List<string>();
+
+            foreach (var (channelId, channelInfo) in channelPairs)
             {
-                var channel = await FetchChannelAsync(botToken, channelId, timeoutCts.Token);
-                if (channel is null)
+                if (channelInfo is null)
                 {
                     unresolved.Add(channelId);
                     continue;
                 }
 
-                var (channelName, guildId) = channel.Value;
-
-                string? guildName = null;
-                if (guildId is not null)
-                {
-                    if (!guildNameCache.TryGetValue(guildId, out guildName))
-                    {
-                        guildName = await FetchGuildNameAsync(botToken, guildId, timeoutCts.Token);
-                        if (guildName is not null)
-                            guildNameCache[guildId] = guildName;
-                    }
-                }
-
+                var (channelName, guildId) = channelInfo.Value;
+                guildNames.TryGetValue(guildId ?? "", out var guildName);
                 resolved.Add(new ResolvedDiscordChannel(channelId, channelName, guildName));
             }
 
@@ -137,17 +143,17 @@ public sealed class DiscordProbe : IDiscordProbe
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return new DiscordChannelResolutionResult(false,
-                "Channel resolution timed out after 30 seconds.", resolved, unresolved);
+                "Channel resolution timed out after 30 seconds.", [], []);
         }
         catch (OperationCanceledException)
         {
             return new DiscordChannelResolutionResult(false,
-                "Channel resolution cancelled.", resolved, unresolved);
+                "Channel resolution cancelled.", [], []);
         }
         catch (HttpRequestException ex)
         {
             return new DiscordChannelResolutionResult(false,
-                $"Channel resolution failed: {ex.Message}", resolved, unresolved);
+                $"Channel resolution failed: {ex.Message}", [], []);
         }
     }
 
@@ -216,9 +222,8 @@ public sealed class DiscordProbe : IDiscordProbe
                 codeProp.TryGetInt32(out var code))
                 return code;
         }
-        catch
+        catch (JsonException)
         {
-            // ignore parse failures
         }
         return null;
     }
