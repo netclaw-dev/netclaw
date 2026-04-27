@@ -329,11 +329,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
                 .ToList();
 
     private static List<string> ParseUserIds(string? input)
-        => string.IsNullOrWhiteSpace(input)
-            ? []
-            : input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(id => !string.IsNullOrWhiteSpace(id))
-                .ToList();
+        => WizardStepHelpers.ParseUserIds(input);
 
     public void Dispose() { }
 }

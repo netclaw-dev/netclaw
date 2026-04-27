@@ -201,31 +201,14 @@ public sealed class SlackStepView : IWizardStepView
 
     private ILayoutNode BuildUserAccessChoiceSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var restrictLabel = "Restrict to specific users (recommended)";
-        var allowLabel = "Allow anyone in allowed channels";
+        var (list, layout) = WizardStepHelpers.BuildUserAccessChoiceSubStep(
+            restrict => vm.RestrictToSpecificUsers = restrict, callbacks);
 
-        _userAccessChoiceList = Layouts.SelectionList(restrictLabel, allowLabel)
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-
-        _userAccessChoiceList.OnFocused();
-        _lastFocusedList = _userAccessChoiceList;
+        _userAccessChoiceList = list;
+        _lastFocusedList = list;
         _lastFocusedInput = null;
 
-        _userAccessChoiceList.SelectionConfirmed
-            .Subscribe(selected =>
-            {
-                if (selected.Count == 0)
-                    return;
-
-                vm.RestrictToSpecificUsers = selected[0] == restrictLabel;
-                callbacks.AdvanceStep();
-            })
-            .DisposeWith(callbacks.Subscriptions);
-
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Who can interact with the bot?").WithForeground(Color.White))
-            .WithChild(_userAccessChoiceList);
+        return layout;
     }
 
     private ILayoutNode BuildAllowedUserIdsSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
