@@ -108,8 +108,10 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
     }
 
     /// <summary>
-    /// Write SOUL.md, AGENTS.md, and TOOLING.md identity files. Called during config finalization.
+    /// Write SOUL.md and TOOLING.md identity files. Called during config finalization.
     /// Reads templates from embedded resources and substitutes placeholders.
+    /// AGENTS.md is no longer written to disk — it is loaded from embedded resources
+    /// in <see cref="FileSystemPromptProvider"/> per audience at runtime.
     /// </summary>
     public void WriteIdentityFiles(NetclawPaths paths)
     {
@@ -146,9 +148,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
         File.WriteAllText(paths.SoulPath, SubstitutePlaceholders(
             ReadEmbeddedTemplate("SOUL.template.md"), substitutions));
-
-        File.WriteAllText(paths.AgentsPath, SubstitutePlaceholders(
-            ReadEmbeddedTemplate("AGENTS.template.md"), substitutions));
 
         File.WriteAllText(paths.ToolingPath, SubstitutePlaceholders(
             ReadEmbeddedTemplate("TOOLING.template.md"), substitutions));

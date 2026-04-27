@@ -26,9 +26,13 @@ public static class WebhookEndpointRouteBuilderExtensions
             WebhookIngressGuard ingressGuard,
             IWebhookExecutionService executionService,
             IOperationalNotificationSink notificationSink,
+            WebhooksConfig webhooksConfig,
             TimeProvider timeProvider,
             CancellationToken ct) =>
         {
+            if (!webhooksConfig.Enabled)
+                return Results.NotFound();
+
             var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
 
             if (!routeCatalog.TryGetRoute(route, out var registeredRoute))

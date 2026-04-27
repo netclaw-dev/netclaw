@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.19.0"
+  version: "1.20.0"
 ---
 
 # Netclaw Operations
@@ -60,6 +60,11 @@ state isolation (inbox, media). The project directory is mutable and points to
 the project root.
 
 ## Scheduling
+
+Scheduling is gated on `Scheduling.Enabled` in `netclaw.json` (default `true`).
+When disabled, reminder tools are hidden, `ReminderManagerActor` skips startup
+reconciliation, and fired reminders are acknowledged but not executed. Public
+audience sessions cannot use scheduling tools regardless of the config flag.
 
 `set_reminder` accepts three schedule types:
 
@@ -152,6 +157,11 @@ After discovery, matched tools become callable for the session.
 Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
+
+Tools belonging to disabled subsystems (see [Feature Kill Switches](#feature-kill-switches))
+are hidden from `search_tools` results for all audiences. Public sessions
+additionally cannot discover or load skills, subagents, memory tools, or
+scheduling tools regardless of feature flags.
 
 ### Adding MCP servers (fail-closed by default)
 
@@ -273,6 +283,10 @@ directories (native + external) when files change on disk. No restart needed.
 
 ## Webhook Management
 
+Webhooks are gated on `Webhooks.Enabled` in `netclaw.json` (default `true`).
+When disabled, the webhook HTTP endpoint returns 404 for all routes and
+webhook tools are hidden from discovery.
+
 Inbound webhooks use a split config model:
 
 - `~/.netclaw/config/netclaw.json` -> `Webhooks.Enabled` toggles the feature
@@ -391,19 +405,49 @@ including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/client/config.json` (local CLI endpoint state),
 `~/.netclaw/config/secrets.json` (credentials — never display API keys).
 
+## Feature Kill Switches
+
+Deployment-wide feature flags in `netclaw.json` disable entire subsystems
+for all audiences. Each defaults to `true` (enabled).
+
+| Config path | What it gates |
+|-------------|---------------|
+| `Memory.Enabled` | Recall, extraction, memory tools |
+| `Search.Enabled` | `web_search`, `web_fetch` tools |
+| `SkillSync.Enabled` | `skill_load`, `skill_read_resource`, skill index |
+| `SubAgents.Enabled` | `spawn_agent`, subagent discovery |
+| `Scheduling.Enabled` | Reminder tools, reminder execution, `ReminderManagerActor` startup |
+| `Webhooks.Enabled` | Webhook ingress and webhook tools |
+
+When a subsystem is disabled, its tools are hidden from `search_tools` for
+ALL audiences (not just Public), and direct invocation returns a generic
+denial. Context layers for disabled subsystems return empty content.
+
+The `netclaw init` wizard presents a Feature Selection step for Team and
+Public postures, allowing operators to pre-configure which subsystems are
+active. Personal posture skips this step (all features enabled by default).
+
 ## Identity
 
-Your identity is defined by three files loaded into every session prompt:
+Your identity is defined by layered files loaded into the session prompt:
 
-| File | Purpose |
-|------|---------|
-| `~/.netclaw/identity/SOUL.md` | Who you serve — name, relationships, preferences, timezone |
-| `~/.netclaw/identity/AGENTS.md` | How you operate — behavioral rules, workflow preferences |
-| `~/.netclaw/identity/TOOLING.md` | What you can do — environment, tools, MCP notes |
+| Layer | Source | Audience |
+|-------|--------|----------|
+| SOUL.md | `~/.netclaw/identity/SOUL.md` (filesystem) | All |
+| AGENTS.md | Embedded in the Netclaw binary (audience-specific) | Team/Personal get full version; Public gets stripped version |
+| TOOLING.md | `~/.netclaw/identity/TOOLING.md` (filesystem) | Team/Personal only |
+| Project instructions | `.netclaw/AGENTS.md` etc. in project directory | Team/Personal only |
 
-To edit: read the file first with `file_read`, then write with `file_write`.
-Keep entries concise and durable. Detail subdirectories exist for depth:
-`identity/soul/`, `identity/agents/`, `identity/tooling/`.
+**AGENTS.md is binary-owned.** The full AGENTS (Team/Personal) contains
+operating rules, autonomy guidance, grounding, search policy, scheduling,
+background shell, subagent delegation, skill reference, identity file paths,
+and memory triage. The Public AGENTS contains only basic operating rules,
+autonomy, grounding, and media attachment guidance — no scheduling, subagent,
+skill, identity-path, memory, search, or background-shell sections.
+
+SOUL.md and TOOLING.md remain editable on disk:
+- To edit: read the file first with `file_read`, then write with `file_write`.
+- Detail subdirectories: `identity/soul/`, `identity/tooling/`.
 
 **Identity vs memory:** If it should shape every future session → identity
 file. If it should be recalled when relevant → SQLite memory.

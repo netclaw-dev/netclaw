@@ -18,6 +18,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 {
     private readonly IActorRef _reminderManager;
     private readonly TimeProvider _timeProvider;
+    private readonly SchedulingConfig _schedulingConfig;
     private readonly IReadOnlyDictionary<string, IReminderTargetResolver> _resolversByTransport;
 
     public record Params(
@@ -49,10 +50,12 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
     public SetReminderTool(
         IActorRef reminderManager,
         TimeProvider timeProvider,
+        SchedulingConfig schedulingConfig,
         IEnumerable<IReminderTargetResolver>? targetResolvers = null)
     {
         _reminderManager = reminderManager;
         _timeProvider = timeProvider;
+        _schedulingConfig = schedulingConfig;
 
         // Build transport -> resolver dictionary, detecting duplicates
         var resolvers = new Dictionary<string, IReminderTargetResolver>(StringComparer.OrdinalIgnoreCase);
@@ -71,6 +74,9 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
+        if (!_schedulingConfig.Enabled)
+            return "Error: Scheduling is disabled for this deployment.";
+
         if (string.IsNullOrWhiteSpace(args.Id))
             return "Error: 'id' is required.";
         if (string.IsNullOrWhiteSpace(args.Name))

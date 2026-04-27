@@ -24,23 +24,29 @@ internal sealed class SessionRecallManager
     /// <summary>
     /// Resolves the recall bundle for the current turn. Caches the result so
     /// subsequent calls within the same turn reuse it.
+    /// Returns empty when the memory subsystem is disabled or the audience is Public.
     /// </summary>
     public AutomaticRecallResult ResolveForTurn(
         string? recallQuery,
         SessionState state,
         SessionId sessionId,
         MessageSource? turnSource,
-        IMemoryRecallCoordinator coordinator)
+        IMemoryRecallCoordinator coordinator,
+        bool memoryEnabled = true)
     {
+        var audience = turnSource?.Audience
+            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);
+
+        // Memory recall is disabled for Public audience or when the subsystem is off
+        if (audience == TrustAudience.Public || !memoryEnabled)
+            return new AutomaticRecallResult([]);
+
         var query = string.IsNullOrWhiteSpace(recallQuery)
             ? state.FindLastUserMessage()?.Content ?? string.Empty
             : recallQuery;
 
         if (string.IsNullOrWhiteSpace(query))
             return new AutomaticRecallResult([]);
-
-        var audience = turnSource?.Audience
-            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);
         var recentUser = state.History
             .Where(x => x.Role == Protocol.ChatRole.User && !SessionState.IsSystemNudge(x))
             .Select(x => x.Content)

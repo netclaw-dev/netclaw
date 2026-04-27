@@ -491,7 +491,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             SenderId = message.SenderId.Value
         });
 
-        await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildDecisionStatus(selectedKey));
+        await TryResolveApprovalPromptAsync(pending!, selectedKey, message.SenderId.Value);
         return true;
     }
 
@@ -522,7 +522,40 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             SenderId = message.SenderId.Value
         });
 
-        await SafeReplyAsync(DiscordApprovalPromptBuilder.BuildDecisionStatus(message.SelectedKey));
+        await TryResolveApprovalPromptAsync(pending!, message.SelectedKey, message.SenderId.Value);
+    }
+
+    private async Task TryResolveApprovalPromptAsync(
+        PendingApprovalRequest pending,
+        string selectedKey,
+        string senderId)
+    {
+        if (pending.PromptMessageId is not { } promptMessageId)
+            return;
+
+        try
+        {
+            var resolvedText = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+                pending.Request,
+                selectedKey,
+                senderId);
+
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdateMessageAsync(
+                _replyChannelId,
+                promptMessageId,
+                resolvedText,
+                removeComponents: true,
+                cts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(
+                ex,
+                "Failed to update resolved approval prompt for call {CallId} messageId={MessageId}",
+                pending.CallId,
+                promptMessageId.Value);
+        }
     }
 
     private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
@@ -634,13 +667,18 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 break;
 
             case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
-                _pendingApprovalRequests.Add(new PendingApprovalRequest(
-                    request.CallId,
-                    request.RequesterSenderId is null ? null : new DiscordUserId(request.RequesterSenderId),
-                    request.RequesterPrincipal));
+                var pendingApproval = new PendingApprovalRequest(request);
+                _pendingApprovalRequests.Add(pendingApproval);
 
-                var (promptText, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
-                await SafeReplyWithButtonsAsync(promptText, buttons, request);
+                var promptMessageId = await SafeReplyWithButtonsAsync(request);
+                if (promptMessageId is not null)
+                {
+                    pendingApproval.PromptMessageId = promptMessageId;
+                }
+                else
+                {
+                    _pendingApprovalRequests.Remove(pendingApproval);
+                }
                 break;
 
             case SessionTitleOutput titleOutput:
@@ -671,20 +709,19 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task SafeReplyWithButtonsAsync(
-        string text,
-        IReadOnlyList<DiscordButtonSpec> buttons,
-        ToolInteractionRequest request)
+    private async Task<DiscordMessageId?> SafeReplyWithButtonsAsync(ToolInteractionRequest request)
     {
+        var (promptText, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
-            var postMessage = BuildPostMessage(text, buttons: buttons);
+            var postMessage = BuildPostMessage(promptText, buttons: buttons);
             var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
             ApplyThreadPromotion(result);
             var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
             ChannelTelemetry.RecordDiscordReplyPosted(duration);
             ChannelTelemetry.RecordDiscordApprovalFallbackActivated("button_prompt");
+            return result.MessageId;
         }
         catch (Exception ex)
         {
@@ -696,11 +733,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 var postMessage = BuildPostMessage(fallbackText);
                 var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
                 ApplyThreadPromotion(result);
+                return result.MessageId;
             }
             catch (Exception textEx)
             {
                 _log.Error(textEx, "Failed posting text-only approval fallback; auto-denying request");
                 await SendApprovalDenyOnFailureAsync(request.CallId);
+                return null;
             }
         }
     }

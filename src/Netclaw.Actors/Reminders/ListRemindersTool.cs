@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text;
 using Akka.Actor;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Reminders;
@@ -14,18 +15,23 @@ namespace Netclaw.Actors.Reminders;
 public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Params>
 {
     private readonly IActorRef _reminderManager;
+    private readonly SchedulingConfig _schedulingConfig;
 
     public record Params(
         [property: Description("Optional filter: 'active' (default) or 'all'.")]
         string? Filter = null);
 
-    public ListRemindersTool(IActorRef reminderManager)
+    public ListRemindersTool(IActorRef reminderManager, SchedulingConfig schedulingConfig)
     {
         _reminderManager = reminderManager;
+        _schedulingConfig = schedulingConfig;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
+        if (!_schedulingConfig.Enabled)
+            return "Error: Scheduling is disabled for this deployment.";
+
         var includeDisabled = string.Equals(args.Filter, "all", StringComparison.OrdinalIgnoreCase);
 
         var response = await _reminderManager.Ask<ReminderListResponse>(

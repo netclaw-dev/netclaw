@@ -24,6 +24,7 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
 
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
+    private readonly SkillSyncConfig _skillSyncConfig;
 
     public record Params(
         [property: Description("Name of the skill containing the resource")]
@@ -31,14 +32,24 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         [property: Description("Relative path within the skill directory (e.g., 'references/checklist.md')")]
         string ResourcePath);
 
-    public SkillReadResourceTool(SkillRegistry skillRegistry, ISkillContentScanner scanner)
+    public SkillReadResourceTool(SkillRegistry skillRegistry, ISkillContentScanner scanner,
+        SkillSyncConfig? skillSyncConfig = null)
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
+        _skillSyncConfig = skillSyncConfig ?? new SkillSyncConfig();
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => await ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
+        // Defense-in-depth: block skill resource reading for Public audience or when skills subsystem is disabled
+        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
+        if (audience == TrustAudience.Public || !_skillSyncConfig.Enabled)
+            return "Error: This tool is not available.";
+
         var skillName = args.SkillName.Trim().ToLowerInvariant();
         var skill = _skillRegistry.GetAll()
             .FirstOrDefault(s => s.Name.Equals(skillName, StringComparison.OrdinalIgnoreCase));

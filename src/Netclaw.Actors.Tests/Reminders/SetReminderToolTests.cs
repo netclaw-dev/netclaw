@@ -29,7 +29,7 @@ public class SetReminderToolTests : TestKit
     public async Task Schedule_oneshot_relative_time_30m()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var execution = Task.Run(async () =>
         {
@@ -69,7 +69,7 @@ public class SetReminderToolTests : TestKit
     public async Task Schedule_interval_2h()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var execution = Task.Run(async () =>
         {
@@ -104,7 +104,7 @@ public class SetReminderToolTests : TestKit
     public async Task Schedule_cron_every_6_hours()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var execution = Task.Run(async () =>
         {
@@ -139,7 +139,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_invalid_cron_expression()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -160,7 +160,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_unknown_schedule_type()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -180,7 +180,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_interval_under_60_seconds()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -200,7 +200,7 @@ public class SetReminderToolTests : TestKit
     public async Task Mode_B_self_targeting_persists_session_and_origin_channel_type()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
             Audience = "team",
@@ -246,7 +246,7 @@ public class SetReminderToolTests : TestKit
     public async Task Mode_B_discord_self_targeting_persists_session_and_origin_channel_type()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
             Audience = "team",
@@ -288,7 +288,7 @@ public class SetReminderToolTests : TestKit
     public async Task Mode_B_rejected_for_unsupported_origin_channel_type()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("webhook/delivery-1", null)
         {
             Audience = "personal",
@@ -314,7 +314,7 @@ public class SetReminderToolTests : TestKit
     public async Task Mode_B_rejected_when_channel_type_missing_from_context()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         // Session id present but ChannelType is null — pre-v0.16 context
         // shape or an unusual caller. Fail loud, do not silently persist a
         // headless reminder that would drop on the floor at fire time.
@@ -339,7 +339,7 @@ public class SetReminderToolTests : TestKit
     public async Task Headless_reminder_with_no_session_and_no_target_persists_with_both_null()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), targetResolvers: null);
 
         var execution = Task.Run(async () =>
         {
@@ -373,7 +373,7 @@ public class SetReminderToolTests : TestKit
     public async Task Normalizes_id_to_kebab_case()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var execution = Task.Run(async () =>
         {
@@ -407,7 +407,7 @@ public class SetReminderToolTests : TestKit
     public async Task Sets_audience_when_provided()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
             Audience = "personal",
@@ -446,7 +446,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_invalid_audience()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -468,7 +468,7 @@ public class SetReminderToolTests : TestKit
     public async Task Omitted_audience_inherits_source_audience()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
             Audience = "team",
@@ -506,7 +506,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_invalid_source_audience_context()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
             Audience = "superadmin",
@@ -531,7 +531,7 @@ public class SetReminderToolTests : TestKit
     public async Task Manager_validation_failure_returns_error_prefix()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
             Audience = "team",
@@ -573,7 +573,7 @@ public class SetReminderToolTests : TestKit
     public async Task Manager_validation_failure_returns_error_prefix_for_discord_source()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
             Audience = "public",
@@ -621,7 +621,7 @@ public class SetReminderToolTests : TestKit
                 ? new ReminderTargetResolution(true, "C0123ABC", ReminderTargetKind.Channel, null)
                 : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
         var execution = Task.Run(async () =>
         {
@@ -664,7 +664,7 @@ public class SetReminderToolTests : TestKit
                 ReminderTargetKind.Unknown,
                 "Could not resolve Slack target '#nope'. Use #channel, @user, or a Slack ID (C..., G..., U...).")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -688,7 +688,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_report_to_channel_when_no_resolver_registered()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), targetResolvers: null);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -710,7 +710,7 @@ public class SetReminderToolTests : TestKit
     public async Task Rejects_channel_delivery_for_signalr_transport_with_actionable_error()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider, targetResolvers: null);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), targetResolvers: null);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -736,7 +736,7 @@ public class SetReminderToolTests : TestKit
         {
             ResultFor = (_) => throw new InvalidOperationException("resolver must not be invoked for Mode B session re-entry")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
             Audience = "team",
@@ -782,7 +782,7 @@ public class SetReminderToolTests : TestKit
                 ? new ReminderTargetResolution(true, "U0456XYZ", ReminderTargetKind.User, null)
                 : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
         var execution = Task.Run(async () =>
         {
@@ -824,7 +824,7 @@ public class SetReminderToolTests : TestKit
                 ? new ReminderTargetResolution(true, "129847561203948576", ReminderTargetKind.User, null)
                 : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
         var execution = Task.Run(async () =>
         {
@@ -864,7 +864,7 @@ public class SetReminderToolTests : TestKit
         {
             ResultFor = (_) => new ReminderTargetResolution(true, null, ReminderTargetKind.Channel, null)
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -900,7 +900,7 @@ public class SetReminderToolTests : TestKit
     public async Task ExpiresIn_sets_expiration_on_interval_reminder()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var execution = Task.Run(async () =>
         {
@@ -937,7 +937,7 @@ public class SetReminderToolTests : TestKit
     public async Task ExpiresIn_rejects_on_oneshot_reminder()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -958,7 +958,7 @@ public class SetReminderToolTests : TestKit
     public async Task ExpiresIn_rejects_unparseable_duration()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {

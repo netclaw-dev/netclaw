@@ -39,7 +39,8 @@ public sealed record SessionMemoryServices(
     IMemoryExtractor MemoryExtractor,
     IMemoryRecallCoordinator RecallCoordinator,
     IMemoryCheckpointSink CheckpointSink,
-    SQLiteMemoryStore? MemoryStore);
+    SQLiteMemoryStore? MemoryStore,
+    MemoryConfig? MemoryConfig = null);
 
 /// <summary>
 /// Metrics and lifecycle observation.

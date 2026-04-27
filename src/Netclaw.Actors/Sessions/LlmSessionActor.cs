@@ -56,6 +56,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
     private readonly MemoryProposalGate _memoryProposalGate = new();
+    private readonly MemoryConfig _memoryConfig;
     private readonly TimeProvider _timeProvider;
     private readonly string _sessionsBasePath;
     private readonly string _sessionLogsBasePath;
@@ -198,6 +199,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _memoryStore = memory?.MemoryStore;
+        _memoryConfig = memory?.MemoryConfig ?? new MemoryConfig();
         _timeProvider = services.TimeProvider;
         _sessionsBasePath = services.Paths.SessionsDirectory;
         _sessionLogsBasePath = services.Paths.SessionLogsDirectory;
@@ -739,13 +741,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolInteractionRequest>(msg =>
         {
-            var audience = _currentTurnSource?.Audience
-                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
-
             _pendingToolInteractions[msg.CallId] = new PendingToolInteraction(
                 msg.ToolName,
                 msg.Patterns,
-                audience,
+                CurrentTurnAudience(),
                 msg.RequesterSenderId,
                 msg.RequesterPrincipal);
 
@@ -966,19 +965,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.Usage);
         }
 
-        // Route proposals through the standard gate → curation pipeline
-        if (msg.Proposals.Count > 0 && _curationActor is not null)
+        // Route proposals through the standard gate → curation pipeline.
+        // Skip entirely when memory is disabled or the session is Public — no memories should form.
+        if (msg.Proposals.Count > 0 && _curationActor is not null
+            && CurrentTurnAudience() != TrustAudience.Public && _memoryConfig.Enabled)
         {
-            // Use session-derived audience when _currentTurnSource is null
-            // (distillation fires after idle, turn context is cleared)
-            var audience = _currentTurnSource?.Audience
-                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
-                audience: audience);
+                audience: CurrentTurnAudience());
 
             var accepted = gateResult.MemoryOperations;
 
@@ -1828,6 +1825,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
         BindTurnTelemetry(cmd.Source);
 
+        // Sessions created from Slack/Discord start without transport-derived
+        // audience encoded in the session id, so rebuild the prompt now that the
+        // actual inbound source is known.
+        SetSystemPrompt();
+
         var userContent = cmd.Content ?? string.Empty;
         var mediaRefs = cmd.MediaReferences;
 
@@ -2271,7 +2273,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void SetSystemPrompt()
     {
-        var content = _promptProvider.GetSystemPrompt(_state.WorkingContext.ProjectDirectory);
+        var audience = CurrentTurnAudience();
+        var content = _promptProvider.GetSystemPrompt(audience, _state.WorkingContext.ProjectDirectory);
         if (string.IsNullOrWhiteSpace(content))
         {
             // Retain the last-known prompt from recovery — deleting it strips the agent
@@ -2314,7 +2317,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_recallManager.TurnRecallCache is null)
         {
             var recallSw = Stopwatch.StartNew();
-            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator);
+            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator, _memoryConfig.Enabled);
             recallSw.Stop();
 
             resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
@@ -2367,7 +2370,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId: _sessionId,
             SessionsBasePath: _sessionsBasePath,
             FileReadGranted: HasFileReadGranted(),
-            ActiveRecall: _activeRecall));
+            ActiveRecall: _activeRecall,
+            Audience: CurrentTurnAudience()));
         _startupContextInjected = true;
 
         var self = Self;
@@ -2395,6 +2399,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId.Value, _activeLlmCts!.Token);
     }
 
+
+    private TrustAudience CurrentTurnAudience()
+        => _currentTurnSource?.Audience
+           ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
 
     private string CurrentMemoryAudience()
         => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();

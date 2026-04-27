@@ -9,6 +9,7 @@ namespace Netclaw.Channels.Discord.Transport;
 internal sealed class DiscordNetReplyClient : IDiscordReplyClient
 {
     private const int MaxRestChannelCacheSize = 1000;
+    private static readonly MessageComponent EmptyComponents = new ComponentBuilder().Build();
 
     private readonly DiscordSocketClient _client;
     private readonly ConcurrentDictionary<ulong, IMessageChannel> _restChannelCache = new();
@@ -32,27 +33,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
     public async Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
     {
         var channelId = ParseSnowflake(message.ReplyChannelId.Value, "reply channel ID");
-
-        // Socket cache misses for DM channels — fall back to REST API.
-        IMessageChannel? messageChannel = _client.GetChannel(channelId) as IMessageChannel;
-        if (messageChannel is null && !_restChannelCache.TryGetValue(channelId, out messageChannel))
-        {
-            var restChannel = await _client.Rest.GetChannelAsync(channelId);
-            messageChannel = restChannel as IMessageChannel;
-            if (messageChannel is not null)
-            {
-                // Safety valve — evict stale entries if the cache grows too large.
-                // Full clear is acceptable here because the cache repopulates lazily
-                // and only DM channels (socket cache misses) land here.
-                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
-                    _restChannelCache.Clear();
-                _restChannelCache[channelId] = messageChannel;
-            }
-        }
-
-        if (messageChannel is null)
-            throw new InvalidOperationException(
-                $"Discord channel {message.ReplyChannelId.Value} not found or is not a message channel.");
+        var messageChannel = await ResolveMessageChannelAsync(channelId, message.ReplyChannelId.Value);
 
         IMessageChannel targetChannel = messageChannel;
         DiscordReplyChannelId? createdThreadId = null;
@@ -108,12 +89,16 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         if (message.CreateThreadOnMessage is null && message.RootMessageId is { } rootId)
             rootRef = new MessageReference(ParseSnowflake(rootId.Value, "root message ID"));
 
-        await targetChannel.SendMessageAsync(
+        var sentMessage = await targetChannel.SendMessageAsync(
             text: message.Text,
             messageReference: rootRef,
             components: components);
 
-        return new DiscordPostResult(CreatedThreadId: createdThreadId);
+        var sentMessageId = sentMessage is not null
+            ? new DiscordMessageId(sentMessage.Id.ToString())
+            : (DiscordMessageId?)null;
+
+        return new DiscordPostResult(CreatedThreadId: createdThreadId, MessageId: sentMessageId);
     }
 
     public async Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
@@ -127,6 +112,48 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         {
             props.Name = name.Length > 100 ? name[..100] : name;
         }, new RequestOptions { CancelToken = cancellationToken });
+    }
+
+    public async Task UpdateMessageAsync(
+        DiscordReplyChannelId channelId,
+        DiscordMessageId messageId,
+        string text,
+        bool removeComponents = false,
+        CancellationToken cancellationToken = default)
+    {
+        var channelSnowflake = ParseSnowflake(channelId.Value, "reply channel ID");
+        var messageSnowflake = ParseSnowflake(messageId.Value, "message ID");
+        var messageChannel = await ResolveMessageChannelAsync(channelSnowflake, channelId.Value);
+
+        await messageChannel.ModifyMessageAsync(messageSnowflake, props =>
+        {
+            props.Content = text;
+            if (removeComponents)
+                props.Components = EmptyComponents;
+        }, new RequestOptions { CancelToken = cancellationToken });
+    }
+
+    private async Task<IMessageChannel> ResolveMessageChannelAsync(ulong channelSnowflake, string channelIdForError)
+    {
+        // Socket cache misses for DM channels — fall back to REST API.
+        IMessageChannel? channel = _client.GetChannel(channelSnowflake) as IMessageChannel;
+        if (channel is null && !_restChannelCache.TryGetValue(channelSnowflake, out channel))
+        {
+            var restChannel = await _client.Rest.GetChannelAsync(channelSnowflake);
+            channel = restChannel as IMessageChannel;
+            if (channel is not null)
+            {
+                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
+                    _restChannelCache.Clear();
+                _restChannelCache[channelSnowflake] = channel;
+            }
+        }
+
+        if (channel is null)
+            throw new InvalidOperationException(
+                $"Discord channel {channelIdForError} not found or is not a message channel.");
+
+        return channel;
     }
 
     private static ulong ParseSnowflake(string value, string label)

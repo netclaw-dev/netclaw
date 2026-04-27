@@ -107,6 +107,13 @@ public static class SecurityPolicyDefaults
         _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, null)
     };
 
+    /// <summary>
+    /// Parses audience from wire format, defaulting to <see cref="TrustAudience.Public"/> on failure.
+    /// Use in defense-in-depth tool gates where unparseable input must deny access.
+    /// </summary>
+    public static TrustAudience ParseAudienceOrPublic(string? wire)
+        => TryParseAudience(wire, out var a) ? a : TrustAudience.Public;
+
     public static bool TryParseAudience(string? wire, out TrustAudience audience)
     {
         if (string.Equals(wire, "public", StringComparison.OrdinalIgnoreCase))

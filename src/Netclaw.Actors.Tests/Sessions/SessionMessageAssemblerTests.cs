@@ -289,6 +289,78 @@ public sealed class SessionMessageAssemblerTests
             (m.Text?.Contains("[memory-recall]", StringComparison.Ordinal) ?? false));
     }
 
+    [Fact]
+    public void Public_audience_static_block_contains_session_id_only()
+    {
+        // Public audience must see the session id but NOT filesystem paths
+        // (session_dir, media_dir) to avoid leaking host layout.
+        var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Public);
+        var messages = SessionMessageAssembler.Assemble(input);
+
+        var staticBlock = messages[1];
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.System, staticBlock.Role);
+        var text = staticBlock.Text ?? string.Empty;
+
+        Assert.Contains($"[session]\nid: {TestSession.Value}", text);
+        Assert.DoesNotContain("session_dir:", text);
+        Assert.DoesNotContain("media_dir:", text);
+    }
+
+    [Fact]
+    public void Personal_audience_static_block_contains_filesystem_paths()
+    {
+        // Personal audience gets the full session block with directories.
+        var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Personal);
+        var messages = SessionMessageAssembler.Assemble(input);
+
+        var staticBlock = messages[1];
+        var text = staticBlock.Text ?? string.Empty;
+
+        Assert.Contains("session_dir:", text);
+        Assert.Contains("media_dir:", text);
+    }
+
+    [Fact]
+    public void Public_audience_suppresses_working_context_in_volatile_block()
+    {
+        // Working context leaks internal paths and scratch notes — Public must not see it.
+        var stateWithWorkingContext = SessionState.Empty with
+        {
+            History = SeedHistory("hi"),
+            WorkingContext = WorkingContext.Empty.AddRecentFile("src/Secrets.cs")
+        };
+        var input = MakeInput(
+            SeedHistory("hi"), FakeRecall("mem-1"), audience: TrustAudience.Public);
+        input = input with
+        {
+            State = stateWithWorkingContext
+        };
+        var messages = SessionMessageAssembler.Assemble(input);
+
+        var allText = string.Join("\n", messages.Select(m => m.Text ?? string.Empty));
+        Assert.DoesNotContain("[working-context]", allText);
+        Assert.DoesNotContain("Secrets.cs", allText);
+    }
+
+    [Fact]
+    public void Personal_audience_includes_working_context_in_volatile_block()
+    {
+        var stateWithWorkingContext = SessionState.Empty with
+        {
+            History = SeedHistory("hi"),
+            WorkingContext = WorkingContext.Empty.AddRecentFile("src/Rect.cs")
+        };
+        var input = MakeInput(SeedHistory("hi"), FakeRecall("mem-1"), audience: TrustAudience.Personal);
+        input = input with
+        {
+            State = stateWithWorkingContext
+        };
+        var messages = SessionMessageAssembler.Assemble(input);
+
+        var tail = messages[^1];
+        Assert.Contains("[working-context]", tail.Text ?? string.Empty);
+    }
+
     private static ContextAssemblyInput MakeInput(
         ImmutableList<SerializableChatMessage> history,
         AutomaticRecallResult? activeRecall,
@@ -296,7 +368,8 @@ public sealed class SessionMessageAssemblerTests
         string? slashCommand = null,
         string? overlay = null,
         string? restartNotice = null,
-        bool fileReadGranted = true)
+        bool fileReadGranted = true,
+        TrustAudience audience = TrustAudience.Personal)
     {
         var state = SessionState.Empty with { History = history };
         return new ContextAssemblyInput(
@@ -309,7 +382,8 @@ public sealed class SessionMessageAssemblerTests
             SessionId: TestSession,
             SessionsBasePath: "/tmp/netclaw-test",
             FileReadGranted: fileReadGranted,
-            ActiveRecall: activeRecall);
+            ActiveRecall: activeRecall,
+            Audience: audience);
     }
 
     private static ImmutableList<SerializableChatMessage> SeedHistory(string firstUser)

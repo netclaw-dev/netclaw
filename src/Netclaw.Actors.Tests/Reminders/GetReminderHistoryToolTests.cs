@@ -16,7 +16,7 @@ public class GetReminderHistoryToolTests : IDisposable
         var paths = new NetclawPaths(_tempDir);
         Directory.CreateDirectory(paths.RemindersDirectory);
         _store = new ReminderHistoryStore(paths);
-        _tool = new GetReminderHistoryTool(_store);
+        _tool = new GetReminderHistoryTool(_store, new SchedulingConfig());
     }
 
     public void Dispose()

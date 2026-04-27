@@ -23,6 +23,7 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly SubAgentDefinitionRegistry _subAgentRegistry;
     private readonly FileSubAgentDefinitionLoader _agentLoader;
     private readonly SubAgentSpawner _subAgentSpawner;
+    private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger<ToolIndexUpdater> _logger;
 
     public ToolIndexUpdater(
@@ -34,6 +35,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         SubAgentDefinitionRegistry subAgentRegistry,
         FileSubAgentDefinitionLoader agentLoader,
         SubAgentSpawner subAgentSpawner,
+        SubAgentConfig subAgentConfig,
         ILogger<ToolIndexUpdater> logger)
     {
         _paths = paths;
@@ -44,6 +46,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         _subAgentRegistry = subAgentRegistry;
         _agentLoader = agentLoader;
         _subAgentSpawner = subAgentSpawner;
+        _subAgentConfig = subAgentConfig;
         _logger = logger;
     }
 
@@ -55,7 +58,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         LoadFileBasedAgents();
 
         // Register spawn_agent tool now that all agents and the spawner are available.
-        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths));
+        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig));
 
         // Write catalogs after all tools are registered.
         _shadowCatalogWriter.WriteCatalogs();

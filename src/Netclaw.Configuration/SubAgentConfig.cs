@@ -8,6 +8,12 @@ namespace Netclaw.Configuration;
 public sealed class SubAgentConfig
 {
     /// <summary>
+    /// When false, the subagent subsystem is disabled.
+    /// No subagent-based tools are registered regardless of audience profile.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// Default timeout for subagent execution when no tool-specific override exists.
     /// </summary>
     public int DefaultTimeoutSeconds { get; set; } = 60;

@@ -29,4 +29,9 @@
     <Content Include="Schemas/**/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources/AGENTS.md" />
+    <EmbeddedResource Include="Resources/AGENTS.public.md" />
+  </ItemGroup>
+
 </Project>

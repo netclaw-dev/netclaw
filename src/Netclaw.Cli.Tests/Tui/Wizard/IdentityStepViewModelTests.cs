@@ -114,7 +114,7 @@ public sealed class IdentityStepViewModelTests : IDisposable
     }
 
     [Fact]
-    public void WriteIdentityFiles_CreatesSoulAndAgents()
+    public void WriteIdentityFiles_CreatesSoulAndTooling()
     {
         using var step = new IdentityStepViewModel();
         step.AgentName = "TestBot";
@@ -130,9 +130,10 @@ public sealed class IdentityStepViewModelTests : IDisposable
         Assert.Contains("Bob", soul);
         Assert.Contains("UTC", soul);
 
-        Assert.True(File.Exists(_context.Paths.AgentsPath));
-        var agents = File.ReadAllText(_context.Paths.AgentsPath);
-        Assert.Contains("Operating Rules", agents);
+        // AGENTS.md is no longer written to disk — it is loaded from embedded
+        // resources at runtime per audience. TOOLING.md is still written.
+        Assert.False(File.Exists(_context.Paths.AgentsPath));
+        Assert.True(File.Exists(_context.Paths.ToolingPath));
     }
 
     [Fact]

@@ -50,6 +50,13 @@ public interface IDiscordReplyClient
     Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default);
 
     Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default);
+
+    Task UpdateMessageAsync(
+        DiscordReplyChannelId channelId,
+        DiscordMessageId messageId,
+        string text,
+        bool removeComponents = false,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record DiscordPostMessage(
@@ -61,7 +68,8 @@ public sealed record DiscordPostMessage(
     string? ThreadName = null);
 
 public sealed record DiscordPostResult(
-    DiscordReplyChannelId? CreatedThreadId = null)
+    DiscordReplyChannelId? CreatedThreadId = null,
+    DiscordMessageId? MessageId = null)
 {
     public static readonly DiscordPostResult Default = new();
 }
@@ -121,4 +129,9 @@ public sealed class UnconfiguredDiscordReplyClient : IDiscordReplyClient
     public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Discord channel attempted to set thread name, but no Discord reply client is configured.");
+
+    public Task UpdateMessageAsync(DiscordReplyChannelId channelId, DiscordMessageId messageId, string text,
+        bool removeComponents = false, CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Discord channel attempted to update a message, but no Discord reply client is configured.");
 }

@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using Akka.Actor;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Reminders;
@@ -13,18 +14,23 @@ namespace Netclaw.Actors.Reminders;
 public sealed partial class CancelReminderTool : NetclawTool<CancelReminderTool.Params>
 {
     private readonly IActorRef _reminderManager;
+    private readonly SchedulingConfig _schedulingConfig;
 
     public record Params(
         [property: Description("The reminder ID to cancel (returned by set_reminder or list_reminders)")]
         string ReminderId);
 
-    public CancelReminderTool(IActorRef reminderManager)
+    public CancelReminderTool(IActorRef reminderManager, SchedulingConfig schedulingConfig)
     {
         _reminderManager = reminderManager;
+        _schedulingConfig = schedulingConfig;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
     {
+        if (!_schedulingConfig.Enabled)
+            return "Error: Scheduling is disabled for this deployment.";
+
         if (string.IsNullOrWhiteSpace(args.ReminderId))
             return "Error: 'reminderId' is required.";
 

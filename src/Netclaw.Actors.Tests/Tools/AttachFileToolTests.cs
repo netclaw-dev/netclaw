@@ -299,7 +299,7 @@ public class AttachFileToolTests : IDisposable
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
-        Assert.Contains("configured roots", result);
+        Assert.Contains("Public trust context may only access files inside the current session directory", result);
         Assert.Empty(context.FileAttachments);
     }
 

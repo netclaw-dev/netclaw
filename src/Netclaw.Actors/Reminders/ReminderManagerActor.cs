@@ -33,6 +33,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private readonly ISessionPipeline _pipeline;
     private readonly EffectivePolicyDefaults _defaults;
+    private readonly SchedulingConfig _schedulingConfig;
     private readonly TimeProvider _timeProvider;
     private readonly ReminderDefinitionStore _definitionStore;
     private readonly ReminderHistoryStore _historyStore;
@@ -48,6 +49,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     public ReminderManagerActor(
         ISessionPipeline pipeline,
         EffectivePolicyDefaults defaults,
+        SchedulingConfig schedulingConfig,
         TimeProvider timeProvider,
         ReminderDefinitionStore definitionStore,
         ReminderHistoryStore historyStore,
@@ -55,6 +57,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         _pipeline = pipeline;
         _defaults = defaults;
+        _schedulingConfig = schedulingConfig;
         _timeProvider = timeProvider;
         _definitionStore = definitionStore;
         _historyStore = historyStore;
@@ -79,7 +82,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     {
         var extension = ReminderClientExtension.Get(Context.System);
         _client = extension.CreateClient(new ReminderEntity(ShardRegionName, EntityId));
-        _log.Info("ReminderManagerActor started");
+        _log.Info("ReminderManagerActor started (scheduling enabled={0})", _schedulingConfig.Enabled);
+
+        if (!_schedulingConfig.Enabled)
+        {
+            _log.Info("Scheduling is disabled — skipping reminder reconciliation and execution");
+            return;
+        }
 
         EmitDroppedInvalidDefinitionAlerts();
 
@@ -471,6 +480,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private async Task HandleReminderFiredAsync(ReminderEnvelope<ReminderPayload> envelope)
     {
+        if (!_schedulingConfig.Enabled)
+        {
+            _log.Warning("Scheduling is disabled — ignoring fired reminder and acking envelope");
+            await _client!.AckAsync(envelope);
+            return;
+        }
+
         var payload = envelope.Message;
         var reminderId = payload.Id;
         var definition = _definitionStore.Get(reminderId);

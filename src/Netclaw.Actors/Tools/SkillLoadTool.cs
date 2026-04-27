@@ -23,6 +23,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
     private readonly ISessionMetrics? _sessionMetrics;
     private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
     private readonly SubAgentSpawner? _subAgentSpawner;
+    private readonly SkillSyncConfig _skillSyncConfig;
 
     public record Params(
         [property: Description("Name of the skill to load (e.g., 'search-citation', 'netclaw-memory')")]
@@ -37,13 +38,15 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         ISkillContentScanner scanner,
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
-        SubAgentSpawner? subAgentSpawner = null)
+        SubAgentSpawner? subAgentSpawner = null,
+        SkillSyncConfig? skillSyncConfig = null)
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
         _sessionMetrics = sessionMetrics;
         _subAgentRegistry = subAgentRegistry;
         _subAgentSpawner = subAgentSpawner;
+        _skillSyncConfig = skillSyncConfig ?? new SkillSyncConfig();
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -51,6 +54,11 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
+        // Defense-in-depth: block skill loading for Public audience or when skills subsystem is disabled
+        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
+        if (audience == TrustAudience.Public || !_skillSyncConfig.Enabled)
+            return "Error: This tool is not available.";
+
         var name = args.Name.Trim().ToLowerInvariant();
         var skill = _skillRegistry.GetByName(name);
 
@@ -107,7 +115,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
                 profile,
                 args.Task,
                 args.Context,
-                context,
+                context!,
                 ct,
                 systemPromptOverlay: routedBody);
 
