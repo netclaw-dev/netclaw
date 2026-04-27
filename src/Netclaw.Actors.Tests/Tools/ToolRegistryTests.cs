@@ -1,5 +1,6 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -187,6 +188,33 @@ public class ToolRegistryTests
         var index = registry.GenerateCompressedIndex();
 
         Assert.Empty(index);
+    }
+
+    [Fact]
+    public void GenerateCompressedIndex_for_public_hides_blocked_capabilities()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(CreateFakeTool("file_read"), "file");
+        registry.Register(CreateFakeTool("set_reminder"), "builtin");
+        registry.Register(CreateFakeTool("spawn_agent"), "builtin");
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("search"), "memorizer", "search"));
+
+        var policy = new ToolAccessPolicy(
+            new ToolConfig(),
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Public,
+                TrustAudience.Public,
+                ShellExecutionMode.Off,
+                UsedStrictFallback: true),
+            featureGates: new FeatureGates(SubAgentsEnabled: false, SchedulingEnabled: false));
+
+        var index = registry.GenerateCompressedIndex(TrustAudience.Public, policy);
+
+        Assert.Contains("file: file_read", index);
+        Assert.DoesNotContain("set_reminder", index);
+        Assert.DoesNotContain("spawn_agent", index);
+        Assert.DoesNotContain("memorizer", index);
     }
 
     private static AIFunction CreateFakeTool(string name)

@@ -42,6 +42,9 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         // sections like Search Decision Rules, Scheduling, Identity Files, etc.
         Assert.DoesNotContain("Search Decision Rules", prompt);
         Assert.DoesNotContain("Identity Files", prompt);
+        Assert.DoesNotContain("media_dir", prompt);
+        Assert.DoesNotContain("session_dir", prompt);
+        Assert.DoesNotContain("inbox/", prompt);
         Assert.DoesNotContain("{{SYSTEM_SKILLS_DIR}}", prompt);
         Assert.DoesNotContain("{{IDENTITY_DIR}}", prompt);
 

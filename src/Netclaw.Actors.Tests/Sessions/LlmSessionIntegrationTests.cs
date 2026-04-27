@@ -188,6 +188,55 @@ public class LlmSessionIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Slack_source_rebuilds_system_prompt_with_team_audience_on_first_turn()
+    {
+        var sessionId = new SessionId("C1234567890/1712700000.000500");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("slack-audience-probe");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession
+        {
+            SessionId = sessionId,
+            Subscriber = subscriber,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "hello from slack",
+            Source = new MessageSource
+            {
+                ChannelType = ChannelType.Slack,
+                SenderId = "U123",
+                ChannelId = "C1234567890",
+                MessageId = "evt-1",
+                TurnId = "turn-1",
+                Audience = TrustAudience.Team,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Team),
+                Principal = PrincipalClassification.TrustedInternal,
+                Provenance = new SourceProvenance
+                {
+                    TransportAuthenticity = TransportAuthenticity.Verified,
+                    PayloadTaint = PayloadTaint.Trusted,
+                    SourceKind = "slack"
+                },
+                ReceivedAt = _timeProvider.GetUtcNow()
+            }
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var allText = string.Join("\n\n", _fakeChatClient.ReceivedMessages.Last()
+            .Select(message => message.Text)
+            .Where(text => !string.IsNullOrWhiteSpace(text)));
+
+        Assert.Contains("You are a test assistant.", allText);
+        Assert.DoesNotContain("Public trust context", allText);
+    }
+
+    [Fact]
     public async Task SendUserMessage_delivers_TextOutput_and_TurnCompleted()
     {
         var sessionId = new SessionId("test-channel/test-thread");

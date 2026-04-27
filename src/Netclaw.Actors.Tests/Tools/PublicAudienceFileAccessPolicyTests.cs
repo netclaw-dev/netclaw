@@ -94,6 +94,8 @@ public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
         // Error must mention "Public" audience but should contain only session-scoped
         // roots (the session dir), not global infrastructure paths
         Assert.Contains("Public", error);
+        Assert.DoesNotContain(_sessionDir, error);
+        Assert.DoesNotContain("configured roots", error, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(_paths.SkillsDirectory, error);
         Assert.DoesNotContain(_paths.IdentityDirectory, error);
         Assert.DoesNotContain(_paths.WorkspacesDirectory, error);
