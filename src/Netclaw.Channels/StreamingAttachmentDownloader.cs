@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Netclaw.Channels;
 
 /// <summary>
@@ -42,6 +44,7 @@ public static class StreamingAttachmentDownloader
         }
 
         var tempPath = Path.Combine(targetDirectory, $".download.{Guid.NewGuid():N}.tmp");
+        var buffer = ArrayPool<byte>.Shared.Rent(DefaultBufferSize);
         try
         {
             await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
@@ -49,11 +52,10 @@ public static class StreamingAttachmentDownloader
                 tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 bufferSize: DefaultBufferSize, useAsync: true);
 
-            var buffer = new byte[DefaultBufferSize];
             long totalBytesWritten = 0;
             int bytesRead;
 
-            while ((bytesRead = await responseStream.ReadAsync(buffer, cancellationToken)) > 0)
+            while ((bytesRead = await responseStream.ReadAsync(buffer.AsMemory(0, DefaultBufferSize), cancellationToken)) > 0)
             {
                 totalBytesWritten += bytesRead;
                 if (totalBytesWritten > maxBytes)
@@ -72,6 +74,10 @@ public static class StreamingAttachmentDownloader
             TryDeleteTemp(tempPath);
             throw;
         }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static void TryDeleteTemp(string tempPath)
@@ -81,9 +87,11 @@ public static class StreamingAttachmentDownloader
             if (File.Exists(tempPath))
                 File.Delete(tempPath);
         }
-        catch
+        catch (IOException)
         {
-            // best-effort cleanup; do not mask the original exception
+            // Best-effort cleanup during error recovery — the file may be locked
+            // by antivirus or another process. The original exception propagates
+            // regardless; this orphaned temp file is harmless.
         }
     }
 }

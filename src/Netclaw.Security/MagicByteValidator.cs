@@ -160,10 +160,7 @@ public static class MagicByteValidator
 
     /// <summary>
     /// Validates file content against its declared MIME type and filename.
-    /// Rejects empty content, oversized content, executables, unknown or
-    /// disallowed MIME types, filenames whose extension doesn't match the
-    /// declared MIME type, and content whose magic bytes don't match the
-    /// declared signature family.
+    /// Delegates to <see cref="ValidateFromHeader"/> using the full content as the header.
     /// </summary>
     public static ContentScanResult Validate(
         ReadOnlySpan<byte> content,
@@ -171,87 +168,7 @@ public static class MagicByteValidator
         string filename,
         ContentPolicy? policy = null)
     {
-        if (content.Length == 0)
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.EmptyContent,
-                "File is empty");
-        }
-
-        var effectivePolicy = policy ?? new ContentPolicy();
-
-        if (content.Length > effectivePolicy.MaxFileSizeBytes)
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.FileTooLarge,
-                $"File exceeds maximum size of {effectivePolicy.MaxFileSizeBytes / (1024 * 1024)} MiB");
-        }
-
-        if (HasExecutableSignature(content))
-        {
-            var detectedType = DetectMimeType(content);
-            return ContentScanResult.Rejected(
-                ContentScanError.ExecutableContent,
-                "Executable content detected",
-                detectedType is not null ? new MimeType(detectedType) : null);
-        }
-
-        var extension = Path.GetExtension(filename);
-        if (string.IsNullOrEmpty(extension))
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.UnrecognizedFileType,
-                "File has no extension");
-        }
-
-        // Normalize known MIME type mismatches (e.g., Slack reports .md as text/plain)
-        var effectiveMimeType = NormalizeMimeType(declaredMimeType, extension);
-
-        if (!RulesByMime.TryGetValue(effectiveMimeType, out var rule))
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.UnrecognizedFileType,
-                $"MIME type '{effectiveMimeType}' is not supported by the content scanner");
-        }
-
-        if (!effectivePolicy.AllowedMimeTypes.Contains(effectiveMimeType))
-        {
-            return ContentScanResult.Rejected(
-                ContentScanError.UnrecognizedFileType,
-                $"MIME type '{effectiveMimeType}' is not allowed by policy");
-        }
-
-        if (!rule.Extensions.Contains(extension))
-        {
-            // Extension disagrees with declared MIME — Discord CDN declares
-            // image/webp for .png files. Use magic bytes as ground truth:
-            // if they confirm a type matching the extension, accept it.
-            // https://github.com/Aaronontheweb/netclaw/issues/754
-            var detected = DetectMimeType(content);
-            if (detected is not null
-                && RulesByMime.TryGetValue(detected, out var detectedRule)
-                && detectedRule.Extensions.Contains(extension)
-                && effectivePolicy.AllowedMimeTypes.Contains(detected))
-            {
-                return ContentScanResult.Allowed(new MimeType(detected));
-            }
-
-            return ContentScanResult.Rejected(
-                ContentScanError.MimeTypeMismatch,
-                $"Extension '{extension}' does not match declared type '{effectiveMimeType}'",
-                detected is not null ? new MimeType(detected) : null);
-        }
-
-        if (!rule.Matches(content))
-        {
-            var detectedMimeType = DetectMimeType(content);
-            return ContentScanResult.Rejected(
-                ContentScanError.MimeTypeMismatch,
-                $"Content is not a valid {effectiveMimeType} file",
-                detectedMimeType is not null ? new MimeType(detectedMimeType) : null);
-        }
-
-        return ContentScanResult.Allowed(new MimeType(effectiveMimeType));
+        return ValidateFromHeader(content, content.Length, declaredMimeType, filename, policy);
     }
 
     /// <summary>

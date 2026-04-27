@@ -44,16 +44,17 @@ public sealed class MagicByteContentScanner(ContentPolicy policy) : IContentScan
 
         try
         {
-            var info = new FileInfo(filePath);
             Span<byte> header = stackalloc byte[HeaderReadSize];
             int bytesRead;
+            long fileSize;
             using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
+                fileSize = fs.Length;
                 bytesRead = fs.Read(header);
             }
 
             var result = MagicByteValidator.ValidateFromHeader(
-                header[..bytesRead], info.Length, declaredMimeType, filename, _policy);
+                header[..bytesRead], fileSize, declaredMimeType, filename, _policy);
             return Task.FromResult(result);
         }
         catch (OperationCanceledException)

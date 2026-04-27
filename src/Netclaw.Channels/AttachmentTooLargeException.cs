@@ -2,10 +2,8 @@ namespace Netclaw.Channels;
 
 /// <summary>
 /// Thrown by <see cref="StreamingAttachmentDownloader"/> when a download
-/// exceeds the configured byte ceiling (either the per-policy limit or
-/// the hardcoded <see cref="Configuration.ChannelAttachmentPolicy.AbsoluteMaxFileBytes"/>
-/// safety valve). Channel actors catch this and convert to a user-visible
-/// rejection reply.
+/// exceeds the operator-configured byte ceiling. Channel actors catch this
+/// and convert to a user-visible rejection reply.
 /// </summary>
 public sealed class AttachmentTooLargeException(long bytesReceived, long maxBytes)
     : InvalidOperationException(
