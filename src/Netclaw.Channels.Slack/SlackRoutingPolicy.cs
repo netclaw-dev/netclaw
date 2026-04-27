@@ -102,7 +102,7 @@ internal sealed record SlackRoutingDecision(
     /// Pre-computed telemetry labels keyed by <see cref="SlackRoutingIgnoreReason"/>
     /// so the <see cref="SlackConversationActor"/> drop path does not allocate a
     /// new string per dropped event. Matches the shape produced by the other
-    /// <c>ChannelTelemetry.RecordSlackEventFiltered</c> callers (bucket-prefixed
+    /// <c>ChannelTelemetry.For(Slack).RecordEventFiltered</c> callers (bucket-prefixed
     /// reason labels) so existing dashboards continue to work.
     /// </summary>
     public static string TelemetryLabelFor(SlackRoutingIgnoreReason reason) =>

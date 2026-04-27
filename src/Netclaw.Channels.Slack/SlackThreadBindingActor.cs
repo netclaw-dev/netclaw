@@ -254,13 +254,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 {
                     case ClassificationOutcome.Block:
                         _log.Warning("Blocked Slack message due to prompt injection risk: {Reason}", classification.Reason);
-                        ChannelTelemetry.RecordSlackEventDropped("prompt_injection_high");
+                        ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped("prompt_injection_high");
                         await SafePostAsync(LiveInjectionBlockedWarning);
                         return;
 
                     case ClassificationOutcome.DetectorUnavailable:
                         _log.Warning("Prompt injection detector unavailable for live message — dropping");
-                        ChannelTelemetry.RecordSlackEventDropped("prompt_injection_detector_unavailable");
+                        ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped("prompt_injection_detector_unavailable");
                         await SafePostAsync(LiveDetectorUnavailableWarning);
                         return;
 
@@ -308,7 +308,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _log.Info("Dropping stale Slack inbound event eventId={EventId} cursor={Cursor}",
                     message.EventId.Value,
                     _cursorTs?.Value ?? "none");
-                ChannelTelemetry.RecordSlackEventDropped("stale_event");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped("stale_event");
                 return;
             }
 
@@ -347,7 +347,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
 
             inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", input.Contents.Count);
-            ChannelTelemetry.RecordSlackMessageEnqueued();
+            ChannelTelemetry.For(ChannelType.Slack).RecordMessageEnqueued();
         }
         catch (OperationCanceledException ex)
         {
@@ -1184,26 +1184,26 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 Text: text), cts.Token);
 
             _log.Info("Posted Slack reply message");
-            ChannelTelemetry.RecordSlackReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyPosted(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return PostResult.Ok;
         }
         catch (OperationCanceledException ex)
         {
             _log.Error(ex, "Timed out posting Slack reply for session {0}", _sessionId.Value);
-            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return new PostResult($"Timed out posting reply: {ex.Message}", DeliveryFailureKind.TransportFailure);
         }
         catch (SlackMessageDeliveryException ex)
         {
             _log.Warning("Slack delivery rejected for session {SessionId} error={ErrorCode} kind={FailureKind}",
                 _sessionId.Value, ex.ErrorCode ?? "unknown", ex.FailureKind);
-            ChannelTelemetry.RecordSlackReplyRejected(ex.ErrorCode);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyRejected(ex.ErrorCode);
             return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed posting Slack reply for session {0}", _sessionId.Value);
-            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return new PostResult(ex.Message, DeliveryFailureKind.Unknown);
         }
     }
@@ -1347,20 +1347,20 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         catch (OperationCanceledException ex)
         {
             _log.Error(ex, "Timed out uploading file {FileName} to Slack thread", file.FileName);
-            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return new PostResult($"Timed out uploading file: {ex.Message}", DeliveryFailureKind.TransportFailure);
         }
         catch (SlackMessageDeliveryException ex)
         {
             _log.Warning("Slack delivery rejected for file upload {FileName} session={SessionId} error={ErrorCode} kind={FailureKind}",
                 file.FileName, _sessionId.Value, ex.ErrorCode ?? "unknown", ex.FailureKind);
-            ChannelTelemetry.RecordSlackReplyRejected(ex.ErrorCode);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyRejected(ex.ErrorCode);
             return new PostResult(ex.Message, ex.FailureKind);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to upload file {FileName} to Slack thread", file.FileName);
-            ChannelTelemetry.RecordSlackReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
+            ChannelTelemetry.For(ChannelType.Slack).RecordReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return new PostResult(ex.Message, DeliveryFailureKind.Unknown);
         }
     }

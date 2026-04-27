@@ -38,14 +38,14 @@ public sealed class SlackConversationActor : ReceiveActor
             if (!aclDecision.IsAllowed)
             {
                 _log.Info("slack_event_dropped event={0} reason={1}", message.EventId, aclDecision.DenyReason ?? "acl_denied");
-                ChannelTelemetry.RecordSlackEventDropped(aclDecision.DenyReason ?? "acl_denied");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped(aclDecision.DenyReason ?? "acl_denied");
                 return;
             }
 
             if (IsBotMessage(message))
             {
                 _log.Info("slack_event_filtered event={0} reason=bot_message", message.EventId);
-                ChannelTelemetry.RecordSlackEventFiltered("bot_message");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("bot_message");
                 return;
             }
 
@@ -72,7 +72,7 @@ public sealed class SlackConversationActor : ReceiveActor
                     "slack_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
                     message.EventId,
                     ignoreReason);
-                ChannelTelemetry.RecordSlackEventFiltered(
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered(
                     SlackRoutingDecision.TelemetryLabelFor(ignoreReason));
                 return;
             }
@@ -80,7 +80,7 @@ public sealed class SlackConversationActor : ReceiveActor
             if (decision.Kind is SlackRoutingDecisionKind.ContinueOnly && !threadExists)
             {
                 _log.Info("slack_event_dropped event={0} reason=thread_not_initialized", message.EventId);
-                ChannelTelemetry.RecordSlackEventDropped("thread_not_initialized");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped("thread_not_initialized");
                 return;
             }
 
@@ -88,7 +88,7 @@ public sealed class SlackConversationActor : ReceiveActor
             {
                 var replyThreadTs = message.ThreadTs ?? SlackThreadTs.FromEventTs(message.EventTs);
                 _log.Info("slack_event_filtered event={0} reason=restart_drain_active", message.EventId);
-                ChannelTelemetry.RecordSlackEventFiltered("restart_drain_active");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("restart_drain_active");
                 _ = PostIngressClosedReplyAsync(message.ChannelId, replyThreadTs, ingressClosedReason);
                 return;
             }
@@ -101,7 +101,7 @@ public sealed class SlackConversationActor : ReceiveActor
             if (string.IsNullOrWhiteSpace(normalized) && message.Files is not { Count: > 0 })
             {
                 _log.Info("slack_event_filtered event={0} reason=empty_text", message.EventId);
-                ChannelTelemetry.RecordSlackEventFiltered("empty_text");
+                ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("empty_text");
                 return;
             }
 

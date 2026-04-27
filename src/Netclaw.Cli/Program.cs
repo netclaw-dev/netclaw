@@ -1381,10 +1381,10 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
                           ? $" ({status.Telemetry.OtlpEndpoint})"
                           : string.Empty));
 
-    if (status.Telemetry.SlackCounters is { } counters)
+    foreach (var channel in status.Telemetry.Channels)
     {
         Console.WriteLine(
-            $"slack counters: recv={counters.EventsReceived} routed={counters.EventsRouted} dropped={counters.EventsDropped} enqueued={counters.MessagesEnqueued} replied={counters.RepliesPosted} rejected={counters.RepliesRejected} reply_failed={counters.RepliesFailed}");
+            $"{channel.ChannelType} counters: recv={channel.EventsReceived} routed={channel.EventsRouted} dropped={channel.EventsDropped} replied={channel.RepliesPosted} rejected={channel.RepliesRejected} reply_failed={channel.RepliesFailed}");
     }
 
     if (status.Model is { } model)
@@ -1564,11 +1564,19 @@ static void WriteStatsResult(DaemonStats.Response stats, int? days)
     Console.WriteLine($"  available: {stats.Skills.TotalAvailable}");
     Console.WriteLine();
 
-    Console.WriteLine("slack:");
-    Console.WriteLine($"  events: recv={stats.SlackActivity.EventsReceived} routed={stats.SlackActivity.EventsRouted} dropped={stats.SlackActivity.EventsDropped}");
-    Console.WriteLine($"  replies: posted={stats.SlackActivity.RepliesPosted} rejected={stats.SlackActivity.RepliesRejected} failed={stats.SlackActivity.RepliesFailed}");
+    foreach (var channel in stats.Channels)
+    {
+        Console.WriteLine($"{channel.ChannelType}:");
+        Console.WriteLine($"  events: recv={channel.EventsReceived} routed={channel.EventsRouted} dropped={channel.EventsDropped}");
+        Console.WriteLine($"  replies: posted={channel.RepliesPosted} rejected={channel.RepliesRejected} failed={channel.RepliesFailed}");
+        if (channel.Extras is { Count: > 0 })
+        {
+            var extras = string.Join(" ", channel.Extras.Select(kv => $"{kv.Key}={kv.Value}"));
+            Console.WriteLine($"  extras: {extras}");
+        }
+        Console.WriteLine();
+    }
 
-    Console.WriteLine();
     Console.WriteLine("webhooks:");
     Console.WriteLine($"  routes: total={stats.Webhooks.TotalRoutes} enabled={stats.Webhooks.EnabledRoutes} disabled={stats.Webhooks.DisabledRoutes} invalid={stats.Webhooks.InvalidRoutes}");
     Console.WriteLine($"  deliveries: accepted={stats.Webhooks.Accepted} filtered={stats.Webhooks.EventFiltered} duplicate={stats.Webhooks.DuplicateDelivery}");

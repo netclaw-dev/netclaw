@@ -24,12 +24,12 @@ public sealed class DiscordGatewayActor : ReceiveActor
 
         Receive<DiscordGatewayMessage>(message =>
         {
-            ChannelTelemetry.RecordDiscordEventReceived("message");
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventReceived("message");
 
             if (!TryMarkEventProcessed(message.EventId))
             {
                 _log.Debug("Dropping duplicate Discord event {0}", message.EventId.Value);
-                ChannelTelemetry.RecordDiscordEventFiltered("duplicate_event");
+                ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("duplicate_event");
                 return;
             }
 
@@ -41,7 +41,7 @@ public sealed class DiscordGatewayActor : ReceiveActor
 
         Receive<DiscordGatewayInteraction>(interaction =>
         {
-            ChannelTelemetry.RecordDiscordEventReceived("interaction");
+            ChannelTelemetry.For(ChannelType.Discord).RecordEventReceived("interaction");
 
             var conversation = GetOrCreateConversationActor(interaction.ChannelId);
 

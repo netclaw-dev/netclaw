@@ -246,13 +246,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             {
                 case ClassificationOutcome.Block:
                     _log.Warning("Blocked Discord message due to prompt injection risk: {Reason}", classification.Reason);
-                    ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_high");
+                    ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped("prompt_injection_high");
                     await SafeReplyAsync(LiveInjectionBlockedWarning);
                     return;
 
                 case ClassificationOutcome.DetectorUnavailable:
                     _log.Warning("Prompt injection detector unavailable for live message — dropping");
-                    ChannelTelemetry.RecordDiscordEventDropped("prompt_injection_detector_unavailable");
+                    ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped("prompt_injection_detector_unavailable");
                     await SafeReplyAsync(LiveDetectorUnavailableWarning);
                     return;
 
@@ -300,7 +300,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(input, writeCts.Token);
-            ChannelTelemetry.RecordDiscordMessageEnqueued();
+            ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
 
             if (TryParseSnowflake(message.EventId.Value) is { } eventSnowflake)
             {
@@ -508,7 +508,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (result is ApprovalLookupResult.NotFound)
         {
             _log.Info("Ignoring Discord approval response for unknown call id {0}", message.CallId);
-            ChannelTelemetry.RecordDiscordInteractionError("unknown_call_id");
+            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "unknown_call_id");
             return;
         }
 
@@ -719,14 +719,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
             ApplyThreadPromotion(result);
             var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            ChannelTelemetry.RecordDiscordReplyPosted(duration);
-            ChannelTelemetry.RecordDiscordApprovalFallbackActivated("button_prompt");
+            ChannelTelemetry.For(ChannelType.Discord).RecordReplyPosted(duration);
+            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("approvalFallbackActivated", "button_prompt");
             return result.MessageId;
         }
         catch (Exception ex)
         {
             _log.Warning(ex, "Failed posting Discord button prompt; falling back to text-only");
-            ChannelTelemetry.RecordDiscordApprovalFallbackActivated("text_prompt");
+            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("approvalFallbackActivated", "text_prompt");
             try
             {
                 var fallbackText = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
@@ -756,13 +756,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
                 ApplyThreadPromotion(result);
                 var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                ChannelTelemetry.RecordDiscordReplyPosted(duration);
+                ChannelTelemetry.For(ChannelType.Discord).RecordReplyPosted(duration);
             }
             catch (Exception ex)
             {
                 var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
                 _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
-                ChannelTelemetry.RecordDiscordReplyFailed(duration);
+                ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
                 return;
             }
