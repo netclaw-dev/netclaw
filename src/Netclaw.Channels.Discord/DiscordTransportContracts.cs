@@ -16,7 +16,8 @@ public sealed record DiscordGatewayMessage(
     bool ContainsBotMention,
     string Text,
     DateTimeOffset ReceivedAt,
-    IReadOnlyList<DiscordFileReference>? Attachments = null);
+    IReadOnlyList<DiscordFileReference>? Attachments = null,
+    bool IsInThread = false);
 
 /// <summary>
 /// Normalized Discord interaction response payload emitted by the transport client.

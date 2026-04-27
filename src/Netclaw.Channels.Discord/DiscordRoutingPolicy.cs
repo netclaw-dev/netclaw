@@ -26,6 +26,12 @@ internal static class DiscordRoutingPolicy
         if (threadExists)
             return DiscordRoutingDecision.ContinueOnly;
 
+        // Thread reply where the actor was lost (e.g. daemon restart):
+        // the message is in a Discord thread, so re-create the session
+        // binding and continue the persisted session.
+        if (message.IsInThread)
+            return DiscordRoutingDecision.StartOrContinue;
+
         if (!mentionOnly)
             return DiscordRoutingDecision.StartOrContinue;
 

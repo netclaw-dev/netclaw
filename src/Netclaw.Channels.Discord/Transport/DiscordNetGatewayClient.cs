@@ -119,7 +119,8 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
             ContainsBotMention: containsMention,
             Text: message.Content,
             ReceivedAt: _timeProvider.GetUtcNow(),
-            Attachments: attachments);
+            Attachments: attachments,
+            IsInThread: isThread);
 
         try
         {

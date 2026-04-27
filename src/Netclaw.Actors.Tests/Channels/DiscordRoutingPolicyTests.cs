@@ -57,7 +57,7 @@ public class DiscordRoutingPolicyTests
     }
 
     [Fact]
-    public void ThreadReply_RequiresMention_WhenNoExistingActor()
+    public void ThreadReply_RehydratesSession_WhenNoExistingActor()
     {
         var message = CreateMessage(text: "follow up", rootMessageId: null, isThread: true);
 
@@ -69,8 +69,8 @@ public class DiscordRoutingPolicyTests
             threadExists: false,
             containsBotMention: false);
 
-        Assert.Equal(DiscordRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(DiscordRoutingIgnoreReason.ChannelMentionRequired, decision.IgnoreReason);
+        Assert.Equal(DiscordRoutingDecisionKind.StartOrContinue, decision.Kind);
+        Assert.Null(decision.IgnoreReason);
     }
 
     [Fact]
@@ -227,6 +227,7 @@ public class DiscordRoutingPolicyTests
             IsDirectMessage: isDirectMessage,
             ContainsBotMention: false,
             Text: text,
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: DateTimeOffset.UtcNow,
+            IsInThread: isThread);
     }
 }
