@@ -46,15 +46,8 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCheckService.ResetCache();
         _testSigningKey.Dispose();
 
-        try
-        {
-            if (Directory.Exists(_tempDir))
-                Directory.Delete(_tempDir, recursive: true);
-        }
-        catch (IOException)
-        {
-            // Best-effort temp cleanup — locked files on Windows are expected.
-        }
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
     }
 
     [Fact]
