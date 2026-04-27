@@ -31,7 +31,7 @@ internal sealed class ScopedFileAccessPolicy
     {
         var profile = _profileResolver.ResolveProfile(context);
         var access = GetAccessProfile(profile, accessKind);
-        return ResolveAndMergeRoots(access, context, accessKind);
+        return ResolveAndMergeRoots(access, context, ResolveAudience(context), accessKind);
     }
 
     private bool TryResolvePath(
@@ -61,17 +61,20 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
+        var audience = ResolveAudience(context);
+        var label = GetAudienceLabel(audience);
+
         if (access.Mode == ToolFilesystemMode.None)
         {
-            error = $"Error: {GetAudienceLabel(context)} trust context does not allow {accessKind.ToString().ToLowerInvariant()} access to local files.";
+            error = $"Error: {label} trust context does not allow {accessKind.ToString().ToLowerInvariant()} access to local files.";
             return false;
         }
 
-        var roots = ResolveAndMergeRoots(access, context, accessKind);
+        var roots = ResolveAndMergeRoots(access, context, audience, accessKind);
 
         if (roots.Count == 0)
         {
-            error = $"Error: {GetAudienceLabel(context)} trust context does not have any configured local file roots for {accessKind.ToString().ToLowerInvariant()} access.";
+            error = $"Error: {label} trust context does not have any configured local file roots for {accessKind.ToString().ToLowerInvariant()} access.";
             return false;
         }
 
@@ -82,7 +85,7 @@ internal sealed class ScopedFileAccessPolicy
 
             if (ContainsSymlinkSegment(root, fullPath))
             {
-                error = $"Error: {GetAudienceLabel(context)} trust context may not access files through symlinked paths inside the current session directory or configured roots.";
+                error = $"Error: {label} trust context may not access files through symlinked paths inside the current session directory or configured roots.";
                 return false;
             }
 
@@ -90,7 +93,7 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
-        error = $"Error: {GetAudienceLabel(context)} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
+        error = $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
         return false;
     }
 
@@ -113,15 +116,12 @@ internal sealed class ScopedFileAccessPolicy
     private IReadOnlyList<string> ResolveAndMergeRoots(
         ToolFilesystemAccessProfile access,
         ToolExecutionContext context,
+        TrustAudience audience,
         AccessKind accessKind)
     {
         var roots = _profileResolver.ResolveRoots(access, context)
             .Select(NormalizeDirectoryPath)
             .ToList();
-
-        var audience = SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
-            ? parsed
-            : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context.SessionId);
 
         if (accessKind == AccessKind.Read && audience != TrustAudience.Public)
         {
@@ -132,20 +132,18 @@ internal sealed class ScopedFileAccessPolicy
         return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
-    private static string GetAudienceLabel(ToolExecutionContext context)
-    {
-        var audience = SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
+    private static TrustAudience ResolveAudience(ToolExecutionContext context)
+        => SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
             ? parsed
             : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context.SessionId);
 
-        return audience switch
-        {
-            TrustAudience.Public => "Public",
-            TrustAudience.Team => "Team",
-            TrustAudience.Personal => "Personal",
-            _ => "Public"
-        };
-    }
+    private static string GetAudienceLabel(TrustAudience audience) => audience switch
+    {
+        TrustAudience.Public => "Public",
+        TrustAudience.Team => "Team",
+        TrustAudience.Personal => "Personal",
+        _ => "Public"
+    };
 
     private static string NormalizeDirectoryPath(string directoryPath)
     {

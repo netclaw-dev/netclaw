@@ -54,9 +54,8 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
-        // Defense-in-depth: block skill loading for Public audience or when skills subsystem is disabled
-        var audience = SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
-            ? parsed : TrustAudience.Public;
+        // Defense-in-depth: duplicates ToolAccessPolicy gate
+        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
         if (audience == TrustAudience.Public || !_skillSyncConfig.Enabled)
             return "Error: This tool is not available.";
 

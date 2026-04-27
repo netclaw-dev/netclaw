@@ -741,13 +741,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolInteractionRequest>(msg =>
         {
-            var audience = _currentTurnSource?.Audience
-                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
-
             _pendingToolInteractions[msg.CallId] = new PendingToolInteraction(
                 msg.ToolName,
                 msg.Patterns,
-                audience,
+                CurrentTurnAudience(),
                 msg.RequesterSenderId,
                 msg.RequesterPrincipal);
 
@@ -968,19 +965,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.Usage);
         }
 
-        // Route proposals through the standard gate → curation pipeline.
         // Skip entirely when memory is disabled or the session is Public — no memories should form.
-        var distillationAudience = _currentTurnSource?.Audience
-            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
         if (msg.Proposals.Count > 0 && _curationActor is not null
-            && distillationAudience != TrustAudience.Public && _memoryConfig.Enabled)
+            && CurrentTurnAudience() != TrustAudience.Public && _memoryConfig.Enabled)
         {
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
-                audience: distillationAudience);
+                audience: CurrentTurnAudience());
 
             var accepted = gateResult.MemoryOperations;
 
@@ -2273,8 +2267,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void SetSystemPrompt()
     {
-        var audience = _currentTurnSource?.Audience
-            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
+        var audience = CurrentTurnAudience();
         var content = _promptProvider.GetSystemPrompt(audience, _state.WorkingContext.ProjectDirectory);
         if (string.IsNullOrWhiteSpace(content))
         {
@@ -2361,8 +2354,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // the end of the list. See SessionMessageAssembler for the full
         // assembly contract. Mark startup injection complete after the
         // first call to preserve the existing OnceAtStart semantics.
-        var contextAudience = _currentTurnSource?.Audience
-            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
         var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
             State: _state,
             ContextLayers: _contextLayers,
@@ -2374,7 +2365,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionsBasePath: _sessionsBasePath,
             FileReadGranted: HasFileReadGranted(),
             ActiveRecall: _activeRecall,
-            Audience: contextAudience));
+            Audience: CurrentTurnAudience()));
         _startupContextInjected = true;
 
         var self = Self;
@@ -2402,6 +2393,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId.Value, _activeLlmCts!.Token);
     }
 
+
+    private TrustAudience CurrentTurnAudience()
+        => _currentTurnSource?.Audience
+           ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
 
     private string CurrentMemoryAudience()
         => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();

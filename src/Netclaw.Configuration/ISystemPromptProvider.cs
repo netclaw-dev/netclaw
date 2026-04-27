@@ -148,6 +148,9 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
     private const string EmbeddedAgentsResource = "Netclaw.Configuration.Resources.AGENTS.md";
     private const string EmbeddedAgentsPublicResource = "Netclaw.Configuration.Resources.AGENTS.public.md";
 
+    private static readonly Lazy<string?> CachedAgents = new(() => ReadEmbeddedResource(EmbeddedAgentsResource));
+    private static readonly Lazy<string?> CachedAgentsPublic = new(() => ReadEmbeddedResource(EmbeddedAgentsPublicResource));
+
     private readonly NetclawPaths _paths;
 
     public FileSystemPromptProvider(NetclawPaths paths)
@@ -162,8 +165,8 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
 
         // AGENTS.md: from embedded resources, audience-dependent
         var agents = audience == TrustAudience.Public
-            ? ReadEmbeddedResource(EmbeddedAgentsPublicResource)
-            : SubstitutePlaceholders(ReadEmbeddedResource(EmbeddedAgentsResource));
+            ? CachedAgentsPublic.Value
+            : SubstitutePlaceholders(CachedAgents.Value);
 
         // TOOLING.md and project instructions: suppressed for Public
         string? tooling = null;
