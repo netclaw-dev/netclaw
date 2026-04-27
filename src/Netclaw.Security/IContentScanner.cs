@@ -11,4 +11,20 @@ public interface IContentScanner
         string filename,
         string declaredMimeType,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Scans a file already on disk. Default implementation reads the entire
+    /// file into memory and delegates to the byte-based overload.
+    /// Implementations may override for more efficient handling (e.g.,
+    /// reading only the file header for magic-byte validation).
+    /// </summary>
+    Task<ContentScanResult> ScanFileAsync(
+        string filePath,
+        string filename,
+        string declaredMimeType,
+        CancellationToken cancellationToken = default)
+    {
+        var bytes = File.ReadAllBytes(filePath);
+        return ScanAsync(bytes, filename, declaredMimeType, cancellationToken);
+    }
 }

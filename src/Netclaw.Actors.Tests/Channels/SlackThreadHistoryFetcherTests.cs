@@ -26,6 +26,7 @@ public sealed class SlackThreadHistoryFetcherTests
         _options,
         new HttpClient(new FakeHttpHandler()),
         new NullContentScanner(),
+        new NetclawPaths(Path.GetTempPath()),
         NullLogger<SlackThreadHistoryFetcher>.Instance);
 
     [Fact]

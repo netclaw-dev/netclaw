@@ -6,6 +6,7 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using SlackNet;
 using SlackNet.WebApi;
+using IOFile = System.IO.File;
 
 namespace Netclaw.Channels.Slack;
 
@@ -17,7 +18,6 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 {
     private const int PageSize = 200;
     private static readonly TimeSpan FileDownloadTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan ContentScanTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Thin abstraction over <c>conversations.replies</c> to keep the fetcher testable
@@ -30,6 +30,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     private readonly SlackChannelOptions _options;
     private readonly HttpClient _httpClient;
     private readonly IContentScanner _contentScanner;
+    private readonly NetclawPaths _paths;
     private readonly ILogger<SlackThreadHistoryFetcher> _logger;
 
     public SlackThreadHistoryFetcher(
@@ -37,12 +38,14 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         SlackChannelOptions options,
         HttpClient httpClient,
         IContentScanner contentScanner,
+        NetclawPaths paths,
         ILogger<SlackThreadHistoryFetcher> logger)
     {
         _repliesFetcher = repliesFetcher;
         _options = options;
         _httpClient = httpClient;
         _contentScanner = contentScanner;
+        _paths = paths;
         _logger = logger;
     }
 
@@ -54,11 +57,12 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         SlackChannelOptions options,
         HttpClient httpClient,
         IContentScanner contentScanner,
+        NetclawPaths paths,
         ILogger<SlackThreadHistoryFetcher> logger)
         : this(
             (channelId, threadTs, limit, cursor, ct) =>
                 conversationsApi.Replies(channelId.Value, threadTs.Value, limit: limit, cursor: cursor, cancellationToken: ct),
-            options, httpClient, contentScanner, logger)
+            options, httpClient, contentScanner, paths, logger)
     {
     }
 
@@ -79,7 +83,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         try
         {
-            return await FetchRepliesAsync(channelId, threadTs, cancellationToken);
+            return await FetchRepliesAsync(sessionId, channelId, threadTs, cancellationToken);
         }
         catch (SlackException ex)
         {
@@ -94,12 +98,14 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     }
 
     private async Task<IReadOnlyList<ChannelInput>> FetchRepliesAsync(
+        SessionId sessionId,
         SlackChannelId channelId,
         SlackThreadTs threadTs,
         CancellationToken cancellationToken)
     {
         var results = new List<ChannelInput>();
         string? cursor = null;
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
 
         do
         {
@@ -119,7 +125,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
                 if (string.IsNullOrWhiteSpace(message.User))
                     continue;
 
-                var input = await ConvertMessageAsync(message, channelId, cancellationToken);
+                var input = await ConvertMessageAsync(message, channelId, inboxDir, cancellationToken);
                 if (input is not null)
                     results.Add(input);
             }
@@ -134,6 +140,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     private async Task<ChannelInput?> ConvertMessageAsync(
         SlackNet.Events.MessageEvent message,
         SlackChannelId channelId,
+        string inboxDir,
         CancellationToken cancellationToken)
     {
         var contents = new List<AIContent>();
@@ -147,7 +154,8 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
                 .Where(f => f.Mimetype is not null
                     && !string.IsNullOrWhiteSpace(f.UrlPrivateDownload ?? f.UrlPrivate));
 
-            var downloadTasks = downloadableFiles.Select(file => DownloadAndScanFileAsync(file, cancellationToken));
+            var downloadTasks = downloadableFiles.Select(
+                file => DownloadAndScanFileAsync(file, inboxDir, cancellationToken));
             var results = await Task.WhenAll(downloadTasks);
 
             foreach (var result in results)
@@ -172,28 +180,45 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         };
     }
 
-    private async Task<DataContent?> DownloadAndScanFileAsync(SlackNet.File file, CancellationToken cancellationToken)
+    private async Task<DataContent?> DownloadAndScanFileAsync(
+        SlackNet.File file, string inboxDir, CancellationToken cancellationToken)
     {
         var downloadUrl = file.UrlPrivateDownload ?? file.UrlPrivate!;
+        var filename = file.Name ?? "attachment";
         try
         {
-            var bytes = await DownloadFileAsync(downloadUrl, cancellationToken);
-            if (bytes.Length == 0)
-                return null;
+            using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            downloadCts.CancelAfter(FileDownloadTimeout);
 
-            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            scanCts.CancelAfter(ContentScanTimeout);
-            var scanResult = await _contentScanner.ScanAsync(
-                bytes, file.Name ?? "attachment", file.Mimetype!, scanCts.Token);
+            var downloadResult = await SlackFileDownloader.DownloadToFileAsync(
+                _httpClient, downloadUrl, _options.BotToken,
+                inboxDir, ChannelAttachmentPolicy.DefaultMaxFileBytes, downloadCts.Token);
+
+            if (downloadResult.BytesWritten == 0)
+            {
+                TryDeleteTemp(downloadResult.FilePath);
+                return null;
+            }
+
+            var scanResult = await _contentScanner.ScanFileAsync(
+                downloadResult.FilePath, filename, file.Mimetype!, cancellationToken);
 
             if (!scanResult.IsAllowed && scanResult.Error != ContentScanError.ScanFailure)
             {
                 _logger.LogWarning("Content scan rejected backfill file {Name}: {Message}",
                     file.Name, scanResult.Message ?? scanResult.Error?.ToString());
+                TryDeleteTemp(downloadResult.FilePath);
                 return null;
             }
 
-            return new DataContent(bytes.ToArray(), file.Mimetype!);
+            var inboxPath = InboxWriter.SanitizeReserveAndMove(inboxDir, filename, downloadResult.FilePath);
+            var bytes = await IOFile.ReadAllBytesAsync(inboxPath, cancellationToken);
+            return new DataContent(bytes, file.Mimetype!);
+        }
+        catch (AttachmentTooLargeException)
+        {
+            _logger.LogWarning("Backfill file {Name} exceeded size limit, skipping", file.Name);
+            return null;
         }
         catch (OperationCanceledException)
         {
@@ -207,10 +232,16 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         }
     }
 
-    private async Task<ReadOnlyMemory<byte>> DownloadFileAsync(string url, CancellationToken cancellationToken)
+    private static void TryDeleteTemp(string tempPath)
     {
-        using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        downloadCts.CancelAfter(FileDownloadTimeout);
-        return await SlackFileDownloader.DownloadAsync(_httpClient, url, _options.BotToken, downloadCts.Token);
+        try
+        {
+            if (IOFile.Exists(tempPath))
+                IOFile.Delete(tempPath);
+        }
+        catch (IOException)
+        {
+            // best-effort cleanup during backfill; file will be orphaned but harmless
+        }
     }
 }

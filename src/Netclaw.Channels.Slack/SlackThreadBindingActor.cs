@@ -359,8 +359,11 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
     }
 
-    private Task<ReadOnlyMemory<byte>> DownloadSlackFileAsync(SlackFileReference file, CancellationToken ct)
-        => SlackFileDownloader.DownloadAsync(_dependencies.HttpClient!, file.UrlPrivateDownload, _dependencies.Options.BotToken, ct);
+    private Task<AttachmentDownloadResult> DownloadSlackFileToInboxAsync(
+        SlackFileReference file, string targetDirectory, long maxBytes, CancellationToken ct)
+        => SlackFileDownloader.DownloadToFileAsync(
+            _dependencies.HttpClient!, file.UrlPrivateDownload, _dependencies.Options.BotToken,
+            targetDirectory, maxBytes, ct);
 
     /// <summary>
     /// Applies the canonical cross-channel attachment ingress pipeline to
@@ -487,12 +490,21 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 $"`{file.Name}` ({FormatBytes(file.Size)}) exceeds the {FormatBytes(policy.MaxFileBytes)} per-file limit.");
         }
 
-        ReadOnlyMemory<byte> bytes;
+        AttachmentDownloadResult downloadResult;
         try
         {
             using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             downloadCts.CancelAfter(OperationTimeout);
-            bytes = await DownloadSlackFileAsync(file, downloadCts.Token);
+            downloadResult = await DownloadSlackFileToInboxAsync(
+                file, inboxDir, policy.MaxFileBytes, downloadCts.Token);
+        }
+        catch (AttachmentTooLargeException ex)
+        {
+            _log.Warning(
+                "slack_attachment_rejected name={Name} mime={Mime} audience={Audience} size={Size} limit={Limit} reason=too-large-during-download",
+                file.Name, file.MimeType, audience, ex.BytesReceived, ex.MaxBytes);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` ({FormatBytes(ex.BytesReceived)}) exceeds the {FormatBytes(ex.MaxBytes)} per-file limit.");
         }
         catch (OperationCanceledException ex)
         {
@@ -511,11 +523,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 $"Couldn't download `{file.Name}` — please try again later.");
         }
 
-        if (bytes.Length == 0)
+        if (downloadResult.BytesWritten == 0)
         {
             _log.Warning(
                 "slack_attachment_rejected name={Name} mime={Mime} reason=empty-download",
                 file.Name, file.MimeType);
+            TryDeleteTemp(downloadResult.FilePath);
             return new AttachmentIngestResult.Rejected(
                 $"`{file.Name}` downloaded as zero bytes.");
         }
@@ -523,16 +536,15 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         ContentScanResult scanResult;
         try
         {
-            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            scanCts.CancelAfter(OperationTimeout);
-            scanResult = await _dependencies.ContentScanner.ScanAsync(
-                bytes, file.Name, file.MimeType, scanCts.Token);
+            scanResult = await _dependencies.ContentScanner.ScanFileAsync(
+                downloadResult.FilePath, file.Name, file.MimeType, cancellationToken);
         }
         catch (Exception ex)
         {
             _log.Warning(ex,
                 "slack_attachment_rejected name={Name} mime={Mime} reason=scan-exception",
                 file.Name, file.MimeType);
+            TryDeleteTemp(downloadResult.FilePath);
             return new AttachmentIngestResult.Rejected(
                 $"Couldn't scan `{file.Name}` — please try again later.");
         }
@@ -542,6 +554,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _log.Warning(
                 "slack_attachment_rejected name={Name} mime={Mime} reason=scan-blocked error={ScanError} message={ScanMessage}",
                 file.Name, file.MimeType, scanResult.Error?.ToString(), scanResult.Message ?? scanResult.Error?.ToString());
+
+            TryDeleteTemp(downloadResult.FilePath);
 
             if (scanResult.Error == ContentScanError.ScanFailure)
             {
@@ -553,21 +567,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 $"Content scanner rejected `{file.Name}`: {scanResult.Message ?? scanResult.Error?.ToString()}.");
         }
 
-        // Write to inbox with filesystem-level collision suffixing and atomic move.
+        // Move temp file to final inbox path with collision suffixing.
         string inboxPath;
         try
         {
-            inboxPath = await InboxWriter.SanitizeReserveAndWriteAsync(
-                inboxDir,
-                file.Name,
-                bytes,
-                cancellationToken);
+            inboxPath = InboxWriter.SanitizeReserveAndMove(
+                inboxDir, file.Name, downloadResult.FilePath);
         }
         catch (InboxWriter.CollisionExhaustedException ex)
         {
             _log.Warning(ex,
                 "slack_attachment_rejected name={Name} reason=collision-exhausted",
                 file.Name);
+            TryDeleteTemp(downloadResult.FilePath);
             return new AttachmentIngestResult.Rejected(
                 $"Too many attachments named `{file.Name}` in this session — please rename and try again.");
         }
@@ -576,6 +588,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _log.Error(ex,
                 "slack_attachment_rejected name={Name} reason=inbox-write-failed",
                 file.Name);
+            TryDeleteTemp(downloadResult.FilePath);
             return new AttachmentIngestResult.Rejected(
                 $"Couldn't save `{file.Name}` — please try again later.");
         }
@@ -584,17 +597,33 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var (inlined, note) = ResolveInlineDecision(category, inlineImages);
 
         var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
-        var line = BuildAttachmentLine(file.Name, file.MimeType, bytes.Length, relativePath, inlined, note);
+        var line = BuildAttachmentLine(file.Name, file.MimeType, downloadResult.BytesWritten, relativePath, inlined, note);
 
         DataContent? inlineContent = null;
         if (inlined)
-            inlineContent = new DataContent(bytes, file.MimeType);
+        {
+            var inlineBytes = await File.ReadAllBytesAsync(inboxPath, cancellationToken);
+            inlineContent = new DataContent(inlineBytes, file.MimeType);
+        }
 
         _log.Info(
             "slack_attachment_accepted name={Name} mime={Mime} size={Size} audience={Audience} category={Category} inlined={Inlined}",
-            file.Name, file.MimeType, bytes.Length, audience, category, inlined);
+            file.Name, file.MimeType, downloadResult.BytesWritten, audience, category, inlined);
 
         return new AttachmentIngestResult.Accepted(line, inlineContent);
+    }
+
+    private void TryDeleteTemp(string tempPath)
+    {
+        try
+        {
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+        }
+        catch (Exception ex)
+        {
+            _log.Debug(ex, "Failed to clean up temp download file {Path}", tempPath);
+        }
     }
 
     private static (bool Inlined, string? Note) ResolveInlineDecision(

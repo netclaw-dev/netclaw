@@ -135,4 +135,21 @@ public static class InboxWriter
         await WriteAtomicAsync(targetPath, bytes, ct).ConfigureAwait(false);
         return targetPath;
     }
+
+    /// <summary>
+    /// Moves an existing temp file into the inbox with filename sanitization
+    /// and collision resolution. Used by the streaming download path where the
+    /// file is already fully written to a temp path in the same directory.
+    /// The move is an atomic rename (same filesystem guaranteed by caller).
+    /// </summary>
+    public static string SanitizeReserveAndMove(
+        string inboxDir,
+        string rawFilename,
+        string sourceTempPath)
+    {
+        var safeName = FilenameSanitizer.Sanitize(rawFilename);
+        var targetPath = ReserveUniquePath(inboxDir, safeName);
+        File.Move(sourceTempPath, targetPath);
+        return targetPath;
+    }
 }

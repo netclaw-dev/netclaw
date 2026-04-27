@@ -104,6 +104,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -187,6 +188,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -322,6 +324,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -387,6 +390,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var deps = new SlackGatewayDependencies(
@@ -493,6 +497,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
             NullLogger<SlackThreadHistoryFetcher>.Instance);
 
         var profiles = ToolAudienceProfileDefaults.CreateProfiles();

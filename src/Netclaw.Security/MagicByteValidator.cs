@@ -64,6 +64,101 @@ public static class MagicByteValidator
         BuildMimeNormalizationRules().ToFrozenDictionary(new ExtensionMimePairComparer());
 
     /// <summary>
+    /// Validates a file using only its header bytes and total size. Used by
+    /// the streaming download path where the full file is on disk and only
+    /// the first N bytes are read into memory for signature checking.
+    /// </summary>
+    /// <param name="header">First N bytes of the file (64 bytes is sufficient for all known signatures).</param>
+    /// <param name="totalFileSize">Total file size from <see cref="System.IO.FileInfo.Length"/>.</param>
+    /// <param name="declaredMimeType">MIME type declared by the channel transport.</param>
+    /// <param name="filename">Original filename including extension.</param>
+    /// <param name="policy">Content policy; null uses default.</param>
+    public static ContentScanResult ValidateFromHeader(
+        ReadOnlySpan<byte> header,
+        long totalFileSize,
+        string declaredMimeType,
+        string filename,
+        ContentPolicy? policy = null)
+    {
+        if (totalFileSize == 0)
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.EmptyContent,
+                "File is empty");
+        }
+
+        var effectivePolicy = policy ?? new ContentPolicy();
+
+        if (totalFileSize > effectivePolicy.MaxFileSizeBytes)
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.FileTooLarge,
+                $"File exceeds maximum size of {effectivePolicy.MaxFileSizeBytes / (1024 * 1024)} MiB");
+        }
+
+        if (HasExecutableSignature(header))
+        {
+            var detectedType = DetectMimeType(header);
+            return ContentScanResult.Rejected(
+                ContentScanError.ExecutableContent,
+                "Executable content detected",
+                detectedType is not null ? new MimeType(detectedType) : null);
+        }
+
+        var extension = Path.GetExtension(filename);
+        if (string.IsNullOrEmpty(extension))
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.UnrecognizedFileType,
+                "File has no extension");
+        }
+
+        var effectiveMimeType = NormalizeMimeType(declaredMimeType, extension);
+
+        if (!RulesByMime.TryGetValue(effectiveMimeType, out var rule))
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.UnrecognizedFileType,
+                $"MIME type '{effectiveMimeType}' is not supported by the content scanner");
+        }
+
+        if (!effectivePolicy.AllowedMimeTypes.Contains(effectiveMimeType))
+        {
+            return ContentScanResult.Rejected(
+                ContentScanError.UnrecognizedFileType,
+                $"MIME type '{effectiveMimeType}' is not allowed by policy");
+        }
+
+        if (!rule.Extensions.Contains(extension))
+        {
+            var detected = DetectMimeType(header);
+            if (detected is not null
+                && RulesByMime.TryGetValue(detected, out var detectedRule)
+                && detectedRule.Extensions.Contains(extension)
+                && effectivePolicy.AllowedMimeTypes.Contains(detected))
+            {
+                return ContentScanResult.Allowed(new MimeType(detected));
+            }
+
+            return ContentScanResult.Rejected(
+                ContentScanError.MimeTypeMismatch,
+                $"Extension '{extension}' does not match declared type '{effectiveMimeType}'",
+                detected is not null ? new MimeType(detected) : null);
+        }
+
+        if (!rule.Matches(header))
+        {
+            var detectedMimeType = DetectMimeType(header);
+            return ContentScanResult.Rejected(
+                ContentScanError.MimeTypeMismatch,
+                $"Content is not a valid {effectiveMimeType} file",
+                detectedMimeType is not null ? new MimeType(detectedMimeType) : null);
+        }
+
+        return ContentScanResult.Allowed(new MimeType(effectiveMimeType));
+    }
+
+    /// <summary>
     /// Validates file content against its declared MIME type and filename.
     /// Rejects empty content, oversized content, executables, unknown or
     /// disallowed MIME types, filenames whose extension doesn't match the
