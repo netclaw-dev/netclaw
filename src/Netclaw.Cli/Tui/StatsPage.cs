@@ -1,3 +1,4 @@
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using R3;
 using Termina.Extensions;
@@ -194,12 +195,18 @@ public sealed class StatsPage : ReactivePage<StatsViewModel>
         return content;
     }
 
-    private static Color GetChannelColor(string channelType) => channelType switch
+    private static Color GetChannelColor(string channelType)
     {
-        "slack" => Color.Cyan,
-        "discord" => Color.Magenta,
-        _ => Color.White
-    };
+        if (!ChannelTypeExtensions.TryFromWireValue(channelType, out var ct))
+            return Color.White;
+
+        return ct switch
+        {
+            ChannelType.Slack => Color.Cyan,
+            ChannelType.Discord => Color.Magenta,
+            _ => Color.White
+        };
+    }
 
     private static ILayoutNode BuildWebhooksPanel(DaemonStats.Response stats)
     {

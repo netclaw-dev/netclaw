@@ -139,18 +139,7 @@ internal sealed class DaemonStatsService(
 
         return ChannelTelemetry.GetAllSnapshots()
             .Where(s => enabledChannelTypes.Contains(s.ChannelType))
-            .Select(s => new DaemonStats.ChannelActivity
-            {
-                ChannelType = s.ChannelType.ToWireValue(),
-                DisplayName = s.DisplayName,
-                EventsReceived = s.EventsReceived,
-                EventsRouted = s.EventsRouted,
-                EventsDropped = s.EventsDropped,
-                RepliesPosted = s.RepliesPosted,
-                RepliesRejected = s.RepliesRejected,
-                RepliesFailed = s.RepliesFailed,
-                Extras = s.Extras.Count > 0 ? new Dictionary<string, long>(s.Extras) : null
-            })
+            .Select(s => s.ToWireActivity())
             .ToList();
     }
 

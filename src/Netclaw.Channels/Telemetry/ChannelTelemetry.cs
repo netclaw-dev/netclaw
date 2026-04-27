@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Threading;
 using Netclaw.Actors.Channels;
+using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Telemetry;
 
@@ -13,8 +14,6 @@ namespace Netclaw.Channels.Telemetry;
 public sealed class ChannelMetrics
 {
     private static readonly Meter Meter = new(ChannelTelemetry.MeterName);
-
-    private readonly string _channelWireValue;
 
     private readonly Counter<long> _eventsReceived;
     private readonly Counter<long> _eventsDropped;
@@ -40,10 +39,10 @@ public sealed class ChannelMetrics
     internal ChannelMetrics(ChannelType channelType)
     {
         ChannelType = channelType;
-        _channelWireValue = channelType.ToWireValue();
         DisplayName = channelType.ToString();
 
-        var prefix = $"netclaw.channel.{_channelWireValue}";
+        var wireValue = channelType.ToWireValue();
+        var prefix = $"netclaw.channel.{wireValue}";
         _eventsReceived = Meter.CreateCounter<long>($"{prefix}.events.received");
         _eventsDropped = Meter.CreateCounter<long>($"{prefix}.events.dropped");
         _eventsFiltered = Meter.CreateCounter<long>($"{prefix}.events.filtered");
@@ -111,11 +110,16 @@ public sealed class ChannelMetrics
 
     /// <summary>
     /// Record a channel-specific counter that doesn't exist on the standard base.
+    /// When <paramref name="tag"/> is provided, the key becomes "metricName:tag".
     /// </summary>
     public void RecordExtra(string metricName, string? tag = null)
     {
-        _extras.AddOrUpdate(metricName, 1, (_, existing) => existing + 1);
+        var key = tag is null ? metricName : $"{metricName}:{tag}";
+        _extras.AddOrUpdate(key, 1, (_, existing) => existing + 1);
     }
+
+    private static readonly IReadOnlyDictionary<string, long> EmptyExtras =
+        new Dictionary<string, long>();
 
     public ChannelMetricsSnapshot GetSnapshot()
         => new(
@@ -130,7 +134,7 @@ public sealed class ChannelMetrics
             RepliesRejected: Interlocked.Read(ref _repliesRejectedTotal),
             RepliesFailed: Interlocked.Read(ref _repliesFailedTotal),
             Extras: _extras.IsEmpty
-                ? new Dictionary<string, long>()
+                ? EmptyExtras
                 : new Dictionary<string, long>(_extras));
 
     internal void Reset()
@@ -158,7 +162,21 @@ public sealed record ChannelMetricsSnapshot(
     long RepliesPosted,
     long RepliesRejected,
     long RepliesFailed,
-    IReadOnlyDictionary<string, long> Extras);
+    IReadOnlyDictionary<string, long> Extras)
+{
+    public DaemonStats.ChannelActivity ToWireActivity() => new()
+    {
+        ChannelType = ChannelType.ToWireValue(),
+        DisplayName = DisplayName,
+        EventsReceived = EventsReceived,
+        EventsRouted = EventsRouted,
+        EventsDropped = EventsDropped,
+        RepliesPosted = RepliesPosted,
+        RepliesRejected = RepliesRejected,
+        RepliesFailed = RepliesFailed,
+        Extras = Extras.Count > 0 ? new Dictionary<string, long>(Extras) : null
+    };
+}
 
 /// <summary>
 /// Static registry of per-channel metrics instances. Call <see cref="For"/>
