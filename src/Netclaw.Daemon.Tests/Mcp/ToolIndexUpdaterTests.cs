@@ -34,11 +34,12 @@ public sealed class ToolIndexUpdaterTests
                 subAgentRegistry,
                 loader,
                 subAgentSpawner: null!,
+                new SubAgentConfig(),
                 NullLogger<ToolIndexUpdater>.Instance);
 
             await updater.StartAsync(TestContext.Current.CancellationToken);
 
-            var discovery = subAgentLayer.GetContextLayer();
+            var discovery = subAgentLayer.GetContextLayer(TrustAudience.Personal);
             Assert.False(string.IsNullOrWhiteSpace(discovery));
             Assert.Contains("available-subagents", discovery, StringComparison.OrdinalIgnoreCase);
             Assert.Contains(paths.AgentsDirectory, discovery, StringComparison.Ordinal);

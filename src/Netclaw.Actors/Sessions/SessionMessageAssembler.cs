@@ -20,7 +20,8 @@ public sealed record ContextAssemblyInput(
     SessionId SessionId,
     string SessionsBasePath,
     bool FileReadGranted,
-    AutomaticRecallResult? ActiveRecall);
+    AutomaticRecallResult? ActiveRecall,
+    TrustAudience Audience = TrustAudience.Personal);
 
 /// <summary>
 /// Pure-function assembly of the <see cref="AiChatMessage"/> list sent to
@@ -129,15 +130,23 @@ public static class SessionMessageAssembler
             if (input.StartupContextInjected)
                 continue;
 
-            var content = layer.GetContextLayer();
+            var content = layer.GetContextLayer(input.Audience);
             if (!string.IsNullOrWhiteSpace(content))
                 parts.Add(content.Trim());
         }
 
-        var sessionBlock = $"[session]\nid: {input.SessionId.Value}"
-            + $"\nsession_dir: {sessionDir}"
-            + $"\nmedia_dir: {Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory)}";
-        parts.Add(sessionBlock);
+        // Public audience sees only session id — no filesystem paths.
+        if (input.Audience == TrustAudience.Public)
+        {
+            parts.Add($"[session]\nid: {input.SessionId.Value}");
+        }
+        else
+        {
+            var sessionBlock = $"[session]\nid: {input.SessionId.Value}"
+                + $"\nsession_dir: {sessionDir}"
+                + $"\nmedia_dir: {Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory)}";
+            parts.Add(sessionBlock);
+        }
 
         if (input.FileReadGranted)
             parts.Add(AttachmentContextHint);
@@ -163,12 +172,14 @@ public static class SessionMessageAssembler
             if (layer.Timing == ContextLayerTiming.OnceAtStart)
                 continue;
 
-            var content = layer.GetContextLayer();
+            var content = layer.GetContextLayer(input.Audience);
             if (!string.IsNullOrWhiteSpace(content))
                 parts.Add(content.Trim());
         }
 
-        if (!input.State.WorkingContext.IsEmpty)
+        // Working context is suppressed for Public audience to avoid leaking
+        // internal operational state (project paths, scratch notes, etc.).
+        if (!input.State.WorkingContext.IsEmpty && input.Audience != TrustAudience.Public)
             parts.Add(input.State.WorkingContext.ToContextBlock());
 
         if (!input.State.ActiveBackgroundJobs.IsEmpty)

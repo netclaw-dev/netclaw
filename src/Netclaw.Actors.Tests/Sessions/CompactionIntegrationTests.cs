@@ -815,7 +815,7 @@ public class CompactionIntegrationTests : TestKit
             TotalTokenCount = 120
         };
 
-        var sessionId = new SessionId("test-channel/wc-survives-compaction");
+        var sessionId = new SessionId("console/wc-survives-compaction");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("wc-survives-sub");
 

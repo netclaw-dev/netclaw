@@ -3,13 +3,28 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, or cross-session memory. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.3.0"
+  version: "1.4.0"
 ---
 
 # Netclaw Memory
 
 Read this before using any memory tool. It defines how memory works and
 when to use each tool.
+
+## Audience and Feature Gating
+
+Memory is subject to two independent gates:
+
+- **Audience gate:** Public sessions have no access to memory tools, automatic
+  recall, or memory extraction. Memory is fully inert for Public — no reads,
+  writes, or recall. Historical memories authored by Public sessions are also
+  excluded from recall and search for all audiences.
+- **Deployment gate:** `Memory.Enabled` in `netclaw.json` (default `true`).
+  When `false`, memory is disabled for ALL audiences — recall returns empty,
+  memory tools are hidden from discovery, and the observation sidecar skips
+  extraction.
+
+Both gates must pass for memory to function.
 
 ## How Memory Works
 

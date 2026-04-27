@@ -36,6 +36,7 @@ public sealed class WizardConfigBuilder
     public List<ExternalSkillSource>? ExternalSkillSources { get; set; }
     public DaemonConfigSection? Daemon { get; set; }
     public WebhooksConfigSection? Webhooks { get; set; }
+    public FeatureSelectionsConfigSection? FeatureSelections { get; set; }
 
     /// <summary>
     /// Assemble the typed sections into netclaw.json and write it.
@@ -273,7 +274,37 @@ public sealed class WizardConfigBuilder
             };
         }
 
+        // Feature selections — merge Enabled flags into existing or new sections
+        if (FeatureSelections is not null)
+        {
+            MergeEnabledFlag(config, "Memory", FeatureSelections.MemoryEnabled);
+            MergeEnabledFlag(config, "Search", FeatureSelections.SearchEnabled);
+            MergeEnabledFlag(config, "SkillSync", FeatureSelections.SkillsEnabled);
+            MergeEnabledFlag(config, "Scheduling", FeatureSelections.SchedulingEnabled);
+            MergeEnabledFlag(config, "SubAgents", FeatureSelections.SubAgentsEnabled);
+            MergeEnabledFlag(config, "Webhooks", FeatureSelections.WebhooksEnabled);
+        }
+
         return config;
+    }
+
+    /// <summary>
+    /// Merge an <c>Enabled</c> flag into an existing config section dictionary,
+    /// or create a new section with just the flag if one does not exist.
+    /// </summary>
+    private static void MergeEnabledFlag(Dictionary<string, object> config, string sectionKey, bool enabled)
+    {
+        if (config.TryGetValue(sectionKey, out var existing) && existing is Dictionary<string, object> section)
+        {
+            section["Enabled"] = enabled;
+        }
+        else
+        {
+            config[sectionKey] = new Dictionary<string, object>
+            {
+                ["Enabled"] = enabled
+            };
+        }
     }
 }
 
@@ -388,4 +419,14 @@ public sealed class DaemonConfigSection
 public sealed class WebhooksConfigSection
 {
     public bool Enabled { get; init; }
+}
+
+public sealed class FeatureSelectionsConfigSection
+{
+    public bool MemoryEnabled { get; init; } = true;
+    public bool SearchEnabled { get; init; } = true;
+    public bool SkillsEnabled { get; init; } = true;
+    public bool SchedulingEnabled { get; init; } = true;
+    public bool SubAgentsEnabled { get; init; } = true;
+    public bool WebhooksEnabled { get; init; } = true;
 }

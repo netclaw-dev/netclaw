@@ -6,6 +6,12 @@ namespace Netclaw.Configuration;
 public sealed class SkillSyncConfig
 {
     /// <summary>
+    /// When false, the skill sync subsystem is disabled entirely.
+    /// No system skill synchronization is performed regardless of other settings.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// When true, skip feed-based system skill sync at daemon startup and use
     /// local built-in/on-disk skills only.
     /// </summary>

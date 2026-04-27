@@ -19,10 +19,19 @@ public enum MemoryContextState
 /// <summary>
 /// Dynamic context layer that provides memory subsystem guidance to the LLM.
 /// Updated after MCP startup completes.
+/// Returns empty for Public audience or when memory is disabled.
 /// </summary>
 public sealed class MemoryIndexContextLayer : IContextLayerProvider
 {
+    private readonly MemoryConfig _config;
     private volatile string _status = string.Empty;
+
+    public MemoryIndexContextLayer() : this(new MemoryConfig()) { }
+
+    public MemoryIndexContextLayer(MemoryConfig config)
+    {
+        _config = config;
+    }
 
     public ContextLayerTiming Timing => ContextLayerTiming.OnceAtStart;
 
@@ -67,5 +76,12 @@ public sealed class MemoryIndexContextLayer : IContextLayerProvider
         };
     }
 
-    public string GetContextLayer() => _status;
+    public string GetContextLayer(TrustAudience audience)
+    {
+        if (audience == TrustAudience.Public)
+            return string.Empty;
+        if (!_config.Enabled)
+            return string.Empty;
+        return _status;
+    }
 }

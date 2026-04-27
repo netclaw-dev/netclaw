@@ -59,6 +59,7 @@ public class ReminderManagerActorTests : TestKit
                 Props.Create(() => new ReminderManagerActor(
                     pipeline,
                     defaults,
+                    new SchedulingConfig(),
                     TimeProvider.System,
                     definitionStore,
                     historyStore,

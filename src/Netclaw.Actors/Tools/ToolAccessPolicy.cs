@@ -16,13 +16,15 @@ public sealed class ToolAccessPolicy
     private readonly ShellCommandPolicy? _shellCommandPolicy;
     private readonly ToolPathPolicy? _toolPathPolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
+    private readonly FeatureGates _featureGates;
 
     public ToolAccessPolicy(
         ToolConfig toolConfig,
         EffectivePolicyDefaults defaults,
         ShellCommandPolicy? shellCommandPolicy = null,
         IToolApprovalMatcher? fileApprovalMatcher = null,
-        ToolPathPolicy? toolPathPolicy = null)
+        ToolPathPolicy? toolPathPolicy = null,
+        FeatureGates? featureGates = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
@@ -30,6 +32,7 @@ public sealed class ToolAccessPolicy
         _shellCommandPolicy = shellCommandPolicy;
         _toolPathPolicy = toolPathPolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
+        _featureGates = featureGates ?? FeatureGates.AllEnabled;
     }
 
     public int MaxToolTimeoutSeconds => _toolConfig.MaxToolTimeoutSeconds;
@@ -65,6 +68,10 @@ public sealed class ToolAccessPolicy
 
     private bool IsToolExposed(INetclawTool tool, TrustAudience audience)
     {
+        // Feature-disabled tools are hidden for ALL audiences
+        if (IsFeatureDisabledTool(tool.Name))
+            return false;
+
         if (tool is McpToolAdapter mcp)
             return _profileResolver.IsMcpServerAllowed(new McpServerName(mcp.ServerName), audience)
                 && _profileResolver.IsMcpToolAllowed(new McpServerName(mcp.ServerName), new ToolName(mcp.BareToolName), audience);
@@ -279,8 +286,45 @@ public sealed class ToolAccessPolicy
         => IsShellTool(tool)
            || string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Returns true when the tool belongs to a subsystem whose feature flag is disabled.
+    /// Disabled-subsystem tools are hidden for ALL audiences, not just Public.
+    /// </summary>
+    private bool IsFeatureDisabledTool(string toolName)
+    {
+        return toolName switch
+        {
+            "store_memory" or "find_memories" or "get_memories" or "update_memory"
+                => !_featureGates.MemoryEnabled,
+            "web_search" or "web_fetch"
+                => !_featureGates.SearchEnabled,
+            "skill_load" or "skill_read_resource"
+                => !_featureGates.SkillSyncEnabled,
+            "spawn_agent"
+                => !_featureGates.SubAgentsEnabled,
+            "set_reminder" or "cancel_reminder" or "list_reminders" or "get_reminder_history"
+                => !_featureGates.SchedulingEnabled,
+            _ => false
+        };
+    }
+
     private static string? GetToolName(AITool tool)
         => tool is AIFunction function ? function.Name : null;
+}
+
+/// <summary>
+/// Subsystem feature flags consumed by <see cref="ToolAccessPolicy"/> to hide
+/// tools belonging to disabled subsystems. All flags default to <c>true</c>.
+/// </summary>
+public sealed record FeatureGates(
+    bool MemoryEnabled = true,
+    bool SearchEnabled = true,
+    bool SkillSyncEnabled = true,
+    bool SubAgentsEnabled = true,
+    bool SchedulingEnabled = true)
+{
+    /// <summary>All subsystems enabled — used as the default when no gates are supplied.</summary>
+    public static readonly FeatureGates AllEnabled = new();
 }
 
 public sealed record ToolAccessDecision(bool Allowed, string? DenyReason = null, ToolApprovalContext? ApprovalContext = null)

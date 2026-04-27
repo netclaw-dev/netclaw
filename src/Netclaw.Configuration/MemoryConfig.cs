@@ -7,6 +7,12 @@ namespace Netclaw.Configuration;
 public sealed class MemoryConfig
 {
     /// <summary>
+    /// When false, the entire cross-session memory subsystem is disabled.
+    /// Tools and automatic recall are not wired up regardless of audience profile.
+    /// </summary>
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>
     /// Automatic recall timeout budget in milliseconds.
     /// </summary>
     public int RecallTimeoutMs { get; set; } = 300;

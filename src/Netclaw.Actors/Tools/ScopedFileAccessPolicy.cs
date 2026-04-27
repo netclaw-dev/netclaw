@@ -107,6 +107,8 @@ internal sealed class ScopedFileAccessPolicy
     /// Resolves profile roots and merges global read roots for read access.
     /// Single source of truth for root resolution — used by both
     /// <see cref="GetRootsForContext"/> and <see cref="TryResolvePath"/>.
+    /// Public audience is excluded from global read roots (skills, identity,
+    /// workspaces) — it may only access its session directory.
     /// </summary>
     private IReadOnlyList<string> ResolveAndMergeRoots(
         ToolFilesystemAccessProfile access,
@@ -117,7 +119,11 @@ internal sealed class ScopedFileAccessPolicy
             .Select(NormalizeDirectoryPath)
             .ToList();
 
-        if (accessKind == AccessKind.Read)
+        var audience = SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
+            ? parsed
+            : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context.SessionId);
+
+        if (accessKind == AccessKind.Read && audience != TrustAudience.Public)
         {
             foreach (var globalRoot in _cachedGlobalReadRoots.Value)
                 roots.Add(globalRoot);

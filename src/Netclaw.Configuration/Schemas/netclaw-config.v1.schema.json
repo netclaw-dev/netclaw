@@ -306,6 +306,11 @@
       "type": "object",
       "description": "Cross-session memory configuration.",
       "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, the entire cross-session memory subsystem is disabled."
+        },
         "RecallTimeoutMs": {
           "type": "integer",
           "minimum": 50,
@@ -323,10 +328,41 @@
       },
       "additionalProperties": false
     },
+    "Search": {
+      "type": "object",
+      "description": "Web search backend configuration.",
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, the web search subsystem is disabled."
+        },
+        "Backend": {
+          "type": "string",
+          "enum": ["DuckDuckGo", "Brave", "SearXng"],
+          "default": "DuckDuckGo",
+          "description": "Search backend identifier."
+        },
+        "BraveApiKey": {
+          "type": ["string", "null"],
+          "description": "Brave Search API key. Required when Backend is Brave. Stored in secrets.json."
+        },
+        "SearXngEndpoint": {
+          "type": ["string", "null"],
+          "description": "SearXNG instance base URL. Required when Backend is SearXng."
+        }
+      },
+      "additionalProperties": false
+    },
     "SkillSync": {
       "type": "object",
       "description": "Startup synchronization behavior for system skills.",
       "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, the skill sync subsystem is disabled entirely."
+        },
         "DisableSystemSkillSync": {
           "type": "boolean",
           "default": false,
@@ -380,6 +416,11 @@
       "type": "object",
       "description": "Timeout configuration for subagent execution (seconds).",
       "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, the subagent subsystem is disabled."
+        },
         "DefaultTimeoutSeconds": {
           "type": "integer",
           "minimum": 5,
@@ -468,6 +509,18 @@
           "minimum": 1,
           "maximum": 3600,
           "default": 300
+        }
+      },
+      "additionalProperties": false
+    },
+    "Scheduling": {
+      "type": "object",
+      "description": "Scheduling and reminders subsystem configuration.",
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When false, the scheduling subsystem is disabled. Reminder and scheduling tools are not registered."
         }
       },
       "additionalProperties": false

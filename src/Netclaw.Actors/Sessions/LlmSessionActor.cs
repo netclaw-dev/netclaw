@@ -56,6 +56,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly IMemoryRecallCoordinator _memoryRecallCoordinator;
     private readonly IMemoryCheckpointSink _memoryCheckpointSink;
     private readonly MemoryProposalGate _memoryProposalGate = new();
+    private readonly MemoryConfig _memoryConfig;
     private readonly TimeProvider _timeProvider;
     private readonly string _sessionsBasePath;
     private readonly string _sessionLogsBasePath;
@@ -198,6 +199,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryRecallCoordinator = memory?.RecallCoordinator ?? NullMemoryRecallCoordinator.Instance;
         _memoryCheckpointSink = memory?.CheckpointSink ?? NullMemoryCheckpointSink.Instance;
         _memoryStore = memory?.MemoryStore;
+        _memoryConfig = memory?.MemoryConfig ?? new MemoryConfig();
         _timeProvider = services.TimeProvider;
         _sessionsBasePath = services.Paths.SessionsDirectory;
         _sessionLogsBasePath = services.Paths.SessionLogsDirectory;
@@ -966,19 +968,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.Usage);
         }
 
-        // Route proposals through the standard gate → curation pipeline
-        if (msg.Proposals.Count > 0 && _curationActor is not null)
+        // Route proposals through the standard gate → curation pipeline.
+        // Skip entirely when memory is disabled or the session is Public — no memories should form.
+        var distillationAudience = _currentTurnSource?.Audience
+            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
+        if (msg.Proposals.Count > 0 && _curationActor is not null
+            && distillationAudience != TrustAudience.Public && _memoryConfig.Enabled)
         {
-            // Use session-derived audience when _currentTurnSource is null
-            // (distillation fires after idle, turn context is cleared)
-            var audience = _currentTurnSource?.Audience
-                ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
-                audience: audience);
+                audience: distillationAudience);
 
             var accepted = gateResult.MemoryOperations;
 
@@ -2271,7 +2273,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void SetSystemPrompt()
     {
-        var content = _promptProvider.GetSystemPrompt(_state.WorkingContext.ProjectDirectory);
+        var audience = _currentTurnSource?.Audience
+            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
+        var content = _promptProvider.GetSystemPrompt(audience, _state.WorkingContext.ProjectDirectory);
         if (string.IsNullOrWhiteSpace(content))
         {
             // Retain the last-known prompt from recovery — deleting it strips the agent
@@ -2314,7 +2318,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_recallManager.TurnRecallCache is null)
         {
             var recallSw = Stopwatch.StartNew();
-            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator);
+            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator, _memoryConfig.Enabled);
             recallSw.Stop();
 
             resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
@@ -2357,6 +2361,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // the end of the list. See SessionMessageAssembler for the full
         // assembly contract. Mark startup injection complete after the
         // first call to preserve the existing OnceAtStart semantics.
+        var contextAudience = _currentTurnSource?.Audience
+            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
         var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
             State: _state,
             ContextLayers: _contextLayers,
@@ -2367,7 +2373,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId: _sessionId,
             SessionsBasePath: _sessionsBasePath,
             FileReadGranted: HasFileReadGranted(),
-            ActiveRecall: _activeRecall));
+            ActiveRecall: _activeRecall,
+            Audience: contextAudience));
         _startupContextInjected = true;
 
         var self = Self;

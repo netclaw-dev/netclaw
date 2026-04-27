@@ -31,6 +31,12 @@ public sealed class WizardContext : IDisposable
     public DeploymentPosture? SelectedPosture { get; set; }
 
     /// <summary>
+    /// Feature selections from the Feature Selection step.
+    /// Null when posture is Personal (step is skipped).
+    /// </summary>
+    public FeatureSelections? FeatureSelections { get; set; }
+
+    /// <summary>
     /// Per-channel audience entries keyed by channel source (e.g., "slack", "discord").
     /// Each channel step populates its own bucket in <c>OnLeave</c>.
     /// The Channels step renders all entries grouped by source.
@@ -59,4 +65,17 @@ public sealed class WizardContext : IDisposable
     {
         StatusMessage.Dispose();
     }
+}
+
+/// <summary>
+/// Deployment-wide feature toggle selections from the Feature Selection wizard step.
+/// </summary>
+public sealed class FeatureSelections
+{
+    public bool MemoryEnabled { get; set; }
+    public bool SearchEnabled { get; set; }
+    public bool SkillsEnabled { get; set; }
+    public bool SchedulingEnabled { get; set; }
+    public bool SubAgentsEnabled { get; set; }
+    public bool WebhooksEnabled { get; set; }
 }
