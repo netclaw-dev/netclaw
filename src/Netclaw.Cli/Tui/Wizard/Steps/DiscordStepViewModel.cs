@@ -8,7 +8,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for configuring Discord integration.
 /// 5 sub-steps: enable -> bot token -> allowed channel IDs -> DM enabled -> allowed user IDs.
 /// </summary>
-public sealed class DiscordStepViewModel : IWizardStepViewModel
+public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
     private readonly IDiscordProbe _discordProbe;
     private int _currentSubStep;
@@ -25,16 +25,28 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
     public string DisplayTitle => "Discord";
 
     public bool DiscordEnabled { get; set; }
+
+    bool IChannelAdapterViewModel.AdapterEnabled
+    {
+        get => DiscordEnabled;
+        set => DiscordEnabled = value;
+    }
+
+    int IChannelAdapterViewModel.ConfiguredChannelCount =>
+        ParseChannelIds(ChannelIdsInput).Count;
+
     public string? BotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public string? AllowedUserIdsInput { get; set; }
     internal DiscordChannelResolutionResult? LastChannelResolution { get; set; }
 
+    internal bool SkipEnableSubStep { get; set; }
+
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => DiscordEnabled ? 5 : 1;
+    public int SubStepCount => DiscordEnabled ? (SkipEnableSubStep ? 4 : 5) : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -70,7 +82,8 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
 
     public bool TryGoBack()
     {
-        if (_currentSubStep > 0)
+        var minSubStep = SkipEnableSubStep ? 1 : 0;
+        if (_currentSubStep > minSubStep)
         {
             _currentSubStep--;
             return true;
@@ -82,10 +95,26 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
         if (direction == NavigationDirection.Back)
             _currentSubStep = _highWaterSubStep;
         else
-            _currentSubStep = 0;
+            _currentSubStep = startSubStep;
+    }
+
+    void IChannelAdapterViewModel.ResetConfig() => ResetConfig();
+
+    internal void ResetConfig()
+    {
+        DiscordEnabled = false;
+        BotToken = null;
+        ChannelIdsInput = null;
+        AllowDirectMessages = false;
+        AllowedUserIdsInput = null;
+        LastChannelResolution = null;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
+        _currentSubStep = startSubStep;
+        _highWaterSubStep = startSubStep;
     }
 
     public void OnLeave()

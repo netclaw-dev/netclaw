@@ -84,13 +84,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
         };
 
         // Create step VMs in the canonical order:
-        // provider → security-posture → feature-selection → slack → discord → channels → search → browser-automation → identity → external-skills → exposure-mode → health-check
+        // provider -> security-posture -> feature-selection -> channel-picker -> channels -> search -> browser-automation -> identity -> external-skills -> exposure-mode -> health-check
         ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory);
         var securityPostureStep = new SecurityPostureStepViewModel();
         var featureSelectionStep = new FeatureSelectionStepViewModel();
         var exposureModeStep = new ExposureModeStepViewModel();
-        var slackStep = new SlackStepViewModel(slackProbe);
-        var discordStep = new DiscordStepViewModel(discordProbe);
+        var channelPickerStep = new ChannelPickerStepViewModel(slackProbe, discordProbe);
         var channelsStep = new ChannelsStepViewModel();
         var searchStep = new SearchStepViewModel();
         var browserStep = new BrowserAutomationStepViewModel();
@@ -103,8 +102,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ProviderStep,
             securityPostureStep,
             featureSelectionStep,
-            slackStep,
-            discordStep,
+            channelPickerStep,
             channelsStep,
             searchStep,
             browserStep,
@@ -133,8 +131,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ["security-posture"] = new SecurityPostureStepView(),
             ["feature-selection"] = new FeatureSelectionStepView(),
             ["exposure-mode"] = new ExposureModeStepView(),
-            ["slack"] = new SlackStepView(),
-            ["discord"] = new DiscordStepView(),
+            ["channel-picker"] = new ChannelPickerStepView(),
             ["channels"] = new ChannelsStepView(),
             ["search"] = new SearchStepView(),
             ["browser-automation"] = new BrowserAutomationStepView(),

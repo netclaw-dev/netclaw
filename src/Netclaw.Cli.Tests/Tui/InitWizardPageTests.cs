@@ -114,19 +114,18 @@ public sealed class InitWizardPageTests : IDisposable
     {
         var (terminal, app, vm) = CreateHeadlessApp(out var input);
 
-        // Make Channels step applicable
+        // Make Channels step applicable before the picker's OnLeave
         vm.Context.AnyChatServicesEnabled = true;
 
-        // Skip: provider → security-posture → feature-selection → slack → discord → channels
+        // Skip: provider -> security-posture -> feature-selection -> channel-picker -> channels
         vm.Orchestrator.GoNext(); // provider → security-posture
         vm.Orchestrator.GoNext(); // security-posture → feature-selection
-        vm.Orchestrator.GoNext(); // feature-selection → slack
-        vm.Orchestrator.GoNext(); // slack → discord
-        vm.Orchestrator.GoNext(); // discord → channels (Slack/Discord OnLeave can clear entries)
+        vm.Orchestrator.GoNext(); // feature-selection → channel-picker
+        vm.Orchestrator.GoNext(); // channel-picker → channels (additive flag preserved)
 
         Assert.Equal("channels", vm.Orchestrator.CurrentStep?.StepId);
 
-        // Populate entries AFTER Slack.OnLeave has run (it removes Slack entries when disabled)
+        // Populate entries for the Channels step to render
         vm.Context.ChannelEntries[ChannelType.Slack] =
         [
             new ChannelEntry("#general", "C123", TrustAudience.Team),
@@ -155,10 +154,10 @@ public sealed class InitWizardPageTests : IDisposable
     {
         var (terminal, app, vm) = CreateHeadlessApp(out var input);
 
+        // Make Channels step applicable before the picker's OnLeave
         vm.Context.AnyChatServicesEnabled = true;
 
-        // Skip to channels: provider → security-posture → feature-selection → slack → channels
-        vm.Orchestrator.GoNext();
+        // Skip: provider -> security-posture -> feature-selection -> channel-picker -> channels
         vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();
         vm.Orchestrator.GoNext();
