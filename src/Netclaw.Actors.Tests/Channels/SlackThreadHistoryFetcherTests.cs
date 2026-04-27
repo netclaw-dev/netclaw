@@ -25,12 +25,13 @@ public sealed class SlackThreadHistoryFetcherTests
         HttpMessageHandler? handler = null,
         IContentScanner? scanner = null,
         ToolAudienceProfiles? profiles = null,
-        ModelCapabilities? modelCapabilities = null) => new(
+        ModelCapabilities? modelCapabilities = null,
+        NetclawPaths? paths = null) => new(
             _replies.FetchAsync,
             _options,
             new HttpClient(handler ?? new FakeHttpHandler()),
             scanner ?? new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
+            paths ?? new NetclawPaths(Path.GetTempPath()),
             profiles ?? ToolAudienceProfileDefaults.CreateProfiles(),
             modelCapabilities ?? TestSlackGatewayDeps.DefaultVisionCapableModel,
             NullLogger<SlackThreadHistoryFetcher>.Instance);
@@ -176,6 +177,43 @@ public sealed class SlackThreadHistoryFetcherTests
     }
 
     [Fact]
+    public async Task Historical_inline_image_includes_attachment_line_and_data_content()
+    {
+        _replies.Set("D2", "2150.0", null, new ConversationMessagesResponse
+        {
+            Messages =
+            [
+                new MessageEvent
+                {
+                    Ts = "2150.1",
+                    User = "U2",
+                    Files =
+                    [
+                        new SlackNet.File
+                        {
+                            Id = "F_IMG",
+                            Name = "photo.png",
+                            Mimetype = "image/png",
+                            Size = 3,
+                            UrlPrivateDownload = "https://files.slack.com/fake/photo.png"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        var result = await CreateFetcher().FetchThreadHistoryAsync(
+            new SessionId("D2/2150.0"), TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Contains(item.Contents, c => c is DataContent d && d.MediaType == "image/png");
+        Assert.Contains(item.Contents.OfType<TextContent>(),
+            t => t.Text.Contains("[attachment]", StringComparison.Ordinal)
+              && t.Text.Contains("photo.png", StringComparison.Ordinal)
+              && t.Text.Contains("inlined=\"true\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Historical_attachment_size_limit_uses_resolved_audience_policy()
     {
         var handler = new FakeHttpHandler();
@@ -218,6 +256,46 @@ public sealed class SlackThreadHistoryFetcherTests
         Assert.Contains(item.Contents.OfType<TextContent>(),
             t => t.Text.Contains("attachment rejected", StringComparison.OrdinalIgnoreCase)
               && t.Text.Contains("per-file limit", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Historical_attachment_reuse_skips_repeat_downloads()
+    {
+        var sessionsRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var handler = new FakeHttpHandler();
+
+        _replies.Set("D3", "2300.0", null, new ConversationMessagesResponse
+        {
+            Messages =
+            [
+                new MessageEvent
+                {
+                    Ts = "2300.1",
+                    User = "U2",
+                    Files =
+                    [
+                        new SlackNet.File
+                        {
+                            Id = "F_REUSE",
+                            Name = "reuse.png",
+                            Mimetype = "image/png",
+                            Size = 3,
+                            UrlPrivateDownload = "https://files.slack.com/fake/reuse.png"
+                        }
+                    ]
+                }
+            ]
+        });
+
+        var fetcher = CreateFetcher(handler: handler, paths: new NetclawPaths(sessionsRoot));
+        var sessionId = new SessionId("D3/2300.0");
+
+        var first = await fetcher.FetchThreadHistoryAsync(sessionId, TestContext.Current.CancellationToken);
+        var second = await fetcher.FetchThreadHistoryAsync(sessionId, TestContext.Current.CancellationToken);
+
+        Assert.Single(first);
+        Assert.Single(second);
+        Assert.Equal(1, handler.RequestCount);
     }
 
     [Fact]

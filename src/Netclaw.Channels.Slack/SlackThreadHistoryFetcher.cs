@@ -254,6 +254,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         var filename = file.Name ?? "attachment";
         var mimeType = file.Mimetype ?? "application/octet-stream";
         var category = AttachmentCategories.FromMime(mimeType);
+        var sourceKey = BuildHistoricalAttachmentSourceKey(file, downloadUrl);
 
         if (!policy.Allows(category))
         {
@@ -276,6 +277,16 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" exceeds the {AttachmentIngressFormatting.FormatBytes(policy.MaxFileBytes)} per-file limit")];
         }
+
+        if (HistoricalAttachmentInbox.TryGetExistingFile(inboxDir, filename, sourceKey, out var existingPath, out var existingSize))
+            return await BuildAcceptedAttachmentContentsAsync(
+                existingPath,
+                filename,
+                mimeType,
+                category,
+                inlineImages,
+                existingSize,
+                cancellationToken);
 
         AttachmentDownloadResult downloadResult;
         try
@@ -356,7 +367,11 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         string inboxPath;
         try
         {
-            inboxPath = InboxWriter.SanitizeReserveAndMove(inboxDir, filename, downloadResult.FilePath);
+            inboxPath = HistoricalAttachmentInbox.PromoteOrReuse(
+                inboxDir,
+                filename,
+                sourceKey,
+                downloadResult.FilePath);
         }
         catch (Exception ex)
         {
@@ -366,24 +381,42 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" could not be saved to the session inbox")];
         }
 
+        return await BuildAcceptedAttachmentContentsAsync(
+            inboxPath,
+            filename,
+            mimeType,
+            category,
+            inlineImages,
+            downloadResult.BytesWritten,
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildAcceptedAttachmentContentsAsync(
+        string inboxPath,
+        string filename,
+        string mimeType,
+        AttachmentCategory category,
+        bool inlineImages,
+        long size,
+        CancellationToken cancellationToken)
+    {
         var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
         var (inlined, note) = AttachmentIngressFormatting.ResolveInlineDecision(category, inlineImages);
+        var line = new TextContent(AttachmentIngressFormatting.BuildAttachmentLine(
+            filename,
+            mimeType,
+            size,
+            relativePath,
+            inlined,
+            note));
+
         if (!inlined)
         {
-            return
-            [
-                new TextContent(AttachmentIngressFormatting.BuildAttachmentLine(
-                    filename,
-                    mimeType,
-                    downloadResult.BytesWritten,
-                    relativePath,
-                    false,
-                    note))
-            ];
+            return [line];
         }
 
         var bytes = await IOFile.ReadAllBytesAsync(inboxPath, cancellationToken);
-        return [new DataContent(bytes, mimeType)];
+        return [line, new DataContent(bytes, mimeType)];
     }
 
     private AudienceResult ResolveHistoricalAudience(SlackChannelId channelId, SlackThreadTs threadTs)
@@ -411,4 +444,9 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
     private static TextContent BuildHistoricalAttachmentRejected(string detail)
         => new($"[attachment rejected: {detail}]");
+
+    private static string BuildHistoricalAttachmentSourceKey(SlackNet.File file, string downloadUrl)
+        => !string.IsNullOrWhiteSpace(file.Id)
+            ? $"slack:{file.Id}"
+            : $"slack-url:{downloadUrl}";
 }

@@ -22,6 +22,7 @@ public static class ThreadHistoryContentMerger
             var ts = item.ReceivedAt == default ? string.Empty : $", {item.ReceivedAt:yyyy-MM-dd HH:mm} UTC";
             sb.AppendLine($"<user: {item.SenderId}{ts}>");
 
+            var hasAttachmentAnnouncement = ContainsAttachmentAnnouncement(item.Contents);
             var imageCount = 0;
             foreach (var content in item.Contents)
             {
@@ -33,6 +34,9 @@ public static class ThreadHistoryContentMerger
 
                     case DataContent data:
                         historicalData.Add(data);
+                        if (hasAttachmentAnnouncement)
+                            break;
+
                         if (data.MediaType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true)
                         {
                             imageCount++;
@@ -74,5 +78,20 @@ public static class ThreadHistoryContentMerger
         }
 
         return merged;
+    }
+
+    private static bool ContainsAttachmentAnnouncement(IReadOnlyList<AIContent> contents)
+    {
+        foreach (var text in contents.OfType<TextContent>())
+        {
+            var lines = text.Text.Split('\n');
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("[attachment]", StringComparison.Ordinal))
+                    return true;
+            }
+        }
+
+        return false;
     }
 }

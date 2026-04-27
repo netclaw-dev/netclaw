@@ -126,6 +126,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
 
                 var input = await ConvertMessageAsync(
                     message,
+                    channelId,
                     threadChannelId,
                     audience,
                     attachmentPolicy,
@@ -149,6 +150,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
 
     private async Task<ChannelInput?> ConvertMessageAsync(
         HistoricalMessage message,
+        DiscordChannelId channelId,
         ulong threadChannelId,
         TrustAudience audience,
         ChannelAttachmentPolicy attachmentPolicy,
@@ -178,6 +180,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             else
             {
                 var attachmentTasks = message.Attachments.Select(file => DownloadAndProjectAttachmentAsync(
+                    message.MessageId,
                     file,
                     audience,
                     attachmentPolicy,
@@ -198,7 +201,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         return new ChannelInput
         {
             SenderId = message.SenderId,
-            ChannelId = threadChannelId.ToString(),
+            ChannelId = channelId.Value,
             MessageId = message.MessageId,
             Audience = audience,
             Principal = PrincipalClassification.UntrustedExternal,
@@ -215,6 +218,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
     }
 
     private async Task<IReadOnlyList<AIContent>> DownloadAndProjectAttachmentAsync(
+        string messageId,
         DiscordFileReference file,
         TrustAudience audience,
         ChannelAttachmentPolicy policy,
@@ -224,6 +228,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         CancellationToken cancellationToken)
     {
         var category = AttachmentCategories.FromMime(file.MimeType);
+        var sourceKey = BuildHistoricalAttachmentSourceKey(messageId, file);
 
         if (!policy.Allows(category))
         {
@@ -246,6 +251,16 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" exceeds the {AttachmentIngressFormatting.FormatBytes(policy.MaxFileBytes)} per-file limit")];
         }
+
+        if (HistoricalAttachmentInbox.TryGetExistingFile(inboxDir, file.Name, sourceKey, out var existingPath, out var existingSize))
+            return await BuildAcceptedAttachmentContentsAsync(
+                existingPath,
+                file.Name,
+                file.MimeType,
+                category,
+                inlineImages,
+                existingSize,
+                cancellationToken);
 
         if (!DiscordAttachmentUrlTrust.IsAllowedAttachmentDomain(file.Url))
         {
@@ -335,7 +350,11 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         string inboxPath;
         try
         {
-            inboxPath = InboxWriter.SanitizeReserveAndMove(inboxDir, file.Name, downloadResult.FilePath);
+            inboxPath = HistoricalAttachmentInbox.PromoteOrReuse(
+                inboxDir,
+                file.Name,
+                sourceKey,
+                downloadResult.FilePath);
         }
         catch (Exception ex)
         {
@@ -345,29 +364,50 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" could not be saved to the session inbox")];
         }
 
+        return await BuildAcceptedAttachmentContentsAsync(
+            inboxPath,
+            file.Name,
+            file.MimeType,
+            category,
+            inlineImages,
+            downloadResult.BytesWritten,
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<AIContent>> BuildAcceptedAttachmentContentsAsync(
+        string inboxPath,
+        string filename,
+        string mimeType,
+        AttachmentCategory category,
+        bool inlineImages,
+        long size,
+        CancellationToken cancellationToken)
+    {
         var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
         var (inlined, note) = AttachmentIngressFormatting.ResolveInlineDecision(category, inlineImages);
+        var line = new TextContent(AttachmentIngressFormatting.BuildAttachmentLine(
+            filename,
+            mimeType,
+            size,
+            relativePath,
+            inlined,
+            note));
+
         if (!inlined)
         {
-            return
-            [
-                new TextContent(AttachmentIngressFormatting.BuildAttachmentLine(
-                    file.Name,
-                    file.MimeType,
-                    downloadResult.BytesWritten,
-                    relativePath,
-                    false,
-                    note))
-            ];
+            return [line];
         }
 
         var bytes = await IOFile.ReadAllBytesAsync(inboxPath, cancellationToken);
-        return [new DataContent(bytes, file.MimeType)];
+        return [line, new DataContent(bytes, mimeType)];
     }
 
     private AudienceResult ResolveHistoricalAudience(DiscordChannelId channelId)
     {
+        var isDefaultChannel = !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
+            && string.Equals(channelId.Value, _options.DefaultChannelId, StringComparison.Ordinal);
         var isExplicitChannel = _options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
+        var isDirectMessage = !isDefaultChannel && !isExplicitChannel && _options.AllowDirectMessages;
         var syntheticMessage = new DiscordGatewayMessage(
             EventId: new DiscordEventId($"history-{channelId.Value}"),
             ChannelId: channelId,
@@ -377,7 +417,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             RootMessageId: null,
             SenderId: new DiscordUserId("history"),
             IsBotMessage: false,
-            IsDirectMessage: false,
+            IsDirectMessage: isDirectMessage,
             ContainsBotMention: false,
             Text: string.Empty,
             ReceivedAt: TimeProvider.System.GetUtcNow());
@@ -465,4 +505,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
 
     private static TextContent BuildHistoricalAttachmentRejected(string detail)
         => new($"[attachment rejected: {detail}]");
+
+    private static string BuildHistoricalAttachmentSourceKey(string messageId, DiscordFileReference file)
+        => $"discord:{messageId}:{file.Url}";
 }

@@ -795,6 +795,7 @@ public abstract class SessionBindingContractTests : TestKit
             Contents =
             [
                 .. baseItem.Contents,
+                new TextContent("[attachment] name=\"image.png\" mime=\"image/png\" size=3 path=\"inbox/image_hist_deadbeef.png\" inlined=\"true\""),
                 new DataContent(new byte[] { 1, 2, 3 }, "image/png")
             ]
         };
@@ -817,7 +818,8 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Contains(input.Contents, c => c is DataContent d && d.MediaType == "image/png");
 
             var textContent = string.Join("\n", input.Contents.OfType<TextContent>().Select(t => t.Text));
-            Assert.Contains("image attachments", textContent, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("[attachment]", textContent, StringComparison.Ordinal);
+            Assert.Contains("path=\"inbox/image_hist_deadbeef.png\"", textContent, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
 

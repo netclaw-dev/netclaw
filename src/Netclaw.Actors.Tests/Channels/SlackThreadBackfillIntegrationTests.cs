@@ -169,7 +169,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         Assert.Contains("can you help with this?", mergedText);
         Assert.Equal(1, CountOccurrences(mergedText, "can you help with this?"));
 
-        Assert.Contains("[image attachments:", mergedText);
+        Assert.Contains("[attachment]", mergedText, StringComparison.Ordinal);
+        Assert.Contains("screenshot.png", mergedText, StringComparison.Ordinal);
+        Assert.Contains("path=\"inbox/screenshot", mergedText, StringComparison.Ordinal);
+        Assert.Contains("inlined=\"true\"", mergedText, StringComparison.Ordinal);
         Assert.True(mergedUserTurn.Contents.OfType<DataContent>().Any(),
             "Expected merged user turn to include image DataContent from backfill");
     }
