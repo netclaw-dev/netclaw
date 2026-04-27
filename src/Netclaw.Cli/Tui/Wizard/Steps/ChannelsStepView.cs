@@ -71,22 +71,35 @@ public sealed class ChannelsStepView : IWizardStepView
             .WithChild(new TextNode("  Chat channels:").WithForeground(Color.White))
             .WithSpacing(1);
 
-        var nameColumnWidth = Math.Max(20, entries.Max(e => e.DisplayName.Length) + 2);
+        var nameColumnWidth = Math.Max(20, entries.Max(e => EntryDisplayName(e).Length) + 2);
 
-        for (var i = 0; i < entries.Count; i++)
+        var showHeaders = _vm!.HasMultipleSources;
+        var entryIndex = 0;
+
+        foreach (var (source, groupEntries) in _vm.GroupedEntries)
         {
-            var entry = entries[i];
-            var isFocused = i == _cursorIndex;
-            var prefix = isFocused ? " \u25b6 " : "   ";
-            var name = entry.DisplayName.PadRight(nameColumnWidth);
-            var audience = $"[\u25c0 {entry.Audience.ToWireValue(),-8} \u25b6]";
-            var line = $"{prefix}{name} {audience}";
+            if (showHeaders)
+            {
+                var label = $" \u2500\u2500 {source} \u2500\u2500";
+                layout = layout.WithChild(
+                    new TextNode($"  {label}").WithForeground(Color.BrightBlack));
+            }
 
-            var node = new TextNode(line);
-            node = isFocused
-                ? node.WithForeground(Color.Cyan).Bold()
-                : node.WithForeground(Color.White);
-            layout = layout.WithChild(node);
+            foreach (var entry in groupEntries)
+            {
+                var isFocused = entryIndex == _cursorIndex;
+                var prefix = isFocused ? " \u25b6 " : "   ";
+                var name = EntryDisplayName(entry).PadRight(nameColumnWidth);
+                var audience = $"[\u25c0 {entry.Audience.ToWireValue(),-8} \u25b6]";
+                var line = $"{prefix}{name} {audience}";
+
+                var node = new TextNode(line);
+                node = isFocused
+                    ? node.WithForeground(Color.Cyan).Bold()
+                    : node.WithForeground(Color.White);
+                layout = layout.WithChild(node);
+                entryIndex++;
+            }
         }
 
         layout = layout.WithSpacing(1)
@@ -218,4 +231,11 @@ public sealed class ChannelsStepView : IWizardStepView
         _cursorIndex = 0;
     }
 
+    private static string EntryDisplayName(ChannelEntry entry)
+    {
+        var name = entry.DisplayName;
+        if (name.StartsWith("Discord:", StringComparison.Ordinal))
+            name = name["Discord:".Length..];
+        return name;
+    }
 }

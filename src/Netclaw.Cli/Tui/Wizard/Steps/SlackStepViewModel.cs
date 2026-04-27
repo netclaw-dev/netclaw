@@ -8,7 +8,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for configuring Slack integration.
 /// 6 sub-steps: enable → bot token → app token → channel names → DM enabled → allowed user IDs.
 /// </summary>
-public sealed class SlackStepViewModel : IWizardStepViewModel
+public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterViewModel
 {
     private static readonly TimeSpan SlackProbeHardTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ChannelResolutionHardTimeout = TimeSpan.FromSeconds(35);
@@ -28,6 +28,15 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
     // ── State ──
     public bool SlackEnabled { get; set; }
+
+    bool IChannelAdapterViewModel.AdapterEnabled
+    {
+        get => SlackEnabled;
+        set => SlackEnabled = value;
+    }
+
+    int IChannelAdapterViewModel.ConfiguredChannelCount =>
+        ParseChannelNames(ChannelNamesInput).Count;
     public string? BotToken { get; set; }
     public string? AppToken { get; set; }
     public string? ChannelNamesInput { get; set; }
@@ -35,10 +44,12 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
     public string? AllowedUserIdsInput { get; set; }
     internal SlackChannelResolutionResult? LastChannelResolution { get; set; }
 
+    internal bool SkipEnableSubStep { get; set; }
+
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
-    public int SubStepCount => SlackEnabled ? 6 : 1;
+    public int SubStepCount => SlackEnabled ? (SkipEnableSubStep ? 5 : 6) : 1;
 
     public string GetHelpText() => _currentSubStep switch
     {
@@ -72,7 +83,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
 
     public bool TryGoBack()
     {
-        if (_currentSubStep > 0)
+        var minSubStep = SkipEnableSubStep ? 1 : 0;
+        if (_currentSubStep > minSubStep)
         {
             _currentSubStep--;
             return true;
@@ -83,10 +95,27 @@ public sealed class SlackStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
         if (direction == NavigationDirection.Back)
             _currentSubStep = _highWaterSubStep;
         else
-            _currentSubStep = 0;
+            _currentSubStep = startSubStep;
+    }
+
+    void IChannelAdapterViewModel.ResetConfig() => ResetConfig();
+
+    internal void ResetConfig()
+    {
+        SlackEnabled = false;
+        BotToken = null;
+        AppToken = null;
+        ChannelNamesInput = null;
+        AllowDirectMessages = false;
+        AllowedUserIdsInput = null;
+        LastChannelResolution = null;
+        var startSubStep = SkipEnableSubStep ? 1 : 0;
+        _currentSubStep = startSubStep;
+        _highWaterSubStep = startSubStep;
     }
 
     public void OnLeave()
