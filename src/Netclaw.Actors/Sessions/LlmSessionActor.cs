@@ -965,6 +965,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.Usage);
         }
 
+        // Route proposals through the standard gate → curation pipeline.
         // Skip entirely when memory is disabled or the session is Public — no memories should form.
         if (msg.Proposals.Count > 0 && _curationActor is not null
             && CurrentTurnAudience() != TrustAudience.Public && _memoryConfig.Enabled)
