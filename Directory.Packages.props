@@ -51,7 +51,7 @@
     <PackageVersion Include="Discord.Net" Version="$(DiscordNetVersion)" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
-    <PackageVersion Include="Cronos" Version="0.8.4" />
+    <PackageVersion Include="Cronos" Version="0.12.0" />
     <PackageVersion Include="Termina" Version="0.8.0" />
   </ItemGroup>
   <!-- Serialization -->
