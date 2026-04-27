@@ -93,7 +93,9 @@ internal sealed class ScopedFileAccessPolicy
             return true;
         }
 
-        error = $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
+        error = audience == TrustAudience.Public
+            ? $"Error: {label} trust context may only access files inside the current session directory."
+            : $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
         return false;
     }
 

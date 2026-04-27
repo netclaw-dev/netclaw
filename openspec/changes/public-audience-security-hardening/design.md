@@ -11,6 +11,12 @@ memories that later surface in privileged sessions. The current
 audience parameter, and the init wizard applies smart defaults silently
 without operator input.
 
+The remaining transport-specific gap is timing: Slack/Discord session startup
+can still assemble the initial prompt and startup context before the resolved
+channel audience is threaded through, which means a Public-origin session can
+briefly receive the wrong AGENTS variant or capability index on its first
+turn.
+
 The remaining gap is not just prompt injection. Several capability-discovery
 and load paths still provide side channels: MCP `search_tools` / `load_tool`,
 skill tools, subagent discovery/spawn, and the global implicit file roots that
@@ -76,8 +82,10 @@ Discovery/load side channels
 - Make prompt injection, discovery results, direct invocation, implicit file
   roots, and automatic/background execution all agree on the same audience /
   feature decisions.
-- Clarify that disabling Public memory makes existing Public memories inert for
-  normal recall/search without introducing a purge feature in this change.
+- Clarify that Public sessions cannot write memories or perform recall/search,
+  while historical Public-authored memories remain available to trusted
+  higher-privilege contexts under their normal policy and may still be deleted
+  deliberately from those contexts.
 
 **Non-Goals:**
 
@@ -160,6 +168,13 @@ session ID for Public. Team/Personal retain full paths.
 **Rationale:** Session ID is already visible in the UI. Filesystem paths reveal
 deployment topology.
 
+**Startup timing rule:** The effective audience must be resolved before the
+first call to `GetSystemPrompt()` and before startup tool/context indices are
+assembled for channel-created sessions. Slack and Discord session startup must
+therefore thread the resolved audience into the very first prompt/context
+construction path rather than correcting it only after the session is already
+running.
+
 ### D7: Public loses implicit internal file roots
 
 **Choice:** Public file access remains session-root scoped only. Identity,
@@ -178,9 +193,9 @@ storage-related paths at runtime.
 infrastructure runs.
 
 **Historical data rule:** Existing Public-authored memories are not purged by
-this change. Once Public memory is disabled, normal recall/search and storage
-paths for Public are off, and normal recall/search paths stop surfacing those
-historical Public-authored items. Deliberate purge by a higher-privilege
+this change. Public sessions lose memory writes and recall/search entirely, but
+historical Public-authored items are not globally suppressed from Team/Personal
+contexts by this change. Deliberate review or deletion by a higher-privilege
 operator remains an operator action, not a new runtime feature in this change.
 
 ### D9: Automatic/background execution keeps persisted originating audience and feature scope
@@ -197,7 +212,21 @@ reappears.
 ### D10: Error message sanitization for Public audience only
 
 **Choice:** `ScopedFileAccessPolicy` omits allowed root paths from error
-messages for Public. Team/Personal retain verbose errors.
+messages for Public, including any mention of the session directory as an
+allowed root. Team/Personal retain verbose errors.
+
+### D11: Public AGENTS attachment guidance must match redacted path policy
+
+**Choice:** The embedded Public AGENTS variant describes attachments using
+pathless, session-redacted wording that matches the Public session block and
+attachment metadata. It must not instruct the model to inspect `session_dir`,
+`media_dir`, `inbox/`, or any other filesystem path that is intentionally
+hidden from Public.
+
+**Rationale:** Public prompt guidance and runtime redaction must agree. If the
+prompt mentions attachment filesystem locations that the session block hides,
+the prompt itself becomes an information leak and trains the model to ask for
+nonexistent/path-redacted details.
 
 ## Risks / Trade-offs
 
@@ -216,5 +245,5 @@ messages for Public. Team/Personal retain verbose errors.
 - **TOOLING.md suppressed entirely for Public**: Public loses environment
   context, but that content exposes deployment details.
 - **No purge/migration for legacy Public memory rows**: keeps the hardening
-  change implementation-ready while still making the data inert for normal
-  recall/search.
+  change implementation-ready while preserving trusted-context access to
+  historical Public-authored data.

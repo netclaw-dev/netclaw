@@ -79,14 +79,16 @@ injected into Public-audience sessions.
 ### Requirement: File access error message sanitization
 
 File access denial messages for Public-audience sessions SHALL NOT include
-the list of allowed root paths. Team and Personal audiences SHALL continue
-to receive verbose error messages including allowed roots.
+the list of allowed root paths or mention the session directory as an allowed
+root. Team and Personal audiences SHALL continue to receive verbose error
+messages including allowed roots.
 
 #### Scenario: Public file access denial omits roots
 
 - **WHEN** a Public-audience session attempts to read a file outside allowed roots
-- **THEN** the error message says "Public trust context may only access files inside the current session directory."
+- **THEN** the error message does not reveal any allowed root
 - **AND** no root paths are listed in the error
+- **AND** the session directory is not named or implied in the error
 
 #### Scenario: Team file access denial includes roots
 

@@ -2,19 +2,17 @@
 
 ### Requirement: Memory gated by audience and config
 
-Cross-session memory (recall, extraction, distillation, and tool access)
-SHALL be gated by both the session's `TrustAudience` and the
-`MemoryConfig.Enabled` flag. When either gate denies access, memory
-operations SHALL be fully suppressed: no reads, no writes, no recall.
+Cross-session memory (recall, extraction, distillation, and tool access) SHALL be gated by both the session's `TrustAudience` and the `MemoryConfig.Enabled` flag. When either gate denies access, memory operations SHALL be fully suppressed: no reads, no writes, no recall.
 
 Public-audience sessions SHALL have memory fully disabled regardless of
 config. This eliminates the memory taint vector where hostile Public users
 inject false facts that later surface in privileged sessions.
 
-When Public memory is disabled, existing Public-authored memories SHALL become
-inert for normal recall/search going forward. This change does not require any
-automatic purge, migration, or cleanup feature. Deliberate purge by a higher-
-privilege session may be implemented later.
+This gate MUST apply to Public sessions, not as a global suppression rule on
+all historical Public-authored memory rows. Existing Public-authored memories
+do not need to be hidden from trusted higher-privilege recall/search or
+deletion paths solely because they were authored under `Public`. This change
+does not require any automatic purge, migration, or cleanup feature.
 
 #### Scenario: Public session has no automatic recall
 
@@ -45,14 +43,16 @@ privilege session may be implemented later.
 - **WHEN** the session resolves automatic recall
 - **THEN** automatic recall executes normally with audience-scoped filtering
 
-#### Scenario: Legacy Public memories are inert for normal recall/search
+#### Scenario: Legacy Public memories remain available to trusted contexts
 
 - **GIVEN** memory storage still contains historical items authored under
   audience `Public`
-- **AND** Public memory has been disabled by this change's gating rules
-- **WHEN** a normal recall/search path executes
-- **THEN** those historical Public items are not surfaced in recall/search
-- **AND** no purge operation is required for this behavior
+- **AND** a session has audience `Team` or `Personal`
+- **AND** `Memory.Enabled` is `true` in config
+- **WHEN** a normal trusted recall/search path executes
+- **THEN** those historical Public-authored items remain eligible for that
+  trusted path under the normal policy rules
+- **AND** no automatic purge or global suppression is introduced by this change
 
 ### Requirement: Self-configuration through conversation
 

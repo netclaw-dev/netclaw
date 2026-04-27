@@ -10,6 +10,7 @@
 - [x] 1.8 Update onboarding identity file generation to stop writing AGENTS.md (or write reference stub only)
 - [x] 1.9 Unit tests: stripped Public AGENTS, full Team/Personal AGENTS, no TOOLING/project instructions for Public
 - [x] 1.10 Add or update eval coverage for identity/system-prompt changes and run `./evals/run-evals.sh`
+- [x] 1.11 Update the embedded Public AGENTS attachment wording so it matches the redacted/pathless Public session block and does not mention `session_dir`, `media_dir`, or `inbox/`
 
 ## 2. Deployment-Wide Feature Kill Switches
 
@@ -46,6 +47,7 @@
 - [x] 4.7 Update any other `IContextLayerProvider` implementations found via grep
 - [x] 4.8 Update `LlmSessionActor` to resolve audience and pass it into `ContextAssemblyInput`
 - [x] 4.9 Unit tests: context layers empty when audience/feature gates deny, present when allowed
+- [x] 4.10 Fix Slack/Discord session-start audience threading so the initial `GetSystemPrompt()` call and startup context/tool index use the resolved channel audience on the first turn
 
 ## 5. Discovery and Load Path Hardening
 
@@ -55,15 +57,16 @@
 - [x] 5.4 Gate `spawn_agent` and subagent discovery on Public audience and `SubAgents.Enabled`
 - [x] 5.5 Ensure tool index / skill index / subagent discovery text does not instruct Public to use hidden capabilities
 - [x] 5.6 Unit tests: blocked capabilities absent from discovery results and denied on direct load/spawn paths
+- [x] 5.7 Ensure the initial startup tool index/context for Public sessions also omits hidden capabilities before any later refresh/rebuild occurs
 
-## 6. Memory Full Disable and Inert Legacy Public Data
+## 6. Memory Full Disable and Legacy Public Data Handling
 
 - [x] 6.1 Remove `store_memory`, `find_memories`, `get_memories`, `update_memory` from the Public audience profile
 - [x] 6.2 Add early return for Public in `SessionRecallManager.ResolveForTurn()`
 - [x] 6.3 Skip memory proposal gate evaluation for Public in `LlmSessionActor`
 - [x] 6.4 Gate recall, explicit search/get, and extraction on `MemoryConfig.Enabled` for all audiences
-- [x] 6.5 Make historical Public-authored memories inert for normal recall/search without adding purge/cleanup code
-- [x] 6.6 Unit tests: Public gets empty recall/search, no extraction; config-disabled suppresses all audiences; legacy Public memories are not surfaced
+- [x] 6.5 Align legacy Public-memory handling with the clarified contract: Public sessions cannot write memories or perform recall/search, but trusted higher-privilege contexts do not automatically suppress historical Public-authored memories
+- [x] 6.6 Unit tests: Public gets no memory writes/recall/search and no extraction; config-disabled suppresses all audiences; Team/Personal trusted paths may still surface or manage historical Public-authored memories under normal policy
 
 ## 7. Public File Roots and Context Sanitization
 
@@ -72,6 +75,7 @@
 - [x] 7.3 Update `SessionMessageAssembler.BuildVolatileContextBlock()` to skip working context for Public
 - [x] 7.4 Update `ScopedFileAccessPolicy` to sanitize error messages for Public
 - [x] 7.5 Unit tests: no implicit internal roots for Public; session block redaction; working context suppression; sanitized errors
+- [x] 7.6 Remove any Public denial wording that names or implies allowed roots, including the session directory
 
 ## 8. Automatic / Runtime-Owned Behavior and Runtime Wiring
 
@@ -88,4 +92,4 @@
 - [x] 9.3 Run `dotnet slopwatch analyze`
 - [x] 9.4 Run `./evals/run-evals.sh`
 - [x] 9.5 Update system skills if mapped feature areas changed
-- [ ] 9.6 Integration test in Docker/containerized Public session covering prompt injection, discovery/load paths, and file-root restrictions
+- [x] 9.6 Integration test in Docker/containerized Public session covering prompt injection, discovery/load paths, and file-root restrictions

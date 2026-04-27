@@ -27,10 +27,18 @@ parameter in addition to the optional project directory.
 Runtime placeholder substitution SHALL be performed on the embedded AGENTS
 resource using `NetclawPaths` values.
 
+For channel-created sessions, the effective audience SHALL be resolved before
+the first prompt assembly. Slack- and Discord-origin sessions SHALL therefore
+select the correct AGENTS variant and startup context/tool index on the first
+turn, not only after later session updates.
+
 The assembled prompt story SHALL be internally consistent with runtime feature
 gates. Prompt layers, discovery hints, and tool exposure SHALL agree on what a
 session can actually access. Public sessions SHALL not be instructed to use
 hidden search, skills, memory, subagent, or workspace/identity capabilities.
+Public attachment guidance in AGENTS SHALL also use the same redacted/pathless
+framing as the Public session block and SHALL not mention filesystem locations
+that are hidden from that audience.
 
 #### Scenario: Full layer assembly on session start
 
@@ -67,4 +75,27 @@ hidden search, skills, memory, subagent, or workspace/identity capabilities.
 - **AND** search, skills, memory, and subagents are not exposed to Public
 - **WHEN** the system prompt is assembled
 - **THEN** the prompt does not advertise those hidden capabilities through
-  AGENTS, TOOLING, project instructions, or context layers
+  AGENTS, TOOLING, project instructions, startup tool/context indices, or
+  context layers
+
+#### Scenario: Slack session starts with the resolved audience-specific prompt
+
+- **GIVEN** a new Slack-origin session resolves to audience `Public`
+- **WHEN** the first system prompt is assembled for that session
+- **THEN** the Public AGENTS variant is selected immediately
+- **AND** the startup context/tool index omits capabilities hidden from Public
+
+#### Scenario: Discord session starts with the resolved audience-specific prompt
+
+- **GIVEN** a new Discord-origin session resolves to audience `Public`
+- **WHEN** the first system prompt is assembled for that session
+- **THEN** the Public AGENTS variant is selected immediately
+- **AND** the startup context/tool index omits capabilities hidden from Public
+
+#### Scenario: Public attachment guidance stays consistent with redacted session block
+
+- **GIVEN** a new Public-audience session starts with uploaded attachments
+- **WHEN** the system prompt is assembled
+- **THEN** Public AGENTS guidance describes attachments without mentioning
+  `session_dir`, `media_dir`, `inbox/`, or other filesystem paths
+- **AND** the guidance is consistent with the ID-only Public session block

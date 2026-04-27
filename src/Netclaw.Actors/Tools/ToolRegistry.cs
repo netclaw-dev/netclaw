@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -189,11 +190,32 @@ public sealed class ToolRegistry
         if (_tools.Count == 0)
             return string.Empty;
 
+        return BuildCompressedIndex(_tools);
+    }
+
+    /// <summary>
+    /// Generates the compressed tool index filtered to the tools discoverable by the
+    /// supplied audience and feature gates.
+    /// </summary>
+    public string GenerateCompressedIndex(TrustAudience audience, ToolAccessPolicy policy)
+    {
+        var visible = _tools
+            .Where(t => policy.IsToolExposed(t.Tool, CreateContext(audience)))
+            .ToList();
+
+        return BuildCompressedIndex(visible);
+    }
+
+    private static string BuildCompressedIndex(IReadOnlyList<ToolRegistration> registrations)
+    {
+        if (registrations.Count == 0)
+            return string.Empty;
+
         var sb = new StringBuilder();
 
         // Separate always-loaded (directly callable) tools from MCP (dynamic) tools
-        var builtinTools = _tools.Where(t => t.Tool is not McpToolAdapter).ToList();
-        var mcpTools = _tools.Where(t => t.Tool is McpToolAdapter).ToList();
+        var builtinTools = registrations.Where(t => t.Tool is not McpToolAdapter).ToList();
+        var mcpTools = registrations.Where(t => t.Tool is McpToolAdapter).ToList();
 
         if (builtinTools.Count > 0)
         {
@@ -208,10 +230,12 @@ public sealed class ToolRegistry
 
         if (mcpTools.Count > 0)
         {
-            sb.AppendLine();
+            if (sb.Length > 0)
+                sb.AppendLine();
+
             sb.AppendLine("[MCP capability servers - discover tools with search_tools]");
 
-            foreach (var summary in GetMcpServerSummaries())
+            foreach (var summary in GetMcpServerSummaries(mcpTools))
             {
                 sb.AppendLine($"{summary.ServerName} ({summary.ToolCount} tools): {summary.Description}");
             }
@@ -224,6 +248,26 @@ public sealed class ToolRegistry
 
         return sb.ToString();
     }
+
+    private static IReadOnlyList<McpServerSummary> GetMcpServerSummaries(IReadOnlyList<ToolRegistration> registrations)
+    {
+        return registrations
+            .Select(t => t.Tool)
+            .OfType<McpToolAdapter>()
+            .GroupBy(t => t.ServerName, StringComparer.OrdinalIgnoreCase)
+            .Select(group =>
+            {
+                var tools = group.ToList();
+                var serverName = tools[0].ServerName;
+                var description = DescribeServerCapability(serverName, tools);
+                return new McpServerSummary(serverName, description, tools.Count);
+            })
+            .OrderBy(x => x.ServerName, StringComparer.Ordinal)
+            .ToList();
+    }
+
+    private static ToolExecutionContext CreateContext(TrustAudience audience)
+        => new(null, null) { Audience = audience.ToWireValue() };
 
     private static string DescribeServerCapability(string serverName, IReadOnlyList<McpToolAdapter> tools)
     {

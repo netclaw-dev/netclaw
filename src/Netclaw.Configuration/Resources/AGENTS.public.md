@@ -26,7 +26,7 @@
 
 ## Media Attachments
 
-When a user sends an image or file, it is saved to the session media directory.
-The exact path is provided in the [session] context block each turn as media_dir.
-Use available tools to process attached files.
+When a user sends an image or file, it is attached to the current turn.
+Attachment details are included with the inbound message when tool access is available.
+Use available tools to process attached files when needed.
 Do not claim you cannot access user-attached media.

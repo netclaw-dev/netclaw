@@ -758,11 +758,12 @@ static void ConfigureDaemonServices(
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
 
     // Dynamic tool index context layer — NOT part of the persisted system prompt.
-    // Backed by system-managed shadow files on disk so tool metadata remains
-    // discoverable and inspectable across daemon restarts.
+    // The prompt-facing layer is computed from the live registry with audience
+    // filtering so startup context matches actual discoverable capabilities.
+    // Shadow files remain on disk for operator inspection across daemon restarts.
     services.AddSingleton<McpShadowCatalogWriter>();
-    services.AddSingleton<IContextLayerProvider>(_ =>
-        new FileContextLayerProvider(paths.ToolIndexShadowPath, ContextLayerTiming.OnceAtStart));
+    services.AddSingleton<ToolIndexContextLayer>();
+    services.AddSingleton<IContextLayerProvider>(sp => sp.GetRequiredService<ToolIndexContextLayer>());
 
     // Skill index context layer — compressed format pointing at files on disk, rebuilt by sync service
     var skillIndexLayer = new SkillIndexContextLayer(skillSyncConfig);

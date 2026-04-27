@@ -1825,6 +1825,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
         BindTurnTelemetry(cmd.Source);
 
+        // Sessions created from Slack/Discord start without transport-derived
+        // audience encoded in the session id, so rebuild the prompt now that the
+        // actual inbound source is known.
+        SetSystemPrompt();
+
         var userContent = cmd.Content ?? string.Empty;
         var mediaRefs = cmd.MediaReferences;
 

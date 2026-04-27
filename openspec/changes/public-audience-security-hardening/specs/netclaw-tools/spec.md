@@ -60,16 +60,17 @@ runtime is disabled, its tools SHALL be absent for all audiences.
 
 File access denial error messages SHALL be sanitized based on the session's
 `TrustAudience`. For Public audiences, error messages SHALL NOT enumerate
-allowed root paths. For Team and Personal audiences, error messages SHALL
-continue to include allowed root paths for debugging.
+allowed root paths or name the session directory as an allowed root. For Team
+and Personal audiences, error messages SHALL continue to include allowed root
+paths for debugging.
 
 #### Scenario: Public file access denial is sanitized
 
 - **GIVEN** a session has audience `Public`
 - **WHEN** a `file_read` tool call targets a path outside allowed roots
-- **THEN** the error message is:
-  `"Error: Public trust context may only access files inside the current session directory."`
+- **THEN** the error message does not reveal any allowed root
 - **AND** no root paths are listed
+- **AND** the session directory is not named or implied as an allowed root
 
 #### Scenario: Personal file access denial is verbose
 

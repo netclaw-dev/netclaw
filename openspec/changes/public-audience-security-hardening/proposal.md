@@ -35,24 +35,36 @@ Source PRDs: `PRD-002` (SEC-003, SEC-008), `PRD-004`, `PRD-007`, `PRD-008`,
   defaults. For Public posture, search defaults off. Enabling search there only
   enables the deployment-wide runtime; it does not automatically expose
   `web_search` or `web_fetch` to Public sessions.
-- **Context assembly filters by audience.** `IContextLayerProvider` and
-  `ContextAssemblyInput` gain a `TrustAudience` parameter. Public sessions
-  receive: no skill index, no memory index, no subagent discovery, no
-  working context, and a redacted session block (ID only, no filesystem
-  paths).
+- **Context assembly filters by audience from session start.**
+  `IContextLayerProvider` and `ContextAssemblyInput` gain a
+  `TrustAudience` parameter. Public sessions receive: no skill index, no
+  memory index, no subagent discovery, no working context, and a redacted
+  session block (ID only, no filesystem paths). Slack- and Discord-created
+  sessions must resolve the effective audience before the initial system
+  prompt and startup context are assembled so the first turn uses the right
+  audience-specific AGENTS variant and capability index.
 - **Discovery and load paths honor the same audience/feature rules.** Public
   must not recover hidden internals through `search_tools`, `load_tool`,
   `skill_load`, `skill_read_resource`, `spawn_agent`, or equivalent capability
   discovery paths. Blocked tools/skills/subagents must be absent from both
-  prompt guidance and discovery results, not merely denied at final invocation.
+  prompt guidance, startup tool/context indices, and discovery results, not
+  merely denied at final invocation.
 - **Memory fully disabled for Public sessions.** Memory tools removed from the
-  Public audience profile, automatic recall suppressed, memory
-  extraction/distillation skipped, and normal recall/search paths treat
-  existing Public-authored memories as inert going forward. This change does
-  not add purge or cleanup behavior.
+  Public audience profile, automatic recall suppressed, explicit recall/search
+  denied, and memory extraction/distillation skipped. Legacy Public-authored
+  memories do not need to be globally suppressed in trusted contexts by this
+  change, and higher-privilege sessions may still review or delete them through
+  their existing privileged paths. This change does not add purge or cleanup
+  behavior.
 - **Public file access loses implicit internal roots.** Public file access must
   stay session-scoped by default and must not implicitly reach identity,
   skills, or workspaces content through global roots or similar defaults.
+  Public denial messages must not reveal any allowed root, including the
+  session directory.
+- **Public AGENTS attachment wording stays pathless.** The Public AGENTS
+  variant must describe uploaded attachments in the same redacted/pathless
+  terms used by the Public session block instead of referring to `session_dir`,
+  `media_dir`, `inbox/`, or other filesystem-oriented guidance.
 - **Automatic/runtime-owned behavior uses the same gates.** Scheduling and
   webhook entry points must honor both deployment-wide `Enabled` switches and
   the persisted originating audience without widening capability exposure.
@@ -77,6 +89,10 @@ Source PRDs: `PRD-002` (SEC-003, SEC-008), `PRD-004`, `PRD-007`, `PRD-008`,
 - `netclaw-session`: System prompt assembly gains audience parameter;
   AGENTS.md loaded from embedded resources by audience instead of from
   disk. `ContextAssemblyInput` gains `TrustAudience Audience` field.
+- `netclaw-input-adapters`: Channel-created sessions must propagate the
+  resolved audience before first-turn prompt/context assembly so Slack and
+  Discord sessions start with the correct audience-specific prompt and
+  capability surface.
 - `netclaw-tools`: Public audience profile loses memory tools and defaults to
   `web_search` / `web_fetch` disabled unless explicitly allowlisted. File
   access denial messages are sanitized for Public audience, and Public loses
@@ -122,5 +138,6 @@ Source PRDs: `PRD-002` (SEC-003, SEC-008), `PRD-004`, `PRD-007`, `PRD-008`,
   `~/.netclaw/identity/AGENTS.md` after init will lose those
   customizations. This is intentional.
 - **No data purge in scope**: Existing Public-authored memories are not deleted
-  by this change. They simply stop participating in normal Public recall/search
-  paths once Public memory is disabled.
+  by this change. Public sessions stop participating in memory write and
+  recall/search paths, but trusted higher-privilege contexts do not
+  automatically lose access to historical Public-authored memories.
