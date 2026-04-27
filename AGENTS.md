@@ -135,6 +135,14 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
   to the primitive defeats the purpose. Use `.Value` for explicit access and
   explicit casts where truly needed. If a value object can silently become a
   string, it provides no more safety than a raw string.
+- **Comments: skip noise, keep signal.** Don't narrate what code does when
+  identifiers already say it (`// increment counter`). Do write comments
+  that help a human reviewer scanning in isolation: security gate
+  explanations (what's blocked, for which audience, why), hidden
+  constraints, subtle invariants, non-obvious fallback strategies, and
+  cross-cutting concerns that aren't visible from the call site. A good
+  comment answers "why would this surprise me?" — not "what does this
+  line do?"
 
 ## Testing Guidelines
 
