@@ -246,7 +246,7 @@ public class SetReminderToolTests : TestKit
     public async Task Mode_B_discord_self_targeting_persists_session_and_origin_channel_type()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
             Audience = "team",
@@ -573,7 +573,7 @@ public class SetReminderToolTests : TestKit
     public async Task Manager_validation_failure_returns_error_prefix_for_discord_source()
     {
         var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
             Audience = "public",
@@ -824,7 +824,7 @@ public class SetReminderToolTests : TestKit
                 ? new ReminderTargetResolution(true, "129847561203948576", ReminderTargetKind.User, null)
                 : new ReminderTargetResolution(false, null, ReminderTargetKind.Unknown, $"unexpected target {input}")
         };
-        var tool = new SetReminderTool(probe, _timeProvider, [resolver]);
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
         var execution = Task.Run(async () =>
         {
