@@ -163,4 +163,70 @@ public sealed class DiscordApprovalPromptBuilderTests
         Assert.Equal(ApprovalOptionKeys.Deny, selectedKey);
         Assert.Null(requesterSenderId);
     }
+
+    [Fact]
+    public void BuildResolvedPromptText_approve_once_shows_checkmark()
+    {
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = "call-r1",
+            ToolName = "git_push",
+            DisplayText = "push to origin/main",
+            Patterns = ["origin/main"],
+            Options = [new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)]
+        };
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            request, ApprovalOptionKeys.ApproveOnce, "user-42");
+
+        Assert.Contains(":white_check_mark:", text);
+        Assert.Contains("git_push", text);
+        Assert.Contains("push to origin/main", text);
+        Assert.Contains("origin/main", text);
+        Assert.Contains(ApprovalOptionKeys.ApproveOnceLabel, text);
+        Assert.Contains("<@user-42>", text);
+    }
+
+    [Fact]
+    public void BuildResolvedPromptText_deny_shows_no_entry()
+    {
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = "call-r2",
+            ToolName = "rm_file",
+            DisplayText = "delete /etc/passwd",
+            Options = [new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)]
+        };
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            request, ApprovalOptionKeys.Deny, "user-99");
+
+        Assert.Contains(":no_entry:", text);
+        Assert.Contains(ApprovalOptionKeys.DenyLabel, text);
+        Assert.DoesNotContain(":white_check_mark:", text);
+    }
+
+    [Fact]
+    public void BuildResolvedPromptText_omits_patterns_when_empty()
+    {
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = "call-r3",
+            ToolName = "read_file",
+            DisplayText = "read config.json",
+            Patterns = [],
+            Options = [new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)]
+        };
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            request, ApprovalOptionKeys.ApproveOnce, "user-1");
+
+        Assert.DoesNotContain("Pattern", text);
+    }
 }

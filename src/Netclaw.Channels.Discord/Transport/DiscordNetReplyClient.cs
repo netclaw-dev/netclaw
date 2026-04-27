@@ -108,12 +108,16 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         if (message.CreateThreadOnMessage is null && message.RootMessageId is { } rootId)
             rootRef = new MessageReference(ParseSnowflake(rootId.Value, "root message ID"));
 
-        await targetChannel.SendMessageAsync(
+        var sentMessage = await targetChannel.SendMessageAsync(
             text: message.Text,
             messageReference: rootRef,
             components: components);
 
-        return new DiscordPostResult(CreatedThreadId: createdThreadId);
+        var sentMessageId = sentMessage is not null
+            ? new DiscordMessageId(sentMessage.Id.ToString())
+            : (DiscordMessageId?)null;
+
+        return new DiscordPostResult(CreatedThreadId: createdThreadId, MessageId: sentMessageId);
     }
 
     public async Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
@@ -126,6 +130,41 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         await thread.ModifyAsync(props =>
         {
             props.Name = name.Length > 100 ? name[..100] : name;
+        }, new RequestOptions { CancelToken = cancellationToken });
+    }
+
+    public async Task UpdateMessageAsync(
+        DiscordReplyChannelId channelId,
+        DiscordMessageId messageId,
+        string text,
+        bool removeComponents = false,
+        CancellationToken cancellationToken = default)
+    {
+        var channelSnowflake = ParseSnowflake(channelId.Value, "reply channel ID");
+        var messageSnowflake = ParseSnowflake(messageId.Value, "message ID");
+
+        IMessageChannel? messageChannel = _client.GetChannel(channelSnowflake) as IMessageChannel;
+        if (messageChannel is null && !_restChannelCache.TryGetValue(channelSnowflake, out messageChannel))
+        {
+            var restChannel = await _client.Rest.GetChannelAsync(channelSnowflake);
+            messageChannel = restChannel as IMessageChannel;
+            if (messageChannel is not null)
+            {
+                if (_restChannelCache.Count >= MaxRestChannelCacheSize)
+                    _restChannelCache.Clear();
+                _restChannelCache[channelSnowflake] = messageChannel;
+            }
+        }
+
+        if (messageChannel is null)
+            throw new InvalidOperationException(
+                $"Discord channel {channelId.Value} not found or is not a message channel.");
+
+        await messageChannel.ModifyMessageAsync(messageSnowflake, props =>
+        {
+            props.Content = text;
+            if (removeComponents)
+                props.Components = new ComponentBuilder().Build();
         }, new RequestOptions { CancelToken = cancellationToken });
     }
 

@@ -33,8 +33,15 @@ public sealed record DiscordApprovalResponse(
     DiscordUserId SenderId,
     DiscordUserId? RequesterSenderId = null);
 
-internal sealed record PendingApprovalRequest(
-    string CallId,
-    DiscordUserId? RequesterSenderId,
-    PrincipalClassification? RequesterPrincipal);
+internal sealed class PendingApprovalRequest(ToolInteractionRequest request)
+{
+    public ToolInteractionRequest Request { get; } = request;
+    public string CallId => Request.CallId;
+
+    public DiscordUserId? RequesterSenderId { get; } =
+        request.RequesterSenderId is not null ? new DiscordUserId(request.RequesterSenderId) : null;
+
+    public PrincipalClassification? RequesterPrincipal => Request.RequesterPrincipal;
+    public DiscordMessageId? PromptMessageId { get; set; }
+}
 

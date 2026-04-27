@@ -404,17 +404,25 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
         {
             Posts.Add(message);
 
-            DiscordPostResult result = DiscordPostResult.Default;
+            DiscordPostResult result;
             if (message.CreateThreadOnMessage is not null)
             {
                 var threadId = new DiscordReplyChannelId($"thread-{message.CreateThreadOnMessage.Value.Value}");
                 result = new DiscordPostResult(CreatedThreadId: threadId);
+            }
+            else
+            {
+                result = DiscordPostResult.Default;
             }
 
             return Task.FromResult(result);
         }
 
         public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task UpdateMessageAsync(DiscordReplyChannelId channelId, DiscordMessageId messageId, string text,
+            bool removeComponents = false, CancellationToken cancellationToken = default)
             => Task.CompletedTask;
     }
 }
