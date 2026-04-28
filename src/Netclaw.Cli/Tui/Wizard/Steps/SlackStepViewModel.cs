@@ -23,7 +23,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         _slackProbe = slackProbe;
     }
 
-    public string StepId => "slack";
+    public string StepId => WizardStepIds.Slack;
     public string DisplayTitle => "Slack";
 
     // ── State ──

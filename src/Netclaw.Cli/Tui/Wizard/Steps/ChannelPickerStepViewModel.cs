@@ -42,7 +42,7 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
             _enabled[adapter.Type] = false;
     }
 
-    public string StepId => "channel-picker";
+    public string StepId => WizardStepIds.ChannelPicker;
     public string DisplayTitle => "Communication Channels";
 
     public bool IsApplicable(WizardContext context) => true;

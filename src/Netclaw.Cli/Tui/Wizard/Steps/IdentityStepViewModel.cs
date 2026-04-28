@@ -14,7 +14,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
     private int _highWaterSubStep;
     private WizardContext? _context;
 
-    public string StepId => "identity";
+    public string StepId => WizardStepIds.Identity;
     public string DisplayTitle => "Identity";
 
     // ── State ──

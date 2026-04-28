@@ -16,7 +16,7 @@ public sealed class ExternalSkillsStepViewModel : IWizardStepViewModel
     private readonly IReadOnlyList<WellKnownProbeResult> _detectedSources;
     private readonly bool[] _enabledFlags;
 
-    public string StepId => "external-skills";
+    public string StepId => WizardStepIds.ExternalSkills;
     public string DisplayTitle => "External Skills";
 
     /// <summary>Custom skill directory path (optional, entered in sub-step 1).</summary>

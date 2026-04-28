@@ -17,7 +17,7 @@ public sealed class FeatureSelectionStepView : IWizardStepView
     private StepViewCallbacks? _callbacks;
     private FeatureSelectionStepViewModel? _vm;
 
-    public string StepId => "feature-selection";
+    public string StepId => WizardStepIds.FeatureSelection;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {

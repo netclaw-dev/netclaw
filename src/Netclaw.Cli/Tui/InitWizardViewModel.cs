@@ -129,18 +129,18 @@ public partial class InitWizardViewModel : ReactiveViewModel
         // Create step views
         _stepViews = new Dictionary<string, IWizardStepView>
         {
-            ["provider"] = new ProviderStepView(clipboardService),
-            ["security-posture"] = new SecurityPostureStepView(),
-            ["feature-selection"] = new FeatureSelectionStepView(),
-            ["exposure-mode"] = new ExposureModeStepView(),
-            ["channel-picker"] = new ChannelPickerStepView(),
-            ["channels"] = new ChannelsStepView(),
-            ["search"] = new SearchStepView(),
-            ["browser-automation"] = new BrowserAutomationStepView(),
-            ["identity"] = new IdentityStepView(),
-            ["external-skills"] = new ExternalSkillsStepView(),
-            ["skill-feeds"] = new SkillFeedsStepView(),
-            ["health-check"] = new HealthCheckStepView()
+            [WizardStepIds.Provider] = new ProviderStepView(clipboardService),
+            [WizardStepIds.SecurityPosture] = new SecurityPostureStepView(),
+            [WizardStepIds.FeatureSelection] = new FeatureSelectionStepView(),
+            [WizardStepIds.ExposureMode] = new ExposureModeStepView(),
+            [WizardStepIds.ChannelPicker] = new ChannelPickerStepView(),
+            [WizardStepIds.Channels] = new ChannelsStepView(),
+            [WizardStepIds.Search] = new SearchStepView(),
+            [WizardStepIds.BrowserAutomation] = new BrowserAutomationStepView(),
+            [WizardStepIds.Identity] = new IdentityStepView(),
+            [WizardStepIds.ExternalSkills] = new ExternalSkillsStepView(),
+            [WizardStepIds.SkillFeeds] = new SkillFeedsStepView(),
+            [WizardStepIds.HealthCheck] = new HealthCheckStepView()
         };
     }
 

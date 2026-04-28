@@ -11,7 +11,7 @@ public sealed class SearchStepViewModel : IWizardStepViewModel
     private int _currentSubStep;
     private int _highWaterSubStep;
 
-    public string StepId => "search";
+    public string StepId => WizardStepIds.Search;
     public string DisplayTitle => "Web Search";
 
     public SearchBackend SelectedBackend { get; set; } = SearchBackend.DuckDuckGo;

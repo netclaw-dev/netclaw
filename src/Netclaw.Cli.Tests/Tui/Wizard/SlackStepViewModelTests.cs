@@ -4,59 +4,24 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class SlackStepViewModelTests : IDisposable
+public sealed class SlackStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
     private readonly FakeSlackProbe _fakeProbe = new();
 
-    public SlackStepViewModelTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
-
-    [Fact]
-    public void SubStepCount_IsOne_WhenDisabled()
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 6)]
+    [InlineData(true, true, 7)]
+    public void SubStepCount_MatchesState(bool enabled, bool restrict, int expected)
     {
         using var step = new SlackStepViewModel(_fakeProbe);
-        step.SlackEnabled = false;
-        Assert.Equal(1, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsSix_WhenEnabled()
-    {
-        using var step = new SlackStepViewModel(_fakeProbe);
-        step.SlackEnabled = true;
-        Assert.Equal(6, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsSeven_WhenEnabled_WithRestrict()
-    {
-        using var step = new SlackStepViewModel(_fakeProbe);
-        step.SlackEnabled = true;
-        step.RestrictToSpecificUsers = true;
-        Assert.Equal(7, step.SubStepCount);
+        step.SlackEnabled = enabled;
+        if (restrict) step.RestrictToSpecificUsers = true;
+        Assert.Equal(expected, step.SubStepCount);
     }
 
     [Fact]
@@ -170,7 +135,7 @@ public sealed class SlackStepViewModelTests : IDisposable
         Assert.Equal(5, step.CurrentSubStep);
 
         // Re-enter from back
-        step.OnEnter(_context, NavigationDirection.Back);
+        step.OnEnter(Context, NavigationDirection.Back);
         Assert.Equal(5, step.CurrentSubStep);
     }
 
@@ -179,31 +144,31 @@ public sealed class SlackStepViewModelTests : IDisposable
     {
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = true;
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         // Another channel already enabled
-        _context.AnyChatServicesEnabled = true;
+        Context.AnyChatServicesEnabled = true;
         step.SlackEnabled = false;
         step.OnLeave();
 
         // Should stay true (additive)
-        Assert.True(_context.AnyChatServicesEnabled);
+        Assert.True(Context.AnyChatServicesEnabled);
     }
 
     [Fact]
     public void OnLeave_PopulatesChannelEntries_WhenEnabled()
     {
-        _context.SelectedPosture = DeploymentPosture.Team;
+        Context.SelectedPosture = DeploymentPosture.Team;
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = true;
         step.AllowDirectMessages = true;
         step.ChannelNamesInput = "general, dev";
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         step.OnLeave();
 
-        Assert.True(_context.ChannelEntries.ContainsKey(ChannelType.Slack));
-        var entries = _context.ChannelEntries[ChannelType.Slack];
+        Assert.True(Context.ChannelEntries.ContainsKey(ChannelType.Slack));
+        var entries = Context.ChannelEntries[ChannelType.Slack];
         Assert.Equal(3, entries.Count); // DMs + #general + #dev
         Assert.True(entries[0].IsDmRow);
         Assert.Equal("#general", entries[1].DisplayName);
@@ -212,14 +177,14 @@ public sealed class SlackStepViewModelTests : IDisposable
     [Fact]
     public void OnLeave_RemovesChannelEntries_WhenDisabled()
     {
-        _context.ChannelEntries[ChannelType.Slack] = [new ChannelEntry("DMs", "dm", TrustAudience.Personal, true)];
+        Context.ChannelEntries[ChannelType.Slack] = [new ChannelEntry("DMs", "dm", TrustAudience.Personal, true)];
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = false;
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         step.OnLeave();
 
-        Assert.False(_context.ChannelEntries.ContainsKey(ChannelType.Slack));
+        Assert.False(Context.ChannelEntries.ContainsKey(ChannelType.Slack));
     }
 
     [Fact]
@@ -228,7 +193,7 @@ public sealed class SlackStepViewModelTests : IDisposable
         using var step = new SlackStepViewModel(_fakeProbe);
         step.SlackEnabled = false;
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.Null(builder.Slack);
@@ -242,7 +207,7 @@ public sealed class SlackStepViewModelTests : IDisposable
         step.AllowDirectMessages = true;
         step.AllowedUserIdsInput = "U123, U456";
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Slack);
@@ -259,7 +224,7 @@ public sealed class SlackStepViewModelTests : IDisposable
         step.BotToken = "xoxb-test-bot-token";
         step.AppToken = "xapp-test-app-token";
 
-        var builder = new WizardSecretsBuilder(_context.Paths);
+        var builder = new WizardSecretsBuilder(Context.Paths);
         step.ContributeSecrets(builder);
         // Verifies no exception — full integration test covers file output
     }

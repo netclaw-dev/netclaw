@@ -2,34 +2,12 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class IdentityStepViewModelTests : IDisposable
+public sealed class IdentityStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
-
-    public IdentityStepViewModelTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
 
     [Fact]
     public void SubStepCount_IsSix()
@@ -76,7 +54,7 @@ public sealed class IdentityStepViewModelTests : IDisposable
         for (var i = 0; i < 5; i++)
             step.TryAdvance();
 
-        step.OnEnter(_context, NavigationDirection.Back);
+        step.OnEnter(Context, NavigationDirection.Back);
         Assert.Equal(5, step.CurrentSubStep);
     }
 
@@ -90,7 +68,7 @@ public sealed class IdentityStepViewModelTests : IDisposable
         step.UserTimezone = "America/New_York";
         step.WebhookUrl = "https://hooks.example.com";
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Identity);
@@ -107,7 +85,7 @@ public sealed class IdentityStepViewModelTests : IDisposable
         using var step = new IdentityStepViewModel();
         step.WebhookUrl = null;
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.Null(builder.Notifications);
@@ -122,18 +100,18 @@ public sealed class IdentityStepViewModelTests : IDisposable
         step.UserName = "Bob";
         step.UserTimezone = "UTC";
 
-        step.WriteIdentityFiles(_context.Paths);
+        step.WriteIdentityFiles(Context.Paths);
 
-        Assert.True(File.Exists(_context.Paths.SoulPath));
-        var soul = File.ReadAllText(_context.Paths.SoulPath);
+        Assert.True(File.Exists(Context.Paths.SoulPath));
+        var soul = File.ReadAllText(Context.Paths.SoulPath);
         Assert.Contains("TestBot", soul);
         Assert.Contains("Bob", soul);
         Assert.Contains("UTC", soul);
 
         // AGENTS.md is no longer written to disk — it is loaded from embedded
         // resources at runtime per audience. TOOLING.md is still written.
-        Assert.False(File.Exists(_context.Paths.AgentsPath));
-        Assert.True(File.Exists(_context.Paths.ToolingPath));
+        Assert.False(File.Exists(Context.Paths.AgentsPath));
+        Assert.True(File.Exists(Context.Paths.ToolingPath));
     }
 
     [Fact]

@@ -10,7 +10,7 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel
 {
     private WizardContext? _context;
 
-    public string StepId => "security-posture";
+    public string StepId => WizardStepIds.SecurityPosture;
     public string DisplayTitle => "Security Posture";
 
     public DeploymentPosture? SelectedPosture { get; set; }

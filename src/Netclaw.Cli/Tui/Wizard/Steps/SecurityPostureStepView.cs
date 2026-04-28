@@ -14,37 +14,36 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class SecurityPostureStepView : IWizardStepView
 {
-    private SelectionListNode<string>? _postureList;
+    private IDisposable? _postureList;
     private IFocusable? _lastFocusedList;
 
-    public string StepId => "security-posture";
+    public string StepId => WizardStepIds.SecurityPosture;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (SecurityPostureStepViewModel)stepVm;
 
-        _postureList = Layouts.SelectionList(
-                "Personal \u2014 Only you on this machine",
-                "Team \u2014 Shared with trusted teammates",
-                "Public \u2014 Open to untrusted users")
+        var postureList = Layouts.SelectionList<PostureOption>(
+                [
+                    new(DeploymentPosture.Personal),
+                    new(DeploymentPosture.Team),
+                    new(DeploymentPosture.Public)
+                ],
+                static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
-        _postureList.OnFocused();
-        _lastFocusedList = _postureList;
+        _postureList = postureList;
+        postureList.OnFocused();
+        _lastFocusedList = postureList;
 
-        // Wire selection → set VM state → advance wizard
-        _postureList.SelectionConfirmed
+        // Wire selection -> set VM state -> advance wizard
+        postureList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
                 {
-                    var choice = selected[0];
-                    vm.SelectedPosture = choice.StartsWith("Personal", StringComparison.Ordinal)
-                        ? DeploymentPosture.Personal
-                        : choice.StartsWith("Team", StringComparison.Ordinal)
-                            ? DeploymentPosture.Team
-                            : DeploymentPosture.Public;
+                    vm.SelectedPosture = selected[0].Value;
                     callbacks.AdvanceStep();
                 }
             })
@@ -53,7 +52,7 @@ public sealed class SecurityPostureStepView : IWizardStepView
         return Layouts.Vertical()
             .WithChild(new TextNode("  Who will interact with this Netclaw instance?").WithForeground(Color.White))
             .WithSpacing(1)
-            .WithChild(_postureList)
+            .WithChild(postureList)
             .WithSpacing(1)
             .WithChild(new TextNode("  Personal = full shell + tools. Team = no shell, shared tools.")
                 .WithForeground(Color.BrightBlack))
@@ -81,4 +80,15 @@ public sealed class SecurityPostureStepView : IWizardStepView
         _lastFocusedList = null;
         _postureList = null;
     }
+}
+
+file record PostureOption(DeploymentPosture Value)
+{
+    public override string ToString() => Value switch
+    {
+        DeploymentPosture.Personal => "Personal — Only you on this machine",
+        DeploymentPosture.Team => "Team — Shared with trusted teammates",
+        DeploymentPosture.Public => "Public — Open to untrusted users",
+        _ => Value.ToString()
+    };
 }

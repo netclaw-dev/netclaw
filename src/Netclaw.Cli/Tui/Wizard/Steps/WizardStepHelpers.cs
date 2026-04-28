@@ -39,6 +39,14 @@ internal static class WizardStepHelpers
         return (list, layout);
     }
 
+    internal static ILayoutNode BuildTextInputPanel(TextInputNode input, string title)
+        => new PanelNode()
+            .WithTitle(title)
+            .WithBorder(BorderStyle.Rounded)
+            .WithBorderColor(Color.Gray)
+            .WithContent(input)
+            .Height(3);
+
     internal static List<string> ParseUserIds(string? input)
         => string.IsNullOrWhiteSpace(input)
             ? []

@@ -12,7 +12,8 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class HealthCheckStepView : IWizardStepView
 {
-    public string StepId => "health-check";
+    public string StepId => WizardStepIds.HealthCheck;
+    public bool ManagesOwnFocusState => true;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {

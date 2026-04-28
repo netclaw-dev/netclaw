@@ -33,17 +33,20 @@ public sealed class ProviderStepView : IWizardStepView
     private bool _manualModelEntry;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
+    private int _currentSubStep;
 
     public ProviderStepView(IClipboardService? clipboardService = null)
     {
         _clipboardService = clipboardService;
     }
 
-    public string StepId => "provider";
+    public string StepId => WizardStepIds.Provider;
+    public bool ManagesOwnFocusState => _currentSubStep is 3 or 5 or 6;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (ProviderStepViewModel)stepVm;
+        _currentSubStep = vm.CurrentSubStep;
 
         return vm.CurrentSubStep switch
         {
@@ -172,12 +175,7 @@ public sealed class ProviderStepView : IWizardStepView
 
             return Layouts.Vertical()
                 .WithChild(new TextNode($"  {displayName} endpoint:").WithForeground(Color.White))
-                .WithChild(new PanelNode()
-                    .WithTitle("Endpoint")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Gray)
-                    .WithContent(_endpointInput)
-                    .Height(3));
+                .WithChild(WizardStepHelpers.BuildTextInputPanel(_endpointInput, "Endpoint"));
         }
 
         _apiKeyInput = new TextInputNode()
@@ -203,12 +201,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode($"  {displayName} API key:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("API Key")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_apiKeyInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_apiKeyInput, "API Key"));
     }
 
     private ILayoutNode BuildValidation(ProviderStepViewModel vm)
@@ -323,12 +316,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Enter model ID:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Model ID")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_manualModelInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_manualModelInput, "Model ID"));
     }
 
     private ILayoutNode BuildOAuthDeviceFlow(ProviderStepViewModel vm)

@@ -47,6 +47,19 @@ public interface IWizardStepView
     string StepId { get; }
 
     /// <summary>
+    /// When true, the page skips <see cref="ClearFocusState"/> before <see cref="BuildContent"/>.
+    /// Use for views that manage their own cursor/focus across invalidations.
+    /// </summary>
+    bool ManagesOwnFocusState => false;
+
+    /// <summary>
+    /// When true, the page routes key input to this view in capture phase
+    /// (before Termina's focus manager), preventing stale focused components
+    /// from consuming keys.
+    /// </summary>
+    bool CapturesInput => false;
+
+    /// <summary>
     /// Build the layout for the current sub-step state and wire all reactive
     /// subscriptions (selection confirmations, input submissions, etc.).
     /// </summary>

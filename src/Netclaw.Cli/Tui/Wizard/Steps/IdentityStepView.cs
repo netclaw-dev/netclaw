@@ -23,7 +23,7 @@ public sealed class IdentityStepView : IWizardStepView
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
 
-    public string StepId => "identity";
+    public string StepId => WizardStepIds.Identity;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
@@ -59,12 +59,7 @@ public sealed class IdentityStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Agent name:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Name")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_agentNameInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_agentNameInput, "Name"));
     }
 
     private ILayoutNode BuildCommStyle(IdentityStepViewModel vm, StepViewCallbacks callbacks)
@@ -117,12 +112,7 @@ public sealed class IdentityStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Your name:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Name")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_userNameInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_userNameInput, "Name"));
     }
 
     private ILayoutNode BuildTimezone(IdentityStepViewModel vm, StepViewCallbacks callbacks)
@@ -144,12 +134,7 @@ public sealed class IdentityStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Your timezone:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Timezone")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_timezoneInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_timezoneInput, "Timezone"));
     }
 
     private ILayoutNode BuildWorkspacesDirectory(IdentityStepViewModel vm, StepViewCallbacks callbacks)
@@ -172,12 +157,7 @@ public sealed class IdentityStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Projects directory:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Workspaces")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_workspacesInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_workspacesInput, "Workspaces"));
     }
 
     private ILayoutNode BuildWebhookUrl(IdentityStepViewModel vm, StepViewCallbacks callbacks)
@@ -202,12 +182,7 @@ public sealed class IdentityStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Notification webhook URL (optional, press Enter to skip):").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Webhook")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_webhookUrlInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_webhookUrlInput, "Webhook"));
     }
 
     public bool HandleKeyPress(KeyPressed key)

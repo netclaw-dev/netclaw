@@ -26,7 +26,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     private string? _bootstrapRawToken;
     private PairedDevice? _bootstrapDevice;
 
-    public string StepId => "exposure-mode";
+    public string StepId => WizardStepIds.ExposureMode;
     public string DisplayTitle => "Network Exposure";
 
     /// <summary>The selected exposure mode. Defaults to <see cref="ExposureMode.Local"/>.</summary>

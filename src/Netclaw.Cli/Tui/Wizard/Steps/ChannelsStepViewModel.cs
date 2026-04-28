@@ -16,7 +16,7 @@ public sealed class ChannelsStepViewModel : IWizardStepViewModel
 {
     private WizardContext? _context;
 
-    public string StepId => "channels";
+    public string StepId => WizardStepIds.Channels;
     public string DisplayTitle => "Channels";
 
     /// <summary>

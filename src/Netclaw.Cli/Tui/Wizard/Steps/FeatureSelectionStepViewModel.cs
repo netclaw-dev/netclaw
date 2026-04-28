@@ -33,7 +33,7 @@ public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel
         "Inbound webhook processing"
     ];
 
-    public string StepId => "feature-selection";
+    public string StepId => WizardStepIds.FeatureSelection;
     public string DisplayTitle => "Feature Selection";
 
     public bool IsApplicable(WizardContext context) =>

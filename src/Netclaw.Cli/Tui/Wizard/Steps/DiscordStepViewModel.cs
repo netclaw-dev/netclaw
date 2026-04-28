@@ -21,7 +21,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         _discordProbe = discordProbe;
     }
 
-    public string StepId => "discord";
+    public string StepId => WizardStepIds.Discord;
     public string DisplayTitle => "Discord";
 
     public bool DiscordEnabled { get; set; }

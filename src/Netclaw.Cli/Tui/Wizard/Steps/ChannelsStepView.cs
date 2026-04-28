@@ -25,7 +25,9 @@ public sealed class ChannelsStepView : IWizardStepView
     private StepViewCallbacks? _callbacks;
     private ChannelsStepViewModel? _vm;
 
-    public string StepId => "channels";
+    public string StepId => WizardStepIds.Channels;
+    public bool ManagesOwnFocusState => true;
+    public bool CapturesInput => true;
 
     /// <summary>Whether the view is in add-channel mode. Exposed for headless testing.</summary>
     internal bool IsAddMode => _addMode;
@@ -43,12 +45,7 @@ public sealed class ChannelsStepView : IWizardStepView
         {
             return Layouts.Vertical()
                 .WithChild(new TextNode("  Add channel:").WithForeground(Color.White))
-                .WithChild(new PanelNode()
-                    .WithTitle("Channel Name")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Gray)
-                    .WithContent(_addInput)
-                    .Height(3))
+                .WithChild(WizardStepHelpers.BuildTextInputPanel(_addInput, "Channel Name"))
                 .WithSpacing(1)
                 .WithChild(new TextNode("  Enter to add, Esc to cancel.")
                     .WithForeground(Color.BrightBlack));
@@ -159,7 +156,10 @@ public sealed class ChannelsStepView : IWizardStepView
             return true;
         }
 
-        // Normal mode
+        // Normal mode — Escape is not consumed here so it falls through to back-navigation
+        if (keyInfo.Key == ConsoleKey.Escape)
+            return false;
+
         switch (keyInfo.Key)
         {
             case ConsoleKey.UpArrow:

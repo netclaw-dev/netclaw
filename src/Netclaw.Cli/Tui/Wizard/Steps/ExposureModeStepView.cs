@@ -17,11 +17,12 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ExposureModeStepView : IWizardStepView
 {
-    private SelectionListNode<string>? _modeList;
+    private IDisposable? _modeList;
     private SelectionListNode<string>? _confirmList;
+    private IDisposable? _webhookList;
     private IFocusable? _lastFocusedList;
 
-    public string StepId => "exposure-mode";
+    public string StepId => WizardStepIds.ExposureMode;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
@@ -39,32 +40,32 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildModeSelection(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        const string localLabel = "Local \u2014 loopback only, safest (recommended)";
-        const string serveLabel = "Tailscale Serve \u2014 accessible within your tailnet";
-        const string funnelLabel = "Tailscale Funnel \u2014 public internet \u26a0";
-        const string cloudflareLabel = "Cloudflare Tunnel \u2014 public internet \u26a0";
+        var localOption = new ExposureModeOption(ExposureMode.Local,
+            "Local — loopback only, safest (recommended)");
+        var serveOption = new ExposureModeOption(ExposureMode.TailscaleServe,
+            "Tailscale Serve — accessible within your tailnet");
+        var funnelOption = new ExposureModeOption(ExposureMode.TailscaleFunnel,
+            "Tailscale Funnel — public internet ⚠");
+        var cloudflareOption = new ExposureModeOption(ExposureMode.CloudflareTunnel,
+            "Cloudflare Tunnel — public internet ⚠");
 
-        _modeList = Layouts.SelectionList(localLabel, serveLabel, funnelLabel, cloudflareLabel)
+        var modeList = Layouts.SelectionList<ExposureModeOption>(
+                [localOption, serveOption, funnelOption, cloudflareOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
-        _modeList.OnFocused();
-        _lastFocusedList = _modeList;
+        _modeList = modeList;
+        modeList.OnFocused();
+        _lastFocusedList = modeList;
         _confirmList = null;
+        _webhookList = null;
 
-        _modeList.SelectionConfirmed
+        modeList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
                 {
-                    var choice = selected[0];
-                    vm.SelectedMode = choice switch
-                    {
-                        serveLabel => ExposureMode.TailscaleServe,
-                        funnelLabel => ExposureMode.TailscaleFunnel,
-                        cloudflareLabel => ExposureMode.CloudflareTunnel,
-                        _ => ExposureMode.Local
-                    };
+                    vm.SelectedMode = selected[0].Value;
                     callbacks.AdvanceStep();
                 }
             })
@@ -73,15 +74,16 @@ public sealed class ExposureModeStepView : IWizardStepView
         return Layouts.Vertical()
             .WithChild(new TextNode("  How will this Netclaw daemon be accessed?").WithForeground(Color.White))
             .WithSpacing(1)
-            .WithChild(_modeList)
+            .WithChild(modeList)
             .WithSpacing(1)
-            .WithChild(new TextNode("  \u26a0 = exposes daemon beyond this machine. Ensure auth is configured first.")
+            .WithChild(new TextNode("  ⚠ = exposes daemon beyond this machine. Ensure auth is configured first.")
                 .WithForeground(Color.BrightBlack));
     }
 
     private ILayoutNode BuildConfirmation(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
         _modeList = null;
+        _webhookList = null;
 
         if (vm.IsHighRisk)
             return BuildHighRiskWarning(vm, callbacks);
@@ -95,7 +97,7 @@ public sealed class ExposureModeStepView : IWizardStepView
             ? "Tailscale Funnel"
             : "Cloudflare Tunnel";
 
-        _confirmList = Layouts.SelectionList("I understand the risks \u2014 continue")
+        _confirmList = Layouts.SelectionList("I understand the risks — continue")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Yellow);
 
@@ -107,20 +109,20 @@ public sealed class ExposureModeStepView : IWizardStepView
             .DisposeWith(callbacks.Subscriptions);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  \u26a0  {modeLabel} exposes your daemon to the public internet.")
+            .WithChild(new TextNode($"  ⚠  {modeLabel} exposes your daemon to the public internet.")
                 .WithForeground(Color.Yellow))
             .WithSpacing(1)
             .WithChild(new TextNode("  Before proceeding, ensure:").WithForeground(Color.White))
-            .WithChild(new TextNode("    \u2022 Hub authentication is configured (device pairing or bearer token)").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("    \u2022 Your tunnel is running and healthy").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("    \u2022 You trust your security posture selection").WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("    • Hub authentication is configured (device pairing or bearer token)").WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("    • Your tunnel is running and healthy").WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("    • You trust your security posture selection").WithForeground(Color.BrightBlack))
             .WithSpacing(1)
             .WithChild(_confirmList);
     }
 
     private ILayoutNode BuildTailscaleServeNotice(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _confirmList = Layouts.SelectionList("Got it \u2014 continue")
+        _confirmList = Layouts.SelectionList("Got it — continue")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -145,24 +147,27 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildWebhookToggle(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        const string enableLabel = "Yes \u2014 accept inbound webhook requests";
-        const string disableLabel = "No \u2014 do not accept inbound webhooks (default)";
+        var disableOption = new WebhookOption(false, "No — do not accept inbound webhooks (default)");
+        var enableOption = new WebhookOption(true, "Yes — accept inbound webhook requests");
 
         _modeList = null;
+        _confirmList = null;
 
-        _confirmList = Layouts.SelectionList(disableLabel, enableLabel)
+        var webhookList = Layouts.SelectionList<WebhookOption>(
+                [disableOption, enableOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
-        _confirmList.OnFocused();
-        _lastFocusedList = _confirmList;
+        _webhookList = webhookList;
+        webhookList.OnFocused();
+        _lastFocusedList = webhookList;
 
-        _confirmList.SelectionConfirmed
+        webhookList.SelectionConfirmed
             .Subscribe(selected =>
             {
                 if (selected.Count > 0)
                 {
-                    vm.WebhooksEnabled = selected[0] == enableLabel;
+                    vm.WebhooksEnabled = selected[0].Value;
                     callbacks.AdvanceStep();
                 }
             })
@@ -171,7 +176,7 @@ public sealed class ExposureModeStepView : IWizardStepView
         return Layouts.Vertical()
             .WithChild(new TextNode("  Should this daemon accept inbound webhooks?").WithForeground(Color.White))
             .WithSpacing(1)
-            .WithChild(_confirmList)
+            .WithChild(webhookList)
             .WithSpacing(1)
             .WithChild(new TextNode("  Inbound webhooks let external services trigger autonomous runs via HTTP POST.")
                 .WithForeground(Color.BrightBlack))
@@ -199,5 +204,16 @@ public sealed class ExposureModeStepView : IWizardStepView
         _lastFocusedList = null;
         _modeList = null;
         _confirmList = null;
+        _webhookList = null;
     }
+}
+
+file record ExposureModeOption(ExposureMode Value, string Label)
+{
+    public override string ToString() => Label;
+}
+
+file record WebhookOption(bool Value, string Label)
+{
+    public override string ToString() => Label;
 }

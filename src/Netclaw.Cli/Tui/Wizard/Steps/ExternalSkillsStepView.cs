@@ -24,7 +24,7 @@ public sealed class ExternalSkillsStepView : IWizardStepView
     private StepViewCallbacks? _callbacks;
     private ExternalSkillsStepViewModel? _vm;
 
-    public string StepId => "external-skills";
+    public string StepId => WizardStepIds.ExternalSkills;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
@@ -100,12 +100,7 @@ public sealed class ExternalSkillsStepView : IWizardStepView
         return Layouts.Vertical()
             .WithChild(new TextNode("  Add a custom skill directory (optional, Enter to skip):")
                 .WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Path")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_customPathInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_customPathInput, "Path"));
     }
 
     private ILayoutNode BuildSymlinkToggle(StepViewCallbacks callbacks)

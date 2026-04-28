@@ -185,41 +185,12 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             var step = ViewModel.Orchestrator.CurrentStep;
             if (step is null) return Layouts.Empty();
 
-            // Health check has no stateful components — safe to rebuild on every invalidation
-            if (step is HealthCheckStepViewModel)
-            {
-                var hcView = ViewModel.StepViews["health-check"];
-                return hcView.BuildContent(step, CreateCallbacks());
-            }
-
-            // Validation and OAuth sub-steps are stateless renders — just a spinner or error text.
-            // Skip clearing focus/subs so the spinner can tick without disposing interactive state.
-            if (step is ProviderStepViewModel { CurrentSubStep: 3 or 5 or 6 })
-            {
-                var providerView = ViewModel.StepViews["provider"];
-                return providerView.BuildContent(step, CreateCallbacks());
-            }
-
-            // Channel picker manages its own state (cursor position, sub-flow mode)
-            // across invalidations — don't clear it on content refresh.
-            if (step is ChannelPickerStepViewModel)
-            {
-                var pickerView = ViewModel.StepViews["channel-picker"];
-                return pickerView.BuildContent(step, CreateCallbacks());
-            }
-
-            // Channels step manages its own state (cursor position, add mode)
-            // across invalidations — don't clear it on content refresh.
-            if (step is ChannelsStepViewModel)
-            {
-                var channelsView = ViewModel.StepViews["channels"];
-                return channelsView.BuildContent(step, CreateCallbacks());
-            }
-
-            // Normal: clear state, build fresh
-            _stepSubs.Clear();
             var currentView = ViewModel.StepViews[step.StepId];
-            currentView.ClearFocusState();
+            if (!currentView.ManagesOwnFocusState)
+            {
+                _stepSubs.Clear();
+                currentView.ClearFocusState();
+            }
             return currentView.BuildContent(step, CreateCallbacks());
         });
 
@@ -288,36 +259,14 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             return true;
         }
 
-        // Channel picker step (picker mode): intercept keys before stale focus
-        // components consume ↑/↓/Space/D/E. Escape flows through for back-navigation.
-        // In sub-flow mode, let keys flow normally to child view components.
-        if (ViewModel.Orchestrator.CurrentStep is ChannelPickerStepViewModel
-            && ((ChannelPickerStepView)ViewModel.StepViews["channel-picker"]).IsInPickerMode
-            && keyInfo.Key != ConsoleKey.Escape)
+        var currentStep = ViewModel.Orchestrator.CurrentStep;
+        if (currentStep is not null
+            && ViewModel.StepViews.TryGetValue(currentStep.StepId, out var captureView)
+            && captureView.CapturesInput
+            && captureView.HandleKeyPress(new KeyPressed(keyInfo)))
         {
-            var pickerView = ViewModel.StepViews["channel-picker"];
-            if (pickerView.HandleKeyPress(new KeyPressed(keyInfo)))
-            {
-                ViewModel.RequestRedraw();
-                return true;
-            }
-        }
-
-        // Channels step: intercept keys before the focus manager can consume them.
-        // Stale IFocusable components (SelectionListNode, TextInputNode) from prior
-        // steps remain on the focus stack and consume ↑/↓ arrows and letter keys.
-        // Escape is only intercepted in add-channel mode (to cancel the dialog);
-        // in normal mode it flows through ViewModel.Input for back-navigation.
-        if (ViewModel.Orchestrator.CurrentStep is ChannelsStepViewModel
-            && (keyInfo.Key != ConsoleKey.Escape
-                || ((ChannelsStepView)ViewModel.StepViews["channels"]).IsAddMode))
-        {
-            var channelsView = ViewModel.StepViews["channels"];
-            if (channelsView.HandleKeyPress(new KeyPressed(keyInfo)))
-            {
-                ViewModel.RequestRedraw();
-                return true;
-            }
+            ViewModel.RequestRedraw();
+            return true;
         }
 
         return false;

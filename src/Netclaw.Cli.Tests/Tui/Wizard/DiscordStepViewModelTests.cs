@@ -4,59 +4,24 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class DiscordStepViewModelTests : IDisposable
+public sealed class DiscordStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
     private readonly FakeDiscordProbe _fakeProbe = new();
 
-    public DiscordStepViewModelTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
-
-    [Fact]
-    public void SubStepCount_IsOne_WhenDisabled()
+    [Theory]
+    [InlineData(false, false, 1)]
+    [InlineData(true, false, 5)]
+    [InlineData(true, true, 6)]
+    public void SubStepCount_MatchesState(bool enabled, bool restrict, int expected)
     {
         using var step = new DiscordStepViewModel(_fakeProbe);
-        step.DiscordEnabled = false;
-        Assert.Equal(1, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsFive_WhenEnabled()
-    {
-        using var step = new DiscordStepViewModel(_fakeProbe);
-        step.DiscordEnabled = true;
-        Assert.Equal(5, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsSix_WhenEnabled_WithRestrict()
-    {
-        using var step = new DiscordStepViewModel(_fakeProbe);
-        step.DiscordEnabled = true;
-        step.RestrictToSpecificUsers = true;
-        Assert.Equal(6, step.SubStepCount);
+        step.DiscordEnabled = enabled;
+        if (restrict) step.RestrictToSpecificUsers = true;
+        Assert.Equal(expected, step.SubStepCount);
     }
 
     [Fact]
@@ -119,7 +84,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
     [Fact]
     public void OnLeave_PopulatesChannelEntries_WhenEnabled()
     {
-        _context.SelectedPosture = DeploymentPosture.Team;
+        Context.SelectedPosture = DeploymentPosture.Team;
         using var step = new DiscordStepViewModel(_fakeProbe)
         {
             DiscordEnabled = true,
@@ -127,11 +92,11 @@ public sealed class DiscordStepViewModelTests : IDisposable
             ChannelIdsInput = "129847561203948576,130111223344556677"
         };
 
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.OnLeave();
 
-        Assert.True(_context.ChannelEntries.ContainsKey(ChannelType.Discord));
-        var entries = _context.ChannelEntries[ChannelType.Discord];
+        Assert.True(Context.ChannelEntries.ContainsKey(ChannelType.Discord));
+        var entries = Context.ChannelEntries[ChannelType.Discord];
         Assert.Equal(3, entries.Count);
         Assert.True(entries[0].IsDmRow);
         Assert.Equal("129847561203948576", entries[1].Id);
@@ -148,10 +113,10 @@ public sealed class DiscordStepViewModelTests : IDisposable
             AllowedUserIdsInput = "130111223344556677"
         };
 
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.OnLeave();
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Discord);
@@ -241,7 +206,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
             [new ResolvedDiscordChannel("129847561203948576", "general", "MyServer")],
             []);
 
-        _context.SelectedPosture = DeploymentPosture.Team;
+        Context.SelectedPosture = DeploymentPosture.Team;
         using var step = new DiscordStepViewModel(_fakeProbe)
         {
             DiscordEnabled = true,
@@ -249,7 +214,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
             ChannelIdsInput = "129847561203948576"
         };
 
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.OnLeave();
 
         var results = new List<HealthCheckItem>();
@@ -261,7 +226,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
         Assert.True(results[1].Passed);
         Assert.Contains("resolved (1)", results[1].Label);
 
-        var entries = _context.ChannelEntries[ChannelType.Discord];
+        var entries = Context.ChannelEntries[ChannelType.Discord];
         var channelEntry = entries.First(e => !e.IsDmRow);
         Assert.Equal("MyServer / #general", channelEntry.DisplayName);
     }
@@ -274,7 +239,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
             [new ResolvedDiscordChannel("111111111111111111", "general", "MyServer")],
             ["999999999999999999"]);
 
-        _context.SelectedPosture = DeploymentPosture.Team;
+        Context.SelectedPosture = DeploymentPosture.Team;
         using var step = new DiscordStepViewModel(_fakeProbe)
         {
             DiscordEnabled = true,
@@ -282,7 +247,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
             ChannelIdsInput = "111111111111111111,999999999999999999"
         };
 
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.OnLeave();
 
         var results = new List<HealthCheckItem>();
@@ -295,7 +260,7 @@ public sealed class DiscordStepViewModelTests : IDisposable
         Assert.Contains("resolved 1/2", results[1].Label);
         Assert.Contains("999999999999999999", results[1].Label);
 
-        var entries = _context.ChannelEntries[ChannelType.Discord];
+        var entries = Context.ChannelEntries[ChannelType.Discord];
         var resolvedEntry = entries.First(e => e.Id == "111111111111111111");
         Assert.Equal("MyServer / #general", resolvedEntry.DisplayName);
 

@@ -1,16 +1,12 @@
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class ExternalSkillsStepViewModelTests : IDisposable
+public sealed class ExternalSkillsStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
-
     private static readonly IReadOnlyList<WellKnownProbeResult> TwoSources =
     [
         new("claude-code", "Claude Code", "/home/user/.claude/skills", true),
@@ -24,37 +20,18 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
 
     private static readonly IReadOnlyList<WellKnownProbeResult> NoSources = [];
 
-    public ExternalSkillsStepViewModelTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
-
     [Fact]
     public void IsApplicable_True_WhenSourcesDetected()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        Assert.True(step.IsApplicable(_context));
+        Assert.True(step.IsApplicable(Context));
     }
 
     [Fact]
     public void IsApplicable_False_WhenNoSourcesDetected()
     {
         using var step = new ExternalSkillsStepViewModel(NoSources);
-        Assert.False(step.IsApplicable(_context));
+        Assert.False(step.IsApplicable(Context));
     }
 
     [Fact]
@@ -78,26 +55,21 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
         Assert.True(step.IsSourceEnabled(0));
     }
 
-    [Fact]
-    public void SubStepCount_IsTwo_WithoutCustomPath()
+    [Theory]
+    [InlineData(null, 2)]
+    [InlineData("/opt/team/skills", 3)]
+    public void SubStepCount_MatchesCustomPath(string? customPath, int expected)
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        Assert.Equal(2, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsThree_WithCustomPath()
-    {
-        using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.CustomPath = "/opt/team/skills";
-        Assert.Equal(3, step.SubStepCount);
+        if (customPath is not null) step.CustomPath = customPath;
+        Assert.Equal(expected, step.SubStepCount);
     }
 
     [Fact]
     public void TryAdvance_FromChecklist_GoesToCustomPath()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         Assert.True(step.TryAdvance());
         Assert.Equal(1, step.CurrentSubStep);
@@ -107,7 +79,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
     public void TryAdvance_FromCustomPath_GoesToSymlink_WhenPathSet()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.TryAdvance(); // → sub-step 1
         step.CustomPath = "/opt/team/skills";
 
@@ -119,7 +91,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
     public void TryAdvance_FromCustomPath_Completes_WhenNoPath()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.TryAdvance(); // → sub-step 1
 
         Assert.False(step.TryAdvance());
@@ -129,7 +101,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
     public void TryGoBack_FromCustomPath_ReturnsToChecklist()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.TryAdvance(); // → sub-step 1
 
         Assert.True(step.TryGoBack());
@@ -140,7 +112,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
     public void TryGoBack_FromChecklist_ReturnsFalse()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         Assert.False(step.TryGoBack());
     }
@@ -149,10 +121,10 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
     public void OnEnter_Back_ResumesAtLastSubStep()
     {
         using var step = new ExternalSkillsStepViewModel(OnlyClaudeCode);
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         step.TryAdvance(); // → sub-step 1
 
-        step.OnEnter(_context, NavigationDirection.Back);
+        step.OnEnter(Context, NavigationDirection.Back);
         Assert.Equal(1, step.CurrentSubStep);
     }
 
@@ -162,7 +134,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
         using var step = new ExternalSkillsStepViewModel(TwoSources);
         step.ToggleSource(1); // disable Open Code
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.ExternalSkillSources);
@@ -188,7 +160,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
         step.CustomPath = "/opt/team/skills";
         step.CustomPathAllowSymlinks = true;
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.ExternalSkillSources);
@@ -207,7 +179,7 @@ public sealed class ExternalSkillsStepViewModelTests : IDisposable
     {
         using var step = new ExternalSkillsStepViewModel(NoSources);
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.Null(builder.ExternalSkillSources);

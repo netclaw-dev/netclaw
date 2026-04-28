@@ -31,7 +31,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
     private SkillFeedsStepViewModel? _vm;
     private int _spinnerTick;
 
-    public string StepId => "skill-feeds";
+    public string StepId => WizardStepIds.SkillFeeds;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
@@ -128,12 +128,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Enter the skill server URL:").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("URL")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_urlInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_urlInput, "URL"));
     }
 
     private ILayoutNode BuildProbeResult(StepViewCallbacks callbacks)
@@ -234,12 +229,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
             .WithChild(new TextNode($"    Found {_vm.LastProbeSkillCount} skills").WithForeground(Color.White))
             .WithSpacing(1)
             .WithChild(new TextNode("  Feed name (used in config):").WithForeground(Color.White))
-            .WithChild(new PanelNode()
-                .WithTitle("Name")
-                .WithBorder(BorderStyle.Rounded)
-                .WithBorderColor(Color.Gray)
-                .WithContent(_nameInput)
-                .Height(3));
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_nameInput, "Name"));
     }
 
     private ILayoutNode BuildAddAnotherPrompt(StepViewCallbacks callbacks)

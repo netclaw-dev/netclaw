@@ -12,7 +12,7 @@ public sealed class BrowserAutomationStepViewModel : IWizardStepViewModel
     private int _currentSubStep;
     private int _highWaterSubStep;
 
-    public string StepId => "browser-automation";
+    public string StepId => WizardStepIds.BrowserAutomation;
     public string DisplayTitle => "Browser Automation";
 
     public bool Enabled { get; set; }

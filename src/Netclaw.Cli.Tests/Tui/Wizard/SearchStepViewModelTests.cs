@@ -2,34 +2,12 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class SearchStepViewModelTests : IDisposable
+public sealed class SearchStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
-
-    public SearchStepViewModelTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
 
     [Fact]
     public void DefaultBackend_IsDuckDuckGo()
@@ -38,20 +16,15 @@ public sealed class SearchStepViewModelTests : IDisposable
         Assert.Equal(SearchBackend.DuckDuckGo, step.SelectedBackend);
     }
 
-    [Fact]
-    public void SubStepCount_IsOne_ForDuckDuckGo()
+    [Theory]
+    [InlineData(SearchBackend.DuckDuckGo, 1)]
+    [InlineData(SearchBackend.Brave, 2)]
+    [InlineData(SearchBackend.SearXng, 2)]
+    public void SubStepCount_MatchesBackend(SearchBackend backend, int expected)
     {
         using var step = new SearchStepViewModel();
-        step.SelectedBackend = SearchBackend.DuckDuckGo;
-        Assert.Equal(1, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsTwo_ForBrave()
-    {
-        using var step = new SearchStepViewModel();
-        step.SelectedBackend = SearchBackend.Brave;
-        Assert.Equal(2, step.SubStepCount);
+        step.SelectedBackend = backend;
+        Assert.Equal(expected, step.SubStepCount);
     }
 
     [Fact]
@@ -89,7 +62,7 @@ public sealed class SearchStepViewModelTests : IDisposable
         step.SelectedBackend = SearchBackend.Brave;
         step.TryAdvance(); // → sub-step 1
 
-        step.OnEnter(_context, NavigationDirection.Back);
+        step.OnEnter(Context, NavigationDirection.Back);
         Assert.Equal(1, step.CurrentSubStep);
     }
 
@@ -99,7 +72,7 @@ public sealed class SearchStepViewModelTests : IDisposable
         using var step = new SearchStepViewModel();
         step.SelectedBackend = SearchBackend.Brave;
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Search);
@@ -113,7 +86,7 @@ public sealed class SearchStepViewModelTests : IDisposable
         step.SelectedBackend = SearchBackend.Brave;
         step.BraveApiKey = "BSA-test-key";
 
-        var builder = new WizardSecretsBuilder(_context.Paths);
+        var builder = new WizardSecretsBuilder(Context.Paths);
         step.ContributeSecrets(builder);
 
         // Secrets builder doesn't expose contents directly, but we can verify
@@ -127,7 +100,7 @@ public sealed class SearchStepViewModelTests : IDisposable
         step.SelectedBackend = SearchBackend.SearXng;
         step.SearXngEndpoint = "http://searxng.local:8080";
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.Search);

@@ -2,49 +2,21 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class BrowserAutomationStepViewModelTests : IDisposable
+public sealed class BrowserAutomationStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
 
-    public BrowserAutomationStepViewModelTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
-
-    [Fact]
-    public void SubStepCount_IsOne_WhenDisabled()
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public void SubStepCount_MatchesEnabledState(bool enabled, int expected)
     {
         using var step = new BrowserAutomationStepViewModel(false, "test");
-        step.Enabled = false;
-        Assert.Equal(1, step.SubStepCount);
-    }
-
-    [Fact]
-    public void SubStepCount_IsTwo_WhenEnabled()
-    {
-        using var step = new BrowserAutomationStepViewModel(false, "test");
-        step.Enabled = true;
-        Assert.Equal(2, step.SubStepCount);
+        step.Enabled = enabled;
+        Assert.Equal(expected, step.SubStepCount);
     }
 
     [Fact]
@@ -82,7 +54,7 @@ public sealed class BrowserAutomationStepViewModelTests : IDisposable
         step.Enabled = true;
         step.TryAdvance(); // → sub-step 1
 
-        step.OnEnter(_context, NavigationDirection.Back);
+        step.OnEnter(Context, NavigationDirection.Back);
         Assert.Equal(1, step.CurrentSubStep);
     }
 
@@ -93,7 +65,7 @@ public sealed class BrowserAutomationStepViewModelTests : IDisposable
         step.Enabled = true;
         step.SelectedBackend = BrowserAutomationBackend.Playwright;
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.BrowserAutomation);
@@ -107,7 +79,7 @@ public sealed class BrowserAutomationStepViewModelTests : IDisposable
         using var step = new BrowserAutomationStepViewModel(false, "test");
         step.Enabled = false;
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.Null(builder.BrowserAutomation);

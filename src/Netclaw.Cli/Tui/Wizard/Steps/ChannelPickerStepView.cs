@@ -15,7 +15,9 @@ public sealed class ChannelPickerStepView : IWizardStepView
     private ChannelPickerStepViewModel? _vm;
     private StepViewCallbacks? _callbacks;
 
-    public string StepId => "channel-picker";
+    public string StepId => WizardStepIds.ChannelPicker;
+    public bool ManagesOwnFocusState => true;
+    public bool CapturesInput => IsInPickerMode;
 
     internal bool IsInPickerMode => _vm?.IsInPickerMode ?? true;
 

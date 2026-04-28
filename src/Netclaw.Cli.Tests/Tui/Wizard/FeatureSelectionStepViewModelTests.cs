@@ -2,44 +2,25 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
-public sealed class FeatureSelectionStepViewModelTests : IDisposable
+public sealed class FeatureSelectionStepViewModelTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
-
-    public FeatureSelectionStepViewModelTests()
+    public override void Dispose()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        _context.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
+        Context.Dispose();
+        base.Dispose();
     }
 
     [Fact]
     public void IsApplicable_Personal_ReturnsFalse()
     {
-        _context.SelectedPosture = DeploymentPosture.Personal;
+        Context.SelectedPosture = DeploymentPosture.Personal;
         using var step = new FeatureSelectionStepViewModel();
 
-        Assert.False(step.IsApplicable(_context));
+        Assert.False(step.IsApplicable(Context));
     }
 
     [Theory]
@@ -47,19 +28,19 @@ public sealed class FeatureSelectionStepViewModelTests : IDisposable
     [InlineData(DeploymentPosture.Public)]
     public void IsApplicable_TeamAndPublic_ReturnsTrue(DeploymentPosture posture)
     {
-        _context.SelectedPosture = posture;
+        Context.SelectedPosture = posture;
         using var step = new FeatureSelectionStepViewModel();
 
-        Assert.True(step.IsApplicable(_context));
+        Assert.True(step.IsApplicable(Context));
     }
 
     [Fact]
     public void OnEnter_PublicPosture_AllFeaturesDefaultOff()
     {
-        _context.SelectedPosture = DeploymentPosture.Public;
+        Context.SelectedPosture = DeploymentPosture.Public;
         using var step = new FeatureSelectionStepViewModel();
 
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         for (var i = 0; i < FeatureSelectionStepViewModel.FeatureNames.Length; i++)
         {
@@ -71,10 +52,10 @@ public sealed class FeatureSelectionStepViewModelTests : IDisposable
     [Fact]
     public void OnEnter_TeamPosture_AllFeaturesDefaultOn()
     {
-        _context.SelectedPosture = DeploymentPosture.Team;
+        Context.SelectedPosture = DeploymentPosture.Team;
         using var step = new FeatureSelectionStepViewModel();
 
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         for (var i = 0; i < FeatureSelectionStepViewModel.FeatureNames.Length; i++)
         {
@@ -86,32 +67,32 @@ public sealed class FeatureSelectionStepViewModelTests : IDisposable
     [Fact]
     public void OnEnter_Backward_DoesNotResetFlags()
     {
-        _context.SelectedPosture = DeploymentPosture.Public;
+        Context.SelectedPosture = DeploymentPosture.Public;
         using var step = new FeatureSelectionStepViewModel();
 
         // Enter forward (all off for Public)
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
         // Toggle memory on
         step.ToggleFeature(0);
         Assert.True(step.IsFeatureEnabled(0));
 
         // Re-enter backward — should preserve manual toggles
-        step.OnEnter(_context, NavigationDirection.Back);
+        step.OnEnter(Context, NavigationDirection.Back);
         Assert.True(step.IsFeatureEnabled(0));
     }
 
     [Fact]
     public void ContributeConfig_WritesEnabledFlags_MatchingToggles()
     {
-        _context.SelectedPosture = DeploymentPosture.Public;
+        Context.SelectedPosture = DeploymentPosture.Public;
         using var step = new FeatureSelectionStepViewModel();
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         // All off by default for Public — selectively enable memory and scheduling
         step.ToggleFeature(0); // Memory
         step.ToggleFeature(3); // Scheduling
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
 
         Assert.NotNull(builder.FeatureSelections);
@@ -126,14 +107,14 @@ public sealed class FeatureSelectionStepViewModelTests : IDisposable
     [Fact]
     public void ContributeConfig_MergesEnabledFlags_IntoConfigDictionary()
     {
-        _context.SelectedPosture = DeploymentPosture.Team;
+        Context.SelectedPosture = DeploymentPosture.Team;
         using var step = new FeatureSelectionStepViewModel();
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         // Team defaults all on — disable SubAgents
         step.ToggleFeature(4);
 
-        var builder = new WizardConfigBuilder(_context.Paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         step.ContributeConfig(builder);
         var config = builder.BuildConfigDictionary();
 
@@ -149,21 +130,21 @@ public sealed class FeatureSelectionStepViewModelTests : IDisposable
     [Fact]
     public void OnLeave_PublishesFeatureSelectionsToContext()
     {
-        _context.SelectedPosture = DeploymentPosture.Public;
+        Context.SelectedPosture = DeploymentPosture.Public;
         using var step = new FeatureSelectionStepViewModel();
-        step.OnEnter(_context, NavigationDirection.Forward);
+        step.OnEnter(Context, NavigationDirection.Forward);
 
         // Enable search only
         step.ToggleFeature(1);
         step.OnLeave();
 
-        Assert.NotNull(_context.FeatureSelections);
-        Assert.False(_context.FeatureSelections!.MemoryEnabled);
-        Assert.True(_context.FeatureSelections.SearchEnabled);
-        Assert.False(_context.FeatureSelections.SkillsEnabled);
-        Assert.False(_context.FeatureSelections.SchedulingEnabled);
-        Assert.False(_context.FeatureSelections.SubAgentsEnabled);
-        Assert.False(_context.FeatureSelections.WebhooksEnabled);
+        Assert.NotNull(Context.FeatureSelections);
+        Assert.False(Context.FeatureSelections!.MemoryEnabled);
+        Assert.True(Context.FeatureSelections.SearchEnabled);
+        Assert.False(Context.FeatureSelections.SkillsEnabled);
+        Assert.False(Context.FeatureSelections.SchedulingEnabled);
+        Assert.False(Context.FeatureSelections.SubAgentsEnabled);
+        Assert.False(Context.FeatureSelections.WebhooksEnabled);
     }
 
     private static void AssertSectionEnabled(Dictionary<string, object> config, string sectionKey, bool expected)
