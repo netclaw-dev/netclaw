@@ -74,10 +74,20 @@ public sealed class SkillFeedsStepView : IWizardStepView
             })
             .DisposeWith(callbacks.Subscriptions);
 
+        var infoContent = Layouts.Vertical()
+            .WithChild(new TextNode("Any server implementing the Cloudflare Agents Skills Discovery protocol can distribute skills to Netclaw. Use ours or bring your own:")
+                .WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("https://github.com/netclaw-dev/skill-server")
+                .WithForeground(Color.Cyan));
+
         return Layouts.Vertical()
             .WithChild(new TextNode("  Connect to a private skill server?").WithForeground(Color.White))
-            .WithChild(new TextNode("  Organizations can host skill servers to distribute").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("  skills to all Netclaw instances automatically.").WithForeground(Color.BrightBlack))
+            .WithSpacing(1)
+            .WithChild(new PanelNode()
+                .WithTitle("ℹ  What's a skill server?")
+                .WithBorder(BorderStyle.Rounded)
+                .WithBorderColor(Color.Gray)
+                .WithContent(infoContent))
             .WithSpacing(1)
             .WithChild(_connectList);
     }
