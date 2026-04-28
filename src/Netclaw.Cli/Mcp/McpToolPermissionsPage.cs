@@ -14,8 +14,10 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 {
     private SelectionListNode<string>? _serverList;
     private DynamicLayoutNode? _contentNode;
+    private DynamicLayoutNode? _footerNode;
     private readonly CompositeDisposable _stepSubs = new();
     private int _gridCursor;
+    private bool _confirmingSave;
 
     private const int AudienceRow = 0;
     private const int ServerEnabledRow = 1;
@@ -158,12 +160,6 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             : sdNode.WithForeground(ColorForMode(serverDefault));
         layout = layout.WithChild(sdNode);
 
-        if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
-        {
-            layout = layout.WithSpacing(1)
-                .WithChild(new TextNode($"  {ViewModel.StatusMessage.Value}").WithForeground(Color.Green));
-        }
-
         layout = layout.WithSpacing(1);
 
         // Tool rows
@@ -208,32 +204,58 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
     private LayoutNode BuildFooter()
     {
-        var footerNode = new DynamicLayoutNode(() =>
+        _footerNode = new DynamicLayoutNode(() =>
         {
+            if (_confirmingSave)
+            {
+                return new TextNode("Save changes?  [Y] Yes  [N] No  [Esc] Cancel")
+                    .WithForeground(Color.Yellow).Bold();
+            }
+
             var hints = ViewModel.CurrentState.Value switch
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[↑/↓] Navigate  [←/→] Change  [Enter] Toggle  [A] All  [S] Save  [Esc] Back",
+                    "[↑/↓] Navigate  [←/→] Change  [Space] Toggle  [A] All  [Enter] Done  [Esc] Back",
                 _ => ""
             };
 
-            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid && ViewModel.HasUnsavedChanges)
+            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid)
             {
-                return Layouts.Horizontal()
-                    .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                    .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
+                var statusText = ViewModel.StatusMessage.Value;
+                var hasStatus = !string.IsNullOrEmpty(statusText);
+                var isError = hasStatus && statusText.StartsWith("Save failed", StringComparison.Ordinal);
+
+                if (isError)
+                {
+                    return Layouts.Horizontal()
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Red));
+                }
+
+                if (ViewModel.HasUnsavedChanges)
+                {
+                    return Layouts.Horizontal()
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                        .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
+                }
+
+                if (hasStatus)
+                {
+                    return Layouts.Horizontal()
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Green));
+                }
             }
 
             return new TextNode(hints).WithForeground(Color.BrightBlack);
         });
 
-        // Footer must invalidate on state changes to show correct hints
         ViewModel.StateVersion
-            .Subscribe(_ => footerNode.Invalidate())
+            .Subscribe(_ => _footerNode.Invalidate())
             .DisposeWith(Subscriptions);
 
-        return footerNode;
+        return _footerNode;
     }
 
     private void HandleKeyPress(KeyPressed key)
@@ -244,6 +266,13 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             ViewModel.RequestQuit();
+            return;
+        }
+
+        // Handle save confirmation dialog
+        if (_confirmingSave)
+        {
+            HandleConfirmation(keyInfo);
             return;
         }
 
@@ -282,13 +311,12 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                     HandleLeftArrow();
                     return;
 
-                case ConsoleKey.Enter:
-                    HandleEnter();
+                case ConsoleKey.Spacebar:
+                    HandleToggle();
                     return;
 
-                case ConsoleKey.S:
-                    ViewModel.Save();
-                    InvalidateAndRedraw();
+                case ConsoleKey.Enter:
+                    HandleDone();
                     return;
 
                 case ConsoleKey.A:
@@ -314,10 +342,6 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
             switch (keyInfo.KeyChar)
             {
-                case 's':
-                    ViewModel.Save();
-                    InvalidateAndRedraw();
-                    return;
                 case 'a' when ViewModel.IsServerAllowedForSelectedAudience():
                     ViewModel.ToggleAll();
                     return;
@@ -395,7 +419,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         }
     }
 
-    private void HandleEnter()
+    private void HandleToggle()
     {
         switch (_gridCursor)
         {
@@ -420,9 +444,58 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         }
     }
 
+    private void HandleDone()
+    {
+        if (ViewModel.HasUnsavedChanges)
+        {
+            _confirmingSave = true;
+            InvalidateAndRedraw();
+        }
+        else
+        {
+            _gridCursor = 0;
+            ViewModel.GoBack();
+        }
+    }
+
+    private void HandleConfirmation(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Y:
+                _confirmingSave = false;
+                try
+                {
+                    ViewModel.Save();
+                }
+                catch (Exception ex)
+                {
+                    ViewModel.StatusMessage.Value = $"Save failed: {ex.Message}";
+                    InvalidateAndRedraw();
+                    return;
+                }
+                _gridCursor = 0;
+                ViewModel.GoBack();
+                break;
+
+            case ConsoleKey.N:
+                _confirmingSave = false;
+                _gridCursor = 0;
+                ViewModel.DiscardChanges();
+                ViewModel.GoBack();
+                break;
+
+            case ConsoleKey.Escape:
+                _confirmingSave = false;
+                InvalidateAndRedraw();
+                break;
+        }
+    }
+
     private void InvalidateAndRedraw()
     {
         _contentNode?.Invalidate();
+        _footerNode?.Invalidate();
         ViewModel.RequestRedraw();
     }
 }

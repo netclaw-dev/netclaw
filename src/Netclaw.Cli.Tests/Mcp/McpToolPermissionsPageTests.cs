@@ -139,7 +139,7 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     }
 
     [Fact]
-    public async Task ToolGrid_EnterOnServerEnabledRow_TogglesServerAccess()
+    public async Task ToolGrid_SpaceOnServerEnabledRow_TogglesServerAccess()
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
@@ -148,9 +148,9 @@ public sealed class McpToolPermissionsPageTests : IDisposable
 
         var wasBefore = vm.IsServerAllowedForSelectedAudience();
 
-        // Navigate to row 1 (Server enabled), Enter toggles.
+        // Navigate to row 1 (Server enabled), Space toggles.
         input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Spacebar);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -160,7 +160,7 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     }
 
     [Fact]
-    public async Task ToolGrid_EnterOnToolRow_TogglesTool()
+    public async Task ToolGrid_SpaceOnToolRow_TogglesTool()
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
@@ -173,11 +173,11 @@ public sealed class McpToolPermissionsPageTests : IDisposable
 
         var wasBefore = vm.IsToolGranted(new ToolName("create-pages"));
 
-        // Navigate to row 3 (first tool), Enter toggles grant.
+        // Navigate to row 3 (first tool), Space toggles grant.
         input.EnqueueKey(ConsoleKey.DownArrow); // row 1
         input.EnqueueKey(ConsoleKey.DownArrow); // row 2
         input.EnqueueKey(ConsoleKey.DownArrow); // row 3 (first tool)
-        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Spacebar);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -213,23 +213,69 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     }
 
     [Fact]
-    public async Task ToolGrid_SaveClearsUnsavedState()
+    public async Task ToolGrid_EnterThenY_SavesAndGoesBack()
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
 
         vm.InitializeForTests(new McpServerName("notion"), ["create-pages"]);
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        // Make a change (toggle server access) then save.
+        // Make a change (toggle server access via Space), then Enter → Y to save.
         input.EnqueueKey(ConsoleKey.DownArrow); // row 1 (server enabled)
-        input.EnqueueKey(ConsoleKey.Enter);     // toggle → creates unsaved state
-        input.EnqueueKey(ConsoleKey.S);         // save
+        input.EnqueueKey(ConsoleKey.Spacebar);  // toggle → creates unsaved state
+        input.EnqueueKey(ConsoleKey.Enter);     // triggers confirmation
+        input.EnqueueKey(ConsoleKey.Y);         // confirm save → goes back to server list
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
         Assert.False(vm.HasUnsavedChanges);
+        Assert.Equal(ToolPermissionsState.ServerList, vm.CurrentState.Value);
+    }
+
+    [Fact]
+    public async Task ToolGrid_EnterThenN_DiscardsAndGoesBack()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        vm.InitializeForTests(new McpServerName("notion"), ["create-pages"]);
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        // Make a change, then Enter → N to discard.
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Spacebar);  // toggle → unsaved
+        input.EnqueueKey(ConsoleKey.Enter);     // triggers confirmation
+        input.EnqueueKey(ConsoleKey.N);         // discard → goes back
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.False(vm.HasUnsavedChanges);
+        Assert.Equal(ToolPermissionsState.ServerList, vm.CurrentState.Value);
+    }
+
+    [Fact]
+    public async Task ToolGrid_EnterThenEsc_CancelsConfirmation()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        vm.InitializeForTests(new McpServerName("notion"), ["create-pages"]);
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        // Make a change, then Enter → Esc to cancel confirmation and stay.
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Spacebar);  // toggle → unsaved
+        input.EnqueueKey(ConsoleKey.Enter);     // triggers confirmation
+        input.EnqueueKey(ConsoleKey.Escape);    // cancel → stays on tool grid
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(vm.HasUnsavedChanges);
+        Assert.Equal(ToolPermissionsState.ToolGrid, vm.CurrentState.Value);
     }
 
     [Fact]

@@ -420,13 +420,34 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public void Save()
     {
         if (!HasUnsavedChanges)
+        {
+            StatusMessage.Value = "No unsaved changes.";
+            NotifyStateChanged();
             return;
+        }
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var toolsSection = ConfigFileHelper.GetOrCreateSection(config, "Tools");
         var profilesSection = ConfigFileHelper.GetOrCreateSection(toolsSection, "AudienceProfiles");
 
-        // Write server access changes (AllowedMcpServers)
+        SaveServerAccess(profilesSection);
+        SaveToolGrants(profilesSection);
+        SaveServerDefaults(profilesSection);
+        SaveToolOverrides(profilesSection);
+
+        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+        _pendingGrants.Clear();
+        _pendingServerAccess.Clear();
+        _pendingServerDefaults.Clear();
+        _pendingToolOverrides.Clear();
+
+        StatusMessage.Value = "✓ Saved to netclaw.json. Restart daemon to apply changes.";
+        CurrentState.Value = ToolPermissionsState.ToolGrid;
+        NotifyStateChanged();
+    }
+
+    private void SaveServerAccess(Dictionary<string, object> profilesSection)
+    {
         foreach (var ((audienceName, serverName), allowed) in _pendingServerAccess)
         {
             var audienceSection = ConfigFileHelper.GetOrCreateSection(profilesSection, audienceName);
@@ -460,8 +481,10 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             else if (!allowed)
                 profile.AllowedMcpServers.RemoveAll(s => s.Equals(serverName, StringComparison.OrdinalIgnoreCase));
         }
+    }
 
-        // Write tool grant changes (McpServerToolGrants)
+    private void SaveToolGrants(Dictionary<string, object> profilesSection)
+    {
         foreach (var (serverName, audienceGrants) in _pendingGrants)
         {
             foreach (var (audienceName, tools) in audienceGrants)
@@ -471,10 +494,10 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
                 grants[serverName] = tools.Order(StringComparer.Ordinal).ToList();
             }
         }
+    }
 
-        // Mirroring in-memory Profiles alongside the on-disk writes lets
-        // GetEffectiveMode / GetServerDefault reflect saved values without
-        // a full config reload.
+    private void SaveServerDefaults(Dictionary<string, object> profilesSection)
+    {
         foreach (var ((audienceName, serverName), mode) in _pendingServerDefaults)
         {
             var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
@@ -482,7 +505,10 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             serverDefaults[serverName] = mode.ToString();
             inMemoryPolicy.McpServerDefaults[serverName] = mode;
         }
+    }
 
+    private void SaveToolOverrides(Dictionary<string, object> profilesSection)
+    {
         foreach (var ((audienceName, serverName, toolName), mode) in _pendingToolOverrides)
         {
             var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
@@ -500,15 +526,15 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
                 inMemoryPolicy.ToolOverrides[exactKey] = mode.Value;
             }
         }
+    }
 
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+    public void DiscardChanges()
+    {
         _pendingGrants.Clear();
         _pendingServerAccess.Clear();
         _pendingServerDefaults.Clear();
         _pendingToolOverrides.Clear();
-
-        StatusMessage.Value = "Saved to netclaw.json. Restart daemon to apply changes.";
-        CurrentState.Value = ToolPermissionsState.ToolGrid;
+        StatusMessage.Value = "";
         NotifyStateChanged();
     }
 
