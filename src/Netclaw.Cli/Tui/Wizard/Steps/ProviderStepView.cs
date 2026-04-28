@@ -33,7 +33,7 @@ public sealed class ProviderStepView : IWizardStepView
     private bool _manualModelEntry;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;
-    private int _currentSubStep;
+    private ProviderStepViewModel? _vm;
 
     public ProviderStepView(IClipboardService? clipboardService = null)
     {
@@ -41,12 +41,12 @@ public sealed class ProviderStepView : IWizardStepView
     }
 
     public string StepId => WizardStepIds.Provider;
-    public bool ManagesOwnFocusState => _currentSubStep is 3 or 5 or 6;
+    public bool ManagesOwnFocusState => (_vm?.CurrentSubStep ?? 0) is 3 or 5 or 6;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (ProviderStepViewModel)stepVm;
-        _currentSubStep = vm.CurrentSubStep;
+        _vm = vm;
 
         return vm.CurrentSubStep switch
         {

@@ -24,6 +24,7 @@ public abstract class WizardStepTestBase : IDisposable
 
     public virtual void Dispose()
     {
+        Context.Dispose();
         if (Directory.Exists(_tempDir))
             Directory.Delete(_tempDir, true);
     }

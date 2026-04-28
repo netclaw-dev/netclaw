@@ -12,12 +12,6 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     private readonly FakeSlackProbe _fakeProbe = new();
     private readonly FakeDiscordProbe _fakeDiscordProbe = new();
 
-    public override void Dispose()
-    {
-        Context.Dispose();
-        base.Dispose();
-    }
-
     [Fact]
     public void StepId_IsChannelPicker()
     {

@@ -37,7 +37,6 @@ public sealed class SecurityPostureStepView : IWizardStepView
         postureList.OnFocused();
         _lastFocusedList = postureList;
 
-        // Wire selection -> set VM state -> advance wizard
         postureList.SelectionConfirmed
             .Subscribe(selected =>
             {

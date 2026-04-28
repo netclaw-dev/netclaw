@@ -1,7 +1,6 @@
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Configuration;
-using Netclaw.Providers;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
@@ -10,36 +9,14 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 /// Tests for <see cref="WizardOrchestrator"/> step sequencing, conditional inclusion,
 /// and navigation with <see cref="NavigationDirection"/>.
 /// </summary>
-public sealed class WizardOrchestratorTests : IDisposable
+public sealed class WizardOrchestratorTests : WizardStepTestBase
 {
-    private readonly string _tempDir;
-    private readonly WizardContext _context;
-
-    public WizardOrchestratorTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
-        paths.EnsureDirectoriesExist();
-
-        _context = new WizardContext
-        {
-            Paths = paths,
-            Registry = new ProviderDescriptorRegistry([]),
-            RequestRedraw = () => { }
-        };
-    }
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
 
     [Fact]
     public void Constructor_EntersFirstStep_Forward()
     {
         var steps = CreateSteps("a", "b", "c");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.Equal("a", orchestrator.CurrentStep!.StepId);
         Assert.Equal(NavigationDirection.Forward, ((FakeStep)steps[0]).LastEntryDirection);
@@ -49,7 +26,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void ActiveStepCount_ReflectsApplicableSteps()
     {
         var steps = CreateSteps("a", "b", "c");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.Equal(3, orchestrator.ActiveStepCount);
     }
@@ -59,7 +36,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     {
         var steps = CreateSteps("a", "b", "c");
         // Steps with 0 sub-steps always return false from TryAdvance
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.True(orchestrator.GoNext());
         Assert.Equal("b", orchestrator.CurrentStep!.StepId);
@@ -72,7 +49,7 @@ public sealed class WizardOrchestratorTests : IDisposable
         var steps = CreateSteps("a", "b", "c");
         ((FakeStep)steps[0]).SetSubStepCount(3); // 3 sub-steps
 
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         // First advance: sub-step 0 → 1 (handled internally)
         Assert.True(orchestrator.GoNext());
@@ -93,7 +70,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void GoNext_ReturnsFalse_AtEnd()
     {
         var steps = CreateSteps("a");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.False(orchestrator.GoNext()); // only one step, already complete
     }
@@ -104,7 +81,7 @@ public sealed class WizardOrchestratorTests : IDisposable
         var steps = CreateSteps("a", "b", "c");
         ((FakeStep)steps[1]).Applicable = false; // b is not applicable
 
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.Equal(2, orchestrator.ActiveStepCount);
         Assert.True(orchestrator.GoNext());
@@ -115,7 +92,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void GoBack_ReturnsToPreviousStep_WithBackDirection()
     {
         var steps = CreateSteps("a", "b", "c");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         orchestrator.GoNext(); // → b
         Assert.Equal("b", orchestrator.CurrentStep!.StepId);
@@ -131,7 +108,7 @@ public sealed class WizardOrchestratorTests : IDisposable
         var steps = CreateSteps("a", "b");
         ((FakeStep)steps[0]).SetSubStepCount(3);
 
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         // Advance through all sub-steps of a, then to b
         orchestrator.GoNext(); // sub-step 1
@@ -151,7 +128,7 @@ public sealed class WizardOrchestratorTests : IDisposable
         var steps = CreateSteps("a", "b");
         ((FakeStep)steps[1]).SetSubStepCount(3);
 
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         orchestrator.GoNext(); // → b (sub-step 0)
         orchestrator.GoNext(); // b sub-step 1
@@ -178,7 +155,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void GoBack_ReturnsFalse_AtBeginning()
     {
         var steps = CreateSteps("a", "b");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.False(orchestrator.GoBack()); // already at first step
     }
@@ -189,7 +166,7 @@ public sealed class WizardOrchestratorTests : IDisposable
         var steps = CreateSteps("a", "b", "c");
         ((FakeStep)steps[1]).Applicable = false;
 
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         orchestrator.GoNext(); // → c (skipping b)
         Assert.Equal("c", orchestrator.CurrentStep!.StepId);
@@ -202,7 +179,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void GetDisplayStepNumber_ReturnsOneBased()
     {
         var steps = CreateSteps("a", "b", "c");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.Equal(1, orchestrator.GetDisplayStepNumber());
 
@@ -219,7 +196,7 @@ public sealed class WizardOrchestratorTests : IDisposable
         var steps = CreateSteps("a", "b", "c");
         ((FakeStep)steps[1]).Applicable = false;
 
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.Equal(1, orchestrator.GetDisplayStepNumber("a"));
         Assert.Equal(-1, orchestrator.GetDisplayStepNumber("b")); // not active
@@ -230,7 +207,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void CurrentStepIndex_UpdatesOnNavigation()
     {
         var steps = CreateSteps("a", "b", "c");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         Assert.Equal(0, orchestrator.CurrentStepIndex.Value);
 
@@ -252,7 +229,7 @@ public sealed class WizardOrchestratorTests : IDisposable
 
         // Channels starts as applicable
         channelsStep.Applicable = true;
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
         Assert.Equal(3, orchestrator.ActiveStepCount);
 
         // Step a completes and sets AnyChatServicesEnabled = false
@@ -268,7 +245,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void Dispose_DisposesAllSteps()
     {
         var steps = CreateSteps("a", "b");
-        var orchestrator = new WizardOrchestrator(steps, _context);
+        var orchestrator = new WizardOrchestrator(steps, Context);
 
         orchestrator.Dispose();
 
@@ -280,7 +257,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void OnLeave_CalledOnCurrentStep_WhenAdvancing()
     {
         var steps = CreateSteps("a", "b");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         orchestrator.GoNext();
 
@@ -291,7 +268,7 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void OnLeave_CalledOnCurrentStep_WhenGoingBack()
     {
         var steps = CreateSteps("a", "b");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
         orchestrator.GoNext(); // → b
         orchestrator.GoBack(); // → a
@@ -303,11 +280,11 @@ public sealed class WizardOrchestratorTests : IDisposable
     public void StatusMessage_ClearedOnNavigation()
     {
         var steps = CreateSteps("a", "b");
-        using var orchestrator = new WizardOrchestrator(steps, _context);
+        using var orchestrator = new WizardOrchestrator(steps, Context);
 
-        _context.StatusMessage.Value = "some error";
+        Context.StatusMessage.Value = "some error";
         orchestrator.GoNext();
-        Assert.Equal("", _context.StatusMessage.Value);
+        Assert.Equal("", Context.StatusMessage.Value);
     }
 
     // ── Helpers ──

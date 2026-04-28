@@ -8,12 +8,6 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public sealed class FeatureSelectionStepViewModelTests : WizardStepTestBase
 {
-    public override void Dispose()
-    {
-        Context.Dispose();
-        base.Dispose();
-    }
-
     [Fact]
     public void IsApplicable_Personal_ReturnsFalse()
     {

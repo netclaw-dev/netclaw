@@ -34,10 +34,10 @@ public sealed class BrowserAutomationStepView : IWizardStepView
 
     private ILayoutNode BuildEnableSubStep(BrowserAutomationStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var noOption = new EnableOption(false, "No — skip browser automation for now");
-        var yesOption = new EnableOption(true, "Yes — configure browser MCP tools");
+        var noOption = new SelectionOption<bool>(false, "No — skip browser automation for now");
+        var yesOption = new SelectionOption<bool>(true, "Yes — configure browser MCP tools");
 
-        var enabledList = Layouts.SelectionList<EnableOption>(
+        var enabledList = Layouts.SelectionList<SelectionOption<bool>>(
                 [noOption, yesOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -67,10 +67,10 @@ public sealed class BrowserAutomationStepView : IWizardStepView
         var chromeLabel = vm.IsChromeDevToolsAvailable
             ? "Chrome DevTools MCP"
             : $"Chrome DevTools MCP (disabled - {vm.ChromeDevToolsUnavailableReason})";
-        var chromeOption = new BrowserBackendOption(BrowserAutomationBackend.ChromeDevTools, chromeLabel);
-        var playwrightOption = new BrowserBackendOption(BrowserAutomationBackend.Playwright, "Playwright MCP");
+        var chromeOption = new SelectionOption<BrowserAutomationBackend>(BrowserAutomationBackend.ChromeDevTools, chromeLabel);
+        var playwrightOption = new SelectionOption<BrowserAutomationBackend>(BrowserAutomationBackend.Playwright, "Playwright MCP");
 
-        var backendList = Layouts.SelectionList<BrowserBackendOption>(
+        var backendList = Layouts.SelectionList<SelectionOption<BrowserAutomationBackend>>(
                 [chromeOption, playwrightOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -119,14 +119,4 @@ public sealed class BrowserAutomationStepView : IWizardStepView
         _enabledList = null;
         _backendList = null;
     }
-}
-
-file record EnableOption(bool Value, string Label)
-{
-    public override string ToString() => Label;
-}
-
-file record BrowserBackendOption(BrowserAutomationBackend Value, string Label)
-{
-    public override string ToString() => Label;
 }

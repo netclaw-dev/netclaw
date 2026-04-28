@@ -37,14 +37,14 @@ public sealed class SearchStepView : IWizardStepView
 
     private ILayoutNode BuildBackendSelection(SearchStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var duckDuckGoOption = new SearchBackendOption(SearchBackend.DuckDuckGo,
+        var duckDuckGoOption = new SelectionOption<SearchBackend>(SearchBackend.DuckDuckGo,
             "DuckDuckGo (default — no config needed, may hit bot detection)");
-        var braveOption = new SearchBackendOption(SearchBackend.Brave,
+        var braveOption = new SelectionOption<SearchBackend>(SearchBackend.Brave,
             "Brave Search (API key required — reliable, fast)");
-        var searxngOption = new SearchBackendOption(SearchBackend.SearXng,
+        var searxngOption = new SelectionOption<SearchBackend>(SearchBackend.SearXng,
             "SearXNG (self-hosted — endpoint required)");
 
-        var backendList = Layouts.SelectionList<SearchBackendOption>(
+        var backendList = Layouts.SelectionList<SelectionOption<SearchBackend>>(
                 [duckDuckGoOption, braveOption, searxngOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -152,9 +152,4 @@ public sealed class SearchStepView : IWizardStepView
         _braveApiKeyInput = null;
         _searxngEndpointInput = null;
     }
-}
-
-file record SearchBackendOption(SearchBackend Value, string Label)
-{
-    public override string ToString() => Label;
 }

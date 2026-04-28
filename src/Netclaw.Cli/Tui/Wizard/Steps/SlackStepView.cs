@@ -19,7 +19,7 @@ public sealed class SlackStepView : IWizardStepView
     private TextInputNode? _appTokenInput;
     private TextInputNode? _channelNamesInput;
     private SelectionListNode<string>? _dmEnabledList;
-    private SelectionListNode<string>? _userAccessChoiceList;
+    private IDisposable? _userAccessChoiceList;
     private TextInputNode? _allowedUserIdsInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;

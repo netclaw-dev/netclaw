@@ -18,7 +18,7 @@ public sealed class DiscordStepView : IWizardStepView
     private TextInputNode? _botTokenInput;
     private TextInputNode? _channelIdsInput;
     private SelectionListNode<string>? _dmEnabledList;
-    private SelectionListNode<string>? _userAccessChoiceList;
+    private IDisposable? _userAccessChoiceList;
     private TextInputNode? _allowedUserIdsInput;
     private IFocusable? _lastFocusedList;
     private TextInputBaseNode? _lastFocusedInput;

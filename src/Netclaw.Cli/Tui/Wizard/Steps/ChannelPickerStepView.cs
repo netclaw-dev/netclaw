@@ -19,7 +19,7 @@ public sealed class ChannelPickerStepView : IWizardStepView
     public bool ManagesOwnFocusState => true;
     public bool CapturesInput => IsInPickerMode;
 
-    internal bool IsInPickerMode => _vm?.IsInPickerMode ?? true;
+    internal bool IsInPickerMode => _vm?.IsInPickerMode ?? false;
 
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {

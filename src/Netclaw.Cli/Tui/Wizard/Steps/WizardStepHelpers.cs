@@ -9,13 +9,14 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 internal static class WizardStepHelpers
 {
-    internal static (SelectionListNode<string> List, ILayoutNode Layout) BuildUserAccessChoiceSubStep(
+    internal static (SelectionListNode<SelectionOption<bool>> List, ILayoutNode Layout) BuildUserAccessChoiceSubStep(
         Action<bool> setRestrict, StepViewCallbacks callbacks)
     {
-        var restrictLabel = "Restrict to specific users (recommended)";
-        var allowLabel = "Allow anyone in allowed channels";
+        var restrictOption = new SelectionOption<bool>(true, "Restrict to specific users (recommended)");
+        var allowOption = new SelectionOption<bool>(false, "Allow anyone in allowed channels");
 
-        var list = Layouts.SelectionList(restrictLabel, allowLabel)
+        var list = Layouts.SelectionList<SelectionOption<bool>>(
+                [restrictOption, allowOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
@@ -27,7 +28,7 @@ internal static class WizardStepHelpers
                 if (selected.Count == 0)
                     return;
 
-                setRestrict(selected[0] == restrictLabel);
+                setRestrict(selected[0].Value);
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -55,4 +56,9 @@ internal static class WizardStepHelpers
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.Ordinal)
                 .ToList();
+}
+
+internal sealed record SelectionOption<T>(T Value, string Label)
+{
+    public override string ToString() => Label;
 }

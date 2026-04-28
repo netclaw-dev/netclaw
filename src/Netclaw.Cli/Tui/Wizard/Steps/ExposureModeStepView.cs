@@ -40,16 +40,16 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildModeSelection(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var localOption = new ExposureModeOption(ExposureMode.Local,
+        var localOption = new SelectionOption<ExposureMode>(ExposureMode.Local,
             "Local — loopback only, safest (recommended)");
-        var serveOption = new ExposureModeOption(ExposureMode.TailscaleServe,
+        var serveOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleServe,
             "Tailscale Serve — accessible within your tailnet");
-        var funnelOption = new ExposureModeOption(ExposureMode.TailscaleFunnel,
+        var funnelOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleFunnel,
             "Tailscale Funnel — public internet ⚠");
-        var cloudflareOption = new ExposureModeOption(ExposureMode.CloudflareTunnel,
+        var cloudflareOption = new SelectionOption<ExposureMode>(ExposureMode.CloudflareTunnel,
             "Cloudflare Tunnel — public internet ⚠");
 
-        var modeList = Layouts.SelectionList<ExposureModeOption>(
+        var modeList = Layouts.SelectionList<SelectionOption<ExposureMode>>(
                 [localOption, serveOption, funnelOption, cloudflareOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -147,13 +147,13 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildWebhookToggle(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var disableOption = new WebhookOption(false, "No — do not accept inbound webhooks (default)");
-        var enableOption = new WebhookOption(true, "Yes — accept inbound webhook requests");
+        var disableOption = new SelectionOption<bool>(false, "No — do not accept inbound webhooks (default)");
+        var enableOption = new SelectionOption<bool>(true, "Yes — accept inbound webhook requests");
 
         _modeList = null;
         _confirmList = null;
 
-        var webhookList = Layouts.SelectionList<WebhookOption>(
+        var webhookList = Layouts.SelectionList<SelectionOption<bool>>(
                 [disableOption, enableOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
@@ -206,14 +206,4 @@ public sealed class ExposureModeStepView : IWizardStepView
         _confirmList = null;
         _webhookList = null;
     }
-}
-
-file record ExposureModeOption(ExposureMode Value, string Label)
-{
-    public override string ToString() => Label;
-}
-
-file record WebhookOption(bool Value, string Label)
-{
-    public override string ToString() => Label;
 }
