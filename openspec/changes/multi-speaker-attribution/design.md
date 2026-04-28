@@ -1,128 +1,228 @@
 ## Context
 
-Netclaw's channel adapters support threaded conversations on Slack and Discord.
-When a bot is mentioned mid-thread, the thread history backfill pipeline
-hydrates prior messages into the first LLM turn. Today, hydrated messages carry
-raw platform IDs (`<user: U0123, 2026-04-09 10:15 UTC>`) and live messages
-carry no speaker identity at all. Additionally, when `AllowedUserIds` restricts
-which users can interact with the bot, non-allowed users' messages in active
-threads are hard-blocked at the conversation actor level, even though the
-authorized user who tagged the bot may have intended their context to be visible.
+Netclaw's threaded adapters already need to hydrate prior thread messages when a
+bot is mentioned mid-thread. The open problem is authority, not retrieval: the
+system must let an authorized operator ask Netclaw to read the thread without
+letting every other speaker become an executable instruction source.
 
-The ACL layer currently has two outcomes: Allow and Deny. The Deny path drops
-messages before they reach the session binding actor. There is no intermediate
-state for "this user can't instruct the bot, but their message should be visible
-as context."
+The previous draft introduced an `Observe` ACL outcome and pushed unauthorized
+messages through the ordinary inbound path with role labels. That is not the
+smallest secure MVP. It still treats unauthorized live input as turn material,
+creates more ACL states than we need, and leaves too much ambiguity around what
+can trigger slash commands, approvals, jobs, reminders, and memory writes.
 
-The `ChannelPipeline.MapToCommand` method builds `SendUserMessage.Content` by
-joining `TextContent` parts. It does not inject any speaker metadata. The
-`MessageSource` (which carries `SenderId` and `Principal`) is marked
-`[ProtoIgnore]` and is not persisted — it is ephemeral ACL/audit metadata only.
+The revised model is stricter:
+
+- only authorized users create executable turns;
+- unauthorized or otherwise pending thread messages remain off the live turn
+  path;
+- when an authorized user speaks, the adapter hydrates the unsynced thread gap
+  into an explicit adopted-context window;
+- the system persists an adopted-context audit record and derives the model's
+  attribution projection from that record;
+- only the current authorized message is executable.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- The LLM can distinguish who said what in multi-party threads, both for
-  hydrated history and live ongoing messages.
-- Non-allowed users' messages in active threads are included as read-only
-  context with an "observer" role. The LLM is instructed not to execute
-  observer instructions.
-- A consistent speaker tag format across hydrated and live messages.
-- The system prompt explains the authorized/observer distinction when
-  `AllowedUserIds` is configured.
+- Preserve multi-speaker thread context for authorized users.
+- Keep execution authority fail-closed: only an authorized current message is
+  executable.
+- Persist enough adopted-context metadata for audit, replay, and later policy
+  review.
+- Make the LLM's framing unambiguous through canonical markers and escaping.
+- Keep scope to the smallest secure MVP without inventing a generalized
+  per-message authority engine.
 
 **Non-Goals:**
 
-- Display name resolution from platform APIs (future work — raw IDs only).
-- Changing the `AllowedUserIds` semantics for thread *creation*. Non-allowed
-  users still cannot start a session — Observe only applies to existing threads.
-- Per-message tool grant scoping based on speaker role (tool grants are
-  session-level, not per-turn).
-- Multi-speaker attribution for non-threaded channels (TUI, timer, SignalR).
+- Display-name resolution beyond stable platform ids.
+- Retroactive reclassification when ACL membership changes after adoption; the
+  MVP captures authority at inclusion time and preserves it.
+- Generalized support for multi-speaker authority on non-threaded transports.
+- Fine-grained partial execution inside adopted context; the window is entirely
+  quoted context in MVP.
 
 ## Decisions
 
-### D1: Third ACL outcome (Observe) vs. session-level filtering
+### D1: Remove `Observe`; keep ACL binary for executable turns
 
-**Decision**: Add `AclOutcome.Observe` to the ACL layer.
+**Decision**: Do not add a third ACL outcome.
 
-**Alternatives considered**:
-- *Session-level filtering*: Keep ACL as Allow/Deny. The binding actor checks
-  `AllowedUserIds` and sets Principal accordingly. Downside: the binding actor
-  needs access to the allow-list, which is currently a conversation-actor
-  concern. Leaks channel config into the session binding.
-- *Thread-context pass-through*: All messages in active threads pass through
-  regardless of AllowedUserIds. Downside: loses the explicit ACL audit trail
-  for observer messages.
+**Rationale**: The secure boundary is "who may create an executable turn," not
+"who may be visible somewhere in the thread." Unauthorized speakers do not need
+their own live inbound outcome because their messages can be recovered from the
+thread source when an authorized user later adopts the window. Keeping ACL
+binary reduces ambiguity and avoids accidental downstream treatment of
+unauthorized content as an ordinary turn.
 
-**Rationale**: The ACL layer already computes all the relevant signals
-(`AllowedUserIds`, `isExplicitUser`). Adding a third outcome there keeps the
-authorization decision in one place and provides a clean audit trail. The
-conversation actor already has `threadExists` from its routing policy check,
-so the new parameter is zero-cost.
+### D2: Use a per-thread authorized sync watermark
 
-### D2: IsObserver flag vs. Principal-only signaling
+**Decision**: Maintain a durable per-thread watermark representing the highest
+thread ordering key that has been included under an authorized turn.
 
-**Decision**: Add `bool IsObserver` to `ChannelInput` and inbound message
-records rather than relying on `PrincipalClassification.UntrustedExternal`.
+**Rationale**: This gives the threaded adapter a minimal, replay-safe way to
+compute the unsynced gap. Unauthorized live messages do not need to be
+persisted separately in the adapter. They remain pending in the source thread
+until the next authorized message adopts them.
 
-**Rationale**: `UntrustedExternal` is the default for all non-explicit users
-even when `AllowedUserIds` is empty (everyone is allowed). Using Principal
-alone conflates "no allow-list, everyone can instruct" with "allow-list
-active, this user is an observer." The explicit `IsObserver` flag is
-unambiguous.
+**Watermark semantics:**
 
-### D3: Speaker tags on all live messages vs. multi-speaker only
+- watermark is exclusive lower bound for the next adoption window;
+- current authorized message is the exclusive upper bound of the adopted window;
+- the threaded adapter owns source-thread gap fetch and watermark bookkeeping;
+- adopted-context persistence success is a prerequisite for enqueue;
+- the adapter advances the watermark only after the session confirms enqueue
+  success for the current authorized message;
+- if adopted-context persistence fails, the turn is not enqueued and the
+  watermark does not advance;
+- if enqueue fails after adoption persistence succeeds, the watermark does not
+  advance and the persisted adopted-context record remains a non-executed audit
+  artifact rather than proof of execution;
+- when no unsynced gap exists, no adopted-context record or projection is
+  created and the authorized message is sent as an ordinary authorized turn.
 
-**Decision**: Add `<speaker:>` tags on all live messages, even single-speaker
-sessions.
+### D3: Persist an adopted-context audit record before model execution
 
-**Rationale**: Consistency with hydrated history (which always has tags). The
-tag costs ~40 characters per message. Conditional tagging would require the
-pipeline to track whether multiple speakers have been seen, adding complexity
-for no meaningful benefit.
+**Decision**: The session owns adopted-context persistence and execution
+linkage. It persists at most one adopted-context record per authorized message
+identity when that message includes unsynced thread material.
 
-### D4: Prompt overlay vs. static AGENTS.md
+**Record fields (MVP minimum):**
 
-**Decision**: Use `SessionPipelineOptions.PromptOverlay` for the multi-speaker
-instruction-authority guidance.
+- session/thread id
+- authorizer identity for the current authorized message
+- sync lower bound and upper bound
+- included message ids and timestamps
+- included message sender ids
+- authority-at-inclusion for each included message
+- the canonical attribution projection actually fed to the model
+- execution linkage showing whether the authorized turn was enqueued
 
-**Rationale**: The guidance is conditional (only needed when `AllowedUserIds`
-is non-empty) and per-session. AGENTS.md is static disk content shared by all
-sessions. The overlay mechanism already exists and is plumbed through to the
-LLM session actor.
+**Idempotency basis:** `(session/thread id, current authorized message id)`.
+Retries or replays for the same authorized message SHALL reuse the existing
+adopted-context record and update its execution linkage rather than creating a
+duplicate record.
 
-### D5: Speaker tag format
+**Rationale**: The audit record is the authoritative source for what context was
+adopted, who authorized that adoption, and how the model saw it. This is enough
+for replay, incident review, and future UI work without persisting raw live
+unauthorized turns as if they were ordinary conversation history.
 
-**Decision**: `<speaker: {SenderId}, role={authorized|observer}, {ReceivedAt}>`
+### D4: Adopted context is explicit quoted context, not executable turn history
 
-**Rationale**: Extends the existing `<user:>` format with the role dimension.
-The angle-bracket format is already established in the hydration spec. Adding
-`role=` makes it machine-parseable while remaining human-readable.
+**Decision**: The model sees adopted thread material inside a dedicated adopted
+context window, followed by a separate current authorized executable message.
+
+**Rationale**: This preserves the useful thread context while making the trust
+boundary visible both to humans and to the model. It also gives downstream
+surfaces a stable rule: only the current authorized message can trigger actions.
+
+### D5: Canonical framing is projection-derived and escape-safe
+
+**Decision**: Define one canonical text projection for the model derived from the
+persisted record.
+
+**Canonical framing:**
+
+```text
+[adopted-context]
+[adopted-message id={messageId} author={senderId} authority-at-inclusion={authorized|pending} ts={timestamp}]
+{escaped message text}
+[/adopted-message]
+...
+[/adopted-context]
+[current-authorized-message author={senderId} ts={timestamp}]
+{escaped current authorized text}
+[/current-authorized-message]
+```
+
+**Escaping rule:** any user-originated line that begins with a reserved marker
+prefix (`[adopted-context]`, `[/adopted-context]`, `[adopted-message `,
+`[/adopted-message]`, `[current-authorized-message `,
+`[/current-authorized-message]`) SHALL be escaped by prefixing that line with a
+backslash in the projection. The persisted record SHALL store the escaped
+projection that was presented to the model.
+
+**Rationale**: Marker-level escaping is the smallest deterministic defense
+against content spoofing. It avoids introducing a full encoding layer while
+making projection and audit match exactly.
+
+### D6: Inclusion-time authority is captured, not recomputed later
+
+**Decision**: Each adopted message records authority-at-inclusion as either
+`authorized` or `pending`, based on the same live turn-creation authorization
+basis that governs the current inbound message at the moment of adoption.
+
+**Rationale**: This preserves the actual decision environment for audit. Later
+ACL changes do not mutate the historical record or the attribution projection
+that the model saw.
+
+### D7: Control surfaces key off the executable message only
+
+**Decision**: Slash-command dispatch, model turn execution, tool approvals,
+reminders, jobs, tool calls, and direct durable memory writes are all scoped to
+the current authorized message.
+
+**Rationale**: This keeps the authority model simple and complete. Adopted
+context can influence interpretation, but it cannot directly originate a control
+flow.
+
+### D8: Approval artifacts carry authorizer and adopted-speaker provenance
+
+**Decision**: Approval prompts and stored approval context SHALL identify the
+current authorizer for the executable message. When the adopted-context window
+for that turn is non-empty, those artifacts SHALL also indicate that adopted
+context was present for the turn and name the adopted speakers by stable sender
+id.
+
+**Rationale**: Approval is a security boundary. The approving human needs to see
+whose authority is executing the request and whether the request depends on
+quoted context from other speakers.
+
+## Flow
+
+1. A threaded inbound message arrives.
+2. ACL checks whether the sender is authorized to create an executable turn.
+3. If unauthorized:
+   - the adapter does not dispatch a model turn;
+   - no slash-command interception runs;
+   - no approval, reminder, job, tool call, or direct durable memory write path
+     begins;
+   - the message remains pending thread context in the source thread.
+4. If authorized:
+    - the threaded adapter loads the authorized sync watermark for the thread;
+    - it fetches unsynced thread messages between watermark and current message;
+    - it classifies each included message with authority-at-inclusion using the
+      same live turn-creation authorization basis applied to the inbound event;
+    - if the fetched gap is empty, it sends the current authorized message as an
+      ordinary authorized turn and advances the watermark only after session
+      confirmation that enqueue succeeded;
+    - otherwise it builds the canonical attribution projection;
+    - the session persists or reuses the adopted-context record keyed by the
+      current authorized message identity;
+    - if that persistence step fails, processing stops without enqueue or
+      watermark advancement;
+    - the session derives the executable turn from the persisted
+      adopted-context record;
+    - it enqueues one authorized executable turn consisting of adopted context
+      plus current authorized message;
+    - if enqueue fails, the watermark remains unchanged and the persisted
+      adopted-context record remains audit-only;
+    - after the session confirms enqueue success, the adapter advances the
+      watermark to the current authorized message.
 
 ## Risks / Trade-offs
 
-- **[Breaking tag format]** → Existing sessions with compacted history that
-  included the old `<user:>` format will see a format mismatch if the same
-  thread is re-hydrated. Mitigation: compacted history is a natural-language
-  summary, not raw tags. The tags only appear in the first-turn merged content,
-  which is itself compacted away on subsequent turns. No functional impact.
-
-- **[Observer prompt injection]** → An observer could craft a message designed
-  to trick the LLM into executing instructions despite the system prompt
-  guidance. Mitigation: observer messages still pass through the existing
-  `IPromptInjectionDetector` pipeline. The system prompt overlay is a
-  defense-in-depth layer, not the sole control. High-risk messages are
-  dropped regardless of role.
-
-- **[Token cost of universal speaker tags]** → Adding ~40 characters per
-  message increases token consumption slightly. Mitigation: negligible
-  compared to typical message content and tool call overhead.
-
-- **[Observe bypassing AllowedUserIds intent]** → Operators who set
-  `AllowedUserIds` may expect complete isolation from non-allowed users.
-  Mitigation: Observe only activates when a thread session already exists
-  (the authorized user chose to engage in that thread). Non-allowed users
-  still cannot create sessions. The observer role is clearly labeled and the
-  LLM is instructed not to follow their commands.
+- **Token cost increase**: explicit adopted-context framing adds overhead.
+  Acceptable for MVP because it buys a clear authority boundary.
+- **Authorized adoption can still carry malicious quoted text**: true, but this
+  is an intentional delegated-read act by an authorized user. Prompt-injection
+  scanning still applies to hydrated messages.
+- **No retroactive inclusion from deleted source messages after the fact**: if a
+  platform message disappears before an authorized adoption, it cannot be
+  included. Acceptable for MVP.
+- **Quoted-context persistence adds schema work**: yes, but the audit value is
+  worth the additive persistence cost and is smaller than persisting all pending
+  live unauthorized turns as ordinary history.

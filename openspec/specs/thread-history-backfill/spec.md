@@ -34,39 +34,31 @@ an implementation; adapters that do not SHALL NOT.
 - **AND** no cursor is advanced
 - **AND** no messages are posted to the channel
 
-### Requirement: Hydration merges into the triggering inbound event
+### Requirement: Hydration merges into an adopted-context window on authorized inbound
 
-Threaded channel adapters SHALL hydrate prior thread messages by merging
-them into the triggering inbound event's `ChannelInput` before enqueueing,
-not by delivering them as separate messages. The merged `ChannelInput` SHALL
-contain a single `TextContent` that frames the historical content with
-`[thread history — messages exchanged before this inbound event]` and
-`[end thread history]` delimiters, followed by the triggering message's
-live text. Image attachments from gap messages SHALL be appended as
-`DataContent` items on the merged `ChannelInput`. The session layer SHALL
-NOT receive a distinct "backfill" message.
+Threaded channel adapters SHALL hydrate prior thread messages only when an
+authorized inbound message is about to create an executable turn. The adapter
+SHALL merge unsynced prior thread messages into an explicit adopted-context
+window before the current authorized message, not as separate turns and not as
+ordinary live message history.
 
-#### Scenario: Merged input appears as a single user turn
+The session layer SHALL receive one authorized turn consisting of the adopted
+window plus the current authorized message. The session layer SHALL NOT receive
+distinct backfill turns for pending speakers.
 
-- **GIVEN** 3 gap messages and 1 triggering mention
-- **WHEN** hydration completes
-- **THEN** exactly one `SendUserMessage` reaches the session
-- **AND** the LLM sees the thread history and the live mention as a single
-  user turn
+#### Scenario: Unsynced thread gap adopted only on authorized inbound
 
-#### Scenario: Historical sender attribution included
+- **GIVEN** a thread contains prior unsynced messages
+- **WHEN** an authorized user sends the next inbound message
+- **THEN** the prior unsynced messages are hydrated into adopted context
+- **AND** the current authorized message is appended as the executable message
 
-- **GIVEN** a gap message from user `U0123` at `2026-04-09 10:15 UTC`
-- **WHEN** the merge runs
-- **THEN** the text block contains `<user: U0123, 2026-04-09 10:15 UTC>`
-  followed by that message's text
+#### Scenario: Unauthorized inbound does not trigger hydration turn
 
-#### Scenario: Image attachments preserved
-
-- **GIVEN** a gap message has one image attachment
-- **WHEN** the merge runs
-- **THEN** the image bytes appear as a `DataContent` on the merged input
-- **AND** the text block records `[image attachments: 1]` for that entry
+- **GIVEN** a non-allowed user sends a threaded message
+- **WHEN** no authorized user is speaking on that inbound event
+- **THEN** the adapter does not dispatch a hydrated turn
+- **AND** the message remains pending source-thread context
 
 ### Requirement: Multimodal content handling reuses the live pipeline
 
@@ -116,41 +108,100 @@ NOT silently pass unchecked content through the hydration path.
 - **AND** the adapter posts a user-visible warning in the thread once per
   inbound event
 
-### Requirement: Cursor-based gap computation and stale drop
+### Requirement: Authorized sync watermark and gap computation
 
-Threaded channel adapters SHALL maintain a durable per-thread cursor marking
-the most recently successfully processed inbound event. Inbound events whose
-ordering key (e.g., Slack `ts`) is at or before the cursor SHALL be dropped
-as stale with a telemetry counter recording the drop. On the first non-stale
-inbound per adapter runtime the adapter SHALL hydrate the gap of messages
-whose ordering key is strictly after the cursor and strictly before the
-triggering event. The cursor SHALL be advanced only after the triggering
-event has been enqueued onto the session input channel.
+Threaded channel adapters SHALL maintain a durable per-thread authorized sync
+watermark marking the highest thread ordering key already included under an
+authorized turn.
 
-#### Scenario: Replay after restart is filtered
+For a new authorized inbound with ordering key `Y`, the adapter SHALL hydrate
+messages whose ordering key is strictly greater than the watermark and strictly
+less than `Y`. The threaded adapter owns source-thread gap fetch and watermark
+bookkeeping, while the session owns adopted-context persistence and execution
+linkage. When the hydrated gap is non-empty, the adapter SHALL require
+adopted-context persistence to succeed before it asks the session to enqueue the
+authorized turn. The adapter SHALL advance the watermark to `Y` only after the
+session confirms that enqueue succeeded. If adopted-context persistence fails,
+the turn SHALL NOT be enqueued and the watermark SHALL NOT advance. If enqueue
+fails after persistence succeeds, the watermark SHALL NOT advance.
 
-- **GIVEN** the cursor persisted before restart is `X`
-- **WHEN** the adapter restarts and the transport replays an event with
-  ordering key `≤ X`
-- **THEN** the replayed event is dropped
-- **AND** a `stale_event` telemetry counter is incremented
+The idempotency basis for adopted-context persistence SHALL be the current
+authorized message identity within the session or thread. If the same
+authorized message is retried or replayed after a record has already been
+persisted, the session SHALL reuse the existing adopted-context record for that
+message rather than creating a duplicate.
 
-#### Scenario: Gap after restart is hydrated exactly once
+If no messages exist strictly between the watermark and `Y`, the adapter SHALL
+skip adopted-context persistence and adopted-context projection entirely and
+enqueue the current authorized message as an ordinary authorized turn.
 
-- **GIVEN** the persisted cursor is `X` and the first inbound after restart
-  has ordering key `Y > X`
-- **WHEN** the event is processed
-- **THEN** messages with ordering key strictly between `X` and `Y` are
-  merged into the triggering event
-- **AND** subsequent inbound events in the same runtime do not re-hydrate
+#### Scenario: First authorized turn adopts full prior gap
 
-#### Scenario: Cursor advances only after successful enqueue
+- **GIVEN** no watermark exists for a thread
+- **AND** an authorized inbound message arrives mid-thread
+- **WHEN** hydration runs
+- **THEN** all eligible prior thread messages before the current authorized
+  message are treated as unsynced and adopted
 
-- **GIVEN** hydration and merge succeed but the session input channel write
-  fails
-- **WHEN** the write failure is handled
-- **THEN** the cursor is not advanced
-- **AND** the next inbound event will attempt hydration again
+#### Scenario: Watermark advances after successful enqueue
+
+- **GIVEN** the current watermark is `X`
+- **AND** an authorized inbound with ordering key `Y > X` is processed
+- **WHEN** the resulting authorized turn is enqueued successfully
+- **THEN** the watermark advances to `Y`
+
+#### Scenario: Same authorized message replay reuses adopted-context record
+
+- **GIVEN** authorized inbound `Y` already has a persisted adopted-context
+  record for the same session and message identity
+- **AND** the watermark has not advanced past `Y`
+- **WHEN** that same authorized message is retried or replayed
+- **THEN** the existing adopted-context record is reused
+- **AND** no duplicate adopted-context record is created
+
+#### Scenario: Watermark does not advance on enqueue failure
+
+- **GIVEN** the current watermark is `X`
+- **AND** hydration for authorized inbound `Y` succeeds
+- **WHEN** turn enqueue fails
+- **THEN** the watermark remains `X`
+
+#### Scenario: Persistence failure blocks enqueue and watermark advance
+
+- **GIVEN** the current watermark is `X`
+- **AND** hydration for authorized inbound `Y` succeeds
+- **WHEN** adopted-context persistence fails
+- **THEN** the authorized turn is not enqueued
+- **AND** the watermark remains `X`
+
+#### Scenario: Inbound at or before watermark is stale for adoption
+
+- **GIVEN** the current authorized sync watermark is `X`
+- **WHEN** a threaded inbound event arrives with ordering key `<= X`
+- **THEN** the event is treated as stale for adoption-gap computation
+- **AND** no new unsynced adopted window is created from messages at or before
+  `X`
+
+### Requirement: Adopted-message inclusion metadata
+
+Each adopted message in the hydrated gap SHALL record message id, sender id,
+timestamp, and authority-at-inclusion. Authority-at-inclusion SHALL be captured
+at adoption time from the same live turn-creation authorization basis applied
+to the inbound event and SHALL be persisted in the adopted-context record.
+
+#### Scenario: Unauthorized speaker captured as pending at inclusion time
+
+- **GIVEN** `AllowedUserIds` contains `"U111"`
+- **AND** adopted gap history contains a message from `"U999"`
+- **WHEN** the adopted-context record is written
+- **THEN** that included message records `authority-at-inclusion=pending`
+
+#### Scenario: Authorized historical speaker captured as authorized at inclusion time
+
+- **GIVEN** `AllowedUserIds` contains `"U111"`
+- **AND** adopted gap history contains a message from `"U111"`
+- **WHEN** the adopted-context record is written
+- **THEN** that included message records `authority-at-inclusion=authorized`
 
 ### Requirement: No artificial hydration size cap
 
