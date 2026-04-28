@@ -128,6 +128,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         var layout = Layouts.Vertical()
             .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold());
 
+        // Row 0: Audience selector
         var audPrefix = _gridCursor == AudienceRow ? " ▶ " : "   ";
         var audText = $"{audPrefix}Audience: [◀ {audienceLabel,-8} ▶]";
         var audNode = new TextNode(audText);
@@ -138,6 +139,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         layout = layout.WithSpacing(1);
 
+        // Row 1: Server enabled
         var enPrefix = _gridCursor == ServerEnabledRow ? " ▶ " : "   ";
         var accessMarker = serverAllowed ? "✓" : " ";
         var enText = $"{enPrefix}[{accessMarker}] Server enabled for {audienceLabel}";
@@ -147,6 +149,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             : enNode.WithForeground(serverAllowed ? Color.White : Color.Yellow);
         layout = layout.WithChild(enNode);
 
+        // Row 2: Server default
         var sdPrefix = _gridCursor == ServerDefaultRow ? " ▶ " : "   ";
         var sdText = $"{sdPrefix}Server default: [{serverDefault}]";
         var sdNode = new TextNode(sdText);
@@ -163,6 +166,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         layout = layout.WithSpacing(1);
 
+        // Tool rows
         var maxToolNameLen = tools.Count > 0 ? tools.Max(t => t.Length) : 0;
 
         for (var i = 0; i < tools.Count; i++)
