@@ -51,7 +51,7 @@
     <PackageVersion Include="Discord.Net" Version="$(DiscordNetVersion)" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
-    <PackageVersion Include="Cronos" Version="0.8.4" />
+    <PackageVersion Include="Cronos" Version="0.12.0" />
     <PackageVersion Include="Termina" Version="0.8.0" />
   </ItemGroup>
   <!-- Serialization -->
@@ -65,7 +65,7 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
-    <PackageVersion Include="Verify.XunitV3" Version="30.10.0" />
+    <PackageVersion Include="Verify.XunitV3" Version="31.16.2" />
   </ItemGroup>
   <!-- Source generators -->
   <ItemGroup>
