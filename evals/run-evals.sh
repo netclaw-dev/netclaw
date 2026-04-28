@@ -925,6 +925,16 @@ assert_multi_turn_python_app() {
         stdout_contains 'greet'
 }
 
+assert_multi_turn_speaker_attribution() {
+    stdout_contains 'alice *= *blue' && \
+        stdout_contains 'bob *= *green'
+}
+
+assert_multi_turn_conflicting_speakers() {
+    stdout_contains 'deploy *= *alice' && \
+        stdout_contains 'block *= *bob'
+}
+
 # ─── Case & Category Runner ──────────────────────────────────────────────────
 
 print_category() {
@@ -1184,6 +1194,16 @@ run_all() {
         "Now add a __main__ block that calls greet('world') and prints the result. Then run the script using shell_execute to verify it outputs 'Hello, world!'." \
         "Without reading the file or running any tools, what's the signature of the greet function you just wrote? Just answer from memory." \
         "Modify the greet function to take an optional 'style' parameter. Default is 'friendly' which keeps current behavior (Hello, {name}!). When style='formal', return 'Good day, {name}.' instead. Then run the script twice using shell_execute: once calling greet('world'), once calling greet('world', style='formal'). Show me both outputs."
+
+    run_multi_turn_case multi_turn_speaker_attribution "retains which named speaker said which fact across turns" \
+        "Please remember this exactly: Alice says her favorite color is blue. Just acknowledge and wait." \
+        "Please remember this too: Bob says his favorite color is green. Just acknowledge and wait." \
+        "Without using any tools, answer exactly in this format and nothing else: Alice=<color>; Bob=<color>."
+
+    run_multi_turn_case multi_turn_conflicting_speakers "preserves attribution when named speakers disagree" \
+        "Please remember this exactly: Alice says deploy to staging. Just acknowledge and wait." \
+        "Please remember this too: Bob says do not deploy anything yet. Just acknowledge and wait." \
+        "Without using any tools, answer exactly in this format and nothing else: deploy=<name>; block=<name>."
 
     end_category
 }

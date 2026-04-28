@@ -356,6 +356,47 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void ToSnapshot_and_FromSnapshot_round_trip_preserves_AdoptedContextRecords()
+    {
+        var timestamp = new DateTimeOffset(2026, 4, 28, 12, 0, 0, TimeSpan.Zero);
+        var state = SessionState.Empty.Apply(new AdoptedContextRecorded
+        {
+            SessionId = TestSessionId,
+            AuthorizedMessageId = "authorized-1",
+            AuthorizerSenderId = "user-1",
+            LowerBound = "cursor-0",
+            UpperBound = "authorized-1",
+            Projection = "[adopted-context]",
+            ProjectionPersisted = true,
+            Messages =
+            [
+                new AdoptedContextRecorded.AdoptedMessageRecord
+                {
+                    MessageId = "history-1",
+                    SenderId = "observer-1",
+                    TimestampMs = timestamp.ToUnixTimeMilliseconds(),
+                    AuthorityAtInclusion = "pending"
+                }
+            ]
+        });
+
+        var restored = SessionState.FromSnapshot(state.ToSnapshot());
+
+        var record = Assert.Single(restored.AdoptedContextRecords);
+        Assert.Equal("authorized-1", record.Key);
+        Assert.Equal("user-1", record.Value.AuthorizerSenderId);
+        Assert.Equal("cursor-0", record.Value.LowerBound);
+        Assert.Equal("authorized-1", record.Value.UpperBound);
+        Assert.True(record.Value.ProjectionPersisted);
+        Assert.Equal("[adopted-context]", record.Value.Projection);
+        var message = Assert.Single(record.Value.Messages);
+        Assert.Equal("history-1", message.MessageId);
+        Assert.Equal("observer-1", message.SenderId);
+        Assert.Equal(timestamp, message.Timestamp);
+        Assert.Equal("pending", message.AuthorityAtInclusion);
+    }
+
+    [Fact]
     public void Apply_TurnRecorded_folds_SourceReminderId_into_ProcessedReminderIds()
     {
         var state = SessionState.Empty;

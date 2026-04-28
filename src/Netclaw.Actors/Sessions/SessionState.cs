@@ -310,7 +310,28 @@ public sealed record SessionState
             TurnCount = TurnCount,
             Title = Title,
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
-            ActiveBackgroundJobs = ActiveBackgroundJobs.Values.ToList()
+            ActiveBackgroundJobs = ActiveBackgroundJobs.Values.ToList(),
+            AdoptedContextRecords = AdoptedContextRecords.Values
+                .OrderBy(record => record.AuthorizedMessageId, StringComparer.Ordinal)
+                .Select(record => new SessionSnapshot.AdoptedContextSnapshotRecord
+                {
+                    AuthorizedMessageId = record.AuthorizedMessageId,
+                    AuthorizerSenderId = record.AuthorizerSenderId,
+                    LowerBound = record.LowerBound,
+                    UpperBound = record.UpperBound,
+                    Projection = record.Projection,
+                    ProjectionPersisted = record.ProjectionPersisted,
+                    Messages = record.Messages
+                        .Select(message => new SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage
+                        {
+                            MessageId = message.MessageId,
+                            SenderId = message.SenderId,
+                            TimestampMs = message.Timestamp.ToUnixTimeMilliseconds(),
+                            AuthorityAtInclusion = message.AuthorityAtInclusion
+                        })
+                        .ToList()
+                })
+                .ToList()
         };
     }
 
@@ -321,6 +342,25 @@ public sealed record SessionState
                 j => $"{Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix}{j.JobId}", j => j)
             : ImmutableDictionary<string, ActiveJobInfo>.Empty;
 
+        var adoptedContextRecords = snapshot.AdoptedContextRecords.Count > 0
+            ? snapshot.AdoptedContextRecords.ToImmutableDictionary(
+                record => record.AuthorizedMessageId,
+                record => new AdoptedContextAuditRecord(
+                    record.AuthorizedMessageId,
+                    record.AuthorizerSenderId,
+                    record.LowerBound,
+                    record.UpperBound,
+                    record.Projection,
+                    record.ProjectionPersisted,
+                    record.Messages
+                        .Select(message => new AdoptedContextAuditMessage(
+                            message.MessageId,
+                            message.SenderId,
+                            DateTimeOffset.FromUnixTimeMilliseconds(message.TimestampMs),
+                            message.AuthorityAtInclusion))
+                        .ToImmutableList()))
+            : ImmutableDictionary<string, AdoptedContextAuditRecord>.Empty;
+
         return new SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
@@ -328,7 +368,7 @@ public sealed record SessionState
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,
             ActiveBackgroundJobs = activeJobs,
-            AdoptedContextRecords = ImmutableDictionary<string, AdoptedContextAuditRecord>.Empty
+            AdoptedContextRecords = adoptedContextRecords
         };
     }
 }

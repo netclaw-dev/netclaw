@@ -3062,6 +3062,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 .ToList()
         };
 
+        // Persist the adopted-context audit record before continuing the turn so the
+        // same accepted authorized message can reuse that record during replay or retry.
+        // Akka.Persistence stashes later commands while this persist is in flight, so the
+        // ordering stays deterministic even though the turn continues in the same handler.
         Persist(evt, e => _state = _state.Apply(e));
     }
 

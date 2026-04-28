@@ -167,7 +167,28 @@ public static class AdoptedContextContentBuilder
     }
 
     private static string EscapeAttribute(string value)
-        => value.Replace(" ", "_", StringComparison.Ordinal);
+    {
+        if (string.IsNullOrEmpty(value))
+            return "unknown";
+
+        var buffer = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            if ((ch >= 'a' && ch <= 'z')
+                || (ch >= 'A' && ch <= 'Z')
+                || (ch >= '0' && ch <= '9')
+                || ch is '.' or '_' or ':' or '-')
+            {
+                buffer.Append(ch);
+            }
+            else
+            {
+                buffer.Append('_');
+            }
+        }
+
+        return buffer.ToString();
+    }
 
     private static bool ContainsAttachmentAnnouncement(IReadOnlyList<AIContent> contents)
     {

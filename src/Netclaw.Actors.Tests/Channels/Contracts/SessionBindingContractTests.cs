@@ -747,6 +747,49 @@ public abstract class SessionBindingContractTests : TestKit
     }
 
     [Fact]
+    public async Task Thread_history_keeps_slash_like_text_out_of_executable_content()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-executable-split");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        var historyItem = Assert.Single(CreateHistoryItems(1));
+        historyFetcher.SetHistory(
+        [
+            historyItem with
+            {
+                Contents = [new TextContent("/opsx-sync")]
+            }
+        ]);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("tell me what they said", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.Equal("tell me what they said", input.ExecutableText);
+            Assert.True(input.HasAdoptedContext);
+
+            var textContent = string.Join("\n", input.Contents
+                .OfType<TextContent>()
+                .Select(t => t.Text));
+            Assert.Contains("/opsx-sync", textContent, StringComparison.Ordinal);
+            Assert.Contains("tell me what they said", textContent, StringComparison.Ordinal);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
     public async Task Thread_history_fetched_for_each_authorized_inbound()
     {
         if (!SupportsThreadHydration) return;
