@@ -222,6 +222,27 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
+    public void CycleServerDefaultBack()
+    {
+        if (SelectedServer is null)
+            return;
+
+        var audience = AudienceName(SelectedAudience);
+        var key = (audience, SelectedServer);
+
+        var current = _pendingServerDefaults.TryGetValue(key, out var pending)
+            ? pending
+            : ResolveProfile(SelectedAudience).ApprovalPolicy?.McpServerDefaults.TryGetValue(SelectedServer, out var configMode) == true
+                ? configMode
+                : ToolApprovalMode.Auto;
+
+        var idx = Array.IndexOf(ServerDefaultCycle, current);
+        var next = ServerDefaultCycle[(idx - 1 + ServerDefaultCycle.Length) % ServerDefaultCycle.Length];
+        _pendingServerDefaults[key] = next;
+
+        NotifyStateChanged();
+    }
+
     /// <summary>
     /// Advances the per-tool approval override for <paramref name="toolName"/>
     /// under the current audience/server pair through
@@ -255,6 +276,41 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             ToolApprovalMode.Auto => ToolApprovalMode.Approval,
             ToolApprovalMode.Approval => ToolApprovalMode.Deny,
             ToolApprovalMode.Deny => null,
+            _ => null
+        };
+
+        _pendingToolOverrides[key] = next;
+
+        NotifyStateChanged();
+    }
+
+    public void CycleToolOverrideBack(ToolName toolName)
+    {
+        if (SelectedServer is null)
+            return;
+
+        var audience = AudienceName(SelectedAudience);
+        var key = (audience, SelectedServer, toolName.Value);
+
+        ToolApprovalMode? current;
+        if (_pendingToolOverrides.TryGetValue(key, out var pending))
+        {
+            current = pending;
+        }
+        else
+        {
+            var exactKey = $"{SelectedServer}/{toolName.Value}";
+            current = ResolveProfile(SelectedAudience).ApprovalPolicy?.ToolOverrides.TryGetValue(exactKey, out var configMode) == true
+                ? configMode
+                : null;
+        }
+
+        ToolApprovalMode? next = current switch
+        {
+            null => ToolApprovalMode.Deny,
+            ToolApprovalMode.Auto => null,
+            ToolApprovalMode.Approval => ToolApprovalMode.Auto,
+            ToolApprovalMode.Deny => ToolApprovalMode.Approval,
             _ => null
         };
 

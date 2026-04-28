@@ -15,7 +15,14 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     private SelectionListNode<string>? _serverList;
     private DynamicLayoutNode? _contentNode;
     private readonly CompositeDisposable _stepSubs = new();
-    private int _toolCursor;
+    private int _gridCursor;
+
+    private const int AudienceRow = 0;
+    private const int ServerEnabledRow = 1;
+    private const int ServerDefaultRow = 2;
+    private const int FirstToolRow = 3;
+
+    private int TotalRows => FirstToolRow + ViewModel.DiscoveredTools.Count;
 
     protected override void OnBound()
     {
@@ -106,34 +113,50 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .WithChild(_serverList);
     }
 
-    /// <summary>
-    /// Manual cursor rendering — matches the channel wizard pattern.
-    /// Preserves cursor position across rebuilds (no SelectionListNode reset).
-    /// </summary>
     private ILayoutNode BuildToolGrid()
     {
         var server = ViewModel.SelectedServer ?? "?";
         var audienceLabel = ViewModel.SelectedAudience.ToWireValue();
-        var audienceSelector = $"[\u25c0 {audienceLabel,-8} \u25b6]";
-
-        var tools = ViewModel.DiscoveredTools;
-        if (_toolCursor >= tools.Count) _toolCursor = tools.Count - 1;
-        if (_toolCursor < 0) _toolCursor = 0;
-
         var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
-        var accessMarker = serverAllowed ? "\u2713" : " ";
-
         var serverDefault = ViewModel.GetServerDefault();
-        var serverDefaultLabel = $"[{serverDefault}]";
+        var tools = ViewModel.DiscoveredTools;
+
+        var maxRow = TotalRows - 1;
+        if (_gridCursor > maxRow) _gridCursor = maxRow;
+        if (_gridCursor < 0) _gridCursor = 0;
 
         var layout = Layouts.Vertical()
-            .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode($"  Audience: {audienceSelector}").WithForeground(Color.Cyan).Bold())
-            .WithSpacing(1)
-            .WithChild(new TextNode($"  [{accessMarker}] Server enabled for {audienceLabel}")
-                .WithForeground(serverAllowed ? Color.White : Color.Yellow))
-            .WithChild(new TextNode($"  [M] Server default: {serverDefaultLabel}")
-                .WithForeground(ColorForMode(serverDefault)));
+            .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold());
+
+        // Row 0: Audience selector
+        var audPrefix = _gridCursor == AudienceRow ? " ▶ " : "   ";
+        var audText = $"{audPrefix}Audience: [◀ {audienceLabel,-8} ▶]";
+        var audNode = new TextNode(audText);
+        audNode = _gridCursor == AudienceRow
+            ? audNode.WithForeground(Color.Cyan).Bold()
+            : audNode.WithForeground(Color.White);
+        layout = layout.WithChild(audNode);
+
+        layout = layout.WithSpacing(1);
+
+        // Row 1: Server enabled
+        var enPrefix = _gridCursor == ServerEnabledRow ? " ▶ " : "   ";
+        var accessMarker = serverAllowed ? "✓" : " ";
+        var enText = $"{enPrefix}[{accessMarker}] Server enabled for {audienceLabel}";
+        var enNode = new TextNode(enText);
+        enNode = _gridCursor == ServerEnabledRow
+            ? enNode.WithForeground(Color.Cyan).Bold()
+            : enNode.WithForeground(serverAllowed ? Color.White : Color.Yellow);
+        layout = layout.WithChild(enNode);
+
+        // Row 2: Server default
+        var sdPrefix = _gridCursor == ServerDefaultRow ? " ▶ " : "   ";
+        var sdText = $"{sdPrefix}Server default: [{serverDefault}]";
+        var sdNode = new TextNode(sdText);
+        sdNode = _gridCursor == ServerDefaultRow
+            ? sdNode.WithForeground(Color.Cyan).Bold()
+            : sdNode.WithForeground(ColorForMode(serverDefault));
+        layout = layout.WithChild(sdNode);
 
         if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
         {
@@ -143,17 +166,18 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         layout = layout.WithSpacing(1);
 
-        // Find the longest tool name for column alignment.
+        // Tool rows
         var maxToolNameLen = tools.Count > 0 ? tools.Max(t => t.Length) : 0;
 
         for (var i = 0; i < tools.Count; i++)
         {
+            var rowIndex = FirstToolRow + i;
+            var isFocused = _gridCursor == rowIndex;
             var tool = tools[i];
-            var isFocused = i == _toolCursor;
             var toolName = new ToolName(tool);
             var granted = serverAllowed && ViewModel.IsToolGranted(toolName);
-            var prefix = isFocused ? " \u25b6 " : "   ";
-            var marker = granted ? "\u2713" : " ";
+            var prefix = isFocused ? " ▶ " : "   ";
+            var marker = granted ? "✓" : " ";
             var paddedName = tool.PadRight(maxToolNameLen);
             var (effectiveMode, inherited) = ViewModel.GetEffectiveMode(toolName);
             var modeBadge = $"[{effectiveMode}]";
@@ -190,7 +214,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [M] Server default  [P] Tool mode  [S] Save  [Esc] Back",
+                    "[↑/↓] Navigate  [←/→] Change  [Enter] Toggle  [A] All  [S] Save  [Esc] Back",
                 _ => ""
             };
 
@@ -231,7 +255,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 return;
             }
 
-            _toolCursor = 0;
+            _gridCursor = 0;
             ViewModel.GoBack();
             return;
         }
@@ -241,31 +265,30 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             switch (keyInfo.Key)
             {
                 case ConsoleKey.UpArrow:
-                    if (_toolCursor > 0) _toolCursor--;
+                    if (_gridCursor > 0) _gridCursor--;
                     InvalidateAndRedraw();
                     return;
 
                 case ConsoleKey.DownArrow:
-                    if (_toolCursor < ViewModel.DiscoveredTools.Count - 1) _toolCursor++;
+                    if (_gridCursor < TotalRows - 1) _gridCursor++;
                     InvalidateAndRedraw();
                     return;
 
                 case ConsoleKey.RightArrow:
-                    ViewModel.CycleAudience();
+                    HandleRightArrow();
                     return;
 
                 case ConsoleKey.LeftArrow:
-                    ViewModel.CycleAudienceBack();
+                    HandleLeftArrow();
                     return;
 
                 case ConsoleKey.Enter:
-                    if (ViewModel.IsServerAllowedForSelectedAudience()
-                        && ViewModel.DiscoveredTools.Count > 0)
-                        ViewModel.ToggleTool(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
+                    HandleEnter();
                     return;
 
                 case ConsoleKey.S:
                     ViewModel.Save();
+                    InvalidateAndRedraw();
                     return;
 
                 case ConsoleKey.A:
@@ -283,41 +306,32 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
                 case ConsoleKey.P:
                     if (ViewModel.IsServerAllowedForSelectedAudience()
-                        && ViewModel.DiscoveredTools.Count > 0)
-                        ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
+                        && ViewModel.DiscoveredTools.Count > 0
+                        && _gridCursor >= FirstToolRow)
+                        ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_gridCursor - FirstToolRow]));
                     return;
             }
 
-            if (keyInfo.KeyChar == 's')
+            switch (keyInfo.KeyChar)
             {
-                ViewModel.Save();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'a' && ViewModel.IsServerAllowedForSelectedAudience())
-            {
-                ViewModel.ToggleAll();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'e')
-            {
-                ViewModel.ToggleServerAccess();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'm')
-            {
-                ViewModel.CycleServerDefault();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'p'
-                && ViewModel.IsServerAllowedForSelectedAudience()
-                && ViewModel.DiscoveredTools.Count > 0)
-            {
-                ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
-                return;
+                case 's':
+                    ViewModel.Save();
+                    InvalidateAndRedraw();
+                    return;
+                case 'a' when ViewModel.IsServerAllowedForSelectedAudience():
+                    ViewModel.ToggleAll();
+                    return;
+                case 'e':
+                    ViewModel.ToggleServerAccess();
+                    return;
+                case 'm':
+                    ViewModel.CycleServerDefault();
+                    return;
+                case 'p' when ViewModel.IsServerAllowedForSelectedAudience()
+                    && ViewModel.DiscoveredTools.Count > 0
+                    && _gridCursor >= FirstToolRow:
+                    ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_gridCursor - FirstToolRow]));
+                    return;
             }
 
             return;
@@ -328,6 +342,78 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         {
             _serverList.HandleInput(keyInfo);
             ViewModel.RequestRedraw();
+        }
+    }
+
+    private void HandleRightArrow()
+    {
+        switch (_gridCursor)
+        {
+            case AudienceRow:
+                ViewModel.CycleAudience();
+                break;
+            case ServerEnabledRow:
+                ViewModel.ToggleServerAccess();
+                break;
+            case ServerDefaultRow:
+                ViewModel.CycleServerDefault();
+                break;
+            default:
+                if (ViewModel.IsServerAllowedForSelectedAudience()
+                    && ViewModel.DiscoveredTools.Count > 0)
+                {
+                    var toolIdx = _gridCursor - FirstToolRow;
+                    ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[toolIdx]));
+                }
+                break;
+        }
+    }
+
+    private void HandleLeftArrow()
+    {
+        switch (_gridCursor)
+        {
+            case AudienceRow:
+                ViewModel.CycleAudienceBack();
+                break;
+            case ServerEnabledRow:
+                ViewModel.ToggleServerAccess();
+                break;
+            case ServerDefaultRow:
+                ViewModel.CycleServerDefaultBack();
+                break;
+            default:
+                if (ViewModel.IsServerAllowedForSelectedAudience()
+                    && ViewModel.DiscoveredTools.Count > 0)
+                {
+                    var toolIdx = _gridCursor - FirstToolRow;
+                    ViewModel.CycleToolOverrideBack(new ToolName(ViewModel.DiscoveredTools[toolIdx]));
+                }
+                break;
+        }
+    }
+
+    private void HandleEnter()
+    {
+        switch (_gridCursor)
+        {
+            case AudienceRow:
+                ViewModel.CycleAudience();
+                break;
+            case ServerEnabledRow:
+                ViewModel.ToggleServerAccess();
+                break;
+            case ServerDefaultRow:
+                ViewModel.CycleServerDefault();
+                break;
+            default:
+                if (ViewModel.IsServerAllowedForSelectedAudience()
+                    && ViewModel.DiscoveredTools.Count > 0)
+                {
+                    var toolIdx = _gridCursor - FirstToolRow;
+                    ViewModel.ToggleTool(new ToolName(ViewModel.DiscoveredTools[toolIdx]));
+                }
+                break;
         }
     }
 
