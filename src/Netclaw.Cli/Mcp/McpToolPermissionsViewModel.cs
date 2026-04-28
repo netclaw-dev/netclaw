@@ -31,6 +31,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public ReactiveProperty<ToolPermissionsState> CurrentState { get; } = new(ToolPermissionsState.Loading);
     internal ReactiveProperty<int> StateVersion { get; } = new(0);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
+    public bool HasSaveError { get; private set; }
 
     // Server list state
     public List<(string Name, string Status, int ToolCount)> Servers { get; } = [];
@@ -334,9 +335,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         // No pending grants = check config
         var profile = ResolveProfile(SelectedAudience);
 
-        // Check pending server access, then config
-        var audName = AudienceName(SelectedAudience);
-        if (_pendingServerAccess.TryGetValue((audName, SelectedServer), out var pendingAccess))
+        if (_pendingServerAccess.TryGetValue((audienceName, SelectedServer), out var pendingAccess))
         {
             if (!pendingAccess)
                 return false;
@@ -417,33 +416,46 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
-    public void Save()
+    public bool Save()
     {
+        HasSaveError = false;
+
         if (!HasUnsavedChanges)
         {
             StatusMessage.Value = "No unsaved changes.";
             NotifyStateChanged();
-            return;
+            return true;
         }
 
-        var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
-        var toolsSection = ConfigFileHelper.GetOrCreateSection(config, "Tools");
-        var profilesSection = ConfigFileHelper.GetOrCreateSection(toolsSection, "AudienceProfiles");
+        try
+        {
+            var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
+            var toolsSection = ConfigFileHelper.GetOrCreateSection(config, "Tools");
+            var profilesSection = ConfigFileHelper.GetOrCreateSection(toolsSection, "AudienceProfiles");
 
-        SaveServerAccess(profilesSection);
-        SaveToolGrants(profilesSection);
-        SaveServerDefaults(profilesSection);
-        SaveToolOverrides(profilesSection);
+            SaveServerAccess(profilesSection);
+            SaveToolGrants(profilesSection);
+            SaveServerDefaults(profilesSection);
+            SaveToolOverrides(profilesSection);
 
-        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
-        _pendingGrants.Clear();
-        _pendingServerAccess.Clear();
-        _pendingServerDefaults.Clear();
-        _pendingToolOverrides.Clear();
+            ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+            _pendingGrants.Clear();
+            _pendingServerAccess.Clear();
+            _pendingServerDefaults.Clear();
+            _pendingToolOverrides.Clear();
 
-        StatusMessage.Value = "✓ Saved to netclaw.json. Restart daemon to apply changes.";
-        CurrentState.Value = ToolPermissionsState.ToolGrid;
-        NotifyStateChanged();
+            StatusMessage.Value = "✓ Saved to netclaw.json. Restart daemon to apply changes.";
+            CurrentState.Value = ToolPermissionsState.ToolGrid;
+            NotifyStateChanged();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            HasSaveError = true;
+            StatusMessage.Value = $"Save failed: {ex.Message}";
+            NotifyStateChanged();
+            return false;
+        }
     }
 
     private void SaveServerAccess(Dictionary<string, object> profilesSection)
