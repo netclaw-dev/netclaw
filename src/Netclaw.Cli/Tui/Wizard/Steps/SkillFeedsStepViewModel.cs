@@ -97,7 +97,7 @@ public sealed class SkillFeedsStepViewModel : IWizardStepViewModel, IDisposable
         }
     }
 
-    public bool ProbeSucceeded => _lastProbeError is null && _lastProbeSkillCount >= 0 && !_probing;
+    public bool ProbeSucceeded => _lastProbeError is null && !_probing;
 
     public void SaveCurrentFeed()
     {

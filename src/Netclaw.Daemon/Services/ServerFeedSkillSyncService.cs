@@ -1,6 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
@@ -19,8 +17,6 @@ namespace Netclaw.Daemon.Services;
 /// </summary>
 internal sealed class ServerFeedSkillSyncService : IHostedService
 {
-    private static readonly string[] AllowedResourcePrefixes = ["references", "scripts", "assets"];
-
     private readonly SkillFeedsConfig _feedsConfig;
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _skillRegistry;
@@ -83,7 +79,8 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         var feedDir = _paths.ServerFeedDirectory(feed.Name);
         Directory.CreateDirectory(feedDir);
 
-        var syncState = ReadSyncState(feed.Name);
+        var syncState = SkillSyncHelpers.ReadSyncState(
+            _paths.ServerFeedSyncStatePath(feed.Name), _logger);
         var now = _timeProvider.GetUtcNow();
 
         RfcSkillIndex? index;
@@ -123,6 +120,8 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
 
         var updated = false;
 
+        using var httpClient = CreateHttpClientForFeed(feed);
+
         foreach (var entry in index.Skills)
         {
             var digestHex = NormalizeDigest(entry.Digest);
@@ -138,7 +137,7 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
             try
             {
                 var mainContent = await DownloadAndVerifyAsync(
-                    entry.Url, digestHex, entry.Name, feed, cancellationToken);
+                    httpClient, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
                 if (mainContent is null)
                     continue;
 
@@ -161,7 +160,7 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
                     var allFilesOk = true;
                     foreach (var resource in entry.Resources)
                     {
-                        var normalizedPath = ValidateResourcePath(resource.Path);
+                        var normalizedPath = SkillSyncHelpers.ValidateResourcePath(resource.Path);
                         if (normalizedPath is null)
                         {
                             _logger.LogWarning(
@@ -173,8 +172,8 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
 
                         var resourceDigest = NormalizeDigest(resource.Digest);
                         var fileContent = await DownloadAndVerifyAsync(
-                            resource.Url, resourceDigest,
-                            $"{entry.Name}/{resource.Path}", feed, cancellationToken);
+                            httpClient, resource.Url, resourceDigest,
+                            $"{entry.Name}/{resource.Path}", feed.TimeoutSeconds, cancellationToken);
                         if (fileContent is null)
                         {
                             allFilesOk = false;
@@ -199,7 +198,8 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
                         continue;
                 }
 
-                await ReplaceSkillDirectoryAsync(feed.Name, entry.Name, downloadedFiles, cancellationToken);
+                await SkillSyncHelpers.ReplaceSkillDirectoryAsync(
+                    feedDir, entry.Name, downloadedFiles, cancellationToken);
 
                 syncState.Skills[entry.Name] = new SyncedSkillState
                 {
@@ -224,31 +224,36 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         if (updated)
         {
             syncState.LastSyncUtc = now;
-            WriteSyncState(feed.Name, syncState);
+            SkillSyncHelpers.WriteSyncState(
+                _paths.ServerFeedSyncStatePath(feed.Name), syncState);
         }
 
         return updated;
     }
 
+    private static HttpClient CreateHttpClientForFeed(SkillFeedSource feed)
+    {
+        var client = new HttpClient();
+        if (feed.ApiKey is { Value: { } apiKey } && !string.IsNullOrWhiteSpace(apiKey))
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", apiKey);
+        }
+        return client;
+    }
+
     private async Task<string?> DownloadAndVerifyAsync(
-        string url, string expectedSha256Hex, string label,
-        SkillFeedSource feed, CancellationToken cancellationToken)
+        HttpClient httpClient, string url, string expectedSha256Hex, string label,
+        int timeoutSeconds, CancellationToken cancellationToken)
     {
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(feed.TimeoutSeconds));
-
-            using var httpClient = new HttpClient();
-            if (feed.ApiKey is { Value: { } apiKey } && !string.IsNullOrWhiteSpace(apiKey))
-            {
-                httpClient.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
-            }
+            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
             var content = await httpClient.GetStringAsync(url, cts.Token);
 
-            var hash = ComputeSha256(content);
+            var hash = SkillSyncHelpers.ComputeSha256(content);
             if (!string.Equals(hash, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning(
@@ -269,33 +274,6 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
             _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
             return null;
         }
-    }
-
-    private SkillSyncState ReadSyncState(string feedName)
-    {
-        var path = _paths.ServerFeedSyncStatePath(feedName);
-        if (!File.Exists(path))
-            return new SkillSyncState();
-
-        try
-        {
-            var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<SkillSyncState>(json) ?? new SkillSyncState();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to read sync state for feed '{FeedName}' — starting fresh", feedName);
-            return new SkillSyncState();
-        }
-    }
-
-    private void WriteSyncState(string feedName, SkillSyncState state)
-    {
-        var path = _paths.ServerFeedSyncStatePath(feedName);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(path, json);
     }
 
     private void RescanAndUpdateIndex()
@@ -337,89 +315,10 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         }
     }
 
-    private async Task ReplaceSkillDirectoryAsync(
-        string feedName, string skillName,
-        IReadOnlyList<DownloadedSkillFile> files,
-        CancellationToken cancellationToken)
-    {
-        var feedDir = _paths.ServerFeedDirectory(feedName);
-        var skillDir = Path.Combine(feedDir, skillName);
-        var stagingRoot = Path.Combine(feedDir, ".staging");
-        Directory.CreateDirectory(stagingRoot);
-
-        var stagingDir = Path.Combine(stagingRoot, $"{skillName}-{Guid.NewGuid():N}");
-        var backupDir = Path.Combine(stagingRoot, $"{skillName}-backup-{Guid.NewGuid():N}");
-
-        Directory.CreateDirectory(stagingDir);
-
-        try
-        {
-            foreach (var file in files)
-            {
-                var targetPath = Path.Combine(
-                    stagingDir, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                await File.WriteAllTextAsync(targetPath, file.Content, cancellationToken);
-            }
-
-            if (Directory.Exists(skillDir))
-                Directory.Move(skillDir, backupDir);
-
-            Directory.Move(stagingDir, skillDir);
-
-            if (Directory.Exists(backupDir))
-                Directory.Delete(backupDir, recursive: true);
-        }
-        catch
-        {
-            if (!Directory.Exists(skillDir) && Directory.Exists(backupDir))
-                Directory.Move(backupDir, skillDir);
-
-            throw;
-        }
-        finally
-        {
-            if (Directory.Exists(stagingDir))
-                Directory.Delete(stagingDir, recursive: true);
-
-            if (Directory.Exists(backupDir) && !Directory.Exists(skillDir))
-                Directory.Delete(backupDir, recursive: true);
-        }
-    }
-
-    internal static string ComputeSha256(string content)
-    {
-        var bytes = Encoding.UTF8.GetBytes(content);
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexStringLower(hash);
-    }
-
-    /// <summary>
-    /// Strips the <c>sha256:</c> prefix from RFC digest values.
-    /// Returns the bare hex string for comparison with computed hashes.
-    /// </summary>
     internal static string NormalizeDigest(string digest)
     {
         if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
             return digest[7..];
         return digest;
     }
-
-    private static string? ValidateResourcePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        if (Path.IsPathRooted(path) || path.Contains("..", StringComparison.Ordinal))
-            return null;
-
-        var normalized = path.Replace('\\', '/');
-        var firstSegment = normalized.Split('/')[0];
-        if (!AllowedResourcePrefixes.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
-            return null;
-
-        return normalized;
-    }
-
-    private sealed record DownloadedSkillFile(string RelativePath, string Content);
 }

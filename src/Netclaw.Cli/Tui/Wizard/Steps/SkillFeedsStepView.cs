@@ -70,11 +70,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
                     return;
 
                 _vm!.SetWantsToConnect(selected[0] == yesLabel);
-
-                if (!_vm.WantsToConnect)
-                    callbacks.AdvanceStep();
-                else
-                    callbacks.AdvanceStep();
+                callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
