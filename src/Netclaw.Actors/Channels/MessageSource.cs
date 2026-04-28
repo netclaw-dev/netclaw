@@ -12,6 +12,12 @@ namespace Netclaw.Actors.Channels;
 /// </summary>
 public sealed record MessageSource
 {
+    public sealed record AdoptedContextEntry(
+        string MessageId,
+        string SenderId,
+        DateTimeOffset Timestamp,
+        string AuthorityAtInclusion);
+
     /// <summary>
     /// Channel type identifier.
     /// </summary>
@@ -81,6 +87,26 @@ public sealed record MessageSource
     /// Stable sender ids present in the adopted-context window for this turn.
     /// </summary>
     public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
+    /// Canonical adopted-context projection shown to the model for this turn.
+    /// </summary>
+    public string? AdoptedContextProjection { get; init; }
+
+    /// <summary>
+    /// Exclusive lower bound for the adopted-context window. Null when there is no prior watermark.
+    /// </summary>
+    public string? AdoptedContextLowerBound { get; init; }
+
+    /// <summary>
+    /// Exclusive upper bound for the adopted-context window, typically the current authorized message id.
+    /// </summary>
+    public string? AdoptedContextUpperBound { get; init; }
+
+    /// <summary>
+    /// Included adopted messages captured at inclusion time.
+    /// </summary>
+    public IReadOnlyList<AdoptedContextEntry> AdoptedContextEntries { get; init; } = [];
 
     /// <summary>
     /// Ephemeral dedup and forensic key for reminder-originated deliveries.

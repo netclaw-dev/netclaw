@@ -367,6 +367,11 @@ public sealed record ToolInteractionRequest : SessionOutput
     /// Stable sender ids present in the adopted context window for the turn.
     /// </summary>
     public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
+    /// True when adopted-context provenance was preserved in stored approval state.
+    /// </summary>
+    public bool PersistedAdoptedContext { get; init; }
 }
 
 /// <summary>

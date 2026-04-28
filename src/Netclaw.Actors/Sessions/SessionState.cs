@@ -15,6 +15,21 @@ namespace Netclaw.Actors.Sessions;
 /// </summary>
 public sealed record SessionState
 {
+    public sealed record AdoptedContextAuditRecord(
+        string AuthorizedMessageId,
+        string? AuthorizerSenderId,
+        string? LowerBound,
+        string? UpperBound,
+        string Projection,
+        bool EnqueueConfirmed,
+        ImmutableList<AdoptedContextAuditMessage> Messages);
+
+    public sealed record AdoptedContextAuditMessage(
+        string MessageId,
+        string SenderId,
+        DateTimeOffset Timestamp,
+        string AuthorityAtInclusion);
+
     public static readonly SessionState Empty = new();
     internal const string SystemNudgePrefix = "[system:";
 
@@ -56,6 +71,9 @@ public sealed record SessionState
     public ImmutableDictionary<string, ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
         ImmutableDictionary<string, ActiveJobInfo>.Empty;
 
+    public ImmutableDictionary<string, AdoptedContextAuditRecord> AdoptedContextRecords { get; init; } =
+        ImmutableDictionary<string, AdoptedContextAuditRecord>.Empty;
+
     /// <summary>
     /// In-memory best-effort dedup ledger for background-job-originated turns.
     /// Same pattern as <see cref="ProcessedReminderIds"/> — not persisted to
@@ -95,6 +113,29 @@ public sealed record SessionState
         return this with { Title = evt.Title };
     }
 
+    public SessionState Apply(AdoptedContextRecorded evt)
+    {
+        var record = new AdoptedContextAuditRecord(
+            evt.AuthorizedMessageId,
+            evt.AuthorizerSenderId,
+            evt.LowerBound,
+            evt.UpperBound,
+            evt.Projection,
+            evt.EnqueueConfirmed,
+            evt.Messages
+                .Select(message => new AdoptedContextAuditMessage(
+                    message.MessageId,
+                    message.SenderId,
+                    DateTimeOffset.FromUnixTimeMilliseconds(message.TimestampMs),
+                    message.AuthorityAtInclusion))
+                .ToImmutableList());
+
+        return this with
+        {
+            AdoptedContextRecords = AdoptedContextRecords.SetItem(evt.AuthorizedMessageId, record)
+        };
+    }
+
     public SessionState Apply(SessionCompacted evt)
     {
         // Preserve system prompt if present, then layer the compacted messages.
@@ -116,7 +157,8 @@ public sealed record SessionState
             WorkingContext = evt.WorkingContext ?? WorkingContext,
             ProcessedReminderIds = ProcessedReminderIds,
             ProcessedBackgroundJobIds = ProcessedBackgroundJobIds,
-            ActiveBackgroundJobs = ActiveBackgroundJobs
+            ActiveBackgroundJobs = ActiveBackgroundJobs,
+            AdoptedContextRecords = AdoptedContextRecords
         };
     }
 
@@ -285,7 +327,8 @@ public sealed record SessionState
             TurnCount = snapshot.TurnCount,
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,
-            ActiveBackgroundJobs = activeJobs
+            ActiveBackgroundJobs = activeJobs,
+            AdoptedContextRecords = ImmutableDictionary<string, AdoptedContextAuditRecord>.Empty
         };
     }
 }

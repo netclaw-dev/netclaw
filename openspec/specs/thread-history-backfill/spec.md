@@ -111,8 +111,9 @@ NOT silently pass unchecked content through the hydration path.
 ### Requirement: Authorized sync watermark and gap computation
 
 Threaded channel adapters SHALL maintain a durable per-thread authorized sync
-watermark marking the highest thread ordering key already included under an
-authorized turn.
+watermark marking the highest thread ordering key whose authorized turn has
+completed durably. Adapters MAY also persist a pending cursor for the highest
+authorized message accepted for enqueue but not yet durably completed.
 
 For a new authorized inbound with ordering key `Y`, the adapter SHALL hydrate
 messages whose ordering key is strictly greater than the watermark and strictly
@@ -120,10 +121,15 @@ less than `Y`. The threaded adapter owns source-thread gap fetch and watermark
 bookkeeping, while the session owns adopted-context persistence and execution
 linkage. When the hydrated gap is non-empty, the adapter SHALL require
 adopted-context persistence to succeed before it asks the session to enqueue the
-authorized turn. The adapter SHALL advance the watermark to `Y` only after the
-session confirms that enqueue succeeded. If adopted-context persistence fails,
-the turn SHALL NOT be enqueued and the watermark SHALL NOT advance. If enqueue
-fails after persistence succeeds, the watermark SHALL NOT advance.
+authorized turn. After enqueue acceptance, the adapter SHALL persist or retain a
+pending cursor for `Y`. The adapter SHALL advance the durable watermark to `Y`
+only after `TurnCompleted` or other durable turn completion for that authorized
+message. This sequencing SHALL remain fail-closed for crash recovery: a crash
+after enqueue acceptance but before durable completion SHALL NOT promote the
+durable watermark. If adopted-context persistence fails, the turn SHALL NOT be
+enqueued and neither pending cursor nor durable watermark SHALL advance. If
+enqueue is not accepted after persistence succeeds, neither pending cursor nor
+durable watermark SHALL advance.
 
 The idempotency basis for adopted-context persistence SHALL be the current
 authorized message identity within the session or thread. If the same
@@ -143,12 +149,21 @@ enqueue the current authorized message as an ordinary authorized turn.
 - **THEN** all eligible prior thread messages before the current authorized
   message are treated as unsynced and adopted
 
-#### Scenario: Watermark advances after successful enqueue
+#### Scenario: Durable watermark advances after durable completion
 
 - **GIVEN** the current watermark is `X`
 - **AND** an authorized inbound with ordering key `Y > X` is processed
-- **WHEN** the resulting authorized turn is enqueued successfully
-- **THEN** the watermark advances to `Y`
+- **WHEN** that authorized turn later emits `TurnCompleted` with durable
+  completion
+- **THEN** the durable watermark advances to `Y`
+
+#### Scenario: Pending cursor is recorded after enqueue acceptance
+
+- **GIVEN** the current watermark is `X`
+- **AND** an authorized inbound with ordering key `Y > X` is processed
+- **WHEN** the resulting authorized turn is accepted for enqueue
+- **THEN** the adapter records a pending cursor for `Y`
+- **AND** the durable watermark remains `X` until durable completion occurs
 
 #### Scenario: Same authorized message replay reuses adopted-context record
 
@@ -159,12 +174,12 @@ enqueue the current authorized message as an ordinary authorized turn.
 - **THEN** the existing adopted-context record is reused
 - **AND** no duplicate adopted-context record is created
 
-#### Scenario: Watermark does not advance on enqueue failure
+#### Scenario: Watermark does not advance without durable completion
 
 - **GIVEN** the current watermark is `X`
 - **AND** hydration for authorized inbound `Y` succeeds
-- **WHEN** turn enqueue fails
-- **THEN** the watermark remains `X`
+- **WHEN** durable turn completion is never observed for `Y`
+- **THEN** the durable watermark remains `X`
 
 #### Scenario: Persistence failure blocks enqueue and watermark advance
 
@@ -172,7 +187,7 @@ enqueue the current authorized message as an ordinary authorized turn.
 - **AND** hydration for authorized inbound `Y` succeeds
 - **WHEN** adopted-context persistence fails
 - **THEN** the authorized turn is not enqueued
-- **AND** the watermark remains `X`
+- **AND** neither pending cursor nor durable watermark advances
 
 #### Scenario: Inbound at or before watermark is stale for adoption
 

@@ -10,9 +10,9 @@ memory writes under-specified.
 The smallest secure MVP is stricter: only authorized users create executable
 turns. Other thread messages remain pending context until an authorized user
 speaks. At that point, Netclaw explicitly adopts the unsynced thread window as
-quoted context, persists an audit record describing what was adopted and under
-whose authority, feeds the model a canonical attribution projection derived from
-that record, and executes only the current authorized message.
+quoted context, persists an audit record describing what was adopted, under
+whose authority, and the exact canonical attribution projection used for
+execution, and executes only the current authorized message.
 
 ## What Changes
 
@@ -30,15 +30,20 @@ that record, and executes only the current authorized message.
 - Require approval prompts and stored approval context to identify the current
   authorizer and, when the adopted-context window is non-empty, to name the
   adopted speakers from that window by stable sender id.
-- Feed the LLM a canonical attribution projection derived from the persisted
-  adopted-context record, followed by the current authorized executable message.
-- Make adoption ordering deterministic: persist the adopted-context record
-  first, enqueue the authorized turn only after that persistence succeeds, and
-  advance the authorized-sync watermark only after the threaded adapter receives
-  session confirmation that enqueue succeeded.
+- Allow the threaded adapter to construct the canonical attribution projection,
+  but require the session to persist that exact projection plus adopted message
+  metadata before execution continues.
+- Make adoption ordering deterministic: persist or reuse the adopted-context
+  record first, enqueue the authorized turn only after that persistence
+  succeeds, persist a pending cursor only after enqueue acceptance, and advance
+  the durable authorized watermark only on `TurnCompleted` or other durable turn
+  completion. This remains fail-closed for crash recovery: a crash after enqueue
+  acceptance but before durable completion must not skip pending thread
+  messages.
 - Use the current authorized message identity as the adoption idempotency basis.
-  Replays or retries for the same authorized message SHALL reuse an existing
-  adopted-context record instead of duplicating it.
+  Replays, retries, or recovery for the same authorized message SHALL reuse the
+  existing adopted-context record and exact persisted projection instead of
+  duplicating or re-deriving them.
 - Reserve execution semantics for the current authorized message only. Pending
   or adopted unauthorized content cannot directly trigger model turns,
   slash-command dispatch, approvals, tool calls, reminders, jobs, or durable
@@ -76,13 +81,16 @@ that record, and executes only the current authorized message.
 - **ACL layer**: no `Observe` outcome. Channel ACL remains an executable-turn
   gate for live inbound messages.
 - **Thread adapters**: own source-thread gap fetch and watermark bookkeeping,
-  fetch unsynced thread history only when an authorized message arrives, and
-  advance the watermark only after session-confirmed enqueue success.
+  fetch unsynced thread history only when an authorized message arrives,
+  persist a pending cursor after enqueue acceptance, and advance the durable
+  watermark only after `TurnCompleted` or other durable turn completion.
 - **Turn construction**: threaded authorized messages are framed as one adopted
   context window plus one executable authorized message.
-- **Session persistence**: own adopted-context persistence and execution
-  linkage, reuse existing adopted-context records for same-message retries, and
-  keep deterministic persist, enqueue, and watermark sequencing.
+- **Session persistence**: own adopted-context persistence, persist the exact
+  projection and adopted metadata before execution continues, reuse existing
+  adopted-context records for same-message retries or recovery, and keep
+  deterministic persist, enqueue, pending-cursor, and durable-watermark
+  sequencing.
 - **Prompt semantics**: adopted context is explicit quoted context, not ordinary
   authoritative turn history.
 - **Control surfaces**: slash commands, approvals, jobs, reminders, tool calls,

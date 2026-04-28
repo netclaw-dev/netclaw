@@ -77,6 +77,16 @@ public static class MessageSourceFactory
             ExecutableText = input.ExecutableText ?? textContent,
             HasAdoptedContext = input.HasAdoptedContext,
             AdoptedSpeakerIds = input.AdoptedSpeakerIds,
+            AdoptedContextProjection = input.AdoptedContextProjection,
+            AdoptedContextLowerBound = input.AdoptedContextLowerBound,
+            AdoptedContextUpperBound = input.AdoptedContextUpperBound,
+            AdoptedContextEntries = input.AdoptedContextEntries
+                .Select(entry => new MessageSource.AdoptedContextEntry(
+                    entry.MessageId,
+                    entry.SenderId,
+                    entry.Timestamp,
+                    entry.AuthorityAtInclusion))
+                .ToArray(),
             ReminderId = input.ReminderId,
             AckTarget = input.AckTarget
         };

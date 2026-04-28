@@ -4,7 +4,7 @@
 
 When an authorized threaded turn adopts unsynced prior thread messages, the
 session system SHALL durably persist or reuse an adopted-context record for
-audit before enqueueing the authorized turn.
+audit before execution continues for that authorized turn.
 
 The persisted record SHALL include at minimum:
 
@@ -15,14 +15,16 @@ The persisted record SHALL include at minimum:
 - included message timestamps
 - included message sender ids
 - authority-at-inclusion for each included message
-- the canonical attribution projection presented to the model
-- enqueue outcome or equivalent execution linkage for the authorized turn
+- the exact canonical attribution projection presented to the model
+- enough linkage to correlate retries or recovery for the same authorized
+  message id
 
 The idempotency basis for this record SHALL be the current authorized message
 identity within the session or thread. If the same authorized message is
 retried or replayed after adopted-context persistence has already succeeded, the
-session SHALL reuse the existing adopted-context record and update its enqueue
-outcome or execution linkage rather than persist a duplicate record.
+session SHALL reuse the existing adopted-context record and exact persisted
+projection rather than persist a duplicate or re-derive a new projection from
+raw thread history.
 
 If the authorized message has no unsynced adopted gap, the session SHALL NOT
 persist an adopted-context record and SHALL treat the turn as an ordinary
@@ -31,9 +33,10 @@ authorized turn.
 If adopted-context persistence fails, the system SHALL NOT enqueue the
 authorized turn and SHALL NOT advance the authorized-sync watermark.
 
-If enqueue fails after the adopted-context record has been persisted, the system
-SHALL leave the watermark unchanged and SHALL treat the persisted record as a
-non-executed audit artifact rather than proof that the turn ran.
+If durable turn completion is not observed after the adopted-context record has
+been persisted, the durable authorized-sync watermark SHALL remain unchanged and
+the persisted record SHALL remain a fail-closed audit artifact that retries or
+recovery can reuse rather than proof that the turn ran.
 
 #### Scenario: Adopted-context record persisted for authorized turn
 
@@ -41,7 +44,7 @@ non-executed audit artifact rather than proof that the turn ran.
 - **WHEN** the turn is prepared
 - **THEN** the session persists one adopted-context audit record
 - **AND** the record contains the authorizer, sync bounds, included messages,
-  authority-at-inclusion, canonical projection, and enqueue linkage
+  authority-at-inclusion, and the exact canonical projection
 
 #### Scenario: Persistence failure blocks enqueue
 
@@ -50,13 +53,13 @@ non-executed audit artifact rather than proof that the turn ran.
 - **THEN** the authorized turn is not enqueued
 - **AND** the authorized-sync watermark does not advance
 
-#### Scenario: Enqueue failure leaves audit without execution
+#### Scenario: Missing durable completion leaves audit without watermark advance
 
 - **GIVEN** the adopted-context record has been persisted
-- **WHEN** authorized turn enqueue fails
-- **THEN** the watermark remains unchanged
+- **WHEN** durable turn completion is not observed for that authorized message
+- **THEN** the durable authorized-sync watermark remains unchanged
 - **AND** the persisted adopted-context record is treated as a non-executed
-  audit artifact
+  audit artifact that retries or recovery may reuse
 
 #### Scenario: Same authorized message retry reuses persisted record
 
@@ -96,11 +99,16 @@ Adopted or pending unauthorized content SHALL NOT directly:
 - **THEN** only the current authorized message is treated as executable
 - **AND** the adopted context remains quoted supporting material
 
-### Requirement: Canonical projection is derived from persisted record
+### Requirement: Canonical projection is persisted exactly and reused
 
-The model-visible multi-speaker projection SHALL be derived from the persisted
-adopted-context record, not reconstructed ad hoc from raw thread history after
-the fact.
+The threaded adapter MAY construct the model-visible multi-speaker projection
+before session handoff. When adopted context exists, the session SHALL persist
+that exact projection together with the adopted-message metadata before
+execution continues.
+
+Retries, replay, or crash recovery for the same authorized message id SHALL
+reuse the persisted adopted-context record keyed by that authorized message id
+rather than reconstruct a different projection from raw thread history.
 
 If no adopted-context record exists because the turn had no unsynced gap, the
 model SHALL receive only the current authorized message and no empty

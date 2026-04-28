@@ -270,6 +270,7 @@ internal static class SessionToolExecutionPipeline
                 RequesterPrincipal = source?.Principal,
                 HasAdoptedContext = source?.HasAdoptedContext ?? false,
                 AdoptedSpeakerIds = source?.AdoptedSpeakerIds ?? [],
+                PersistedAdoptedContext = source?.HasAdoptedContext ?? false,
                 Patterns = ctx.UnapprovedPatterns,
                 Options = ctx.Options
                     .Select(o => new ToolInteractionOption(o.Key, o.Label))

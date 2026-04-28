@@ -744,7 +744,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var gap = new List<AdoptedContextMessage>(candidates.Count);
         var blockedForRisk = 0;
         var detectorUnavailable = false;
-        var adoptedSpeakerIds = new HashSet<string>(StringComparer.Ordinal);
 
         for (var i = 0; i < candidates.Count; i++)
         {
@@ -756,7 +755,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                         ? AdoptedMessageAuthority.Authorized
                         : AdoptedMessageAuthority.Pending;
                     gap.Add(new AdoptedContextMessage(item, authority));
-                    adoptedSpeakerIds.Add(item.SenderId);
                     break;
 
                 case ClassificationOutcome.Block:
@@ -785,12 +783,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (gap.Count == 0)
             return new InboundBuildResult(baseInput, detectorUnavailable);
 
-        var mergedContents = MergeGapWithLiveContents(gap, liveContents, triggeringMessage);
+        var merged = MergeGapWithLiveContents(gap, liveContents, triggeringMessage);
         return new InboundBuildResult(baseInput with
         {
-            Contents = mergedContents,
+            Contents = merged.Contents,
             HasAdoptedContext = true,
-            AdoptedSpeakerIds = adoptedSpeakerIds.ToArray()
+            AdoptedSpeakerIds = merged.SpeakerIds,
+            AdoptedContextProjection = merged.Projection,
+            AdoptedContextLowerBound = cursor?.Value,
+            AdoptedContextUpperBound = triggeringMessage.EventId.Value,
+            AdoptedContextEntries = merged.Entries
         }, detectorUnavailable);
     }
 
@@ -844,7 +846,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private readonly record struct CursorAdvanced(string CursorTs);
 
-    private static List<AIContent> MergeGapWithLiveContents(
+    private static AdoptedContextMergeResult MergeGapWithLiveContents(
         IReadOnlyList<AdoptedContextMessage> gap,
         IReadOnlyList<AIContent> liveContents,
         SlackThreadInbound triggeringMessage)

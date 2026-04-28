@@ -18,8 +18,9 @@ The revised model is stricter:
   path;
 - when an authorized user speaks, the adapter hydrates the unsynced thread gap
   into an explicit adopted-context window;
-- the system persists an adopted-context audit record and derives the model's
-  attribution projection from that record;
+- the adapter may construct the canonical attribution projection, but the system
+  persists that exact projection plus adopted metadata before execution
+  continues;
 - only the current authorized message is executable.
 
 ## Goals / Non-Goals
@@ -60,12 +61,16 @@ unauthorized content as an ordinary turn.
 ### D2: Use a per-thread authorized sync watermark
 
 **Decision**: Maintain a durable per-thread watermark representing the highest
-thread ordering key that has been included under an authorized turn.
+thread ordering key whose authorized turn completed durably, plus a pending
+cursor for the highest authorized inbound accepted for enqueue but not yet
+durably completed.
 
 **Rationale**: This gives the threaded adapter a minimal, replay-safe way to
-compute the unsynced gap. Unauthorized live messages do not need to be
-persisted separately in the adapter. They remain pending in the source thread
-until the next authorized message adopts them.
+compute the unsynced gap while staying fail-closed across crashes. Unauthorized
+live messages do not need to be persisted separately in the adapter. They
+remain pending in the source thread until the next authorized message adopts
+them. A crash after enqueue acceptance but before durable turn completion does
+not promote the durable watermark, so recovery cannot skip pending messages.
 
 **Watermark semantics:**
 
@@ -73,21 +78,27 @@ until the next authorized message adopts them.
 - current authorized message is the exclusive upper bound of the adopted window;
 - the threaded adapter owns source-thread gap fetch and watermark bookkeeping;
 - adopted-context persistence success is a prerequisite for enqueue;
-- the adapter advances the watermark only after the session confirms enqueue
-  success for the current authorized message;
+- after enqueue acceptance, the adapter may persist a pending cursor for the
+  current authorized message;
+- the adapter advances the durable watermark only after `TurnCompleted` or
+  other durable turn completion for the current authorized message;
 - if adopted-context persistence fails, the turn is not enqueued and the
-  watermark does not advance;
-- if enqueue fails after adoption persistence succeeds, the watermark does not
-  advance and the persisted adopted-context record remains a non-executed audit
-  artifact rather than proof of execution;
+  pending cursor and durable watermark do not advance;
+- if enqueue fails after adoption persistence succeeds, the pending cursor and
+  durable watermark do not advance and the persisted adopted-context record
+  remains a non-executed audit artifact rather than proof of execution;
+- if enqueue succeeds but durable turn completion never occurs, the durable
+  watermark does not advance and recovery reuses the persisted adopted-context
+  record for the same authorized message id;
 - when no unsynced gap exists, no adopted-context record or projection is
   created and the authorized message is sent as an ordinary authorized turn.
 
 ### D3: Persist an adopted-context audit record before model execution
 
-**Decision**: The session owns adopted-context persistence and execution
-linkage. It persists at most one adopted-context record per authorized message
-identity when that message includes unsynced thread material.
+**Decision**: The session owns adopted-context persistence. It persists at most
+one adopted-context record per authorized message identity when that message
+includes unsynced thread material, and that record stores the exact canonical
+projection used for execution.
 
 **Record fields (MVP minimum):**
 
@@ -97,18 +108,21 @@ identity when that message includes unsynced thread material.
 - included message ids and timestamps
 - included message sender ids
 - authority-at-inclusion for each included message
-- the canonical attribution projection actually fed to the model
-- execution linkage showing whether the authorized turn was enqueued
+- the exact canonical attribution projection actually fed to the model
+- enough linkage to correlate retries or recovery for the same authorized
+  message id
 
 **Idempotency basis:** `(session/thread id, current authorized message id)`.
-Retries or replays for the same authorized message SHALL reuse the existing
-adopted-context record and update its execution linkage rather than creating a
-duplicate record.
+Retries, replays, or recovery for the same authorized message SHALL reuse the
+existing adopted-context record and its exact persisted projection rather than
+creating a duplicate or re-deriving a different projection from raw thread
+history.
 
 **Rationale**: The audit record is the authoritative source for what context was
-adopted, who authorized that adoption, and how the model saw it. This is enough
-for replay, incident review, and future UI work without persisting raw live
-unauthorized turns as if they were ordinary conversation history.
+adopted, who authorized that adoption, and exactly how the model saw it. This
+is enough for retry, recovery, replay, incident review, and future UI work
+without persisting raw live unauthorized turns as if they were ordinary
+conversation history.
 
 ### D4: Adopted context is explicit quoted context, not executable turn history
 
@@ -119,10 +133,11 @@ context window, followed by a separate current authorized executable message.
 boundary visible both to humans and to the model. It also gives downstream
 surfaces a stable rule: only the current authorized message can trigger actions.
 
-### D5: Canonical framing is projection-derived and escape-safe
+### D5: Canonical framing is exact-persisted and escape-safe
 
-**Decision**: Define one canonical text projection for the model derived from the
-persisted record.
+**Decision**: Define one canonical text projection for the model. The adapter
+may construct that projection before handoff, and the session SHALL persist that
+exact projection before execution continues.
 
 **Canonical framing:**
 
@@ -147,7 +162,7 @@ projection that was presented to the model.
 
 **Rationale**: Marker-level escaping is the smallest deterministic defense
 against content spoofing. It avoids introducing a full encoding layer while
-making projection and audit match exactly.
+making the executed projection and the persisted audit record match exactly.
 
 ### D6: Inclusion-time authority is captured, not recomputed later
 
@@ -197,21 +212,26 @@ quoted context from other speakers.
     - it classifies each included message with authority-at-inclusion using the
       same live turn-creation authorization basis applied to the inbound event;
     - if the fetched gap is empty, it sends the current authorized message as an
-      ordinary authorized turn and advances the watermark only after session
-      confirmation that enqueue succeeded;
+      ordinary authorized turn, persists a pending cursor only after enqueue
+      acceptance, and advances the durable watermark only after `TurnCompleted`
+      or other durable turn completion;
     - otherwise it builds the canonical attribution projection;
     - the session persists or reuses the adopted-context record keyed by the
-      current authorized message identity;
+      current authorized message identity, including that exact projection and
+      adopted message metadata;
     - if that persistence step fails, processing stops without enqueue or
-      watermark advancement;
-    - the session derives the executable turn from the persisted
-      adopted-context record;
+      pending-cursor or durable-watermark advancement;
     - it enqueues one authorized executable turn consisting of adopted context
       plus current authorized message;
-    - if enqueue fails, the watermark remains unchanged and the persisted
-      adopted-context record remains audit-only;
-    - after the session confirms enqueue success, the adapter advances the
-      watermark to the current authorized message.
+    - after enqueue acceptance, the adapter persists a pending cursor for the
+      current authorized message;
+    - if enqueue fails, the pending cursor and durable watermark remain
+      unchanged and the persisted adopted-context record remains audit-only;
+    - if durable turn completion never occurs, the durable watermark remains
+      unchanged and retries or recovery reuse the persisted record for that
+      authorized message id;
+    - after `TurnCompleted` or other durable turn completion, the adapter
+      advances the durable watermark to the current authorized message.
 
 ## Risks / Trade-offs
 

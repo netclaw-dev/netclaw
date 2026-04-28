@@ -14,6 +14,12 @@ public sealed record AdoptedContextMessage(
     ChannelInput Input,
     AdoptedMessageAuthority AuthorityAtInclusion);
 
+public sealed record AdoptedContextMergeResult(
+    List<AIContent> Contents,
+    string Projection,
+    IReadOnlyList<ChannelInput.AdoptedContextEntry> Entries,
+    IReadOnlyList<string> SpeakerIds);
+
 public static class AdoptedContextContentBuilder
 {
     private static readonly string[] ReservedMarkerPrefixes =
@@ -26,18 +32,26 @@ public static class AdoptedContextContentBuilder
         "[/current-authorized-message]"
     ];
 
-    public static List<AIContent> MergeWithCurrentMessage(
+    public static AdoptedContextMergeResult MergeWithCurrentMessage(
         IReadOnlyList<AdoptedContextMessage> adopted,
         IReadOnlyList<AIContent> liveContents,
         string currentAuthorId,
         DateTimeOffset currentReceivedAt)
     {
         if (adopted.Count == 0)
-            return [.. liveContents];
+        {
+            return new AdoptedContextMergeResult(
+                [.. liveContents],
+                string.Empty,
+                [],
+                []);
+        }
 
         var merged = new List<AIContent>();
         var adoptedData = new List<AIContent>();
         var text = new StringBuilder();
+        var entries = new List<ChannelInput.AdoptedContextEntry>(adopted.Count);
+        var speakerIds = new HashSet<string>(StringComparer.Ordinal);
 
         text.AppendLine("[adopted-context]");
 
@@ -51,6 +65,15 @@ public static class AdoptedContextContentBuilder
             var ts = item.Input.ReceivedAt == default
                 ? string.Empty
                 : $" ts={item.Input.ReceivedAt:O}";
+
+            entries.Add(new ChannelInput.AdoptedContextEntry
+            {
+                MessageId = item.Input.MessageId ?? "unknown",
+                SenderId = item.Input.SenderId,
+                Timestamp = item.Input.ReceivedAt,
+                AuthorityAtInclusion = authority
+            });
+            speakerIds.Add(item.Input.SenderId);
 
             text.AppendLine($"[adopted-message id={messageId} author={senderId} authority-at-inclusion={authority}{ts}]");
 
@@ -108,7 +131,8 @@ public static class AdoptedContextContentBuilder
         }
         text.AppendLine("[/current-authorized-message]");
 
-        merged.Add(new TextContent(text.ToString().TrimEnd()));
+        var projection = text.ToString().TrimEnd();
+        merged.Add(new TextContent(projection));
         merged.AddRange(adoptedData);
 
         foreach (var content in liveContents)
@@ -117,7 +141,11 @@ public static class AdoptedContextContentBuilder
                 merged.Add(content);
         }
 
-        return merged;
+        return new AdoptedContextMergeResult(
+            merged,
+            projection,
+            entries,
+            speakerIds.ToArray());
     }
 
     private static string EscapeReservedMarkerLines(string text)

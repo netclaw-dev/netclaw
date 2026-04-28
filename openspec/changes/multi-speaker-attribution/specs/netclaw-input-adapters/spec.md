@@ -6,12 +6,18 @@ When a threaded adapter receives an authorized inbound message, it SHALL hydrate
 the unsynced thread gap before that message and construct a single authorized
 turn envelope containing:
 
-- a canonical adopted-context projection derived from the persisted
-  adopted-context record; and
+- a canonical adopted-context projection for the adopted window; and
 - the current authorized executable message.
 
 The adopted-context portion SHALL be quoted context only. The current
 authorized message SHALL be the only executable user instruction in that turn.
+
+When adopted context is present, the threaded adapter MAY construct the
+canonical adopted-context projection before handoff. The session SHALL durably
+persist that exact projection together with the adopted-message metadata before
+execution continues. Retries or recovery for the same authorized message id
+SHALL reuse the persisted adopted-context record rather than re-derive a
+different projection from raw thread history.
 
 If the unsynced gap is empty, the adapter SHALL omit adopted-context
 persistence and adopted-context framing and SHALL send only the current
@@ -68,9 +74,12 @@ Any user-originated line beginning with a reserved marker prefix SHALL be
 escaped by prefixing that line with `\` before inclusion in the canonical
 projection.
 
-The adapter owns source-thread gap fetch and watermark bookkeeping. It SHALL
-advance the authorized-sync watermark only after the session confirms that the
-turn enqueue succeeded.
+The adapter owns source-thread gap fetch and watermark bookkeeping. After the
+authorized turn is accepted for enqueue, it SHALL persist a pending cursor for
+that authorized message. The adapter SHALL advance the durable
+authorized-sync watermark only after `TurnCompleted` or other durable turn
+completion confirms that the turn was durably recorded. This sequencing SHALL
+remain fail-closed for crash recovery.
 
 #### Scenario: Adopted message text with reserved marker is escaped
 
