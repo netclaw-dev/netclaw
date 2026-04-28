@@ -61,6 +61,24 @@ public sealed record ChannelInput
     public DateTimeOffset ReceivedAt { get; init; }
 
     /// <summary>
+    /// Executable text for this turn. When omitted, the full text content is executable.
+    /// Threaded adapters use this to keep adopted context quoted while restricting
+    /// control paths to the current message.
+    /// </summary>
+    public string? ExecutableText { get; init; }
+
+    /// <summary>
+    /// True when the turn contains quoted adopted thread context ahead of the current
+    /// executable message.
+    /// </summary>
+    public bool HasAdoptedContext { get; init; }
+
+    /// <summary>
+    /// Stable sender ids that appeared in the adopted context window.
+    /// </summary>
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
     /// Ephemeral reminder dedup and forensic key. Set by channel leaf actors
     /// when handling a <c>DeliverTrustedSessionTurn</c> (Mode B reminder
     /// re-entry). Propagated through to

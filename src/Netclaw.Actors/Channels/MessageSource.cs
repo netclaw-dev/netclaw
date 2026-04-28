@@ -67,6 +67,22 @@ public sealed record MessageSource
     public DateTimeOffset ReceivedAt { get; init; }
 
     /// <summary>
+    /// Executable text for the current turn. When threaded adapters prepend adopted
+    /// quoted context, this remains the current authorized message text.
+    /// </summary>
+    public string? ExecutableText { get; init; }
+
+    /// <summary>
+    /// True when the model input contains a quoted adopted-context window.
+    /// </summary>
+    public bool HasAdoptedContext { get; init; }
+
+    /// <summary>
+    /// Stable sender ids present in the adopted-context window for this turn.
+    /// </summary>
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
     /// Ephemeral dedup and forensic key for reminder-originated deliveries.
     /// Format is <c>"{reminderId}:{fireTimestampMs}"</c>. Null for regular
     /// user messages. The target session pre-checks this value against its

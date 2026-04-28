@@ -47,7 +47,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
     private int _turnNumber;
-    private bool _threadHistoryFetchAttempted;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
     private ulong? _pendingCursorSnowflake;
@@ -279,7 +278,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (liveContents.Count == 0)
             return;
 
-        var (mergedContents, backfillDetectorUnavailable) = await BuildInputContentsAsync(liveContents, inboundCts.Token);
+        var (mergedContents, backfillDetectorUnavailable, adoptedSpeakerIds) = await BuildInputContentsAsync(message, liveContents, inboundCts.Token);
 
         if (backfillDetectorUnavailable)
             await SafeReplyAsync(BackfillDetectorWarning);
@@ -294,7 +293,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             Principal = message.Principal,
             Provenance = message.Provenance,
             Contents = mergedContents,
-            ReceivedAt = message.ReceivedAt
+            ReceivedAt = message.ReceivedAt,
+            ExecutableText = message.Text,
+            HasAdoptedContext = adoptedSpeakerIds.Count > 0,
+            AdoptedSpeakerIds = adoptedSpeakerIds
         };
 
         try
@@ -321,14 +323,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task<(IReadOnlyList<AIContent> Contents, bool BackfillDetectorUnavailable)> BuildInputContentsAsync(
+    private async Task<(IReadOnlyList<AIContent> Contents, bool BackfillDetectorUnavailable, IReadOnlyList<string> AdoptedSpeakerIds)> BuildInputContentsAsync(
+        DiscordThreadInbound message,
         List<AIContent> liveContents,
         CancellationToken cancellationToken)
     {
-        if (_threadHistoryFetchAttempted || _dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return (liveContents, false);
-
-        _threadHistoryFetchAttempted = true;
+        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
+            return (liveContents, false, []);
 
         IReadOnlyList<ChannelInput> history;
         try
@@ -338,11 +339,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         catch (Exception ex)
         {
             _log.Warning(ex, "Thread history fetch failed for session {0}", _sessionId.Value);
-            return (liveContents, false);
+            return (liveContents, false, []);
         }
 
         if (history.Count == 0)
-            return (liveContents, false);
+            return (liveContents, false, []);
 
         var cursor = _cursorSnowflake;
 
@@ -368,7 +369,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _log.Info(
                 "Thread history hydrated fetched={FetchedCount} gapCount=0 cursor={Cursor} session={Session}",
                 history.Count, cursor?.ToString() ?? "none", _sessionId.Value);
-            return (liveContents, false);
+            return (liveContents, false, []);
         }
 
         // Phase 2: classify candidates in parallel for prompt injection risk.
@@ -376,16 +377,22 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
 
         // Phase 3: assemble gap preserving chronological order.
-        var safe = new List<ChannelInput>(candidates.Count);
+        var safe = new List<AdoptedContextMessage>(candidates.Count);
         var blockedForRisk = 0;
         var detectorUnavailable = false;
+        var adoptedSpeakerIds = new HashSet<string>(StringComparer.Ordinal);
 
         for (var i = 0; i < candidates.Count; i++)
         {
             switch (classifications[i].Outcome)
             {
                 case ClassificationOutcome.Allow:
-                    safe.Add(candidates[i]);
+                    var authority = _dependencies.Options.AllowedUserIds.Length == 0
+                        || _dependencies.Options.AllowedUserIds.Contains(candidates[i].SenderId, StringComparer.Ordinal)
+                        ? AdoptedMessageAuthority.Authorized
+                        : AdoptedMessageAuthority.Pending;
+                    safe.Add(new AdoptedContextMessage(candidates[i], authority));
+                    adoptedSpeakerIds.Add(candidates[i].SenderId);
                     break;
 
                 case ClassificationOutcome.Block:
@@ -409,9 +416,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             history.Count, candidates.Count, safe.Count, blockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
 
         if (safe.Count == 0)
-            return (liveContents, detectorUnavailable);
+            return (liveContents, detectorUnavailable, []);
 
-        return (MergeHistoryWithLiveContents(safe, liveContents), detectorUnavailable);
+        return (
+            MergeHistoryWithLiveContents(safe, liveContents, message),
+            detectorUnavailable,
+            adoptedSpeakerIds.ToArray());
     }
 
     private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
@@ -426,9 +436,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     }
 
     private static List<AIContent> MergeHistoryWithLiveContents(
-        IReadOnlyList<ChannelInput> history,
-        IReadOnlyList<AIContent> liveContents)
-        => ThreadHistoryContentMerger.MergeHistoryWithLiveContents(history, liveContents);
+        IReadOnlyList<AdoptedContextMessage> history,
+        IReadOnlyList<AIContent> liveContents,
+        DiscordThreadInbound message)
+        => AdoptedContextContentBuilder.MergeWithCurrentMessage(
+            history,
+            liveContents,
+            message.SenderId.Value,
+            message.ReceivedAt);
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message, string selectedKey)
     {

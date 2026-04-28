@@ -735,16 +735,19 @@ public abstract class SessionBindingContractTests : TestKit
         {
             Assert.Equal(1, historyFetcher.FetchCount);
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.Equal("live message", input.ExecutableText);
+            Assert.True(input.HasAdoptedContext);
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));
-            Assert.Contains("thread history", textContent, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("[adopted-context]", textContent, StringComparison.Ordinal);
+            Assert.Contains("[current-authorized-message", textContent, StringComparison.Ordinal);
             Assert.Contains("live message", textContent);
         }, cancellationToken: ct);
     }
 
     [Fact]
-    public async Task Thread_history_fetched_once_per_lifetime()
+    public async Task Thread_history_fetched_for_each_authorized_inbound()
     {
         if (!SupportsThreadHydration) return;
 
@@ -777,7 +780,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.True(pipeline.CapturedInputs.Count >= 2),
             cancellationToken: ct);
 
-        Assert.Equal(1, historyFetcher.FetchCount);
+        Assert.Equal(2, historyFetcher.FetchCount);
     }
 
     [Fact]
@@ -848,11 +851,12 @@ public abstract class SessionBindingContractTests : TestKit
         {
             Assert.Equal(1, historyFetcher.FetchCount);
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.False(input.HasAdoptedContext);
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));
             Assert.Contains("live message", textContent);
-            Assert.DoesNotContain("thread history", textContent, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("[adopted-context]", textContent, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
 

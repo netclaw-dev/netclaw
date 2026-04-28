@@ -29,6 +29,8 @@ internal static class SlackApprovalBlockBuilder
             }
         }
 
+        AppendAdoptedContextSummary(lines, request);
+
         lines.Add("");
         lines.Add("Reply with:");
         lines.Add($"  *A)* {ApprovalOptionKeys.ApproveOnceLabel}");
@@ -60,6 +62,14 @@ internal static class SlackApprovalBlockBuilder
             blocks.Add(new SectionBlock
             {
                 Text = new Markdown($"*Patterns*\n{string.Join("\n", patternLines)}")
+            });
+        }
+
+        if (request.HasAdoptedContext)
+        {
+            blocks.Add(new SectionBlock
+            {
+                Text = new Markdown(BuildAdoptedContextMarkdown(request))
             });
         }
 
@@ -138,8 +148,27 @@ internal static class SlackApprovalBlockBuilder
             });
         }
 
+        if (request.HasAdoptedContext)
+        {
+            blocks.Add(new SectionBlock
+            {
+                Text = new Markdown(BuildAdoptedContextMarkdown(request))
+            });
+        }
+
         return blocks;
     }
+
+    private static void AppendAdoptedContextSummary(List<string> lines, ToolInteractionRequest request)
+    {
+        if (!request.HasAdoptedContext)
+            return;
+
+        lines.Add($"Adopted context: present ({string.Join(", ", request.AdoptedSpeakerIds)})");
+    }
+
+    private static string BuildAdoptedContextMarkdown(ToolInteractionRequest request)
+        => $"*Adopted context:* present\n*Speakers:* `{EscapeMarkdown(string.Join(", ", request.AdoptedSpeakerIds))}`";
 
     internal static string BuildButtonValue(ToolInteractionRequest request, ToolInteractionOption option)
         => ApprovalButtonValueCodec.Encode(request, option);

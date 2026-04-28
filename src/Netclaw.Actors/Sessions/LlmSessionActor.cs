@@ -1831,6 +1831,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         SetSystemPrompt();
 
         var userContent = cmd.Content ?? string.Empty;
+        var executableUserContent = cmd.Source?.ExecutableText ?? userContent;
         var mediaRefs = cmd.MediaReferences;
 
         TurnLog().Info(
@@ -1841,7 +1842,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             userContent.Length);
 
         _logActor?.Tell(cmd);
-        _observerActor?.Tell(cmd);
+
+        // Quoted adopted thread context is useful for the live turn, but it should not
+        // silently become durable memory authority via the automatic observer path.
+        if (cmd.Source?.HasAdoptedContext != true)
+            _observerActor?.Tell(cmd);
 
         _turnState.ResetForNewTurn();
         _discoveredToolCache.PrepareForNewTurn(
@@ -1877,7 +1882,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
         }
 
-        if (TryHandleSlashCommand(userContent, mediaRefs))
+        if (TryHandleSlashCommand(executableUserContent, mediaRefs))
             return;
 
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
@@ -1885,7 +1890,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _recallManager.ResetForNewTurn();
         _streamingRetryAttempt = 0;
         _compactionOverflowRetryCount = 0;
-        FireInitialTurnLlmCall(userContent);
+        FireInitialTurnLlmCall(executableUserContent);
         TransitionTo(SessionPhase.Processing);
     }
 
