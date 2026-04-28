@@ -746,7 +746,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.Patterns,
                 CurrentTurnAudience(),
                 msg.RequesterSenderId,
-                msg.RequesterPrincipal);
+                msg.RequesterPrincipal,
+                msg.HasAdoptedContext,
+                msg.AdoptedSpeakerIds);
 
             PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
 
@@ -970,6 +972,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (msg.Proposals.Count > 0 && _curationActor is not null
             && CurrentTurnAudience() != TrustAudience.Public && _memoryConfig.Enabled)
         {
+            if (_currentTurnSource?.HasAdoptedContext == true)
+            {
+                TurnLog().Info("memory_curation_skipped adopted-context present; waiting for explicit elevation");
+                if (stopAfterAcceptedProposalPersistence)
+                    CompletePassivation();
+                return;
+            }
+
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
                 Memory.MemorySensitivity.Normal.ToWireValue(),
@@ -1824,6 +1834,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _currentTurnSource = cmd.Source;
         _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
         BindTurnTelemetry(cmd.Source);
+        PersistAdoptedContextIfNeeded(cmd.Source);
 
         // Sessions created from Slack/Discord start without transport-derived
         // audience encoded in the session id, so rebuild the prompt now that the
@@ -1831,6 +1842,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         SetSystemPrompt();
 
         var userContent = cmd.Content ?? string.Empty;
+        var executableUserContent = cmd.Source?.ExecutableText ?? userContent;
         var mediaRefs = cmd.MediaReferences;
 
         TurnLog().Info(
@@ -1841,7 +1853,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             userContent.Length);
 
         _logActor?.Tell(cmd);
-        _observerActor?.Tell(cmd);
+
+        // Quoted adopted thread context is useful for the live turn, but it should not
+        // silently become durable memory authority via the automatic observer path.
+        if (cmd.Source?.HasAdoptedContext != true)
+            _observerActor?.Tell(cmd);
 
         _turnState.ResetForNewTurn();
         _discoveredToolCache.PrepareForNewTurn(
@@ -1877,7 +1893,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
         }
 
-        if (TryHandleSlashCommand(userContent, mediaRefs))
+        if (TryHandleSlashCommand(executableUserContent, mediaRefs))
             return;
 
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
@@ -1885,7 +1901,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _recallManager.ResetForNewTurn();
         _streamingRetryAttempt = 0;
         _compactionOverflowRetryCount = 0;
-        FireInitialTurnLlmCall(userContent);
+        FireInitialTurnLlmCall(executableUserContent);
         TransitionTo(SessionPhase.Processing);
     }
 
@@ -3007,7 +3023,51 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IReadOnlyList<string> Patterns,
         TrustAudience Audience,
         string? RequesterSenderId,
-        PrincipalClassification? RequesterPrincipal);
+        PrincipalClassification? RequesterPrincipal,
+        bool HasAdoptedContext,
+        IReadOnlyList<string> AdoptedSpeakerIds);
+
+    private void PersistAdoptedContextIfNeeded(MessageSource? source)
+    {
+        if (source?.HasAdoptedContext != true)
+            return;
+
+        if (string.IsNullOrWhiteSpace(source.MessageId))
+            return;
+
+        if (_state.AdoptedContextRecords.TryGetValue(source.MessageId, out var existing)
+            && existing.ProjectionPersisted)
+        {
+            return;
+        }
+
+        var evt = new AdoptedContextRecorded
+        {
+            SessionId = _sessionId,
+            AuthorizedMessageId = source.MessageId,
+            AuthorizerSenderId = source.SenderId,
+            LowerBound = source.AdoptedContextLowerBound,
+            UpperBound = source.AdoptedContextUpperBound ?? source.MessageId,
+            Projection = source.AdoptedContextProjection ?? string.Empty,
+            ProjectionPersisted = true,
+            RecordedAtMs = NowMs(),
+            Messages = source.AdoptedContextEntries
+                .Select(entry => new AdoptedContextRecorded.AdoptedMessageRecord
+                {
+                    MessageId = entry.MessageId,
+                    SenderId = entry.SenderId,
+                    TimestampMs = entry.Timestamp.ToUnixTimeMilliseconds(),
+                    AuthorityAtInclusion = entry.AuthorityAtInclusion
+                })
+                .ToList()
+        };
+
+        // Persist the adopted-context audit record before continuing the turn so the
+        // same accepted authorized message can reuse that record during replay or retry.
+        // Akka.Persistence stashes later commands while this persist is in flight, so the
+        // ordering stays deterministic even though the turn continues in the same handler.
+        Persist(evt, e => _state = _state.Apply(e));
+    }
 
     private sealed record RoutedSkillExecutionCompleted(
         string SkillName,

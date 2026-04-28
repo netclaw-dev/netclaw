@@ -161,8 +161,9 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         var mergedUserTurn = userMessages[0];
         var mergedText = string.Join("", mergedUserTurn.Contents.OfType<TextContent>().Select(t => t.Text));
 
-        Assert.Contains("[thread history", mergedText);
-        Assert.Contains("[end thread history]", mergedText);
+        Assert.Contains("[adopted-context]", mergedText, StringComparison.Ordinal);
+        Assert.Contains("[/adopted-context]", mergedText, StringComparison.Ordinal);
+        Assert.Contains("[current-authorized-message author=U_MENTIONER", mergedText, StringComparison.Ordinal);
         Assert.Contains("thread root", mergedText);
         Assert.Contains("Has anyone looked at the dashboard?", mergedText);
         Assert.Contains("I think it's the new query", mergedText);
@@ -243,7 +244,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
         Assert.Equal(1, fetchCount);
 
-        // Second message in the same thread — should NOT re-backfill
+        // Second message in the same thread fetches again, but only for the unsynced gap.
         gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
             EventId: new SlackEventId("C_RECOVERY:4000.2"),
@@ -262,8 +263,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount >= 2, "Expected second LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        // Backfill should only have been called once in the same runtime.
-        Assert.Equal(1, fetchCount);
+        Assert.Equal(2, fetchCount);
 
         Watch(gateway);
         Sys.Stop(gateway);
@@ -289,12 +289,12 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount >= 3, "Expected third LLM call after relaunch");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, fetchCount);
+        Assert.Equal(3, fetchCount);
 
         var recoveredMessages = _chatClient.Calls[^1];
         var recoveredLastUser = recoveredMessages.Last(m => m.Role == AiChatRole.User);
         var recoveredUserText = string.Join("", recoveredLastUser.Contents.OfType<TextContent>().Select(t => t.Text));
-        Assert.Contains("[thread history", recoveredUserText, StringComparison.Ordinal);
+        Assert.Contains("[adopted-context]", recoveredUserText, StringComparison.Ordinal);
         Assert.Contains("I think it's the new query", recoveredUserText, StringComparison.Ordinal);
         Assert.Contains("after restart", recoveredUserText);
     }

@@ -11,6 +11,14 @@ namespace Netclaw.Actors.Channels;
 /// </summary>
 public sealed record ChannelInput
 {
+    public sealed record AdoptedContextEntry
+    {
+        public required string MessageId { get; init; }
+        public required string SenderId { get; init; }
+        public required DateTimeOffset Timestamp { get; init; }
+        public required string AuthorityAtInclusion { get; init; }
+    }
+
     /// <summary>
     /// Identity of the user who sent this message.
     /// </summary>
@@ -59,6 +67,44 @@ public sealed record ChannelInput
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }
+
+    /// <summary>
+    /// Executable text for this turn. When omitted, the full text content is executable.
+    /// Threaded adapters use this to keep adopted context quoted while restricting
+    /// control paths to the current message.
+    /// </summary>
+    public string? ExecutableText { get; init; }
+
+    /// <summary>
+    /// True when the turn contains quoted adopted thread context ahead of the current
+    /// executable message.
+    /// </summary>
+    public bool HasAdoptedContext { get; init; }
+
+    /// <summary>
+    /// Stable sender ids that appeared in the adopted context window.
+    /// </summary>
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
+    /// Canonical adopted-context projection shown to the model when quoted context is present.
+    /// </summary>
+    public string? AdoptedContextProjection { get; init; }
+
+    /// <summary>
+    /// Exclusive lower bound for the adopted-context window. Null when there is no prior watermark.
+    /// </summary>
+    public string? AdoptedContextLowerBound { get; init; }
+
+    /// <summary>
+    /// Exclusive upper bound for the adopted-context window, usually the current authorized message id.
+    /// </summary>
+    public string? AdoptedContextUpperBound { get; init; }
+
+    /// <summary>
+    /// Included adopted messages captured at inclusion time for audit persistence.
+    /// </summary>
+    public IReadOnlyList<AdoptedContextEntry> AdoptedContextEntries { get; init; } = [];
 
     /// <summary>
     /// Ephemeral reminder dedup and forensic key. Set by channel leaf actors

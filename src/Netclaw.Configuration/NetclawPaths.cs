@@ -33,6 +33,15 @@ public sealed class NetclawPaths
     public string SystemSkillsDirectory => Path.Combine(SkillsDirectory, ".system");
     public string SkillSyncStatePath => Path.Combine(SystemSkillsDirectory, ".sync-state.json");
 
+    // ── Server feed skills (from private skill-server instances) ──
+    public string ServerFeedsDirectory => Path.Combine(SkillsDirectory, ".server-feeds");
+
+    public string ServerFeedDirectory(string feedName)
+        => Path.Combine(ServerFeedsDirectory, feedName);
+
+    public string ServerFeedSyncStatePath(string feedName)
+        => Path.Combine(ServerFeedDirectory(feedName), ".sync-state.json");
+
     // ── Cache directory ──
     public string CacheDirectory => Path.Combine(BasePath, "cache");
     public string RestartManifestPath => Path.Combine(CacheDirectory, "restart-manifest.json");
@@ -112,6 +121,7 @@ public sealed class NetclawPaths
         Directory.CreateDirectory(McpShadowDirectory);
         Directory.CreateDirectory(SkillsDirectory);
         Directory.CreateDirectory(SystemSkillsDirectory);
+        Directory.CreateDirectory(ServerFeedsDirectory);
         Directory.CreateDirectory(ProjectsDirectory);
         Directory.CreateDirectory(ClientDirectory);
         Directory.CreateDirectory(EnvironmentDirectory);

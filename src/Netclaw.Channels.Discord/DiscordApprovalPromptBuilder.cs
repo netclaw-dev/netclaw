@@ -15,6 +15,8 @@ internal static class DiscordApprovalPromptBuilder
         if (request.Patterns.Count > 0)
             sb.Append("Pattern: ").AppendLine(string.Join(", ", request.Patterns));
 
+        AppendAdoptedContextSummary(sb, request);
+
         sb.AppendLine();
         sb.AppendLine("Reply with:");
         sb.Append("A) ").AppendLine(ApprovalOptionKeys.ApproveOnceLabel);
@@ -87,6 +89,17 @@ internal static class DiscordApprovalPromptBuilder
                     sb.Append("  • `").Append(pattern).AppendLine("`");
             }
         }
+
+        AppendAdoptedContextSummary(sb, request);
+    }
+
+    private static void AppendAdoptedContextSummary(StringBuilder sb, ToolInteractionRequest request)
+    {
+        if (!request.HasAdoptedContext)
+            return;
+
+        sb.Append("**Adopted context:** present").AppendLine();
+        sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).AppendLine("`");
     }
 
     private static string GetDecisionLabel(string selectedKey)

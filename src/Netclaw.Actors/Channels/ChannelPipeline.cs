@@ -56,7 +56,13 @@ public sealed record SessionPipelineOptions
 public static class MessageSourceFactory
 {
     public static MessageSource Create(ChannelInput input, SessionPipelineOptions options, string turnId)
-        => new()
+    {
+        var textContent = string.Join("\n", input.Contents
+            .OfType<TextContent>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        return new MessageSource
         {
             ChannelType = options.ChannelType,
             SenderId = input.SenderId,
@@ -68,9 +74,23 @@ public static class MessageSourceFactory
             Principal = input.Principal ?? options.DefaultPrincipal,
             Provenance = input.Provenance ?? options.DefaultProvenance,
             ReceivedAt = input.ReceivedAt,
+            ExecutableText = input.ExecutableText ?? textContent,
+            HasAdoptedContext = input.HasAdoptedContext,
+            AdoptedSpeakerIds = input.AdoptedSpeakerIds,
+            AdoptedContextProjection = input.AdoptedContextProjection,
+            AdoptedContextLowerBound = input.AdoptedContextLowerBound,
+            AdoptedContextUpperBound = input.AdoptedContextUpperBound,
+            AdoptedContextEntries = input.AdoptedContextEntries
+                .Select(entry => new MessageSource.AdoptedContextEntry(
+                    entry.MessageId,
+                    entry.SenderId,
+                    entry.Timestamp,
+                    entry.AuthorityAtInclusion))
+                .ToArray(),
             ReminderId = input.ReminderId,
             AckTarget = input.AckTarget
         };
+    }
 }
 
 /// <summary>

@@ -174,7 +174,9 @@ public static class SessionOutputDtoMapper
             InteractionDisplayText = msg.DisplayText,
             RequesterSenderId = msg.RequesterSenderId,
             InteractionPatterns = msg.Patterns.ToList(),
-            InteractionOptions = msg.Options.ToList()
+            InteractionOptions = msg.Options.ToList(),
+            InteractionHasAdoptedContext = msg.HasAdoptedContext,
+            InteractionAdoptedSpeakerIds = msg.AdoptedSpeakerIds.ToList()
         },
 
         _ => new SessionOutputDto
@@ -326,6 +328,8 @@ public static class SessionOutputDtoMapper
                 ToolName = dto.ToolName ?? "unknown",
                 DisplayText = dto.InteractionDisplayText ?? string.Empty,
                 RequesterSenderId = dto.RequesterSenderId,
+                HasAdoptedContext = dto.InteractionHasAdoptedContext ?? false,
+                AdoptedSpeakerIds = dto.InteractionAdoptedSpeakerIds ?? [],
                 Patterns = dto.InteractionPatterns ?? [],
                 Options = dto.InteractionOptions ?? []
             },

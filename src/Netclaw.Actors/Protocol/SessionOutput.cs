@@ -357,6 +357,21 @@ public sealed record ToolInteractionRequest : SessionOutput
 
     /// <summary>Available response options (e.g., approve once, approve for this chat, approve always, deny).</summary>
     public required IReadOnlyList<ToolInteractionOption> Options { get; init; }
+
+    /// <summary>
+    /// True when the executable request was accompanied by quoted adopted context.
+    /// </summary>
+    public bool HasAdoptedContext { get; init; }
+
+    /// <summary>
+    /// Stable sender ids present in the adopted context window for the turn.
+    /// </summary>
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
+    /// True when adopted-context provenance was preserved in stored approval state.
+    /// </summary>
+    public bool PersistedAdoptedContext { get; init; }
 }
 
 /// <summary>

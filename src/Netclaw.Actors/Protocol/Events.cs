@@ -65,6 +65,55 @@ public sealed class TurnRecorded
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 }
 
+[ProtoContract]
+public sealed class AdoptedContextRecorded
+{
+    [ProtoContract]
+    public sealed class AdoptedMessageRecord
+    {
+        [ProtoMember(1)]
+        public string MessageId { get; set; } = string.Empty;
+
+        [ProtoMember(2)]
+        public string SenderId { get; set; } = string.Empty;
+
+        [ProtoMember(3)]
+        public long TimestampMs { get; set; }
+
+        [ProtoMember(4)]
+        public string AuthorityAtInclusion { get; set; } = string.Empty;
+    }
+
+    [ProtoMember(1)]
+    public SessionId SessionId { get; set; }
+
+    [ProtoMember(2)]
+    public string AuthorizedMessageId { get; set; } = string.Empty;
+
+    [ProtoMember(3)]
+    public string? AuthorizerSenderId { get; set; }
+
+    [ProtoMember(4)]
+    public string? LowerBound { get; set; }
+
+    [ProtoMember(5)]
+    public string? UpperBound { get; set; }
+
+    [ProtoMember(6)]
+    public string Projection { get; set; } = string.Empty;
+
+    [ProtoMember(7)]
+    public List<AdoptedMessageRecord> Messages { get; set; } = [];
+
+    [ProtoMember(8)]
+    public bool ProjectionPersisted { get; set; }
+
+    [ProtoMember(9)]
+    public long RecordedAtMs { get; set; }
+
+    public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
+}
+
 /// <summary>
 /// Persisted event recording that the session title was set or updated.
 /// </summary>

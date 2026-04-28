@@ -68,6 +68,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Grounding & Alignment | 3 | Uses tools to verify facts, admits uncertainty |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Complex Task Execution | 3 | Multi-step tool chains complete successfully |
+| Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |
 
 Each case defines multiple natural phrasings of the same intent. Each
 run picks a random variant, testing whether behavior is robust across
@@ -216,6 +217,9 @@ skips persistence.
   `NETCLAW_EVAL_PROVIDER_ENDPOINT` to a reachable IP/hostname instead.
 - **Multi-turn support**: `netclaw chat -p --resume <id>` enables multi-turn
   scripted conversations against a named session.
+- **No native ACL/authority eval mode yet**: the current scored runner exercises
+  multi-turn attribution behavior, but it does not yet simulate restricted
+  channel posture with distinct authorized vs unauthorized speakers.
 - **Identity is borrowed from host**: the container does not
   self-bootstrap identity. CI will need a committed fixture under
   `evals/fixtures/identity/` — tracked as a follow-up.

@@ -33,7 +33,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
     private readonly SessionPipelineHandle _handle;
-    private bool _threadHistoryFetchAttempted;
     private SlackEventTs? _cursorTs;
     private SlackEventTs? _pendingCursorTs;
     private static readonly object ReinitializeTimerKey = new();
@@ -693,15 +692,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             Principal = triggeringMessage.Principal,
             Provenance = triggeringMessage.Provenance,
             Contents = liveContents,
-            ReceivedAt = triggeringMessage.ReceivedAt
+            ReceivedAt = triggeringMessage.ReceivedAt,
+            ExecutableText = triggeringMessage.Text
         };
 
-        // Only attempt hydration once per actor runtime. Setting the flag up front
-        // avoids re-fetching the entire thread if any downstream step throws.
-        if (_threadHistoryFetchAttempted || currentTs is not { } triggerTs)
+        if (currentTs is not { } triggerTs)
             return new InboundBuildResult(baseInput, false);
-
-        _threadHistoryFetchAttempted = true;
 
         var history = await _dependencies.ThreadHistoryFetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
         if (history.Count == 0)
@@ -745,7 +741,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var classifications = await Task.WhenAll(candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
 
         // Phase 3: assemble gap preserving chronological order.
-        var gap = new List<ChannelInput>(candidates.Count);
+        var gap = new List<AdoptedContextMessage>(candidates.Count);
         var blockedForRisk = 0;
         var detectorUnavailable = false;
 
@@ -755,7 +751,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             switch (classifications[i].Outcome)
             {
                 case ClassificationOutcome.Allow:
-                    gap.Add(item);
+                    var authority = SlackAclPolicy.IsAllowedUser(new SlackUserId(item.SenderId), _dependencies.Options)
+                        ? AdoptedMessageAuthority.Authorized
+                        : AdoptedMessageAuthority.Pending;
+                    gap.Add(new AdoptedContextMessage(item, authority));
                     break;
 
                 case ClassificationOutcome.Block:
@@ -784,8 +783,17 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (gap.Count == 0)
             return new InboundBuildResult(baseInput, detectorUnavailable);
 
-        var mergedContents = MergeGapWithLiveContents(gap, liveContents);
-        return new InboundBuildResult(baseInput with { Contents = mergedContents }, detectorUnavailable);
+        var merged = MergeGapWithLiveContents(gap, liveContents, triggeringMessage);
+        return new InboundBuildResult(baseInput with
+        {
+            Contents = merged.Contents,
+            HasAdoptedContext = true,
+            AdoptedSpeakerIds = merged.SpeakerIds,
+            AdoptedContextProjection = merged.Projection,
+            AdoptedContextLowerBound = cursor?.Value,
+            AdoptedContextUpperBound = triggeringMessage.EventId.Value,
+            AdoptedContextEntries = merged.Entries
+        }, detectorUnavailable);
     }
 
     private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
@@ -838,10 +846,15 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private readonly record struct CursorAdvanced(string CursorTs);
 
-    private static List<AIContent> MergeGapWithLiveContents(
-        IReadOnlyList<ChannelInput> gap,
-        IReadOnlyList<AIContent> liveContents)
-        => ThreadHistoryContentMerger.MergeHistoryWithLiveContents(gap, liveContents);
+    private static AdoptedContextMergeResult MergeGapWithLiveContents(
+        IReadOnlyList<AdoptedContextMessage> gap,
+        IReadOnlyList<AIContent> liveContents,
+        SlackThreadInbound triggeringMessage)
+        => AdoptedContextContentBuilder.MergeWithCurrentMessage(
+            gap,
+            liveContents,
+            triggeringMessage.SenderId,
+            triggeringMessage.ReceivedAt);
 
     private async Task ReinitializePipelineAsync(string reason)
     {

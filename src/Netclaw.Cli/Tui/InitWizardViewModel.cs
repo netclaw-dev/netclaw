@@ -95,6 +95,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var browserStep = new BrowserAutomationStepViewModel();
         var identityStep = new IdentityStepViewModel();
         var externalSkillsStep = new ExternalSkillsStepViewModel();
+        var skillFeedsStep = new SkillFeedsStepViewModel();
         _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState);
 
         var steps = new List<IWizardStepViewModel>
@@ -108,6 +109,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             browserStep,
             identityStep,
             externalSkillsStep,
+            skillFeedsStep,
             exposureModeStep,
             _healthCheckStep
         };
@@ -137,6 +139,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ["browser-automation"] = new BrowserAutomationStepView(),
             ["identity"] = new IdentityStepView(),
             ["external-skills"] = new ExternalSkillsStepView(),
+            ["skill-feeds"] = new SkillFeedsStepView(),
             ["health-check"] = new HealthCheckStepView()
         };
     }

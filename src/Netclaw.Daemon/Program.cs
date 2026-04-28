@@ -660,8 +660,25 @@ static void ConfigureDaemonServices(
     services.AddSingleton(externalSkillsConfig);
     services.AddSingleton(resolvedExternalSources);
 
-    // Scan native skills first (highest precedence), then external sources
-    var initialSkillScan = SkillScanner.ScanAndMerge(paths.SkillsDirectory, resolvedExternalSources);
+    // Server feed skill sources (private skill-server instances)
+    var skillFeedsConfig = configuration.GetSection("SkillFeeds")
+        .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
+    services.AddSingleton(skillFeedsConfig);
+
+    var resolvedServerFeedSources = new List<ResolvedExternalSource>();
+    foreach (var feed in skillFeedsConfig.Feeds.Where(f => f.Enabled))
+    {
+        var feedDir = paths.ServerFeedDirectory(feed.Name);
+        if (Directory.Exists(feedDir))
+            resolvedServerFeedSources.Add(new ResolvedExternalSource(
+                $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
+    }
+    IReadOnlyList<ResolvedExternalSource> serverFeeds = resolvedServerFeedSources;
+    services.AddKeyedSingleton("server-feeds", serverFeeds);
+
+    // Scan native skills first (highest precedence), then server feeds, then external sources
+    var initialSkillScan = SkillScanner.ScanAndMerge(
+        paths.SkillsDirectory, serverFeeds, resolvedExternalSources);
     skillRegistry.ReplaceAll(initialSkillScan.AcceptedSkills, initialSkillScan.Issues);
     services.AddSingleton(skillRegistry);
 
@@ -825,9 +842,16 @@ static void ConfigureDaemonServices(
         services.AddHostedService<SystemSkillSyncService>();
     }
 
+    // Server feed sync — syncs skills from private skill-server instances at startup.
+    // Runs after SystemSkillSyncService; each feed syncs independently.
+    if (skillFeedsConfig.Feeds.Any(f => f.Enabled))
+    {
+        services.AddHostedService<ServerFeedSkillSyncService>();
+    }
+
     // Skill directory watcher — auto-rescan when skill files change on disk.
-    // Covers native skills directory and all external sources.
-    // Registered after SystemSkillSyncService so initial sync completes first.
+    // Covers native skills directory, server feeds, and all external sources.
+    // Registered after sync services so initial sync completes first.
     services.AddSingleton<SkillDirectoryWatcherService>();
     services.AddHostedService(sp => sp.GetRequiredService<SkillDirectoryWatcherService>());
 

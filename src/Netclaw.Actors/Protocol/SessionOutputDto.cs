@@ -102,6 +102,8 @@ public sealed record SessionOutputDto
     public string? RequesterSenderId { get; init; }
     public List<string>? InteractionPatterns { get; init; }
     public List<ToolInteractionOption>? InteractionOptions { get; init; }
+    public bool? InteractionHasAdoptedContext { get; init; }
+    public List<string>? InteractionAdoptedSpeakerIds { get; init; }
 
     // SubAgent
     public string? AgentName { get; init; }

@@ -12,6 +12,12 @@ namespace Netclaw.Actors.Channels;
 /// </summary>
 public sealed record MessageSource
 {
+    public sealed record AdoptedContextEntry(
+        string MessageId,
+        string SenderId,
+        DateTimeOffset Timestamp,
+        string AuthorityAtInclusion);
+
     /// <summary>
     /// Channel type identifier.
     /// </summary>
@@ -65,6 +71,42 @@ public sealed record MessageSource
     /// When the message was received by the channel.
     /// </summary>
     public DateTimeOffset ReceivedAt { get; init; }
+
+    /// <summary>
+    /// Executable text for the current turn. When threaded adapters prepend adopted
+    /// quoted context, this remains the current authorized message text.
+    /// </summary>
+    public string? ExecutableText { get; init; }
+
+    /// <summary>
+    /// True when the model input contains a quoted adopted-context window.
+    /// </summary>
+    public bool HasAdoptedContext { get; init; }
+
+    /// <summary>
+    /// Stable sender ids present in the adopted-context window for this turn.
+    /// </summary>
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
+    /// Canonical adopted-context projection shown to the model for this turn.
+    /// </summary>
+    public string? AdoptedContextProjection { get; init; }
+
+    /// <summary>
+    /// Exclusive lower bound for the adopted-context window. Null when there is no prior watermark.
+    /// </summary>
+    public string? AdoptedContextLowerBound { get; init; }
+
+    /// <summary>
+    /// Exclusive upper bound for the adopted-context window, typically the current authorized message id.
+    /// </summary>
+    public string? AdoptedContextUpperBound { get; init; }
+
+    /// <summary>
+    /// Included adopted messages captured at inclusion time.
+    /// </summary>
+    public IReadOnlyList<AdoptedContextEntry> AdoptedContextEntries { get; init; } = [];
 
     /// <summary>
     /// Ephemeral dedup and forensic key for reminder-originated deliveries.

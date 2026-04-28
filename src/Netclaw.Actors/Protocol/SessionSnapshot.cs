@@ -11,6 +11,47 @@ namespace Netclaw.Actors.Protocol;
 [ProtoContract]
 public sealed class SessionSnapshot
 {
+    [ProtoContract]
+    public sealed class AdoptedContextSnapshotRecord
+    {
+        [ProtoContract]
+        public sealed class AdoptedContextSnapshotMessage
+        {
+            [ProtoMember(1)]
+            public string MessageId { get; set; } = string.Empty;
+
+            [ProtoMember(2)]
+            public string SenderId { get; set; } = string.Empty;
+
+            [ProtoMember(3)]
+            public long TimestampMs { get; set; }
+
+            [ProtoMember(4)]
+            public string AuthorityAtInclusion { get; set; } = string.Empty;
+        }
+
+        [ProtoMember(1)]
+        public string AuthorizedMessageId { get; set; } = string.Empty;
+
+        [ProtoMember(2)]
+        public string? AuthorizerSenderId { get; set; }
+
+        [ProtoMember(3)]
+        public string? LowerBound { get; set; }
+
+        [ProtoMember(4)]
+        public string? UpperBound { get; set; }
+
+        [ProtoMember(5)]
+        public string Projection { get; set; } = string.Empty;
+
+        [ProtoMember(6)]
+        public bool ProjectionPersisted { get; set; }
+
+        [ProtoMember(7)]
+        public List<AdoptedContextSnapshotMessage> Messages { get; set; } = new();
+    }
+
     [ProtoMember(1)]
     public List<SerializableChatMessage> History { get; set; } = new();
 
@@ -48,4 +89,7 @@ public sealed class SessionSnapshot
     /// </summary>
     [ProtoMember(7)]
     public List<ActiveJobInfo> ActiveBackgroundJobs { get; set; } = new();
+
+    [ProtoMember(8)]
+    public List<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; set; } = new();
 }
