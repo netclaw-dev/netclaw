@@ -26,7 +26,7 @@
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftAspNetCoreVersion)" />
-    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.4.0" />
+    <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.5.0" />
     <PackageVersion Include="ModelContextProtocol.Core" Version="1.2.0" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="$(MicrosoftAspNetCoreVersion)" />
