@@ -21,7 +21,7 @@ public sealed record SessionState
         string? LowerBound,
         string? UpperBound,
         string Projection,
-        bool EnqueueConfirmed,
+        bool ProjectionPersisted,
         ImmutableList<AdoptedContextAuditMessage> Messages);
 
     public sealed record AdoptedContextAuditMessage(
@@ -121,7 +121,7 @@ public sealed record SessionState
             evt.LowerBound,
             evt.UpperBound,
             evt.Projection,
-            evt.EnqueueConfirmed,
+            evt.ProjectionPersisted,
             evt.Messages
                 .Select(message => new AdoptedContextAuditMessage(
                     message.MessageId,

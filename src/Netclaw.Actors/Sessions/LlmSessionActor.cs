@@ -3036,7 +3036,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
 
         if (_state.AdoptedContextRecords.TryGetValue(source.MessageId, out var existing)
-            && existing.EnqueueConfirmed)
+            && existing.ProjectionPersisted)
         {
             return;
         }
@@ -3049,7 +3049,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             LowerBound = source.AdoptedContextLowerBound,
             UpperBound = source.AdoptedContextUpperBound ?? source.MessageId,
             Projection = source.AdoptedContextProjection ?? string.Empty,
-            EnqueueConfirmed = true,
+            ProjectionPersisted = true,
             RecordedAtMs = NowMs(),
             Messages = source.AdoptedContextEntries
                 .Select(entry => new AdoptedContextRecorded.AdoptedMessageRecord

@@ -106,7 +106,7 @@ public sealed class AdoptedContextRecorded
     public List<AdoptedMessageRecord> Messages { get; set; } = [];
 
     [ProtoMember(8)]
-    public bool EnqueueConfirmed { get; set; }
+    public bool ProjectionPersisted { get; set; }
 
     [ProtoMember(9)]
     public long RecordedAtMs { get; set; }
