@@ -14,8 +14,17 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 {
     private SelectionListNode<string>? _serverList;
     private DynamicLayoutNode? _contentNode;
+    private DynamicLayoutNode? _footerNode;
     private readonly CompositeDisposable _stepSubs = new();
-    private int _toolCursor;
+    private int _gridCursor;
+    private bool _confirmingSave;
+
+    private const int AudienceRow = 0;
+    private const int ServerEnabledRow = 1;
+    private const int ServerDefaultRow = 2;
+    private const int FirstToolRow = 3;
+
+    private int TotalRows => FirstToolRow + ViewModel.DiscoveredTools.Count;
 
     protected override void OnBound()
     {
@@ -106,54 +115,65 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .WithChild(_serverList);
     }
 
-    /// <summary>
-    /// Manual cursor rendering — matches the channel wizard pattern.
-    /// Preserves cursor position across rebuilds (no SelectionListNode reset).
-    /// </summary>
     private ILayoutNode BuildToolGrid()
     {
         var server = ViewModel.SelectedServer ?? "?";
         var audienceLabel = ViewModel.SelectedAudience.ToWireValue();
-        var audienceSelector = $"[\u25c0 {audienceLabel,-8} \u25b6]";
-
-        var tools = ViewModel.DiscoveredTools;
-        if (_toolCursor >= tools.Count) _toolCursor = tools.Count - 1;
-        if (_toolCursor < 0) _toolCursor = 0;
-
         var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
-        var accessMarker = serverAllowed ? "\u2713" : " ";
-
         var serverDefault = ViewModel.GetServerDefault();
-        var serverDefaultLabel = $"[{serverDefault}]";
+        var tools = ViewModel.DiscoveredTools;
+
+        var maxRow = TotalRows - 1;
+        if (_gridCursor > maxRow) _gridCursor = maxRow;
+        if (_gridCursor < 0) _gridCursor = 0;
 
         var layout = Layouts.Vertical()
-            .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode($"  Audience: {audienceSelector}").WithForeground(Color.Cyan).Bold())
-            .WithSpacing(1)
-            .WithChild(new TextNode($"  [{accessMarker}] Server enabled for {audienceLabel}")
-                .WithForeground(serverAllowed ? Color.White : Color.Yellow))
-            .WithChild(new TextNode($"  [M] Server default: {serverDefaultLabel}")
-                .WithForeground(ColorForMode(serverDefault)));
+            .WithChild(new TextNode($"  Server: {server}").WithForeground(Color.White).Bold());
 
-        if (!string.IsNullOrEmpty(ViewModel.StatusMessage.Value))
-        {
-            layout = layout.WithSpacing(1)
-                .WithChild(new TextNode($"  {ViewModel.StatusMessage.Value}").WithForeground(Color.Green));
-        }
+        // Row 0: Audience selector
+        var audPrefix = _gridCursor == AudienceRow ? " ▶ " : "   ";
+        var audText = $"{audPrefix}Audience: [◀ {audienceLabel,-8} ▶]";
+        var audNode = new TextNode(audText);
+        audNode = _gridCursor == AudienceRow
+            ? audNode.WithForeground(Color.Cyan).Bold()
+            : audNode.WithForeground(Color.White);
+        layout = layout.WithChild(audNode);
 
         layout = layout.WithSpacing(1);
 
-        // Find the longest tool name for column alignment.
+        // Row 1: Server enabled
+        var enPrefix = _gridCursor == ServerEnabledRow ? " ▶ " : "   ";
+        var accessMarker = serverAllowed ? "✓" : " ";
+        var enText = $"{enPrefix}[{accessMarker}] Server enabled for {audienceLabel}";
+        var enNode = new TextNode(enText);
+        enNode = _gridCursor == ServerEnabledRow
+            ? enNode.WithForeground(Color.Cyan).Bold()
+            : enNode.WithForeground(serverAllowed ? Color.White : Color.Yellow);
+        layout = layout.WithChild(enNode);
+
+        // Row 2: Server default
+        var sdPrefix = _gridCursor == ServerDefaultRow ? " ▶ " : "   ";
+        var sdText = $"{sdPrefix}Server default: [{serverDefault}]";
+        var sdNode = new TextNode(sdText);
+        sdNode = _gridCursor == ServerDefaultRow
+            ? sdNode.WithForeground(Color.Cyan).Bold()
+            : sdNode.WithForeground(ColorForMode(serverDefault));
+        layout = layout.WithChild(sdNode);
+
+        layout = layout.WithSpacing(1);
+
+        // Tool rows
         var maxToolNameLen = tools.Count > 0 ? tools.Max(t => t.Length) : 0;
 
         for (var i = 0; i < tools.Count; i++)
         {
+            var rowIndex = FirstToolRow + i;
+            var isFocused = _gridCursor == rowIndex;
             var tool = tools[i];
-            var isFocused = i == _toolCursor;
             var toolName = new ToolName(tool);
             var granted = serverAllowed && ViewModel.IsToolGranted(toolName);
-            var prefix = isFocused ? " \u25b6 " : "   ";
-            var marker = granted ? "\u2713" : " ";
+            var prefix = isFocused ? " ▶ " : "   ";
+            var marker = granted ? "✓" : " ";
             var paddedName = tool.PadRight(maxToolNameLen);
             var (effectiveMode, inherited) = ViewModel.GetEffectiveMode(toolName);
             var modeBadge = $"[{effectiveMode}]";
@@ -184,32 +204,57 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
     private LayoutNode BuildFooter()
     {
-        var footerNode = new DynamicLayoutNode(() =>
+        _footerNode = new DynamicLayoutNode(() =>
         {
+            if (_confirmingSave)
+            {
+                return new TextNode("Save changes?  [Y] Yes  [N] No  [Esc] Cancel")
+                    .WithForeground(Color.Yellow).Bold();
+            }
+
             var hints = ViewModel.CurrentState.Value switch
             {
                 ToolPermissionsState.ServerList => "[Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                 ToolPermissionsState.ToolGrid =>
-                    "[\u2190/\u2192] Audience  [\u2191/\u2193] Navigate  [Enter] Toggle  [A] All  [E] Enable/Disable  [M] Server default  [P] Tool mode  [S] Save  [Esc] Back",
+                    "[↑/↓] Navigate  [←/→] Change  [Space] Toggle  [A] All  [Enter] Done  [Esc] Back",
                 _ => ""
             };
 
-            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid && ViewModel.HasUnsavedChanges)
+            if (ViewModel.CurrentState.Value == ToolPermissionsState.ToolGrid)
             {
-                return Layouts.Horizontal()
-                    .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
-                    .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
+                var statusText = ViewModel.StatusMessage.Value;
+                var hasStatus = !string.IsNullOrEmpty(statusText);
+
+                if (ViewModel.HasSaveError)
+                {
+                    return Layouts.Horizontal()
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Red));
+                }
+
+                if (ViewModel.HasUnsavedChanges)
+                {
+                    return Layouts.Horizontal()
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                        .WithChild(new TextNode("  *unsaved*").WithForeground(Color.Yellow));
+                }
+
+                if (hasStatus)
+                {
+                    return Layouts.Horizontal()
+                        .WithChild(new TextNode(hints).WithForeground(Color.BrightBlack))
+                        .WithChild(new TextNode($"  {statusText}").WithForeground(Color.Green));
+                }
             }
 
             return new TextNode(hints).WithForeground(Color.BrightBlack);
         });
 
-        // Footer must invalidate on state changes to show correct hints
         ViewModel.StateVersion
-            .Subscribe(_ => footerNode.Invalidate())
+            .Subscribe(_ => _footerNode.Invalidate())
             .DisposeWith(Subscriptions);
 
-        return footerNode;
+        return _footerNode;
     }
 
     private void HandleKeyPress(KeyPressed key)
@@ -223,6 +268,13 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             return;
         }
 
+        // Handle save confirmation dialog
+        if (_confirmingSave)
+        {
+            HandleConfirmation(keyInfo);
+            return;
+        }
+
         if (keyInfo.Key == ConsoleKey.Escape)
         {
             if (ViewModel.CurrentState.Value == ToolPermissionsState.ServerList)
@@ -231,7 +283,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 return;
             }
 
-            _toolCursor = 0;
+            _gridCursor = 0;
             ViewModel.GoBack();
             return;
         }
@@ -241,31 +293,29 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             switch (keyInfo.Key)
             {
                 case ConsoleKey.UpArrow:
-                    if (_toolCursor > 0) _toolCursor--;
+                    if (_gridCursor > 0) _gridCursor--;
                     InvalidateAndRedraw();
                     return;
 
                 case ConsoleKey.DownArrow:
-                    if (_toolCursor < ViewModel.DiscoveredTools.Count - 1) _toolCursor++;
+                    if (_gridCursor < TotalRows - 1) _gridCursor++;
                     InvalidateAndRedraw();
                     return;
 
                 case ConsoleKey.RightArrow:
-                    ViewModel.CycleAudience();
+                    HandleRightArrow();
                     return;
 
                 case ConsoleKey.LeftArrow:
-                    ViewModel.CycleAudienceBack();
+                    HandleLeftArrow();
+                    return;
+
+                case ConsoleKey.Spacebar:
+                    HandleToggle();
                     return;
 
                 case ConsoleKey.Enter:
-                    if (ViewModel.IsServerAllowedForSelectedAudience()
-                        && ViewModel.DiscoveredTools.Count > 0)
-                        ViewModel.ToggleTool(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
-                    return;
-
-                case ConsoleKey.S:
-                    ViewModel.Save();
+                    HandleDone();
                     return;
 
                 case ConsoleKey.A:
@@ -283,41 +333,10 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
                 case ConsoleKey.P:
                     if (ViewModel.IsServerAllowedForSelectedAudience()
-                        && ViewModel.DiscoveredTools.Count > 0)
-                        ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
+                        && ViewModel.DiscoveredTools.Count > 0
+                        && _gridCursor >= FirstToolRow)
+                        ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_gridCursor - FirstToolRow]));
                     return;
-            }
-
-            if (keyInfo.KeyChar == 's')
-            {
-                ViewModel.Save();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'a' && ViewModel.IsServerAllowedForSelectedAudience())
-            {
-                ViewModel.ToggleAll();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'e')
-            {
-                ViewModel.ToggleServerAccess();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'm')
-            {
-                ViewModel.CycleServerDefault();
-                return;
-            }
-
-            if (keyInfo.KeyChar == 'p'
-                && ViewModel.IsServerAllowedForSelectedAudience()
-                && ViewModel.DiscoveredTools.Count > 0)
-            {
-                ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[_toolCursor]));
-                return;
             }
 
             return;
@@ -331,9 +350,99 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         }
     }
 
+    private void HandleRightArrow() => DispatchGridAction(
+        ViewModel.CycleAudience,
+        ViewModel.ToggleServerAccess,
+        ViewModel.CycleServerDefault,
+        idx => ViewModel.CycleToolOverride(new ToolName(ViewModel.DiscoveredTools[idx])));
+
+    private void HandleLeftArrow() => DispatchGridAction(
+        ViewModel.CycleAudienceBack,
+        ViewModel.ToggleServerAccess,
+        ViewModel.CycleServerDefaultBack,
+        idx => ViewModel.CycleToolOverrideBack(new ToolName(ViewModel.DiscoveredTools[idx])));
+
+    private void HandleToggle() => DispatchGridAction(
+        ViewModel.CycleAudience,
+        ViewModel.ToggleServerAccess,
+        ViewModel.CycleServerDefault,
+        idx => ViewModel.ToggleTool(new ToolName(ViewModel.DiscoveredTools[idx])));
+
+    private void DispatchGridAction(
+        Action audienceAction,
+        Action serverEnabledAction,
+        Action serverDefaultAction,
+        Action<int> toolAction)
+    {
+        switch (_gridCursor)
+        {
+            case AudienceRow:
+                audienceAction();
+                break;
+            case ServerEnabledRow:
+                serverEnabledAction();
+                break;
+            case ServerDefaultRow:
+                serverDefaultAction();
+                break;
+            default:
+                if (_gridCursor >= FirstToolRow
+                    && ViewModel.IsServerAllowedForSelectedAudience()
+                    && ViewModel.DiscoveredTools.Count > 0)
+                {
+                    toolAction(_gridCursor - FirstToolRow);
+                }
+                break;
+        }
+    }
+
+    private void HandleDone()
+    {
+        if (ViewModel.HasUnsavedChanges)
+        {
+            _confirmingSave = true;
+            InvalidateAndRedraw();
+        }
+        else
+        {
+            _gridCursor = 0;
+            ViewModel.GoBack();
+        }
+    }
+
+    private void HandleConfirmation(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.Y:
+                _confirmingSave = false;
+                if (!ViewModel.Save())
+                {
+                    InvalidateAndRedraw();
+                    return;
+                }
+                _gridCursor = 0;
+                ViewModel.GoBack();
+                break;
+
+            case ConsoleKey.N:
+                _confirmingSave = false;
+                _gridCursor = 0;
+                ViewModel.DiscardChanges();
+                ViewModel.GoBack();
+                break;
+
+            case ConsoleKey.Escape:
+                _confirmingSave = false;
+                InvalidateAndRedraw();
+                break;
+        }
+    }
+
     private void InvalidateAndRedraw()
     {
         _contentNode?.Invalidate();
+        _footerNode?.Invalidate();
         ViewModel.RequestRedraw();
     }
 }

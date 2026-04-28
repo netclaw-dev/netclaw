@@ -30,9 +30,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     private McpToolPermissionsViewModel CreateVm()
     {
         var configuration = new ConfigurationBuilder().Build();
-        var daemonPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-vm-daemon-{Guid.NewGuid():N}"));
-        daemonPaths.EnsureDirectoriesExist();
-        var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, daemonPaths);
+        var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, _paths);
         return new McpToolPermissionsViewModel(_paths, daemonApi);
     }
 
@@ -155,6 +153,70 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         Assert.Equal(ToolApprovalMode.Approval, mode);
         Assert.True(inherited);
         Assert.Equal(ToolApprovalMode.Approval, vm.GetServerDefault());
+    }
+
+    [Fact]
+    public void CycleServerDefaultBack_StartingFromAuto_CyclesInReverse()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.CycleServerDefaultBack();
+        Assert.Equal(ToolApprovalMode.Deny, vm.GetServerDefault());
+
+        vm.CycleServerDefaultBack();
+        Assert.Equal(ToolApprovalMode.Approval, vm.GetServerDefault());
+
+        vm.CycleServerDefaultBack();
+        Assert.Equal(ToolApprovalMode.Auto, vm.GetServerDefault());
+    }
+
+    [Fact]
+    public void CycleToolOverrideBack_FromInherit_CyclesThroughAllModesInReverse()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        var (_, isInherited) = vm.GetEffectiveMode(new ToolName("create-pages"));
+        Assert.True(isInherited);
+
+        vm.CycleToolOverrideBack(new ToolName("create-pages"));
+        var step1 = vm.GetEffectiveMode(new ToolName("create-pages"));
+        Assert.Equal(ToolApprovalMode.Deny, step1.Mode);
+        Assert.False(step1.IsInherited);
+
+        vm.CycleToolOverrideBack(new ToolName("create-pages"));
+        var step2 = vm.GetEffectiveMode(new ToolName("create-pages"));
+        Assert.Equal(ToolApprovalMode.Approval, step2.Mode);
+        Assert.False(step2.IsInherited);
+
+        vm.CycleToolOverrideBack(new ToolName("create-pages"));
+        var step3 = vm.GetEffectiveMode(new ToolName("create-pages"));
+        Assert.Equal(ToolApprovalMode.Auto, step3.Mode);
+        Assert.False(step3.IsInherited);
+
+        vm.CycleToolOverrideBack(new ToolName("create-pages"));
+        var step4 = vm.GetEffectiveMode(new ToolName("create-pages"));
+        Assert.True(step4.IsInherited);
+    }
+
+    [Fact]
+    public void CycleToolOverride_ForwardThenBack_ReturnsToOriginalState()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.CycleToolOverride(new ToolName("create-pages"));
+        vm.CycleToolOverride(new ToolName("create-pages"));
+
+        vm.CycleToolOverrideBack(new ToolName("create-pages"));
+        vm.CycleToolOverrideBack(new ToolName("create-pages"));
+
+        var (_, isInherited) = vm.GetEffectiveMode(new ToolName("create-pages"));
+        Assert.True(isInherited);
     }
 
     private sealed class NoopHttpClientFactory : IHttpClientFactory

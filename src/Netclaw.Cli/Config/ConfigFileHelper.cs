@@ -43,10 +43,17 @@ internal static class ConfigFileHelper
     internal static Dictionary<string, object> GetOrCreateSection(
         Dictionary<string, object> dict, string key)
     {
-        if (dict.TryGetValue(key, out var existing))
+        if (dict.TryGetValue(key, out var existing) && existing is not null)
         {
             if (existing is JsonElement je)
             {
+                if (je.ValueKind == JsonValueKind.Null)
+                {
+                    var fresh = new Dictionary<string, object>();
+                    dict[key] = fresh;
+                    return fresh;
+                }
+
                 var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
                     ?? new Dictionary<string, object>();
                 dict[key] = parsed;
