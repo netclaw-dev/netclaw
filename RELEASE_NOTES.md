@@ -1,3 +1,19 @@
+#### 0.16.1 2026-04-28 ####
+
+Netclaw v0.16.1 — Private skill feed sync, MCP permissions navigation fix, and dependency update
+
+**Features**
+
+* Added private skill server feed sync via `Netclaw.SkillClient` — operators can now configure private skill-server instances under `SkillFeeds.Feeds` in `netclaw.yaml`; a new `ServerFeedSkillSyncService` syncs skills from those feeds at startup using the Cloudflare Agent Skills RFC discovery protocol, with per-feed error isolation, SHA-256 verification, and content security scanning. Skills follow three-tier precedence (native > server-feed > external) so server-feed skills can extend but never override built-in capabilities. A new "Skill Feeds" step in the `netclaw init` wizard supports live probe validation and error recovery. Closes [#532](https://github.com/Aaronontheweb/netclaw/issues/532). ([#785](https://github.com/Aaronontheweb/netclaw/pull/785))
+
+**Bug Fixes**
+
+* Fixed MCP permissions page navigation — Up/Down now navigates all configurable rows (Audience, Server Enabled, Server Default, Tools) using a unified grid cursor, and Left/Right performs context-sensitive cycling per row. The footer is simplified to the six most common shortcuts; legacy shortcuts still work. The `*unsaved*` indicator now clears reliably after saving. Closes [#786](https://github.com/Aaronontheweb/netclaw/issues/786). ([#788](https://github.com/Aaronontheweb/netclaw/pull/788))
+
+**Dependencies**
+
+* Bumped `Cronos` from 0.8.4 to 0.12.0 — includes support for schedule jitter via the `H` character, nullable reference type annotations, strong-named assembly signing, removal of the year 2499 limitation, and several bug fixes across the 0.9–0.12 release series. ([#572](https://github.com/Aaronontheweb/netclaw/pull/572))
+
 #### 0.16.0 2026-04-27 ####
 
 Netclaw v0.16.0 — Discord session continuity, public audience hardening, reminder expiration, and init wizard overhaul
