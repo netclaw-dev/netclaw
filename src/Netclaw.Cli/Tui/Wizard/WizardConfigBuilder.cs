@@ -34,6 +34,7 @@ public sealed class WizardConfigBuilder
     public WorkspacesConfigSection? Workspaces { get; set; }
     public NotificationsConfigSection? Notifications { get; set; }
     public List<ExternalSkillSource>? ExternalSkillSources { get; set; }
+    public List<SkillFeedSource>? SkillFeedSources { get; set; }
     public DaemonConfigSection? Daemon { get; set; }
     public WebhooksConfigSection? Webhooks { get; set; }
     public FeatureSelectionsConfigSection? FeatureSelections { get; set; }
@@ -219,6 +220,26 @@ public sealed class WizardConfigBuilder
             config["ExternalSkills"] = new Dictionary<string, object>
             {
                 ["Sources"] = sourcesArray
+            };
+        }
+
+        // Skill feeds (private skill servers)
+        if (SkillFeedSources is { Count: > 0 })
+        {
+            var feedsArray = SkillFeedSources.Select(f =>
+            {
+                var entry = new Dictionary<string, object>
+                {
+                    ["Name"] = f.Name,
+                    ["Url"] = f.Url,
+                    ["Enabled"] = f.Enabled
+                };
+                return (object)entry;
+            }).ToArray();
+
+            config["SkillFeeds"] = new Dictionary<string, object>
+            {
+                ["Feeds"] = feedsArray
             };
         }
 

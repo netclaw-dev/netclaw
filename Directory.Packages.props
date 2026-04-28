@@ -52,6 +52,7 @@
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.12.0" />
+    <PackageVersion Include="Netclaw.SkillClient" Version="0.2.0" />
     <PackageVersion Include="Termina" Version="0.8.0" />
   </ItemGroup>
   <!-- Serialization -->

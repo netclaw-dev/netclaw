@@ -412,6 +412,56 @@
       },
       "additionalProperties": false
     },
+    "SkillFeeds": {
+      "type": "object",
+      "description": "Private skill server feeds. Skills are synced from these servers at startup and periodically.",
+      "properties": {
+        "SyncIntervalMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
+          "default": 60,
+          "description": "How often (in minutes) to re-check feeds for updated skills. 0 disables periodic sync."
+        },
+        "Feeds": {
+          "type": "array",
+          "description": "Ordered list of skill server feeds. Earlier feeds win on name collisions.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "Name": {
+                "type": "string",
+                "description": "Unique feed identifier (used as directory name). Lowercase alphanumeric and hyphens."
+              },
+              "Url": {
+                "type": "string",
+                "format": "uri",
+                "description": "Skill server base URL (e.g., https://skills.corp.com)."
+              },
+              "ApiKey": {
+                "type": ["string", "null"],
+                "description": "Optional Bearer token for authenticated access. Supports ENC: prefix."
+              },
+              "Enabled": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether this feed is active."
+              },
+              "TimeoutSeconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 300,
+                "default": 30,
+                "description": "HTTP timeout in seconds for requests to this feed."
+              }
+            },
+            "required": ["Name", "Url"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "SubAgents": {
       "type": "object",
       "description": "Timeout configuration for subagent execution (seconds).",

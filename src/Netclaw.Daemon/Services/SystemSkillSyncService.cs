@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -19,8 +17,6 @@ namespace Netclaw.Daemon.Services;
 /// </summary>
 internal sealed class SystemSkillSyncService : IHostedService
 {
-    private static readonly string[] AllowedResourcePrefixes = ["references", "scripts", "assets"];
-
     private readonly HttpClient _httpClient;
     private readonly NetclawPaths _paths;
     private readonly SkillSyncConfig _skillSyncConfig;
@@ -30,6 +26,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
     private readonly ISkillContentScanner _scanner;
+    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public SystemSkillSyncService(
@@ -41,10 +38,12 @@ internal sealed class SystemSkillSyncService : IHostedService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
+        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         IChatClientProvider? chatClientProvider = null)
         : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer,
-            timeProvider, scanner, logger, BuildInfo.Version, externalSources)
+            timeProvider, scanner, logger, BuildInfo.Version, serverFeedSources, externalSources)
     {
     }
 
@@ -59,6 +58,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
         string daemonVersion,
+        IReadOnlyList<ResolvedExternalSource>? serverFeedSources = null,
         IReadOnlyList<ResolvedExternalSource>? externalSources = null)
     {
         _httpClient = httpClient;
@@ -70,6 +70,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         _scanner = scanner;
         _logger = logger;
         _daemonVersion = daemonVersion;
+        _serverFeedSources = serverFeedSources ?? [];
         _externalSources = externalSources ?? [];
     }
 
@@ -108,27 +109,10 @@ internal sealed class SystemSkillSyncService : IHostedService
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     private SkillSyncState ReadSyncState()
-    {
-        if (!File.Exists(_paths.SkillSyncStatePath))
-            return new SkillSyncState();
-
-        try
-        {
-            var json = File.ReadAllText(_paths.SkillSyncStatePath);
-            return JsonSerializer.Deserialize<SkillSyncState>(json) ?? new SkillSyncState();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to read sync state — starting fresh");
-            return new SkillSyncState();
-        }
-    }
+        => SkillSyncHelpers.ReadSyncState(_paths.SkillSyncStatePath, _logger);
 
     private void WriteSyncState(SkillSyncState state)
-    {
-        var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
-        File.WriteAllText(_paths.SkillSyncStatePath, json);
-    }
+        => SkillSyncHelpers.WriteSyncState(_paths.SkillSyncStatePath, state);
 
     private async Task<SkillFeedManifest?> FetchManifestAsync(CancellationToken cancellationToken)
     {
@@ -230,7 +214,7 @@ internal sealed class SystemSkillSyncService : IHostedService
                     var allFilesOk = true;
                     foreach (var file in entry.Files)
                     {
-                        var normalizedPath = ValidateFeedResourcePath(file.Path);
+                        var normalizedPath = SkillSyncHelpers.ValidateResourcePath(file.Path);
                         if (normalizedPath is null)
                         {
                             _logger.LogWarning(
@@ -272,7 +256,8 @@ internal sealed class SystemSkillSyncService : IHostedService
                         continue;
                 }
 
-                await ReplaceSkillDirectoryAsync(entry.Name, downloadedFiles, cancellationToken);
+                await SkillSyncHelpers.ReplaceSkillDirectoryAsync(
+                    _paths.SystemSkillsDirectory, entry.Name, downloadedFiles, cancellationToken);
 
                 syncState.Skills[entry.Name] = new SyncedSkillState
                 {
@@ -317,8 +302,7 @@ internal sealed class SystemSkillSyncService : IHostedService
 
             var content = await _httpClient.GetStringAsync(url, cts.Token);
 
-            // Verify SHA-256
-            var hash = ComputeSha256(content);
+            var hash = SkillSyncHelpers.ComputeSha256(content);
             if (!string.Equals(hash, expectedSha256, StringComparison.OrdinalIgnoreCase))
             {
                 _logger.LogWarning(
@@ -347,7 +331,8 @@ internal sealed class SystemSkillSyncService : IHostedService
     /// </summary>
     private void RescanAndUpdateIndex()
     {
-        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, _externalSources);
+        var mergedResult = SkillScanner.ScanAndMerge(
+            _paths.SkillsDirectory, _serverFeedSources, _externalSources);
         SkillRegistryUpdater.ApplyMergedScanResult(
             _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
 
@@ -374,16 +359,8 @@ internal sealed class SystemSkillSyncService : IHostedService
     }
 
     internal static string ComputeSha256(string content)
-    {
-        var bytes = Encoding.UTF8.GetBytes(content);
-        var hash = SHA256.HashData(bytes);
-        return Convert.ToHexStringLower(hash);
-    }
+        => SkillSyncHelpers.ComputeSha256(content);
 
-    /// <summary>
-    /// Returns true if <paramref name="current"/> >= <paramref name="minimum"/>.
-    /// Uses simple semver major.minor.patch comparison.
-    /// </summary>
     internal static bool IsVersionSatisfied(string current, string minimum)
     {
         if (Version.TryParse(current, out var currentVersion)
@@ -395,70 +372,4 @@ internal sealed class SystemSkillSyncService : IHostedService
         // If parsing fails, assume satisfied to avoid blocking skills unnecessarily
         return true;
     }
-
-    private static string? ValidateFeedResourcePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return null;
-
-        if (Path.IsPathRooted(path) || path.Contains("..", StringComparison.Ordinal))
-            return null;
-
-        var normalized = path.Replace('\\', '/');
-        var firstSegment = normalized.Split('/')[0];
-        if (!AllowedResourcePrefixes.Contains(firstSegment, StringComparer.OrdinalIgnoreCase))
-            return null;
-
-        return normalized;
-    }
-
-    private async Task ReplaceSkillDirectoryAsync(
-        string skillName,
-        IReadOnlyList<DownloadedSkillFile> files,
-        CancellationToken cancellationToken)
-    {
-        var skillDir = Path.Combine(_paths.SystemSkillsDirectory, skillName);
-        var stagingRoot = Path.Combine(_paths.SystemSkillsDirectory, ".staging");
-        Directory.CreateDirectory(stagingRoot);
-
-        var stagingDir = Path.Combine(stagingRoot, $"{skillName}-{Guid.NewGuid():N}");
-        var backupDir = Path.Combine(stagingRoot, $"{skillName}-backup-{Guid.NewGuid():N}");
-
-        Directory.CreateDirectory(stagingDir);
-
-        try
-        {
-            foreach (var file in files)
-            {
-                var targetPath = Path.Combine(stagingDir, file.RelativePath.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-                await File.WriteAllTextAsync(targetPath, file.Content, cancellationToken);
-            }
-
-            if (Directory.Exists(skillDir))
-                Directory.Move(skillDir, backupDir);
-
-            Directory.Move(stagingDir, skillDir);
-
-            if (Directory.Exists(backupDir))
-                Directory.Delete(backupDir, recursive: true);
-        }
-        catch
-        {
-            if (!Directory.Exists(skillDir) && Directory.Exists(backupDir))
-                Directory.Move(backupDir, skillDir);
-
-            throw;
-        }
-        finally
-        {
-            if (Directory.Exists(stagingDir))
-                Directory.Delete(stagingDir, recursive: true);
-
-            if (Directory.Exists(backupDir) && !Directory.Exists(skillDir))
-                Directory.Delete(backupDir, recursive: true);
-        }
-    }
-
-    private sealed record DownloadedSkillFile(string RelativePath, string Content);
 }

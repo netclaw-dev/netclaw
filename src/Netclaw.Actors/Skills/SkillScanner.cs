@@ -195,6 +195,18 @@ public static partial class SkillScanner
     public static MergedSkillScanResult ScanAndMerge(
         string nativeSkillsDirectory,
         IReadOnlyList<ResolvedExternalSource> externalSources)
+        => ScanAndMerge(nativeSkillsDirectory, Array.Empty<ResolvedExternalSource>(), externalSources);
+
+    /// <summary>
+    /// Scans the native skills directory, server feed sources, and external sources,
+    /// merging results with three-tier precedence: native &gt; server feeds &gt; external.
+    /// Server feed sources are org-managed private skill servers that take precedence
+    /// over local external directories but yield to native user skills.
+    /// </summary>
+    public static MergedSkillScanResult ScanAndMerge(
+        string nativeSkillsDirectory,
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         var nativeScan = Scan(nativeSkillsDirectory, allowSymlinks: false, strictNameMatch: true);
         var allAccepted = new List<SkillEntry>(nativeScan.AcceptedSkills);
@@ -203,7 +215,23 @@ public static partial class SkillScanner
         var knownNames = new HashSet<string>(
             nativeScan.AcceptedSkills.Select(s => s.Name), StringComparer.OrdinalIgnoreCase);
 
-        foreach (var source in externalSources)
+        // Server feed sources (second tier — org-managed private skill servers)
+        MergeSources(serverFeedSources, allAccepted, allIssues, knownNames, allowFrontmatterlessFlatFiles: false);
+
+        // External filesystem sources (third tier — Claude Code, Open Code, custom paths)
+        MergeSources(externalSources, allAccepted, allIssues, knownNames, allowFrontmatterlessFlatFiles: true);
+
+        return new MergedSkillScanResult(allAccepted, allIssues);
+    }
+
+    private static void MergeSources(
+        IReadOnlyList<ResolvedExternalSource> sources,
+        List<SkillEntry> allAccepted,
+        List<SkillScanIssue> allIssues,
+        HashSet<string> knownNames,
+        bool allowFrontmatterlessFlatFiles)
+    {
+        foreach (var source in sources)
         {
             foreach (var path in source.Paths)
             {
@@ -211,7 +239,7 @@ public static partial class SkillScanner
                     path,
                     allowSymlinks: source.AllowSymlinks,
                     strictNameMatch: false,
-                    allowFrontmatterlessFlatFiles: IsClaudeCommandsDirectory(path));
+                    allowFrontmatterlessFlatFiles: allowFrontmatterlessFlatFiles && IsClaudeCommandsDirectory(path));
                 allIssues.AddRange(externalScan.Issues);
 
                 foreach (var skill in externalScan.AcceptedSkills)
@@ -230,8 +258,6 @@ public static partial class SkillScanner
                 }
             }
         }
-
-        return new MergedSkillScanResult(allAccepted, allIssues);
     }
 
     private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false, bool strictNameMatch = true)
@@ -659,12 +685,15 @@ public static partial class SkillScanner
         return null;
     }
 
+    private const string ServerFeedsCategory = ".server-feeds";
+
     /// <summary>
-    /// Only <c>.system</c> is scanned as a hidden directory (system skills from CDN).
-    /// All other hidden directories are ignored.
+    /// Hidden directories that are scanned for skills. <c>.system</c> holds CDN-synced
+    /// system skills; <c>.server-feeds</c> holds skills synced from private skill servers.
     /// </summary>
     private static bool IsAllowedHiddenDirectory(string dirName)
-        => string.Equals(dirName, SystemCategory, StringComparison.Ordinal);
+        => string.Equals(dirName, SystemCategory, StringComparison.Ordinal)
+        || string.Equals(dirName, ServerFeedsCategory, StringComparison.Ordinal);
 
     private static bool IsClaudeCommandsDirectory(string path)
     {

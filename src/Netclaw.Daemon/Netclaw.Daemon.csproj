@@ -23,6 +23,7 @@
     <PackageReference Include="Akka.Persistence.Sql.Hosting" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="ModelContextProtocol.Core" />
+    <PackageReference Include="Netclaw.SkillClient" />
     <PackageReference Include="OpenTelemetry" />
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
