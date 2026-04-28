@@ -3,7 +3,7 @@ namespace Netclaw.Configuration;
 /// <summary>
 /// Configuration for private skill server feeds. Organizations can host
 /// skill-server instances and have Netclaw daemons automatically discover
-/// and sync skills from them at startup.
+/// and sync skills at startup and periodically thereafter.
 /// </summary>
 public sealed class SkillFeedsConfig
 {
@@ -13,6 +13,13 @@ public sealed class SkillFeedsConfig
     /// system skills always take highest precedence regardless of order.
     /// </summary>
     public List<SkillFeedSource> Feeds { get; set; } = [];
+
+    /// <summary>
+    /// How often (in minutes) to re-check feeds for updated skills.
+    /// Default: 60 (once per hour). Set to 0 to disable periodic sync
+    /// and only sync at daemon startup.
+    /// </summary>
+    public int SyncIntervalMinutes { get; set; } = 60;
 }
 
 /// <summary>

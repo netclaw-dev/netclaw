@@ -414,8 +414,15 @@
     },
     "SkillFeeds": {
       "type": "object",
-      "description": "Private skill server feeds. Skills are synced from these servers at startup.",
+      "description": "Private skill server feeds. Skills are synced from these servers at startup and periodically.",
       "properties": {
+        "SyncIntervalMinutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440,
+          "default": 60,
+          "description": "How often (in minutes) to re-check feeds for updated skills. 0 disables periodic sync."
+        },
         "Feeds": {
           "type": "array",
           "description": "Ordered list of skill server feeds. Earlier feeds win on name collisions.",

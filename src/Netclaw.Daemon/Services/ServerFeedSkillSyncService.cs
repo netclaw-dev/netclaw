@@ -10,12 +10,13 @@ using Netclaw.SkillClient;
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
-/// Syncs skills from private skill-server instances at daemon startup using
-/// the Cloudflare Agent Skills RFC discovery protocol. Each configured feed
-/// is synced independently — one failing server never blocks others.
-/// Never blocks startup on network failures; falls back to on-disk skills.
+/// Syncs skills from private skill-server instances at daemon startup and
+/// periodically thereafter using the Cloudflare Agent Skills RFC discovery
+/// protocol. Each configured feed is synced independently — one failing
+/// server never blocks others. Never blocks startup on network failures;
+/// falls back to on-disk skills.
 /// </summary>
-internal sealed class ServerFeedSkillSyncService : IHostedService
+internal sealed class ServerFeedSkillSyncService : BackgroundService
 {
     private readonly SkillFeedsConfig _feedsConfig;
     private readonly NetclawPaths _paths;
@@ -25,6 +26,9 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
     private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
+
+    // Random jitter (0–5 min) so multiple daemon instances don't all poll at once
+    private readonly TimeSpan _initialJitter;
 
     public ServerFeedSkillSyncService(
         SkillFeedsConfig feedsConfig,
@@ -44,18 +48,58 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         _scanner = scanner;
         _logger = logger;
         _externalSources = externalSources;
+        _initialJitter = TimeSpan.FromSeconds(Random.Shared.Next(0, 300));
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        var anyChanged = false;
+        // Initial sync at startup — no jitter
+        await SyncAllFeedsAsync(stoppingToken);
 
+        var intervalMinutes = _feedsConfig.SyncIntervalMinutes;
+        if (intervalMinutes <= 0)
+        {
+            _logger.LogInformation("Periodic server feed sync disabled (SyncIntervalMinutes=0)");
+            return;
+        }
+
+        var interval = TimeSpan.FromMinutes(intervalMinutes);
+
+        // First periodic tick includes jitter to stagger across instances
+        var firstDelay = interval + _initialJitter;
+        _logger.LogInformation(
+            "Server feed periodic sync scheduled every {IntervalMinutes}m (first check in {FirstDelayMinutes:F1}m)",
+            intervalMinutes, firstDelay.TotalMinutes);
+
+        using var timer = new PeriodicTimer(interval, _timeProvider);
+
+        // Wait the jittered first interval
+        try
+        {
+            await Task.Delay(firstDelay, _timeProvider, stoppingToken);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        // First periodic sync
+        await SyncAllFeedsAsync(stoppingToken);
+
+        // Subsequent syncs on the regular interval
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            await SyncAllFeedsAsync(stoppingToken);
+        }
+    }
+
+    private async Task SyncAllFeedsAsync(CancellationToken cancellationToken)
+    {
         foreach (var feed in _feedsConfig.Feeds.Where(f => f.Enabled))
         {
             try
             {
-                var changed = await SyncFeedAsync(feed, cancellationToken);
-                anyChanged |= changed;
+                await SyncFeedAsync(feed, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -68,9 +112,7 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         RescanAndUpdateIndex();
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    private async Task<bool> SyncFeedAsync(SkillFeedSource feed, CancellationToken cancellationToken)
+    private async Task SyncFeedAsync(SkillFeedSource feed, CancellationToken cancellationToken)
     {
         var feedDir = _paths.ServerFeedDirectory(feed.Name);
         Directory.CreateDirectory(feedDir);
@@ -93,24 +135,24 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
                 _logger.LogWarning(
                     "Server feed '{FeedName}' RFC index fetch timed out — using on-disk skills",
                     feed.Name);
-                return false;
+                return;
             }
             catch (HttpRequestException ex)
             {
                 _logger.LogWarning(
                     "Server feed '{FeedName}' RFC index fetch failed: {Message} — using on-disk skills",
                     feed.Name, ex.Message);
-                return false;
+                return;
             }
         }
 
         if (index is null || index.Skills.Count == 0)
         {
-            _logger.LogInformation("Server feed '{FeedName}' returned empty index", feed.Name);
-            return false;
+            _logger.LogDebug("Server feed '{FeedName}' returned empty index", feed.Name);
+            return;
         }
 
-        _logger.LogInformation(
+        _logger.LogDebug(
             "Fetched RFC index from server feed '{FeedName}' ({SkillCount} skills)",
             feed.Name, index.Skills.Count);
 
@@ -223,8 +265,6 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
             SkillSyncHelpers.WriteSyncState(
                 _paths.ServerFeedSyncStatePath(feed.Name), syncState);
         }
-
-        return updated;
     }
 
     private static HttpClient CreateHttpClientForFeed(SkillFeedSource feed)
@@ -274,7 +314,6 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
 
     private void RescanAndUpdateIndex()
     {
-        // Rebuild resolved server feed sources (directories may have been created during sync)
         var resolvedServerFeeds = new List<ResolvedExternalSource>();
         foreach (var feed in _feedsConfig.Feeds.Where(f => f.Enabled))
         {
