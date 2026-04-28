@@ -54,7 +54,18 @@ public sealed class SkillFeedsStepViewModel : IWizardStepViewModel, IDisposable
 
     public void SetName(string name)
     {
-        _currentName = name.Trim();
+        _currentName = SanitizeFeedName(name.Trim());
+    }
+
+    /// <summary>
+    /// Marks the probe as in-progress synchronously so the render path
+    /// sees <see cref="IsProbing"/> == true before the background task starts.
+    /// </summary>
+    public void BeginProbe()
+    {
+        _probing = true;
+        _lastProbeError = null;
+        _lastProbeSkillCount = 0;
     }
 
     public async Task ProbeAsync(CancellationToken ct)
@@ -210,6 +221,24 @@ public sealed class SkillFeedsStepViewModel : IWizardStepViewModel, IDisposable
         {
             return "custom";
         }
+    }
+
+    internal static string SanitizeFeedName(string name)
+    {
+        var sanitized = new char[name.Length];
+        var len = 0;
+
+        foreach (var c in name)
+        {
+            if (char.IsLetterOrDigit(c) || c == '-')
+                sanitized[len++] = char.ToLowerInvariant(c);
+            else if (c is ' ' or '_' or '.')
+                sanitized[len++] = '-';
+        }
+
+        // Trim leading/trailing hyphens
+        var span = sanitized.AsSpan(0, len).Trim('-');
+        return span.Length > 0 ? new string(span) : "custom";
     }
 
     public sealed record ConfiguredFeed(string Name, string Url, int SkillCount);

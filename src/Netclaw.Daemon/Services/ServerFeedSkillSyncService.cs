@@ -24,7 +24,6 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
     private readonly TimeProvider _timeProvider;
     private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
-    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public ServerFeedSkillSyncService(
@@ -35,8 +34,6 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
-        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
-        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         _feedsConfig = feedsConfig;
@@ -46,7 +43,6 @@ internal sealed class ServerFeedSkillSyncService : IHostedService
         _timeProvider = timeProvider;
         _scanner = scanner;
         _logger = logger;
-        _serverFeedSources = serverFeedSources;
         _externalSources = externalSources;
     }
 

@@ -102,6 +102,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
                     return;
 
                 _vm.SetUrl(text);
+                _vm.BeginProbe();
                 callbacks.AdvanceStep();
 
                 _ = Task.Run(async () =>
@@ -109,7 +110,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
                     await _vm.ProbeAsync(CancellationToken.None);
                     callbacks.InvalidateAndRedraw();
 
-                    if (_vm.ProbeSucceeded && _vm.LastProbeError is null)
+                    if (_vm.ProbeSucceeded)
                         callbacks.AdvanceStep();
                 });
             })
@@ -159,12 +160,13 @@ public sealed class SkillFeedsStepView : IWizardStepView
 
                     if (choice == retryLabel)
                     {
+                        _vm.BeginProbe();
                         callbacks.InvalidateAndRedraw();
                         _ = Task.Run(async () =>
                         {
                             await _vm.ProbeAsync(CancellationToken.None);
                             callbacks.InvalidateAndRedraw();
-                            if (_vm.ProbeSucceeded && _vm.LastProbeError is null)
+                            if (_vm.ProbeSucceeded)
                                 callbacks.AdvanceStep();
                         });
                     }
@@ -188,8 +190,7 @@ public sealed class SkillFeedsStepView : IWizardStepView
                 .WithChild(_errorActionList);
         }
 
-        // Success — auto-advance handled by probe callback, but render success state
-        callbacks.AdvanceStep();
+        // Success — probe callback handles AdvanceStep(); this is a transient render state
         return Layouts.Vertical()
             .WithChild(new TextNode($"  ✓ Connected to {_vm.CurrentUrl}").WithForeground(Color.Green))
             .WithChild(new TextNode($"    Found {_vm.LastProbeSkillCount} skills").WithForeground(Color.White));
