@@ -30,6 +30,7 @@ internal sealed class SystemSkillSyncService : IHostedService
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
     private readonly ISkillContentScanner _scanner;
+    private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
     public SystemSkillSyncService(
@@ -41,10 +42,12 @@ internal sealed class SystemSkillSyncService : IHostedService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
+        [Microsoft.Extensions.DependencyInjection.FromKeyedServices("server-feeds")]
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources,
         IChatClientProvider? chatClientProvider = null)
         : this(httpClient, paths, skillSyncConfig, skillRegistry, skillIndexLayer,
-            timeProvider, scanner, logger, BuildInfo.Version, externalSources)
+            timeProvider, scanner, logger, BuildInfo.Version, serverFeedSources, externalSources)
     {
     }
 
@@ -59,6 +62,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         ISkillContentScanner scanner,
         ILogger<SystemSkillSyncService> logger,
         string daemonVersion,
+        IReadOnlyList<ResolvedExternalSource>? serverFeedSources = null,
         IReadOnlyList<ResolvedExternalSource>? externalSources = null)
     {
         _httpClient = httpClient;
@@ -70,6 +74,7 @@ internal sealed class SystemSkillSyncService : IHostedService
         _scanner = scanner;
         _logger = logger;
         _daemonVersion = daemonVersion;
+        _serverFeedSources = serverFeedSources ?? [];
         _externalSources = externalSources ?? [];
     }
 
@@ -347,7 +352,8 @@ internal sealed class SystemSkillSyncService : IHostedService
     /// </summary>
     private void RescanAndUpdateIndex()
     {
-        var mergedResult = SkillScanner.ScanAndMerge(_paths.SkillsDirectory, _externalSources);
+        var mergedResult = SkillScanner.ScanAndMerge(
+            _paths.SkillsDirectory, _serverFeedSources, _externalSources);
         SkillRegistryUpdater.ApplyMergedScanResult(
             _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
 
