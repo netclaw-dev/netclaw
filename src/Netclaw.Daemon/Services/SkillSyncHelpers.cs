@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="SkillSyncHelpers.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;

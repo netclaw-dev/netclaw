@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="RegisteredWebhookRoute.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.IO;
 using Microsoft.AspNetCore.Http;
 using Netclaw.Configuration;

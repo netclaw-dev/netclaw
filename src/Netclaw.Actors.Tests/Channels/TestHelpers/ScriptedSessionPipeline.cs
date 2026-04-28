@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="ScriptedSessionPipeline.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using Akka;
 using Akka.Streams;
 using Akka.Streams.Dsl;

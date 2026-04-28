@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="LoopbackAuthenticationHandlerTests.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Net;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;

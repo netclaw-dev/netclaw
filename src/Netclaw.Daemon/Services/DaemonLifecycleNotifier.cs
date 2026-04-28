@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="DaemonLifecycleNotifier.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;

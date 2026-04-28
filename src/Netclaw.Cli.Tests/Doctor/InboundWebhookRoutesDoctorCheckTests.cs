@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="InboundWebhookRoutesDoctorCheckTests.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Cli.Doctor;

@@ -85,6 +85,21 @@ jobs:
         env:
           NETCLAW_CLI: ./install-test/netclaw
 
+  copyright-headers:
+    name: Copyright Headers
+    runs-on: arc-netclaw
+    timeout-minutes: 5
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: "Verify copyright headers"
+        shell: pwsh
+        run: ./scripts/Add-FileHeaders.ps1 -Verify
+
   slopwatch:
     name: Slopwatch
     runs-on: arc-netclaw

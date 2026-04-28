@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="DiscordChannelContextTests.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using Netclaw.Channels.Discord.Transport;
 using static Netclaw.Channels.Discord.Transport.DiscordNetGatewayClient;
 using Xunit;

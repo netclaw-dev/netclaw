@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="InitWizardPage.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Providers.OAuth;

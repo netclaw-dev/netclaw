@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="DoctorRunner.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 namespace Netclaw.Cli.Doctor;
 
 public sealed class DoctorRunner(IEnumerable<IDoctorCheck> checks)

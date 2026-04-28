@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="RecordingDiscordReplyClient.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using Netclaw.Channels.Discord;
 
 namespace Netclaw.Actors.Tests.Channels.TestHelpers;

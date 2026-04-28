@@ -167,7 +167,8 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
 After any code changes, run:
 
 ```bash
-dotnet slopwatch analyze     # Detect reward hacking (new violations fail CI)
+dotnet slopwatch analyze                   # Detect reward hacking (new violations fail CI)
+./scripts/Add-FileHeaders.ps1 -Verify      # Ensure all .cs files have copyright headers
 ```
 
 Slopwatch detects: disabled/skipped tests, suppressed warnings, empty catch
@@ -243,6 +244,7 @@ Done means all of the following are true:
 - behavior aligns with PRD + spec
 - acceptance criteria are testable and verified
 - `dotnet slopwatch analyze` passes (no new violations)
+- copyright headers present on all `.cs` files (`./scripts/Add-FileHeaders.ps1 -Verify`)
 - operational impact is documented (runbooks or CLI help)
 - OpenSpec artifacts are updated or archived appropriately
 - system skills updated if a mapped feature area was changed (see table above)
