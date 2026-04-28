@@ -30,9 +30,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     private McpToolPermissionsViewModel CreateVm()
     {
         var configuration = new ConfigurationBuilder().Build();
-        var daemonPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-vm-daemon-{Guid.NewGuid():N}"));
-        daemonPaths.EnsureDirectoriesExist();
-        var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, daemonPaths);
+        var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, _paths);
         return new McpToolPermissionsViewModel(_paths, daemonApi);
     }
 

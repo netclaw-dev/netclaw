@@ -265,9 +265,7 @@ public sealed class McpToolPermissionsPageTests : IDisposable
         McpToolPermissionsViewModel? capturedVm = null;
 
         var configuration = new ConfigurationBuilder().Build();
-        var daemonPaths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-daemon-{Guid.NewGuid():N}"));
-        daemonPaths.EnsureDirectoriesExist();
-        var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, daemonPaths);
+        var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths);
 
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminal);
