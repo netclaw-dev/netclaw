@@ -31,8 +31,16 @@ public sealed class ChannelPickerStepView : IWizardStepView
         _vm = (ChannelPickerStepViewModel)stepVm;
         _callbacks = callbacks;
 
+        // ManagesOwnFocusState = true prevents InitWizardPage from clearing
+        // step-scoped subscriptions. Clear here to prevent accumulation across
+        // sub-step transitions and cursor-blink-timer re-renders (#792).
+        callbacks.Subscriptions.Clear();
+
         if (_vm.IsInSubFlow && _vm.ActiveAdapterVm is not null && _vm.ActiveAdapterView is not null)
+        {
+            _vm.ActiveAdapterView.ClearFocusState();
             return _vm.ActiveAdapterView.BuildContent(_vm.ActiveAdapterVm, callbacks);
+        }
 
         return BuildPickerChecklist();
     }
