@@ -37,7 +37,7 @@ public static class WebhookRouteValidator
         if (string.IsNullOrWhiteSpace(route.Prompt))
             errors.Add("Prompt is required.");
 
-        if (route.Verification.Secret is null || string.IsNullOrWhiteSpace(route.Verification.Secret.Value))
+        if (route.Verification.Secret.IsNullOrEmpty())
             errors.Add("Verification secret is required.");
 
         if (route.MaxBodyBytes < 1)

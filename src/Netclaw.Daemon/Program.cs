@@ -1095,12 +1095,12 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
     switch (config.Backend)
     {
         case SearchBackend.Brave:
-            if (config.BraveApiKey is null || string.IsNullOrWhiteSpace(config.BraveApiKey.Value))
+            if (config.BraveApiKey.IsNullOrEmpty())
             {
                 Console.Error.WriteLine("warn: Brave Search configured but no API key provided (Search.BraveApiKey). Web search tool will not be registered.");
                 return null;
             }
-            return new BraveSearchBackend(config.BraveApiKey.Value);
+            return new BraveSearchBackend(config.BraveApiKey!.Value);
 
         case SearchBackend.SearXng:
             if (string.IsNullOrWhiteSpace(config.SearXngEndpoint))

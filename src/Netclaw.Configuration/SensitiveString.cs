@@ -24,6 +24,27 @@ public sealed record SensitiveString(string Value)
     public override string ToString() => "***REDACTED***";
 }
 
+public static class SensitiveStringExtensions
+{
+    /// <summary>
+    /// Returns true when <paramref name="token"/> is null or wraps a null/whitespace value.
+    /// </summary>
+    public static bool IsNullOrEmpty(this SensitiveString? token)
+        => token is null || string.IsNullOrWhiteSpace(token.Value);
+
+    /// <summary>
+    /// Guards that <paramref name="token"/> contains a non-whitespace value, returning
+    /// the validated instance. Throws <see cref="InvalidOperationException"/> with
+    /// <paramref name="context"/> in the message when validation fails.
+    /// </summary>
+    public static SensitiveString RequireValid(this SensitiveString? token, string context)
+    {
+        if (token.IsNullOrEmpty())
+            throw new InvalidOperationException($"{context} is required but was not configured.");
+        return token!;
+    }
+}
+
 /// <summary>
 /// Enables Microsoft.Extensions.Configuration to bind JSON string values
 /// directly to <see cref="SensitiveString"/> properties.

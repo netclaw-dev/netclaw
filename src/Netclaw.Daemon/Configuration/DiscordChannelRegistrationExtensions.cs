@@ -26,8 +26,7 @@ public static class DiscordChannelRegistrationExtensions
         if (!discordOptions.Enabled)
             return;
 
-        if (discordOptions.BotToken is null || string.IsNullOrWhiteSpace(discordOptions.BotToken.Value))
-            throw new InvalidOperationException("Discord is enabled but Discord:BotToken is not configured.");
+        discordOptions.BotToken.RequireValid("Discord:BotToken");
 
         services.AddSingleton(_ => new DiscordSocketClient(new DiscordSocketConfig
         {

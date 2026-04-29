@@ -94,13 +94,12 @@ public sealed class DiscordChannel : IChannel
             return;
         }
 
-        if (_options.BotToken is null || string.IsNullOrWhiteSpace(_options.BotToken.Value))
-            throw new InvalidOperationException("Discord is enabled but Discord:BotToken is not configured.");
+        var botToken = _options.BotToken.RequireValid("Discord:BotToken");
 
         try
         {
             // Connect first so BotUserId is available before creating the gateway actor.
-            await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+            await _gatewayClient.ConnectAsync(botToken.Value, cancellationToken);
 
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;

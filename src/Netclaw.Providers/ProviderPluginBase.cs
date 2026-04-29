@@ -60,10 +60,10 @@ public abstract class ProviderPluginBase<TDescriptor> : ILlmProviderPlugin
     /// </summary>
     protected static string GetRequiredApiKey(ProviderEntry provider, string providerType)
     {
-        if (provider.ApiKey is { } apiKey && !string.IsNullOrWhiteSpace(apiKey.Value))
-            return apiKey.Value;
-        if (provider.OAuthAccessToken is { } oauthToken && !string.IsNullOrWhiteSpace(oauthToken.Value))
-            return oauthToken.Value;
+        if (!provider.ApiKey.IsNullOrEmpty())
+            return provider.ApiKey!.Value;
+        if (!provider.OAuthAccessToken.IsNullOrEmpty())
+            return provider.OAuthAccessToken!.Value;
         throw new InvalidOperationException(
             $"Provider type '{providerType}' requires authentication. "
             + "Configure ApiKey or OAuthAccessToken in secrets.json.");

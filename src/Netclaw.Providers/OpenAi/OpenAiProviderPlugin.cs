@@ -25,10 +25,8 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
         if (entry.AuthMethod is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice)
         {
             // OAuth path → Codex backend
-            var token = entry.OAuthAccessToken;
-            if (token is null || string.IsNullOrWhiteSpace(token.Value))
-                throw new InvalidOperationException(
-                    "OpenAI OAuth requires an access token. Run 'netclaw provider fix <name>'.");
+            var token = entry.OAuthAccessToken.RequireValid(
+                "OpenAI OAuth access token (run 'netclaw provider fix <name>')");
 
             var accountId = JwtAccountIdExtractor.Extract(token.Value);
             var options = new OpenAIClientOptions

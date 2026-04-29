@@ -28,11 +28,10 @@ public static class SlackChannelRegistrationExtensions
         if (!slackOptions.Enabled)
             return;
 
-        if (slackOptions.BotToken is null || string.IsNullOrWhiteSpace(slackOptions.BotToken.Value))
-            throw new InvalidOperationException("Slack is enabled but Slack:BotToken is not configured.");
+        slackOptions.BotToken.RequireValid("Slack:BotToken");
 
-        if (slackOptions.SocketMode && (slackOptions.AppToken is null || string.IsNullOrWhiteSpace(slackOptions.AppToken.Value)))
-            throw new InvalidOperationException("Slack Socket Mode is enabled but Slack:AppToken is not configured.");
+        if (slackOptions.SocketMode)
+            slackOptions.AppToken.RequireValid("Slack:AppToken (Socket Mode)");
 
         services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
