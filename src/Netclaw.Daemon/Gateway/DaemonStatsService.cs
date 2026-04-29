@@ -97,7 +97,7 @@ internal sealed class DaemonStatsService(
             {
                 Date = group.Key,
                 TotalLoads = group.Sum(x => x.Count),
-                Methods = group
+                Methods = [.. group
                     .GroupBy(x => x.Method)
                     .Select(methodGroup => new SkillUsageStats.MethodCount
                     {
@@ -105,15 +105,14 @@ internal sealed class DaemonStatsService(
                         Count = methodGroup.Sum(x => x.Count)
                     })
                     .OrderByDescending(x => x.Count)
-                    .ThenBy(x => x.Method, StringComparer.Ordinal)
-                    .ToList(),
-                Skills = group
+                    .ThenBy(x => x.Method, StringComparer.Ordinal)],
+                Skills = [.. group
                     .GroupBy(x => x.SkillName, StringComparer.OrdinalIgnoreCase)
                     .Select(skillGroup => new SkillUsageStats.SkillCount
                     {
                         SkillName = skillGroup.Key,
                         TotalLoads = skillGroup.Sum(x => x.Count),
-                        Methods = skillGroup
+                        Methods = [.. skillGroup
                             .GroupBy(x => x.Method)
                             .Select(methodGroup => new SkillUsageStats.MethodCount
                             {
@@ -121,12 +120,10 @@ internal sealed class DaemonStatsService(
                                 Count = methodGroup.Sum(x => x.Count)
                             })
                             .OrderByDescending(x => x.Count)
-                            .ThenBy(x => x.Method, StringComparer.Ordinal)
-                            .ToList()
+                            .ThenBy(x => x.Method, StringComparer.Ordinal)]
                     })
                     .OrderByDescending(x => x.TotalLoads)
-                    .ThenBy(x => x.SkillName, StringComparer.OrdinalIgnoreCase)
-                    .ToList()
+                    .ThenBy(x => x.SkillName, StringComparer.OrdinalIgnoreCase)]
             })
             .ToList();
 
@@ -142,10 +139,9 @@ internal sealed class DaemonStatsService(
         if (slackOptions.Enabled) enabledChannelTypes.Add(ChannelType.Slack);
         if (discordOptions.Enabled) enabledChannelTypes.Add(ChannelType.Discord);
 
-        return ChannelTelemetry.GetAllSnapshots()
+        return [.. ChannelTelemetry.GetAllSnapshots()
             .Where(s => enabledChannelTypes.Contains(s.ChannelType))
-            .Select(s => s.ToWireActivity())
-            .ToList();
+            .Select(s => s.ToWireActivity())];
     }
 
     private static async Task<List<DaemonStats.DailyRow>> QueryDailyStatsAsync(IActorRef actorRef, int days, CancellationToken ct)
@@ -154,7 +150,7 @@ internal sealed class DaemonStatsService(
         {
             var result = await actorRef.Ask<DailyStatsActor.QueryDailyStatsResult>(
                 new DailyStatsActor.QueryDailyStats(days), TimeSpan.FromSeconds(5), ct);
-            return result.Rows
+            return [.. result.Rows
                 .Select(r => new DaemonStats.DailyRow
                 {
                     Date = r.DateKey,
@@ -165,8 +161,7 @@ internal sealed class DaemonStatsService(
                     MemoriesFormed = r.MemoriesFormed,
                     MemoriesRecalled = r.MemoriesRecalled,
                     SkillsLoaded = r.SkillsLoaded
-                })
-                .ToList();
+                })];
         }
         catch
         {

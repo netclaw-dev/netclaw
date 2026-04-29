@@ -38,7 +38,7 @@ public sealed class SessionRegistry
     private readonly ILogger<SessionRegistry> _logger;
 
     // session ID → channel type (retained for re-create on re-materialization)
-    private readonly Dictionary<SessionId, Actors.Channels.ChannelType> _knownSessions = new();
+    private readonly Dictionary<SessionId, Actors.Channels.ChannelType> _knownSessions = [];
     private readonly SemaphoreSlim _sessionMutationGate = new(1, 1);
 
     private readonly SessionConnectionMap _connections = new();

@@ -477,7 +477,7 @@ public sealed class MagicByteValidatorTests
     [Fact]
     public void Validate_EmptyContent_Rejected()
     {
-        var result = MagicByteValidator.Validate(ReadOnlySpan<byte>.Empty, "image/png", "empty.png");
+        var result = MagicByteValidator.Validate([], "image/png", "empty.png");
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.EmptyContent, result.Error);
@@ -813,8 +813,8 @@ public sealed class MagicByteValidatorTests
     [Fact]
     public void DetectMimeType_returns_null_for_empty_or_short_content()
     {
-        Assert.Null(MagicByteValidator.DetectMimeType(ReadOnlySpan<byte>.Empty));
-        Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF }));
-        Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF, 0xD8 }));
+        Assert.Null(MagicByteValidator.DetectMimeType([]));
+        Assert.Null(MagicByteValidator.DetectMimeType([0xFF]));
+        Assert.Null(MagicByteValidator.DetectMimeType([0xFF, 0xD8]));
     }
 }

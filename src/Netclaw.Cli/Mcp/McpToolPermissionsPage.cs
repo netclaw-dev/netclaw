@@ -20,7 +20,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     private SelectionListNode<string>? _serverList;
     private DynamicLayoutNode? _contentNode;
     private DynamicLayoutNode? _footerNode;
-    private readonly CompositeDisposable _stepSubs = new();
+    private readonly CompositeDisposable _stepSubs = [];
     private int _gridCursor;
     private bool _confirmingSave;
 

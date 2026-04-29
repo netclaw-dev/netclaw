@@ -208,7 +208,7 @@ internal static class BrowserAutomationRuntimeDetector
 
         var edgePaths = OperatingSystem.IsMacOS()
             ? new[] { "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" }
-            : new[] { "/usr/bin/microsoft-edge", "/usr/bin/msedge" };
+            : ["/usr/bin/microsoft-edge", "/usr/bin/msedge"];
 
         return edgePaths.Any(File.Exists);
     }

@@ -82,14 +82,10 @@ internal static class SessionToolExecutionPipeline
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
             self.Tell(new ToolExecutionCompleted
             {
-                ToolResults = results.Select(r => r.Message).ToList(),
+                ToolResults = [.. results.Select(r => r.Message)],
                 FileAttachments = fileAttachments,
-                CompletedSubAgentRuns = results
-                    .SelectMany(r => r.CompletedSubAgentRuns)
-                    .ToList(),
-                AcceptedSubAgentFindings = results
-                    .SelectMany(r => r.AcceptedSubAgentFindings)
-                    .ToList()
+                CompletedSubAgentRuns = [.. results.SelectMany(r => r.CompletedSubAgentRuns)],
+                AcceptedSubAgentFindings = [.. results.SelectMany(r => r.AcceptedSubAgentFindings)]
             });
         }
         catch (TimeoutException ex)

@@ -39,7 +39,7 @@ public sealed record SessionState
     internal const string SystemNudgePrefix = "[system:";
 
     public ImmutableList<SerializableChatMessage> History { get; init; } =
-        ImmutableList<SerializableChatMessage>.Empty;
+        [];
 
     public int TurnCount { get; init; }
 
@@ -74,10 +74,10 @@ public sealed record SessionState
     /// because jobs are long-lived and must survive recovery.
     /// </summary>
     public ImmutableDictionary<string, ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
-        ImmutableDictionary<string, ActiveJobInfo>.Empty;
+        [];
 
     public ImmutableDictionary<string, AdoptedContextAuditRecord> AdoptedContextRecords { get; init; } =
-        ImmutableDictionary<string, AdoptedContextAuditRecord>.Empty;
+        [];
 
     /// <summary>
     /// In-memory best-effort dedup ledger for background-job-originated turns.
@@ -127,13 +127,12 @@ public sealed record SessionState
             evt.UpperBound,
             evt.Projection,
             evt.ProjectionPersisted,
-            evt.Messages
+            [.. evt.Messages
                 .Select(message => new AdoptedContextAuditMessage(
                     message.MessageId,
                     message.SenderId,
                     DateTimeOffset.FromUnixTimeMilliseconds(message.TimestampMs),
-                    message.AuthorityAtInclusion))
-                .ToImmutableList());
+                    message.AuthorityAtInclusion))]);
 
         return this with
         {
@@ -315,8 +314,8 @@ public sealed record SessionState
             TurnCount = TurnCount,
             Title = Title,
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
-            ActiveBackgroundJobs = ActiveBackgroundJobs.Values.ToList(),
-            AdoptedContextRecords = AdoptedContextRecords.Values
+            ActiveBackgroundJobs = [.. ActiveBackgroundJobs.Values],
+            AdoptedContextRecords = [.. AdoptedContextRecords.Values
                 .OrderBy(record => record.AuthorizedMessageId, StringComparer.Ordinal)
                 .Select(record => new SessionSnapshot.AdoptedContextSnapshotRecord
                 {
@@ -326,17 +325,15 @@ public sealed record SessionState
                     UpperBound = record.UpperBound,
                     Projection = record.Projection,
                     ProjectionPersisted = record.ProjectionPersisted,
-                    Messages = record.Messages
+                    Messages = [.. record.Messages
                         .Select(message => new SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage
                         {
                             MessageId = message.MessageId,
                             SenderId = message.SenderId,
                             TimestampMs = message.Timestamp.ToUnixTimeMilliseconds(),
                             AuthorityAtInclusion = message.AuthorityAtInclusion
-                        })
-                        .ToList()
-                })
-                .ToList()
+                        })]
+                })]
         };
     }
 
@@ -345,7 +342,7 @@ public sealed record SessionState
         var activeJobs = snapshot.ActiveBackgroundJobs.Count > 0
             ? snapshot.ActiveBackgroundJobs.ToImmutableDictionary(
                 j => $"{Jobs.BackgroundJobManagerActor.JobDeliveryKeyPrefix}{j.JobId}", j => j)
-            : ImmutableDictionary<string, ActiveJobInfo>.Empty;
+            : [];
 
         var adoptedContextRecords = snapshot.AdoptedContextRecords.Count > 0
             ? snapshot.AdoptedContextRecords.ToImmutableDictionary(
@@ -357,14 +354,13 @@ public sealed record SessionState
                     record.UpperBound,
                     record.Projection,
                     record.ProjectionPersisted,
-                    record.Messages
+                    [.. record.Messages
                         .Select(message => new AdoptedContextAuditMessage(
                             message.MessageId,
                             message.SenderId,
                             DateTimeOffset.FromUnixTimeMilliseconds(message.TimestampMs),
-                            message.AuthorityAtInclusion))
-                        .ToImmutableList()))
-            : ImmutableDictionary<string, AdoptedContextAuditRecord>.Empty;
+                            message.AuthorityAtInclusion))]))
+            : [];
 
         return new SessionState
         {

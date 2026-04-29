@@ -46,7 +46,7 @@ internal sealed class DaemonCrashMonitor : IDisposable
         => new(
             paths.LogsDirectory,
             timeProvider,
-            benignUnobservedFilters is null ? [] : benignUnobservedFilters.ToArray());
+            benignUnobservedFilters is null ? [] : [.. benignUnobservedFilters]);
 
     public void AttachServices(IServiceProvider services)
     {

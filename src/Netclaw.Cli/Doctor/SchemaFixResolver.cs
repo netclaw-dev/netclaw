@@ -177,7 +177,7 @@ public static class SchemaFixResolver
 
             var instancePath = detail.InstanceLocation.ToString();
             var parentSegments = string.IsNullOrEmpty(instancePath)
-                ? Array.Empty<string>()
+                ? []
                 : ParseJsonPointer(instancePath);
 
             var parentSchema = parentSegments.Length == 0

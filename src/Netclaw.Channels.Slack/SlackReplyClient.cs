@@ -20,7 +20,7 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
         try
         {
             var blocks = message.Blocks?.Count > 0
-                ? message.Blocks.ToList()
+                ? [.. message.Blocks]
                 : SlackBlockConverter.Convert(message.Text);
 
             var response = await slackApiClient.Chat.PostMessage(new Message

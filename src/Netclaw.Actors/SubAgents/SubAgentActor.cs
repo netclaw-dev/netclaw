@@ -43,7 +43,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
 
     // Conversation state (not persisted — ephemeral)
-    private readonly List<AiChatMessage> _history = new();
+    private readonly List<AiChatMessage> _history = [];
     private int _toolIterationCount;
     private IActorRef _replyTo = ActorRefs.Nobody;
     private CancellationTokenSource? _executionCts;
@@ -245,7 +245,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             options = new ChatOptions
             {
-                Tools = _aiTools.ToList()
+                Tools = [.. _aiTools]
             };
         }
 
@@ -420,7 +420,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var results = await Task.WhenAll(tasks);
             self.Tell(new ToolExecutionCompleted
             {
-                ToolResults = results.ToList()
+                ToolResults = [.. results]
             });
         }
         catch (Exception ex)

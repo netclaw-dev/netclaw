@@ -89,8 +89,8 @@ public class ModelCapabilityActorTests : TestKit
     /// </summary>
     private sealed class ControllableResolver : IModelCapabilityResolver
     {
-        private readonly Dictionary<string, ResolvedModelCapabilities> _results = new();
-        private readonly Dictionary<string, Exception> _errors = new();
+        private readonly Dictionary<string, ResolvedModelCapabilities> _results = [];
+        private readonly Dictionary<string, Exception> _errors = [];
         private int _callCount;
 
         public int CallCount => _callCount;

@@ -34,11 +34,11 @@ public static class OAuthTokenPersistence
             ? File.ReadAllText(paths.SecretsPath)
             : "{}";
 
-        var root = JsonNode.Parse(existingJson)?.AsObject() ?? new JsonObject();
-        var providers = root["Providers"]?.AsObject() ?? new JsonObject();
+        var root = JsonNode.Parse(existingJson)?.AsObject() ?? [];
+        var providers = root["Providers"]?.AsObject() ?? [];
         root["Providers"] = providers;
 
-        var providerNode = providers[providerName]?.AsObject() ?? new JsonObject();
+        var providerNode = providers[providerName]?.AsObject() ?? [];
         providers[providerName] = providerNode;
 
         providerNode["OAuthAccessToken"] = result.AccessToken.Value;
@@ -57,10 +57,10 @@ public static class OAuthTokenPersistence
         {
             var configJson = File.Exists(paths.NetclawConfigPath)
                 ? File.ReadAllText(paths.NetclawConfigPath) : "{}";
-            var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? new JsonObject();
-            var configProviders = configRoot["Providers"]?.AsObject() ?? new JsonObject();
+            var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? [];
+            var configProviders = configRoot["Providers"]?.AsObject() ?? [];
             configRoot["Providers"] = configProviders;
-            var configProvider = configProviders[providerName]?.AsObject() ?? new JsonObject();
+            var configProvider = configProviders[providerName]?.AsObject() ?? [];
             configProviders[providerName] = configProvider;
             configProvider["OAuthTokenExpiry"] = result.ExpiresAt.Value.ToString("o");
             File.WriteAllText(paths.NetclawConfigPath,

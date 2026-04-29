@@ -44,7 +44,7 @@ public sealed class ExtractiveSessionReducer : IChatReducer
         IEnumerable<ChatMessage> messages,
         CancellationToken cancellationToken)
     {
-        var list = messages as IList<ChatMessage> ?? messages.ToList();
+        var list = messages as IList<ChatMessage> ?? [.. messages];
 
         var hasSystemPrompt = list.Count > 0 && list[0].Role == ChatRole.System;
         var systemOffset = hasSystemPrompt ? 1 : 0;

@@ -370,7 +370,7 @@ internal static class WebhooksCommand
 
         if (hasEvents)
         {
-            route.Events = events.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            route.Events = [.. events.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
         }
 
         // Parse audience

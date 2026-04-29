@@ -127,10 +127,10 @@ public sealed class SerializationRoundTripTests : TestKit
         {
             SessionId = new SessionId("C99999/1708531200.000100"),
             Summary = "The user asked about system status; all services healthy.",
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new() { Role = ChatRole.System, Content = "Summary: all services healthy." }
-            },
+            ],
             TurnCountBefore = 42,
             CompactedAtMs = ts.ToUnixTimeMilliseconds()
         };

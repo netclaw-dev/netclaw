@@ -19,7 +19,7 @@ public sealed class SlackGatewayActor : ReceiveActor
 
     private readonly SlackGatewayDependencies _dependencies;
     private readonly ILoggingAdapter _log;
-    private readonly Dictionary<SlackEventId, byte> _processedEventIds = new();
+    private readonly Dictionary<SlackEventId, byte> _processedEventIds = [];
     private readonly Queue<SlackEventId> _processedEventOrder = new();
 
     public SlackGatewayActor(SlackGatewayDependencies dependencies)
