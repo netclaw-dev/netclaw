@@ -413,23 +413,10 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
     {
         var isExplicitChannel = _options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
         var isDirectMessage = string.Equals(channelId.Value, threadOrMessageId.Value, StringComparison.Ordinal);
-        var syntheticMessage = new DiscordGatewayMessage(
-            EventId: new DiscordEventId($"history-{channelId.Value}"),
-            ChannelId: channelId,
-            ReplyChannelId: new DiscordReplyChannelId(threadOrMessageId.Value),
-            MessageId: new DiscordMessageId($"history-{channelId.Value}"),
-            ThreadOrMessageId: threadOrMessageId,
-            RootMessageId: null,
-            SenderId: new DiscordUserId("history"),
-            IsBotMessage: false,
-            IsDirectMessage: isDirectMessage,
-            ContainsBotMention: false,
-            Text: string.Empty,
-            ReceivedAt: TimeProvider.System.GetUtcNow());
 
-        return DiscordAclPolicy.ResolveAudience(
-            syntheticMessage,
-            _options,
+        return AudienceResult.Resolve(
+            channelId.Value, isDirectMessage,
+            _options.ChannelAudiences,
             isExplicitUser: false,
             isExplicitChannel: isExplicitChannel);
     }

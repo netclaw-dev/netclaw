@@ -23,11 +23,11 @@ public static class SlackAclPolicy
         if (message.UserId is not { } userId)
             return ChannelAclDecision.Deny(AclDenyReasons.MissingUserId);
 
-        var isConversationAllowed = message.IsDirectMessage
-            ? options.AllowDirectMessages
-            : IsAllowedChannel(message.ChannelId, options, defaultChannelId);
+        if (message.IsDirectMessage && !options.AllowDirectMessages)
+            return ChannelAclDecision.Deny(AclDenyReasons.DirectMessagesDisabled);
 
-        if (!isConversationAllowed)
+        if (!message.IsDirectMessage
+            && !IsAllowedChannel(message.ChannelId, options, defaultChannelId))
             return ChannelAclDecision.Deny(AclDenyReasons.ChannelNotAllowed);
 
         if (!IsAllowedUser(userId, options))
@@ -36,7 +36,9 @@ public static class SlackAclPolicy
         var isExplicitUser = options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
         var isExplicitChannel = options.AllowedChannelIds.Contains(message.ChannelId.Value, StringComparer.Ordinal);
 
-        var audienceResult = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
+        var audienceResult = AudienceResult.Resolve(
+            message.ChannelId.Value, message.IsDirectMessage,
+            options.ChannelAudiences, isExplicitUser, isExplicitChannel);
         if (audienceResult.Error is not null)
             return ChannelAclDecision.Deny(audienceResult.Error);
 
@@ -71,42 +73,6 @@ public static class SlackAclPolicy
             return true;
 
         return options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
-    }
-
-    /// <summary>
-    /// Resolves audience via: explicit channel ID → "dm" key → existing heuristic fallback.
-    /// Returns an error when a <see cref="SlackChannelOptions.ChannelAudiences"/> key matches
-    /// but the value is not a recognized audience string — this is a config error, not a
-    /// "fall through to default" situation.
-    /// </summary>
-    internal static AudienceResult ResolveAudience(
-        SlackInboundMessage message,
-        SlackChannelOptions options,
-        bool isExplicitUser,
-        bool isExplicitChannel)
-    {
-        // 1. Explicit channel ID mapping
-        if (options.ChannelAudiences.TryGetValue(message.ChannelId.Value, out var channelOverride))
-        {
-            return SecurityPolicyDefaults.TryParseAudience(channelOverride, out var channelAudience)
-                ? new AudienceResult(channelAudience)
-                : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:{message.ChannelId.Value}={channelOverride}");
-        }
-
-        // 2. DM key mapping
-        if (message.IsDirectMessage
-            && options.ChannelAudiences.TryGetValue("dm", out var dmOverride))
-        {
-            return SecurityPolicyDefaults.TryParseAudience(dmOverride, out var dmAudience)
-                ? new AudienceResult(dmAudience)
-                : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:dm={dmOverride}");
-        }
-
-        // 3. Existing heuristic fallback (no key matched — this is the only legitimate fallback)
-        var audience = (message.IsDirectMessage || isExplicitUser || isExplicitChannel)
-            ? TrustAudience.Team
-            : TrustAudience.Public;
-        return new AudienceResult(audience);
     }
 
     /// <summary>

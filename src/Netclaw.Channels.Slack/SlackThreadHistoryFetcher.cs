@@ -427,22 +427,11 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     private AudienceResult ResolveHistoricalAudience(SlackChannelId channelId, SlackThreadTs threadTs)
     {
         var isExplicitChannel = _options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
-        var syntheticMessage = new SlackInboundMessage(
-            Kind: SlackInboundKind.Message,
-            EventId: new SlackEventId($"history:{threadTs.Value}"),
-            ChannelId: channelId,
-            ThreadTs: threadTs,
-            EventTs: new SlackEventTs(threadTs.Value),
-            UserId: null,
-            BotId: null,
-            Text: string.Empty,
-            Subtype: null,
-            Hidden: false,
-            IsDirectMessage: channelId.Value.StartsWith("D", StringComparison.Ordinal));
+        var isDirectMessage = channelId.Value.StartsWith("D", StringComparison.Ordinal);
 
-        return SlackAclPolicy.ResolveAudience(
-            syntheticMessage,
-            _options,
+        return AudienceResult.Resolve(
+            channelId.Value, isDirectMessage,
+            _options.ChannelAudiences,
             isExplicitUser: false,
             isExplicitChannel: isExplicitChannel);
     }

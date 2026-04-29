@@ -40,7 +40,7 @@ public abstract class AclPolicyContractTests
         var options = new ChannelOptionsBuilder { AllowDirectMessages = false };
         var result = EvaluateDm("user-1", options);
         Assert.False(result.IsAllowed);
-        Assert.NotNull(result.DenyReason);
+        Assert.Contains(AclDenyReasons.DirectMessagesDisabled, result.DenyReason!);
     }
 
     [Fact]
