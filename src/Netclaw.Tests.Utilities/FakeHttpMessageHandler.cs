@@ -9,12 +9,10 @@ using System.Text.Json;
 
 namespace Netclaw.Tests.Utilities;
 
-/// <summary>
-/// Test double for <see cref="HttpMessageHandler"/> that supports both a
-/// catch-all delegate and per-URL routing.
-/// </summary>
 internal sealed class FakeHttpMessageHandler : HttpMessageHandler
 {
+    private const string JsonMediaType = "application/json";
+
     private readonly Dictionary<string, Func<HttpRequestMessage, HttpResponseMessage>> _routes = new();
     private readonly Func<HttpRequestMessage, HttpResponseMessage>? _catchAll;
 
@@ -24,13 +22,7 @@ internal sealed class FakeHttpMessageHandler : HttpMessageHandler
         => _catchAll = handler;
 
     public void AddJsonResponse<T>(string url, T body)
-    {
-        var json = JsonSerializer.Serialize(body);
-        _routes[url] = _ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-    }
+        => AddResponse(url, HttpStatusCode.OK, JsonSerializer.Serialize(body), JsonMediaType);
 
     public void AddStringResponse(string url, string content, string contentType = "text/plain")
         => _routes[url] = _ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -60,5 +52,5 @@ internal sealed class FakeHttpMessageHandler : HttpMessageHandler
     }
 
     public static HttpResponseMessage JsonResponse<T>(T body, HttpStatusCode status = HttpStatusCode.OK)
-        => new(status) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json") };
+        => new(status) { Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, JsonMediaType) };
 }

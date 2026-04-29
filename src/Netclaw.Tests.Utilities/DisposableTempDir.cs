@@ -16,7 +16,7 @@ internal sealed class DisposableTempDir : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(Path))
-            Directory.Delete(Path, recursive: true);
+        try { Directory.Delete(Path, recursive: true); }
+        catch (DirectoryNotFoundException) { } // slopwatch-ignore: SW003 test cleanup — directory may already be gone
     }
 }
