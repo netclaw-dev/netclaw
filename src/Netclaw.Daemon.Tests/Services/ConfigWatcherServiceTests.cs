@@ -6,23 +6,21 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class ConfigWatcherServiceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FakeRestartCoordinator _restartCoordinator;
     private readonly ConfigWatcherService _sut;
 
     public ConfigWatcherServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
 
         _restartCoordinator = new FakeRestartCoordinator();
@@ -138,8 +136,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     public void Dispose()
     {
         _sut.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     private sealed class FakeRestartCoordinator : IDaemonRestartCoordinator

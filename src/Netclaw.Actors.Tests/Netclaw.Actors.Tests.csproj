@@ -25,6 +25,7 @@
     <ProjectReference Include="../Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Tools.Abstractions/Netclaw.Tools.Abstractions.csproj" />
+    <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj" />
   </ItemGroup>
 
   <ItemGroup>

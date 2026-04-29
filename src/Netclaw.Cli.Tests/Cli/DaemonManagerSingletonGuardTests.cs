@@ -5,21 +5,20 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class DaemonManagerSingletonGuardTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly DaemonManager _sut;
 
     public DaemonManagerSingletonGuardTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _sut = new DaemonManager(_paths, TimeProvider.System);
     }
@@ -98,7 +97,7 @@ public sealed class DaemonManagerSingletonGuardTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
+        try { _dir.Dispose(); }
         catch (IOException) { } // slopwatch-ignore: SW003 test cleanup best-effort — directory may already be gone
     }
 }

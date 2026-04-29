@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -17,24 +18,21 @@ namespace Netclaw.Actors.Tests.Tools;
 /// </summary>
 public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly string _sessionDir;
     private readonly NetclawPaths _paths;
 
     public PublicAudienceFileAccessPolicyTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _sessionDir = Path.Combine(_tempDir, "sessions", "test-session");
+        _sessionDir = Path.Combine(_dir.Path, "sessions", "test-session");
         Directory.CreateDirectory(_sessionDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]

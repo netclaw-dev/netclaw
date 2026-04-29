@@ -17,24 +17,23 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Reminder;
 
 public sealed class ReminderEndpointAuthorizationTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly FakeTimeProvider _timeProvider;
     private readonly ReminderDefinitionStore _definitionStore;
     private readonly ReminderHistoryStore _historyStore;
 
     public ReminderEndpointAuthorizationTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-endpoint-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
         _timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 4, 9, 12, 0, 0, TimeSpan.Zero));
 
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _definitionStore = new ReminderDefinitionStore(paths);
         _historyStore = new ReminderHistoryStore(paths);
@@ -42,8 +41,7 @@ public sealed class ReminderEndpointAuthorizationTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     private async Task<WebApplication> CreateAppAsync(bool spoofLoopback)

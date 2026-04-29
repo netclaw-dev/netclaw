@@ -10,28 +10,26 @@ using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class DaemonApiAuthenticationTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public DaemonApiAuthenticationTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-daemon-api-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]

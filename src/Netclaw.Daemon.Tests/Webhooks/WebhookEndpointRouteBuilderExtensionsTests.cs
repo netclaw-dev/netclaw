@@ -16,6 +16,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Webhooks;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Webhooks;
@@ -27,14 +28,13 @@ public sealed class WebhookTelemetryCollection;
 public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
 {
     private int _writeVersion;
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly Netclaw.Configuration.WebhookRouteStore _store;
 
     public WebhookEndpointRouteBuilderExtensionsTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-webhook-endpoints-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _store = new Netclaw.Configuration.WebhookRouteStore(_paths);
         WebhookTelemetry.ResetForTests();
@@ -178,8 +178,7 @@ public sealed class WebhookEndpointRouteBuilderExtensionsTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]

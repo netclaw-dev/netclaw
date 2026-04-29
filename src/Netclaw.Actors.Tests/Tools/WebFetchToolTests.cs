@@ -6,24 +6,18 @@
 using System.Text;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
 public class WebFetchToolTests : IDisposable
 {
-    private readonly string _tempDir;
-
-    public WebFetchToolTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-fetch-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-    }
+    private readonly DisposableTempDir _dir = new();
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
@@ -279,7 +273,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/test" },
@@ -293,7 +287,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains("Preview", result);
 
         // File should exist on disk as .html (raw mode is default)
-        var files = Directory.GetFiles(_tempDir, "*.html");
+        var files = Directory.GetFiles(_dir.Path, "*.html");
         Assert.Single(files);
 
         // File content should preserve HTML structure but strip scripts
@@ -319,7 +313,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/test", ["Format"] = "text" },
@@ -327,7 +321,7 @@ public class WebFetchToolTests : IDisposable
 
         Assert.Contains(".txt", result);
 
-        var files = Directory.GetFiles(_tempDir, "*.txt");
+        var files = Directory.GetFiles(_dir.Path, "*.txt");
         Assert.Single(files);
 
         var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
@@ -350,13 +344,13 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/page" },
             CancellationToken.None);
 
-        var files = Directory.GetFiles(_tempDir, "*.html");
+        var files = Directory.GetFiles(_dir.Path, "*.html");
         Assert.Single(files);
 
         var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
@@ -373,7 +367,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(json, "application/json");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://api.example.com/data.json" },
@@ -381,7 +375,7 @@ public class WebFetchToolTests : IDisposable
 
         Assert.Contains("Saved to:", result);
 
-        var files = Directory.GetFiles(_tempDir, "*.json");
+        var files = Directory.GetFiles(_dir.Path, "*.json");
         Assert.Single(files);
 
         var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
@@ -395,7 +389,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(json, "application/json");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://api.example.com/data" },
@@ -404,7 +398,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains("Saved to:", result);
 
         // Should use .json from Content-Type fallback, not .txt
-        var files = Directory.GetFiles(_tempDir, "*.json");
+        var files = Directory.GetFiles(_dir.Path, "*.json");
         Assert.Single(files);
     }
 
@@ -415,7 +409,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(script, "text/plain");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/install.sh" },
@@ -424,7 +418,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains("Saved to:", result);
         Assert.Contains(".sh", result);
 
-        var files = Directory.GetFiles(_tempDir, "*.sh");
+        var files = Directory.GetFiles(_dir.Path, "*.sh");
         Assert.Single(files);
 
         var fileContent = await File.ReadAllTextAsync(files[0], TestContext.Current.CancellationToken);
@@ -434,7 +428,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_rejects_invalid_url()
     {
-        var tool = new WebFetchTool(fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "not-a-url" },
@@ -447,7 +441,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_rejects_http_when_https_required()
     {
-        var tool = new WebFetchTool(fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://example.com/page" },
@@ -463,7 +457,7 @@ public class WebFetchToolTests : IDisposable
         var config = new ToolConfig { WebFetch = new WebFetchConfig { RequireHttps = false } };
         var handler = new FakeHttpHandler("<html><body><p>OK</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(config, httpClient, _tempDir);
+        var tool = new WebFetchTool(config, httpClient, _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://example.com/page" },
@@ -478,7 +472,7 @@ public class WebFetchToolTests : IDisposable
     {
         var handler = new FakeHttpHandler("<html><body><p>Local</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://localhost:8080/api" },
@@ -493,7 +487,7 @@ public class WebFetchToolTests : IDisposable
     {
         var handler = new FakeHttpHandler("<html><body><p>Loopback</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://127.0.0.1:3000/" },
@@ -508,7 +502,7 @@ public class WebFetchToolTests : IDisposable
     {
         var handler = new FakeHttpHandler("<html><body><p>IPv6</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://[::1]:5000/" },
@@ -522,7 +516,7 @@ public class WebFetchToolTests : IDisposable
     public async Task ExecuteAsync_rejects_http_localhost_when_not_in_allow_list()
     {
         var config = new ToolConfig { WebFetch = new WebFetchConfig { HttpAllowList = [] } };
-        var tool = new WebFetchTool(config, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(config, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://localhost:8080/" },
@@ -537,7 +531,7 @@ public class WebFetchToolTests : IDisposable
         var config = new ToolConfig { WebFetch = new WebFetchConfig { HttpAllowList = ["internal.corp"] } };
         var handler = new FakeHttpHandler("<html><body><p>Internal</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(config, httpClient, _tempDir);
+        var tool = new WebFetchTool(config, httpClient, _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "http://internal.corp/api" },
@@ -554,7 +548,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(imageBytes, "image/png");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/photo.png" },
@@ -566,7 +560,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains("binary file", result);
         Assert.Contains("attach_file", result);
 
-        var files = Directory.GetFiles(_tempDir, "*.png");
+        var files = Directory.GetFiles(_dir.Path, "*.png");
         Assert.Single(files);
 
         // Verify byte-perfect round-trip
@@ -582,7 +576,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(pdfBytes, "application/pdf");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://arxiv.org/pdf/2603.25414" },
@@ -591,7 +585,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains("Content-Type: application/pdf", result);
 
         // URL has no extension, should fall back to .pdf from Content-Type
-        var files = Directory.GetFiles(_tempDir, "*.pdf");
+        var files = Directory.GetFiles(_dir.Path, "*.pdf");
         Assert.Single(files);
 
         var savedBytes = await File.ReadAllBytesAsync(files[0], TestContext.Current.CancellationToken);
@@ -605,13 +599,13 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(bytes, "image/gif");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/animation.gif" },
             CancellationToken.None);
 
-        var files = Directory.GetFiles(_tempDir, "*.gif");
+        var files = Directory.GetFiles(_dir.Path, "*.gif");
         Assert.Single(files);
     }
 
@@ -622,20 +616,20 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(bytes, "application/octet-stream");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "https://example.com/api/download" },
             CancellationToken.None);
 
-        var files = Directory.GetFiles(_tempDir, "*.bin");
+        var files = Directory.GetFiles(_dir.Path, "*.bin");
         Assert.Single(files);
     }
 
     [Fact]
     public async Task ExecuteAsync_rejects_ftp_url()
     {
-        var tool = new WebFetchTool(fetchDirectory: _tempDir);
+        var tool = new WebFetchTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Url"] = "ftp://files.example.com/doc.txt" },

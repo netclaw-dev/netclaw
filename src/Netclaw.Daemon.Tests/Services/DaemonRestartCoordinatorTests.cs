@@ -12,13 +12,14 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class DaemonRestartCoordinatorTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly ActorSystem _system;
     private readonly NetclawPaths _paths;
     private readonly SessionIngressGate _ingressGate = new();
@@ -28,9 +29,7 @@ public sealed class DaemonRestartCoordinatorTests : IDisposable
 
     public DaemonRestartCoordinatorTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-restart-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _system = ActorSystem.Create($"restart-tests-{Guid.NewGuid():N}");
     }
@@ -93,8 +92,7 @@ public sealed class DaemonRestartCoordinatorTests : IDisposable
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     private DaemonRestartCoordinator CreateCoordinator(

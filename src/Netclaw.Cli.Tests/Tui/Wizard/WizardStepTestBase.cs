@@ -6,18 +6,18 @@
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Tests.Utilities;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public abstract class WizardStepTestBase : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     protected readonly WizardContext Context;
 
     protected WizardStepTestBase()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         Context = new WizardContext
         {
@@ -30,7 +30,6 @@ public abstract class WizardStepTestBase : IDisposable
     public virtual void Dispose()
     {
         Context.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
+        _dir.Dispose();
     }
 }

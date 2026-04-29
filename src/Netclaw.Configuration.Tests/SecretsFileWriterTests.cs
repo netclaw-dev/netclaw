@@ -5,26 +5,24 @@
 // -----------------------------------------------------------------------
 using System.Runtime.InteropServices;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
 public sealed class SecretsFileWriterTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly string _secretsPath;
 
     public SecretsFileWriterTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _secretsPath = Path.Combine(_tempDir, "secrets.json");
+        _secretsPath = Path.Combine(_dir.Path, "secrets.json");
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
@@ -52,7 +50,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     [Fact]
     public void Write_creates_parent_directories()
     {
-        var nestedPath = Path.Combine(_tempDir, "nested", "deep", "secrets.json");
+        var nestedPath = Path.Combine(_dir.Path, "nested", "deep", "secrets.json");
         SecretsFileWriter.Write(nestedPath, """{}""");
 
         Assert.True(File.Exists(nestedPath));
@@ -61,7 +59,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     [Fact]
     public void Write_with_protector_encrypts_leaf_values()
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         var protector = SecretsProtection.CreateProtector(paths);
 
@@ -77,7 +75,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     [Fact]
     public void Write_with_protector_does_not_double_encrypt()
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         var protector = SecretsProtection.CreateProtector(paths);
 
@@ -97,7 +95,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     [Fact]
     public void DecryptJsonLeaves_round_trips_with_encrypt()
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         var protector = SecretsProtection.CreateProtector(paths);
 
@@ -120,7 +118,7 @@ public sealed class SecretsFileWriterTests : IDisposable
     [Fact]
     public void DecryptJsonLeaves_leaves_plaintext_untouched()
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         var protector = SecretsProtection.CreateProtector(paths);
 

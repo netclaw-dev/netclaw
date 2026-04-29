@@ -12,6 +12,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Security;
@@ -23,21 +24,18 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class DeviceTokenAuthenticationHandlerTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly FakeTimeProvider _time;
     private readonly DeviceRegistry _deviceRegistry;
 
     public DeviceTokenAuthenticationHandlerTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-auth-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-
         _time = new FakeTimeProvider(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero));
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         _deviceRegistry = new DeviceRegistry(paths, _time, NullLogger<DeviceRegistry>.Instance);
     }
 
-    public void Dispose() => Directory.Delete(_tempDir, recursive: true);
+    public void Dispose() => _dir.Dispose();
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 

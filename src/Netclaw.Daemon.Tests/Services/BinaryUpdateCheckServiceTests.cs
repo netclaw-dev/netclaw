@@ -10,6 +10,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Configuration.Security;
 using Netclaw.Daemon.Services;
+using Netclaw.Tests.Utilities;
 using NSec.Cryptography;
 using Xunit;
 
@@ -17,15 +18,14 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class BinaryUpdateCheckServiceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly Key _testSigningKey;
     private readonly byte[] _testPublicKeyBlob;
 
     public BinaryUpdateCheckServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
 
         // Generate a test signing keypair for each test
@@ -99,7 +99,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     [Fact]
     public async Task CheckAndNotify_GracefullyHandlesNetworkFailure()
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
@@ -113,7 +113,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     [Fact]
     public async Task CheckAndNotify_HandlesTimeoutGracefully()
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         // No response configured → 404, which triggers HttpRequestException
 
         var sut = CreateDaemonService(handler, currentVersion: "0.1.0");
@@ -169,7 +169,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     [Fact]
     public async Task CheckForUpdateAsync_ReturnsNoUpdateOnNetworkFailure()
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.InternalServerError);
 
         using var httpClient = new HttpClient(handler);
@@ -198,7 +198,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task CheckForUpdateAsync_ReturnsNoUpdateOnMissingSignature()
     {
         var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
         // No signature configured — will 404
 
@@ -214,7 +214,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task FetchVerifiedManifestAsync_ReturnsSignatureFailureOnMissingSignature()
     {
         var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.BinaryManifestUrl, manifest);
         // No signature URL → 404
 
@@ -229,7 +229,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     public async Task FetchVerifiedManifestAsync_ReturnsSignatureFailureOnTamperedManifest()
     {
         var manifest = CreateManifest("0.2.0", UpdateCheckService.GetCurrentRid());
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
 
         // Return the manifest but sign different content
         var json = JsonSerializer.Serialize(manifest);
@@ -417,8 +417,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         MinisignVerifier.TestVerifyResultOverride = null;
         UpdateCheckService.ResetCache();
         _testSigningKey.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -426,7 +425,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     // ═══════════════════════════════════════════════════════════════
 
     private static BinaryUpdateCheckService CreateDaemonService(
-        FakeHttpHandler handler,
+        FakeHttpMessageHandler handler,
         string currentVersion = "0.1.0",
         FakeNotificationSink? sink = null)
     {
@@ -440,11 +439,11 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     }
 
     /// <summary>
-    /// Creates a FakeHttpHandler that returns a properly signed manifest.
+    /// Creates a FakeHttpMessageHandler that returns a properly signed manifest.
     /// </summary>
-    private FakeHttpHandler CreateSignedHandler(BinaryFeedManifest manifest)
+    private FakeHttpMessageHandler CreateSignedHandler(BinaryFeedManifest manifest)
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         var json = JsonSerializer.Serialize(manifest);
         handler.AddResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.OK, json, "application/json");
 
@@ -512,43 +511,5 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
     {
         public List<OperationalAlert> Alerts { get; } = [];
         public void Emit(OperationalAlert alert) => Alerts.Add(alert);
-    }
-
-    /// <summary>
-    /// Reuses the same FakeHttpHandler pattern from <see cref="SystemSkillSyncServiceTests"/>.
-    /// </summary>
-    internal sealed class FakeHttpHandler : HttpMessageHandler
-    {
-        private readonly Dictionary<string, (HttpStatusCode Status, string Content, string ContentType)> _responses = new();
-
-        public void AddJsonResponse<T>(string url, T body)
-        {
-            var json = JsonSerializer.Serialize(body);
-            _responses[url] = (HttpStatusCode.OK, json, "application/json");
-        }
-
-        public void AddResponse(string url, HttpStatusCode status, string content, string contentType)
-        {
-            _responses[url] = (status, content, contentType);
-        }
-
-        public void AddErrorResponse(string url, HttpStatusCode status)
-        {
-            _responses[url] = (status, string.Empty, "text/plain");
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri!.ToString();
-            if (!_responses.TryGetValue(url, out var entry))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-
-            var response = new HttpResponseMessage(entry.Status)
-            {
-                Content = new StringContent(entry.Content, System.Text.Encoding.UTF8, entry.ContentType)
-            };
-            return Task.FromResult(response);
-        }
     }
 }

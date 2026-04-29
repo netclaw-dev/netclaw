@@ -9,21 +9,21 @@ using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
 public sealed class ProviderStepViewModelTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly WizardContext _context;
     private readonly FakeProviderProbe _fakeProbe = new();
     private readonly ProviderDescriptorRegistry _registry = ProviderCommand.CreateDefaultRegistry();
 
     public ProviderStepViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _context = new WizardContext
         {
@@ -33,11 +33,7 @@ public sealed class ProviderStepViewModelTests : IDisposable
         };
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public void SetSubStep_AdvancesToGivenStep()

@@ -7,28 +7,23 @@ using System.Text.Json;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Webhooks;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Webhooks;
 
 public sealed class WebhooksCommandTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public WebhooksCommandTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public async Task List_NoRoutes_ReturnsZero()
@@ -373,7 +368,7 @@ public sealed class WebhooksCommandTests : IDisposable
 
         var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "test-route",
-            "--prompt-file", Path.Combine(_tempDir, "missing.txt"),
+            "--prompt-file", Path.Combine(_dir.Path, "missing.txt"),
             "--secret", "after-secret"
         ], _paths);
 
@@ -387,7 +382,7 @@ public sealed class WebhooksCommandTests : IDisposable
     [Fact]
     public async Task Set_MultipleSecretSources_ReturnsOne()
     {
-        var secretFile = Path.Combine(_tempDir, "secret.txt");
+        var secretFile = Path.Combine(_dir.Path, "secret.txt");
         File.WriteAllText(secretFile, "file-secret");
 
         var result = await WebhooksCommand.RunAsync([
@@ -403,7 +398,7 @@ public sealed class WebhooksCommandTests : IDisposable
     [Fact]
     public async Task Set_MultiplePromptSources_ReturnsOne()
     {
-        var promptFile = Path.Combine(_tempDir, "prompt.txt");
+        var promptFile = Path.Combine(_dir.Path, "prompt.txt");
         File.WriteAllText(promptFile, "file prompt");
 
         var result = await WebhooksCommand.RunAsync([

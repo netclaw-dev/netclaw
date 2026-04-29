@@ -11,6 +11,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -18,7 +19,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 
 public sealed class McpOAuthServiceTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-mcp-oauth-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
 
     [Fact]
     public async Task GetFlowStatusByState_ReauthWithExistingToken_RemainsPending()
@@ -61,7 +62,7 @@ public sealed class McpOAuthServiceTests : IDisposable
     [Fact]
     public async Task LoadTokensFromDisk_survives_encrypted_round_trip()
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         var protector = SecretsProtection.CreateProtector(paths);
         SensitiveStringTypeConverter.Protector = protector;
@@ -108,8 +109,7 @@ public sealed class McpOAuthServiceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
+        _dir.Dispose();
     }
 
     private McpOAuthService CreateService(HttpClient discoveryClient, OAuthPkceService pkceService,
@@ -117,7 +117,7 @@ public sealed class McpOAuthServiceTests : IDisposable
     {
         return new McpOAuthService(
             discoveryClient,
-            new NetclawPaths(_tempDir),
+            new NetclawPaths(_dir.Path),
             TimeProvider.System,
             NullLogger<McpOAuthService>.Instance,
             pkceService,
@@ -171,19 +171,4 @@ public sealed class McpOAuthServiceTests : IDisposable
         };
     }
 
-    private sealed class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
-
-        public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
-        {
-            _handler = handler;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_handler(request));
-        }
-    }
 }

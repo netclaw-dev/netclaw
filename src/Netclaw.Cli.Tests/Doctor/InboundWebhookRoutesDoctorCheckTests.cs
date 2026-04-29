@@ -7,27 +7,23 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
 
 public sealed class InboundWebhookRoutesDoctorCheckTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public InboundWebhookRoutesDoctorCheckTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-inbound-webhook-doctor-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public async Task ReturnsPass_WhenNoRouteFilesExist()

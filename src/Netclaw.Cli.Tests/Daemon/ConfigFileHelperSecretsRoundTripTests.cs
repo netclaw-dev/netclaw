@@ -6,6 +6,7 @@
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Daemon;
@@ -21,18 +22,16 @@ namespace Netclaw.Cli.Tests.Daemon;
 /// </summary>
 public sealed class ConfigFileHelperSecretsRoundTripTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public ConfigFileHelperSecretsRoundTripTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-pair-cmd-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose() => Directory.Delete(_tempDir, recursive: true);
+    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public void DeviceToken_WrittenToSecrets_DecryptsCorrectly_And_Endpoint_WrittenToConfig_RoundsTrip()

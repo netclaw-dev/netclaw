@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
@@ -14,16 +15,13 @@ namespace Netclaw.Configuration.Tests;
 /// </summary>
 public sealed class FileSystemPromptProviderAudienceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FileSystemPromptProvider _provider;
 
     public FileSystemPromptProviderAudienceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
 
         // Write a TOOLING.md so we can verify it is suppressed for Public
@@ -34,8 +32,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
@@ -98,7 +95,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     public void Public_audience_does_not_include_project_instructions()
     {
         // Create a project directory with a CLAUDE.md
-        var projectDir = Path.Combine(_tempDir, "myproject");
+        var projectDir = Path.Combine(_dir.Path, "myproject");
         Directory.CreateDirectory(projectDir);
         File.WriteAllText(Path.Combine(projectDir, "CLAUDE.md"), "# Secret Project Rules");
 
@@ -110,7 +107,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
     [Fact]
     public void Personal_audience_includes_project_instructions()
     {
-        var projectDir = Path.Combine(_tempDir, "myproject");
+        var projectDir = Path.Combine(_dir.Path, "myproject");
         Directory.CreateDirectory(projectDir);
         File.WriteAllText(Path.Combine(projectDir, "CLAUDE.md"), "# Secret Project Rules");
 

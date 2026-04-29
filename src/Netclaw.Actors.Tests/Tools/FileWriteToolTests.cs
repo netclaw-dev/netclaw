@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -13,28 +14,25 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class FileWriteToolTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly FileWriteTool _tool = new(new ToolConfig());
     private readonly string _sessionDir;
 
     public FileWriteToolTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _sessionDir = Path.Combine(_tempDir, "session");
+        _sessionDir = Path.Combine(_dir.Path, "session");
         Directory.CreateDirectory(_sessionDir);
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
     public async Task Write_new_file_creates_it()
     {
-        var filePath = Path.Combine(_tempDir, "new.txt");
+        var filePath = Path.Combine(_dir.Path, "new.txt");
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath,
@@ -51,7 +49,7 @@ public class FileWriteToolTests : IDisposable
     [Fact]
     public async Task Overwrite_existing_file()
     {
-        var filePath = Path.Combine(_tempDir, "existing.txt");
+        var filePath = Path.Combine(_dir.Path, "existing.txt");
         await File.WriteAllTextAsync(filePath, "old content", TestContext.Current.CancellationToken);
 
         var args = new Dictionary<string, object?>
@@ -69,7 +67,7 @@ public class FileWriteToolTests : IDisposable
     [Fact]
     public async Task Creates_parent_directories()
     {
-        var filePath = Path.Combine(_tempDir, "sub", "dir", "deep.txt");
+        var filePath = Path.Combine(_dir.Path, "sub", "dir", "deep.txt");
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath,
@@ -112,7 +110,7 @@ public class FileWriteToolTests : IDisposable
     [Fact]
     public async Task Write_denied_path_returns_access_denied()
     {
-        var filePath = Path.Combine(_tempDir, "secrets.json");
+        var filePath = Path.Combine(_dir.Path, "secrets.json");
         var policy = new ToolPathPolicy([filePath]);
         var tool = new FileWriteTool(new ToolConfig(), policy);
 
@@ -147,7 +145,7 @@ public class FileWriteToolTests : IDisposable
     [Fact]
     public async Task Public_context_cannot_write_outside_session_directory()
     {
-        var filePath = Path.Combine(_tempDir, "host-write.txt");
+        var filePath = Path.Combine(_dir.Path, "host-write.txt");
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath,

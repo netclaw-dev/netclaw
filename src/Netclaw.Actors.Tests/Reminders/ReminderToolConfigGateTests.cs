@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Reminders;
@@ -16,18 +17,12 @@ namespace Netclaw.Actors.Tests.Reminders;
 /// </summary>
 public class ReminderToolConfigGateTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-gate-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
     private readonly SchedulingConfig _disabledConfig = new() { Enabled = false };
-
-    public ReminderToolConfigGateTests()
-    {
-        Directory.CreateDirectory(_tempDir);
-    }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
@@ -78,7 +73,7 @@ public class ReminderToolConfigGateTests : IDisposable
     [Fact]
     public async Task GetReminderHistoryTool_ReturnsErrorWhenSchedulingDisabled()
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(paths.RemindersDirectory);
         var store = new ReminderHistoryStore(paths);
         var tool = new GetReminderHistoryTool(store, _disabledConfig);

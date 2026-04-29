@@ -7,21 +7,20 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Gateway;
 
 public sealed class DailyStatsActorTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly ActorSystem _system;
 
     public DailyStatsActorTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-dailystats-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _system = ActorSystem.Create($"daily-stats-tests-{Guid.NewGuid():N}");
     }
@@ -65,8 +64,7 @@ public sealed class DailyStatsActorTests : IDisposable
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider

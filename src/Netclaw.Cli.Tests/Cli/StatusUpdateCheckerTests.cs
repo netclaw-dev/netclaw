@@ -8,6 +8,7 @@ using System.Text.Json;
 using Netclaw.Cli.Update;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Configuration.Security;
+using Netclaw.Tests.Utilities;
 using NSec.Cryptography;
 using Xunit;
 
@@ -72,7 +73,7 @@ public sealed class StatusUpdateCheckerTests : IDisposable
     [Fact]
     public async Task CheckAsync_ReturnsUnknown_OnNetworkError()
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddErrorResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         using var httpClient = new HttpClient(handler);
@@ -112,9 +113,9 @@ public sealed class StatusUpdateCheckerTests : IDisposable
 
     // ─── Helpers ────────────────────────────────────────────────────────────────
 
-    private FakeHttpHandler CreateSignedHandler(BinaryFeedManifest manifest)
+    private FakeHttpMessageHandler CreateSignedHandler(BinaryFeedManifest manifest)
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         var json = JsonSerializer.Serialize(manifest);
         handler.AddResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.OK, json, "application/json");
 
@@ -164,41 +165,6 @@ public sealed class StatusUpdateCheckerTests : IDisposable
                 }
             ]
         };
-    }
-
-    private sealed class FakeHttpHandler : HttpMessageHandler
-    {
-        private readonly Dictionary<string, (HttpStatusCode Status, string Content, string ContentType)> _responses = new();
-
-        public void AddJsonResponse<T>(string url, T body)
-        {
-            var json = JsonSerializer.Serialize(body);
-            _responses[url] = (HttpStatusCode.OK, json, "application/json");
-        }
-
-        public void AddResponse(string url, HttpStatusCode status, string content, string contentType)
-        {
-            _responses[url] = (status, content, contentType);
-        }
-
-        public void AddErrorResponse(string url, HttpStatusCode status)
-        {
-            _responses[url] = (status, string.Empty, "text/plain");
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri!.ToString();
-            if (!_responses.TryGetValue(url, out var entry))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-
-            var response = new HttpResponseMessage(entry.Status)
-            {
-                Content = new StringContent(entry.Content, System.Text.Encoding.UTF8, entry.ContentType)
-            };
-            return Task.FromResult(response);
-        }
     }
 
     /// <summary>

@@ -7,6 +7,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Configuration.Tests.Providers.OAuth.OAuthTestHelpers;
 

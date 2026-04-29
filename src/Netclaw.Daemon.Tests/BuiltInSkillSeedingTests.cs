@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests;
@@ -14,13 +15,9 @@ namespace Netclaw.Daemon.Tests;
 /// </summary>
 public sealed class BuiltInSkillSeedingTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-skill-seed-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public void BuiltInSkills_directory_exists_in_build_output()
@@ -58,7 +55,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     [Fact]
     public void CopyBuiltInSkills_seeds_to_empty_directory()
     {
-        var skillsDir = Path.Combine(_tempDir, "skills");
+        var skillsDir = Path.Combine(_dir.Path, "skills");
         Directory.CreateDirectory(skillsDir);
 
         // Invoke the seeding method
@@ -90,7 +87,7 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     [Fact]
     public void CopyBuiltInSkills_does_not_overwrite_existing_files()
     {
-        var skillsDir = Path.Combine(_tempDir, "skills");
+        var skillsDir = Path.Combine(_dir.Path, "skills");
         var skillDir = Path.Combine(skillsDir, "netclaw-memory");
         var targetPath = Path.Combine(skillDir, "SKILL.md");
 

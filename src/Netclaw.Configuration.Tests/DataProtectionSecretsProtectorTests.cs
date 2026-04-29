@@ -4,27 +4,26 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration.Secrets;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
 public sealed class DataProtectionSecretsProtectorTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly DataProtectionSecretsProtector _protector;
 
     public DataProtectionSecretsProtectorTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _protector = SecretsProtection.CreateProtector(paths);
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]

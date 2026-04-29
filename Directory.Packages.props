@@ -4,7 +4,7 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <!-- Nuget package versions -->
     <AkkaHostingVersion>1.5.67</AkkaHostingVersion>
-    <AkkaPersistenceSqlHostingVersion>1.5.62</AkkaPersistenceSqlHostingVersion>
+    <AkkaPersistenceSqlHostingVersion>1.5.67</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.6.0-beta2</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
@@ -65,7 +65,7 @@
     <PackageVersion Include="Akka.Hosting.TestKit" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
     <PackageVersion Include="Verify.XunitV3" Version="31.16.2" />
   </ItemGroup>
   <!-- Source generators -->

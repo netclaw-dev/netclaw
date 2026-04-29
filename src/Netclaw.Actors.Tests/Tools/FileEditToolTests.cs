@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -13,28 +14,25 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class FileEditToolTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly FileEditTool _tool = new(new ToolConfig());
     private readonly string _sessionDir;
 
     public FileEditToolTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _sessionDir = Path.Combine(_tempDir, "session");
+        _sessionDir = Path.Combine(_dir.Path, "session");
         Directory.CreateDirectory(_sessionDir);
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
     public async Task Edit_single_occurrence_replaces_text()
     {
-        var filePath = Path.Combine(_tempDir, "test.cs");
+        var filePath = Path.Combine(_dir.Path, "test.cs");
         await File.WriteAllTextAsync(filePath, "using System;\nusing Xunit;\n\nclass Foo { }", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
@@ -53,7 +51,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task ReplaceAll_replaces_all_occurrences()
     {
-        var filePath = Path.Combine(_tempDir, "test.txt");
+        var filePath = Path.Combine(_dir.Path, "test.txt");
         await File.WriteAllTextAsync(filePath, "foo bar foo baz foo", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
@@ -71,7 +69,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task Non_unique_match_without_ReplaceAll_returns_error()
     {
-        var filePath = Path.Combine(_tempDir, "test.txt");
+        var filePath = Path.Combine(_dir.Path, "test.txt");
         var original = "foo bar foo baz foo";
         await File.WriteAllTextAsync(filePath, original, TestContext.Current.CancellationToken);
 
@@ -89,7 +87,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task OldString_not_found_returns_error()
     {
-        var filePath = Path.Combine(_tempDir, "test.txt");
+        var filePath = Path.Combine(_dir.Path, "test.txt");
         var original = "hello world";
         await File.WriteAllTextAsync(filePath, original, TestContext.Current.CancellationToken);
 
@@ -107,7 +105,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task OldString_equals_NewString_returns_error()
     {
-        var filePath = Path.Combine(_tempDir, "test.txt");
+        var filePath = Path.Combine(_dir.Path, "test.txt");
         await File.WriteAllTextAsync(filePath, "hello world", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
@@ -123,7 +121,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task Empty_NewString_performs_deletion()
     {
-        var filePath = Path.Combine(_tempDir, "test.cs");
+        var filePath = Path.Combine(_dir.Path, "test.cs");
         await File.WriteAllTextAsync(filePath, "line1\nDELETE_ME\nline3", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
@@ -140,7 +138,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task File_does_not_exist_returns_error()
     {
-        var filePath = Path.Combine(_tempDir, "nonexistent.txt");
+        var filePath = Path.Combine(_dir.Path, "nonexistent.txt");
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -155,7 +153,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task Edit_denied_path_returns_access_denied()
     {
-        var filePath = Path.Combine(_tempDir, "secrets.json");
+        var filePath = Path.Combine(_dir.Path, "secrets.json");
         await File.WriteAllTextAsync(filePath, "secret data", TestContext.Current.CancellationToken);
         var policy = new ToolPathPolicy([filePath]);
         var tool = new FileEditTool(new ToolConfig(), policy);
@@ -191,7 +189,7 @@ public class FileEditToolTests : IDisposable
     [Fact]
     public async Task Public_context_cannot_edit_outside_session_directory()
     {
-        var filePath = Path.Combine(_tempDir, "host-file.txt");
+        var filePath = Path.Combine(_dir.Path, "host-file.txt");
         await File.WriteAllTextAsync(filePath, "original", TestContext.Current.CancellationToken);
 
         var result = await _tool.ExecuteAsync(new Dictionary<string, object?>

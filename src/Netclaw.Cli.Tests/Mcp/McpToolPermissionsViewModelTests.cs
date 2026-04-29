@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -16,21 +17,16 @@ namespace Netclaw.Cli.Tests.Mcp;
 
 public sealed class McpToolPermissionsViewModelTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public McpToolPermissionsViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-vm-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     private McpToolPermissionsViewModel CreateVm()
     {

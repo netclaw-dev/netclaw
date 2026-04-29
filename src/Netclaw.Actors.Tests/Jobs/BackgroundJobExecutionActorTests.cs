@@ -9,22 +9,29 @@ using Akka.Hosting.TestKit;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Jobs;
 
 public class BackgroundJobExecutionActorTests : TestKit
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-exec-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
     private BackgroundJobDefinitionStore _store = null!;
 
     public BackgroundJobExecutionActorTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _store = new BackgroundJobDefinitionStore(paths);
+    }
+
+    protected override async Task AfterAllAsync()
+    {
+        _dir.Dispose();
+        await base.AfterAllAsync();
     }
 
     private BackgroundJobDefinition MakeDefinition(string command, int timeoutSeconds = 600) => new()

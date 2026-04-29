@@ -5,28 +5,27 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Reminders;
 
 public class ReminderHistoryStoreTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-history-tests-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
     private readonly ReminderHistoryStore _store;
     private static readonly ReminderId TestId = new("test-reminder");
 
     public ReminderHistoryStoreTests()
     {
-        Directory.CreateDirectory(_tempDir);
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(paths.RemindersDirectory);
         _store = new ReminderHistoryStore(paths);
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]

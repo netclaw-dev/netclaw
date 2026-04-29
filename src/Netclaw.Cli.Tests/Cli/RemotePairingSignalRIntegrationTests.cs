@@ -16,13 +16,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Security;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class RemotePairingSignalRIntegrationTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly DeviceRegistry _deviceRegistry;
     private readonly PairingCodeService _pairingCodeService;
@@ -30,10 +31,7 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
 
     public RemotePairingSignalRIntegrationTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-remote-pairing-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
 
         _deviceRegistry = new DeviceRegistry(_paths, TimeProvider.System, NullLogger<DeviceRegistry>.Instance);
@@ -43,8 +41,7 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Authorize]

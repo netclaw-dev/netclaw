@@ -11,6 +11,7 @@ using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Services;
 using Netclaw.Security.Skills;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using SecuritySkillScanResult = Netclaw.Security.Skills.SkillScanResult;
 
@@ -18,7 +19,7 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class SystemSkillSyncServiceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
@@ -27,8 +28,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
     public SystemSkillSyncServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _skillRegistry = new SkillRegistry();
         _skillIndexLayer = new SkillIndexContextLayer();
@@ -57,9 +57,9 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
-        handler.AddStringResponse(manifest.Skills[0].Url, skillContent);
+        handler.AddStringResponse(manifest.Skills[0].Url, skillContent, "text/markdown");
 
         var sut = CreateService(handler);
         await sut.StartAsync(CancellationToken.None);
@@ -102,9 +102,9 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
-        handler.AddStringResponse(manifest.Skills[0].Url, "# Remote");
+        handler.AddStringResponse(manifest.Skills[0].Url, "# Remote", "text/markdown");
 
         var service = new SystemSkillSyncService(
             new HttpClient(handler),
@@ -162,7 +162,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
         // No download response added — should not be called
 
@@ -212,9 +212,9 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
-        handler.AddStringResponse(manifest.Skills[0].Url, newContent);
+        handler.AddStringResponse(manifest.Skills[0].Url, newContent, "text/markdown");
 
         var sut = CreateService(handler);
         await sut.StartAsync(CancellationToken.None);
@@ -265,9 +265,9 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
-        handler.AddStringResponse(manifest.Skills[0].Url, newContent);
+        handler.AddStringResponse(manifest.Skills[0].Url, newContent, "text/markdown");
 
         var service = CreateService(handler, scanner: new RejectingSkillScanner());
         await service.StartAsync(CancellationToken.None);
@@ -328,10 +328,10 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
-        handler.AddStringResponse(manifest.Skills[0].Url, newContent);
-        handler.AddStringResponse(manifest.Skills[0].Files![0].Url, resourceContent);
+        handler.AddStringResponse(manifest.Skills[0].Url, newContent, "text/markdown");
+        handler.AddStringResponse(manifest.Skills[0].Files![0].Url, resourceContent, "text/markdown");
 
         var service = CreateService(handler, scanner: new RejectingResourceSkillScanner());
         await service.StartAsync(CancellationToken.None);
@@ -363,9 +363,9 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
-        handler.AddStringResponse(manifest.Skills[0].Url, badContent); // delivers tampered content
+        handler.AddStringResponse(manifest.Skills[0].Url, badContent, "text/markdown"); // delivers tampered content
 
         var sut = CreateService(handler);
         await sut.StartAsync(CancellationToken.None);
@@ -397,7 +397,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
             ]
         };
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddJsonResponse(FeedConstants.SystemSkillsManifestUrl, manifest);
 
         var sut = CreateService(handler, daemonVersion: "0.1.0");
@@ -415,7 +415,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         File.WriteAllText(Path.Combine(existingDir, "SKILL.md"),
             "---\nname: existing\ndescription: Still here\n---\n\n# Existing\n\nContent.");
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         var sut = CreateService(handler);
@@ -441,7 +441,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         File.WriteAllText(Path.Combine(userDir, "SKILL.md"),
             "---\nname: user-skill\ndescription: user skill\n---\n\n# User\n\nContent.");
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         var sut = CreateService(handler);
@@ -467,7 +467,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
         File.WriteAllText(Path.Combine(invalidDir, "SKILL.md"),
             "---\nname: invalid-skill\n---\n\n# Invalid\n\nMissing description.");
 
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         handler.AddErrorResponse(FeedConstants.SystemSkillsManifestUrl, HttpStatusCode.ServiceUnavailable);
 
         var sut = CreateService(handler);
@@ -554,11 +554,10 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
-    private SystemSkillSyncService CreateService(FakeHttpHandler handler, string daemonVersion = "0.1.0", ISkillContentScanner? scanner = null)
+    private SystemSkillSyncService CreateService(FakeHttpMessageHandler handler, string daemonVersion = "0.1.0", ISkillContentScanner? scanner = null)
     {
         var httpClient = new HttpClient(handler);
         return new SystemSkillSyncService(
@@ -583,44 +582,6 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
     {
         var json = JsonSerializer.Serialize(state, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(_paths.SkillSyncStatePath, json);
-    }
-
-    /// <summary>
-    /// Simple fake HTTP handler that returns pre-configured responses by URL.
-    /// </summary>
-    internal sealed class FakeHttpHandler : HttpMessageHandler
-    {
-        private readonly Dictionary<string, (HttpStatusCode Status, string Content, string ContentType)> _responses = new();
-
-        public void AddJsonResponse<T>(string url, T body)
-        {
-            var json = JsonSerializer.Serialize(body);
-            _responses[url] = (HttpStatusCode.OK, json, "application/json");
-        }
-
-        public void AddStringResponse(string url, string content)
-        {
-            _responses[url] = (HttpStatusCode.OK, content, "text/markdown");
-        }
-
-        public void AddErrorResponse(string url, HttpStatusCode status)
-        {
-            _responses[url] = (status, string.Empty, "text/plain");
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri!.ToString();
-            if (!_responses.TryGetValue(url, out var entry))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-
-            var response = new HttpResponseMessage(entry.Status)
-            {
-                Content = new StringContent(entry.Content, System.Text.Encoding.UTF8, entry.ContentType)
-            };
-            return Task.FromResult(response);
-        }
     }
 
     internal sealed class ListLogger<T> : ILogger<T>

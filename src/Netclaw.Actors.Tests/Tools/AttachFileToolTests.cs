@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -12,28 +13,21 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class AttachFileToolTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly AttachFileTool _tool = new(new ToolConfig());
-
-    public AttachFileToolTests()
-    {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-    }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
     public async Task Valid_file_within_session_directory_succeeds()
     {
-        var filePath = Path.Combine(_tempDir, "report.png");
+        var filePath = Path.Combine(_dir.Path, "report.png");
         await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 }, TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath
@@ -55,7 +49,7 @@ public class AttachFileToolTests : IDisposable
 
         try
         {
-            var context = new ToolExecutionContext("test-session", _tempDir);
+            var context = new ToolExecutionContext("test-session", _dir.Path);
             var args = new Dictionary<string, object?>
             {
                 ["Path"] = outsidePath
@@ -75,10 +69,10 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Dotdot_traversal_is_rejected()
     {
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
-            ["Path"] = Path.Combine(_tempDir, "..", "..", "etc", "passwd")
+            ["Path"] = Path.Combine(_dir.Path, "..", "..", "etc", "passwd")
         };
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -90,8 +84,8 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Missing_file_returns_error()
     {
-        var filePath = Path.Combine(_tempDir, "nonexistent.png");
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var filePath = Path.Combine(_dir.Path, "nonexistent.png");
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath
@@ -106,7 +100,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Empty_path_returns_error()
     {
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
             ["Path"] = ""
@@ -135,10 +129,10 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Display_name_is_used_when_provided()
     {
-        var filePath = Path.Combine(_tempDir, "abc123.png");
+        var filePath = Path.Combine(_dir.Path, "abc123.png");
         await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 }, TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath,
@@ -155,10 +149,10 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Successful_attach_populates_file_attachments_on_context()
     {
-        var filePath = Path.Combine(_tempDir, "chart.png");
+        var filePath = Path.Combine(_dir.Path, "chart.png");
         await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 }, TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
             ["Path"] = filePath
@@ -175,10 +169,10 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Failed_attach_does_not_populate_file_attachments()
     {
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
-            ["Path"] = Path.Combine(_tempDir, "nonexistent.png")
+            ["Path"] = Path.Combine(_dir.Path, "nonexistent.png")
         };
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -190,12 +184,12 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Prefix_collision_path_is_rejected()
     {
-        var outsideDir = _tempDir + "-outside";
+        var outsideDir = _dir.Path + "-outside";
         Directory.CreateDirectory(outsideDir);
         var outsideFile = Path.Combine(outsideDir, "secret.txt");
         await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _tempDir);
+        var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
         {
             ["Path"] = outsideFile
@@ -212,7 +206,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Symlink_to_outside_file_is_rejected()
     {
         var outsideFile = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
-        var symlinkPath = Path.Combine(_tempDir, "linked.txt");
+        var symlinkPath = Path.Combine(_dir.Path, "linked.txt");
 
         await File.WriteAllTextAsync(outsideFile, "sensitive data", TestContext.Current.CancellationToken);
 
@@ -220,7 +214,7 @@ public class AttachFileToolTests : IDisposable
         {
             File.CreateSymbolicLink(symlinkPath, outsideFile);
 
-            var context = new ToolExecutionContext("test-session", _tempDir);
+            var context = new ToolExecutionContext("test-session", _dir.Path);
             var args = new Dictionary<string, object?>
             {
                 ["Path"] = symlinkPath
@@ -248,7 +242,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task File_from_sibling_session_directory_is_copied_and_attached()
     {
-        var sessionsRoot = Path.Combine(_tempDir, "sessions");
+        var sessionsRoot = Path.Combine(_dir.Path, "sessions");
         var currentSessionDir = Path.Combine(sessionsRoot, "current");
         var siblingSessionDir = Path.Combine(sessionsRoot, "sibling");
         Directory.CreateDirectory(currentSessionDir);
@@ -284,10 +278,10 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Public_context_cannot_attach_file_outside_session_directory()
     {
-        var outsidePath = Path.Combine(_tempDir, "outside.txt");
+        var outsidePath = Path.Combine(_dir.Path, "outside.txt");
         await File.WriteAllTextAsync(outsidePath, "secret", TestContext.Current.CancellationToken);
 
-        var sessionDir = Path.Combine(_tempDir, "session");
+        var sessionDir = Path.Combine(_dir.Path, "session");
         Directory.CreateDirectory(sessionDir);
 
         var context = new ToolExecutionContext("slack/thread-1", sessionDir)
@@ -311,13 +305,13 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Symlink_from_sibling_session_to_outside_root_is_rejected()
     {
-        var sessionsRoot = Path.Combine(_tempDir, "sessions");
+        var sessionsRoot = Path.Combine(_dir.Path, "sessions");
         var currentSessionDir = Path.Combine(sessionsRoot, "current");
         var siblingSessionDir = Path.Combine(sessionsRoot, "sibling");
         Directory.CreateDirectory(currentSessionDir);
         Directory.CreateDirectory(siblingSessionDir);
 
-        var outsidePath = Path.Combine(_tempDir, "outside.txt");
+        var outsidePath = Path.Combine(_dir.Path, "outside.txt");
         await File.WriteAllTextAsync(outsidePath, "secret", TestContext.Current.CancellationToken);
 
         var symlinkPath = Path.Combine(siblingSessionDir, "linked.txt");

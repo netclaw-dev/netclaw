@@ -9,28 +9,24 @@ using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;
 
 public sealed class ProviderManagerViewModelTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
 
     public ProviderManagerViewModelTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     /// <summary>
     /// Simulates activation without requiring a bound Page (which provides the Input stream).
