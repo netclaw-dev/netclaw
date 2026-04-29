@@ -120,14 +120,14 @@ public class SessionStateCompactionTests
         {
             SessionId = new SessionId("test"),
             Summary = "Summary of conversation",
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new()
                 {
                     Role = ChatRole.Assistant,
                     Content = "Summary of conversation"
                 }
-            },
+            ],
             TurnCountBefore = 1,
             CompactedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };
@@ -157,14 +157,14 @@ public class SessionStateCompactionTests
         {
             SessionId = new SessionId("test"),
             Summary = "Summary",
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new()
                 {
                     Role = ChatRole.Assistant,
                     Content = "Summary"
                 }
-            },
+            ],
             TurnCountBefore = 1,
             CompactedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
         };

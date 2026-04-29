@@ -85,15 +85,20 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             foreach (var update in ParseStreamingUpdates(document.RootElement, pendingToolCalls))
             {
                 var suppressThisUpdate = false;
-                foreach (var tc in update.Contents.OfType<TextContent>())
+                foreach (var item in update.Contents)
                 {
-                    accumulatedText.Append(tc.Text);
-                    if (filter.ShouldSuppress(tc.Text))
-                        suppressThisUpdate = true;
+                    switch (item)
+                    {
+                        case TextContent tc:
+                            accumulatedText.Append(tc.Text);
+                            if (filter.ShouldSuppress(tc.Text))
+                                suppressThisUpdate = true;
+                            break;
+                        case FunctionCallContent:
+                            hadStructuredToolCalls = true;
+                            break;
+                    }
                 }
-
-                if (update.Contents.OfType<FunctionCallContent>().Any())
-                    hadStructuredToolCalls = true;
 
                 if (update.FinishReason is not null)
                     finalUpdate = update;
@@ -127,7 +132,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextContent(cleaned)]);
                 }
 
-                yield return new ChatResponseUpdate(ChatRole.Assistant, textToolCalls.Cast<AIContent>().ToList())
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [.. textToolCalls.Cast<AIContent>()])
                 {
                     FinishReason = ChatFinishReason.ToolCalls
                 };
@@ -142,7 +147,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             var textToolCalls = TextToolCallParser.ExtractFromText(accumulatedText.ToString());
             if (textToolCalls.Count > 0)
             {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, textToolCalls.Cast<AIContent>().ToList())
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [.. textToolCalls.Cast<AIContent>()])
                 {
                     FinishReason = ChatFinishReason.ToolCalls
                 };
@@ -670,7 +675,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             Additional(details)[PredictedTokPerSecX100Key] = (long)(predictedPerSec * 100);
 
         static AdditionalPropertiesDictionary<long> Additional(UsageDetails d)
-            => d.AdditionalCounts ??= new AdditionalPropertiesDictionary<long>();
+            => d.AdditionalCounts ??= [];
     }
 
     private static bool TryGetLong(JsonElement obj, string name, out long value)

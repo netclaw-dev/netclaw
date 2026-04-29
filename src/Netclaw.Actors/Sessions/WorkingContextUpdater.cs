@@ -29,7 +29,7 @@ internal static class WorkingContextUpdater
     // keyed as `{"Path": "..."}`. MCP tools and other conventions use the
     // camelCase/snake_case variants. Probe all common forms.
     private static readonly string[] PathFieldNames =
-    {
+    [
         "Path",
         "path",
         "FilePath",
@@ -40,7 +40,7 @@ internal static class WorkingContextUpdater
         "FileName",
         "filename",
         "fileName",
-    };
+    ];
 
     /// <summary>
     /// Process a batch of tool results that just completed, find each

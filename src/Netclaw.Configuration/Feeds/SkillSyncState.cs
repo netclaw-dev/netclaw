@@ -17,7 +17,7 @@ public sealed class SkillSyncState
     public DateTimeOffset LastSyncUtc { get; set; }
 
     [JsonPropertyName("skills")]
-    public Dictionary<string, SyncedSkillState> Skills { get; set; } = new();
+    public Dictionary<string, SyncedSkillState> Skills { get; set; } = [];
 }
 
 /// <summary>

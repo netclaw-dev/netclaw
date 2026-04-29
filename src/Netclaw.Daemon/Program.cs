@@ -758,7 +758,7 @@ static void ConfigureDaemonServices(
 
     // MCP server lifecycle management
     var mcpServers = configuration.GetSection("McpServers")
-        .Get<Dictionary<string, McpServerEntry>>() ?? new();
+        .Get<Dictionary<string, McpServerEntry>>() ?? [];
     services.AddSingleton(mcpServers);
     services.AddHttpClient("ProviderOAuth");
     services.AddSingleton(sp =>
@@ -910,8 +910,10 @@ static void ConfigureDaemonServices(
     }
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
-        var resolvers = new List<IModelCapabilityResolver>();
-        resolvers.Add(sp.GetRequiredService<OpenAiCodexCapabilityResolver>());
+        var resolvers = new List<IModelCapabilityResolver>
+        {
+            sp.GetRequiredService<OpenAiCodexCapabilityResolver>()
+        };
         if (ollamaEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
         if (openAiCompatibleEndpoint is not null)

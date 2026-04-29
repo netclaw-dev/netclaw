@@ -146,11 +146,10 @@ public sealed class MemoryProposalGate
         if (accepted.Count > MaxProposalsPerRun)
         {
             var trimmed = accepted.Count - MaxProposalsPerRun;
-            accepted = accepted
+            accepted = [.. accepted
                 .OrderByDescending(a => a.Proposal.Confidence)
                 .ThenBy(a => a.OriginalIndex)
-                .Take(MaxProposalsPerRun)
-                .ToList();
+                .Take(MaxProposalsPerRun)];
             rejectionReasons["max-proposals-exceeded"] = trimmed;
         }
 

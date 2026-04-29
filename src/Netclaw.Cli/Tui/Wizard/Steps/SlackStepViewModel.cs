@@ -202,7 +202,7 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         {
             Enabled = true,
             AllowedChannelIds = LastChannelResolution is { Resolved.Count: > 0 }
-                ? LastChannelResolution.Resolved.Select(r => r.Id).ToList()
+                ? [.. LastChannelResolution.Resolved.Select(r => r.Id)]
                 : null,
             AllowDirectMessages = AllowDirectMessages,
             AllowedUserIds = userIds.Count > 0 ? userIds : null,

@@ -92,7 +92,7 @@ public static class ChatMessageConverter
         string? sessionDir = null,
         ILogger? logger = null)
     {
-        return messages.Select(m => ToAiMessage(m, sessionDir, logger)).ToList();
+        return [.. messages.Select(m => ToAiMessage(m, sessionDir, logger))];
     }
 
     public static SerializableChatMessage FromAiMessage(AiChatMessage msg, string? sessionDir = null)

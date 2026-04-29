@@ -187,14 +187,13 @@ public sealed class SkillFeedsStepViewModel : IWizardStepViewModel, IDisposable
         if (_feeds.Count == 0)
             return;
 
-        builder.SkillFeedSources = _feeds
+        builder.SkillFeedSources = [.. _feeds
             .Select(f => new SkillFeedSource
             {
                 Name = f.Name,
                 Url = f.Url,
                 Enabled = true
-            })
-            .ToList();
+            })];
     }
 
     public void ContributeSecrets(WizardSecretsBuilder builder) { }

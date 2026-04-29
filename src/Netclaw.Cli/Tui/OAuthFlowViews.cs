@@ -27,7 +27,7 @@ internal static class OAuthFlowViews
     public static List<string> BuildAuthMethodLabels(IProviderAuth auth)
     {
         var customLabels = (auth as MultiAuth)?.AuthMethodLabels;
-        return auth.SupportedAuthMethods
+        return [.. auth.SupportedAuthMethods
             .Where(m => m != AuthMethod.None)
             .Select(m => customLabels?.TryGetValue(m, out var label) == true
                 ? label
@@ -37,8 +37,7 @@ internal static class OAuthFlowViews
                     AuthMethod.OAuthPkce => "OAuth Login (recommended)",
                     AuthMethod.OAuthDevice => "OAuth Device Flow",
                     _ => m.ToString()
-                })
-            .ToList();
+                })];
     }
 
     /// <summary>

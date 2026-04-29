@@ -60,7 +60,7 @@ internal static class ConfigFileHelper
                 }
 
                 var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
-                    ?? new Dictionary<string, object>();
+                    ?? [];
                 dict[key] = parsed;
                 return parsed;
             }
@@ -85,7 +85,7 @@ internal static class ConfigFileHelper
         if (existing is JsonElement je)
         {
             var parsed = JsonSerializer.Deserialize<Dictionary<string, object>>(je.GetRawText())
-                ?? new Dictionary<string, object>();
+                ?? [];
             dict[key] = parsed;
             return parsed;
         }

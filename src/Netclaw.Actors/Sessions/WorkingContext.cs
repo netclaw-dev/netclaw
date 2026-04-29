@@ -36,7 +36,7 @@ public sealed record WorkingContext
 
     [ProtoMember(1)]
     public ImmutableList<string> RecentFiles { get; init; } =
-        ImmutableList<string>.Empty;
+        [];
 
     [ProtoMember(2)]
     public string? ProjectDirectory { get; init; }

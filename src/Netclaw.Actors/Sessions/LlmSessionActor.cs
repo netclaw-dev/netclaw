@@ -71,11 +71,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
-    private readonly List<SendUserMessage> _buffer = new();
+    private readonly List<SendUserMessage> _buffer = [];
     private readonly HashSet<string> _inFlightReminderIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> _inFlightBackgroundJobIds = new(StringComparer.Ordinal);
-    private readonly Dictionary<IActorRef, OutputFilter> _subscribers = new();
-    private readonly List<AITool> _availableTools = new();
+    private readonly Dictionary<IActorRef, OutputFilter> _subscribers = [];
+    private readonly List<AITool> _availableTools = [];
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
     private MessageSource? _currentTurnSource;
     private readonly ToolRegistry? _fullRegistry;
@@ -1887,7 +1887,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     "ingress_bug model={ModelId} modalities={Modalities} offending={Offending}",
                     _model.ModelId, _model.InputModalities, offendingDesc);
 
-                mediaRefs = mediaRefs.Where(r => r.Modality != (int)MediaModality.Image).ToList();
+                mediaRefs = [.. mediaRefs.Where(r => r.Modality != (int)MediaModality.Image)];
 
                 const string ingressBugNotice =
                     "[system] An attachment was received but could not be delivered to the model due to an ingress bug. " +
@@ -2405,7 +2405,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             options = new ChatOptions
             {
-                Tools = exposedTools.ToList()
+                Tools = [.. exposedTools]
             };
         }
 
@@ -3056,15 +3056,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Projection = source.AdoptedContextProjection ?? string.Empty,
             ProjectionPersisted = true,
             RecordedAtMs = NowMs(),
-            Messages = source.AdoptedContextEntries
+            Messages = [.. source.AdoptedContextEntries
                 .Select(entry => new AdoptedContextRecorded.AdoptedMessageRecord
                 {
                     MessageId = entry.MessageId,
                     SenderId = entry.SenderId,
                     TimestampMs = entry.Timestamp.ToUnixTimeMilliseconds(),
                     AuthorityAtInclusion = entry.AuthorityAtInclusion
-                })
-                .ToList()
+                })]
         };
 
         // Persist the adopted-context audit record before continuing the turn so the

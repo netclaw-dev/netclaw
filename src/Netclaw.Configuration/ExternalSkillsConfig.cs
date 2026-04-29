@@ -85,7 +85,7 @@ public sealed class ExternalSkillsConfig
 
             IReadOnlyList<string> candidatePaths = source.WellKnown is not null
                 ? ResolveWellKnownPaths(source.WellKnown, homeDirectory)
-                : source.Path is not null ? new[] { source.Path } : Array.Empty<string>();
+                : source.Path is not null ? new[] { source.Path } : [];
 
             if (string.Equals(source.WellKnown, ClaudeCodeAlias, StringComparison.OrdinalIgnoreCase))
             {

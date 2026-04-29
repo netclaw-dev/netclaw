@@ -693,7 +693,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             args.Add("--isolated");
         }
 
-        return args.ToArray();
+        return [.. args];
     }
 
     private static Dictionary<string, AIFunction> CreateFunctionMap(IList<McpClientTool> tools)

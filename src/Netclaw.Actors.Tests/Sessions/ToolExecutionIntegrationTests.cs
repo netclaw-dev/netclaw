@@ -342,10 +342,10 @@ internal sealed class FakeToolExecutor : IToolExecutor
     public int CallCount => _callCount;
 
     /// <summary>Tool name → result string.</summary>
-    public Dictionary<string, string> Results { get; } = new();
+    public Dictionary<string, string> Results { get; } = [];
 
     /// <summary>Tool names that should throw on execution.</summary>
-    public HashSet<string> FailForTools { get; } = new();
+    public HashSet<string> FailForTools { get; } = [];
 
     public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
     {
@@ -374,7 +374,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
 /// </summary>
 internal sealed class FakeToolAuditLogger : IToolAuditLogger
 {
-    public List<ToolAuditEntry> Entries { get; } = new();
+    public List<ToolAuditEntry> Entries { get; } = [];
 
     public void Log(ToolAuditEntry entry)
     {

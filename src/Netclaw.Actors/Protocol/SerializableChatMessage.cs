@@ -29,7 +29,7 @@ public sealed class SerializableChatMessage
     /// and the LLM wants to invoke tools.
     /// </summary>
     [ProtoMember(4)]
-    public List<SerializableToolCall> ToolCalls { get; set; } = new();
+    public List<SerializableToolCall> ToolCalls { get; set; } = [];
 
     /// <summary>
     /// The tool call ID this message is a result for. Present when role is Tool.
@@ -42,7 +42,7 @@ public sealed class SerializableChatMessage
     /// Stored as relative paths within the session media directory.
     /// </summary>
     [ProtoMember(6)]
-    public List<SerializableMediaReference> MediaReferences { get; set; } = new();
+    public List<SerializableMediaReference> MediaReferences { get; set; } = [];
 }
 
 /// <summary>

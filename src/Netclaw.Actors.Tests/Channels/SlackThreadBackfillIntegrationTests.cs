@@ -714,7 +714,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref _callCount);
-            LastMessages = messages.ToList();
+            LastMessages = [.. messages];
             Calls.Add(LastMessages);
 
             var response = new ChatResponse(new ChatMessage(

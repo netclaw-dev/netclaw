@@ -133,8 +133,6 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (string.IsNullOrWhiteSpace(value))
             return [];
 
-        return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Where(x => !string.IsNullOrWhiteSpace(x))
-            .ToList();
+        return [.. value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => !string.IsNullOrWhiteSpace(x))];
     }
 }

@@ -224,7 +224,7 @@ public sealed class SchemaMigrator
         var migrationRoot = Path.Combine(AppContext.BaseDirectory, "migrations", "sqlite");
         if (Directory.Exists(migrationRoot))
         {
-            return Directory.GetFiles(migrationRoot, "*.sql", SearchOption.TopDirectoryOnly)
+            return [.. Directory.GetFiles(migrationRoot, "*.sql", SearchOption.TopDirectoryOnly)
                 .Select(path => new
                 {
                     Path = path,
@@ -233,14 +233,13 @@ public sealed class SchemaMigrator
                 })
                 .Where(x => x.Version is not null)
                 .OrderBy(x => x.Version)
-                .Select(x => new SqlMigration(x.Version!.Value, x.Name, File.ReadAllText(x.Path)))
-                .ToList();
+                .Select(x => new SqlMigration(x.Version!.Value, x.Name, File.ReadAllText(x.Path)))];
         }
 
         var marker = ".migrations.sqlite.";
         var assembly = typeof(SchemaMigrator).Assembly;
 
-        return assembly.GetManifestResourceNames()
+        return [.. assembly.GetManifestResourceNames()
             .Where(name => name.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)
                            && name.Contains(marker, StringComparison.OrdinalIgnoreCase))
             .Select(path => new
@@ -260,8 +259,7 @@ public sealed class SchemaMigrator
             .Select(x => new SqlMigration(
                 x.Version!.Value,
                 x.Name,
-                ReadEmbeddedResourceText(assembly, x.ResourceName)))
-            .ToList();
+                ReadEmbeddedResourceText(assembly, x.ResourceName)))];
     }
 
     private static async Task<HashSet<string>> ReadTableColumnsAsync(

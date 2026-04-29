@@ -201,8 +201,8 @@ public static class WebhookEndpointRouteBuilderExtensions
 
     internal static string SanitizeWebhookId(string value)
     {
-        var sanitized = new string(value.Select(ch =>
-            char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '-').ToArray());
+        var sanitized = new string([.. value.Select(ch =>
+            char.IsLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '-')]);
 
         return string.IsNullOrWhiteSpace(sanitized)
             ? Guid.NewGuid().ToString("N")

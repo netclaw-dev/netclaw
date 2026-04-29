@@ -22,8 +22,8 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
     private readonly string _connectionString;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DailyStatsActor> _logger;
-    private readonly Dictionary<string, Accumulator> _pending = new();
-    private readonly Dictionary<(string DateKey, string SkillName, SkillLoadMethod Method), long> _pendingSkillUsage = new();
+    private readonly Dictionary<string, Accumulator> _pending = [];
+    private readonly Dictionary<(string DateKey, string SkillName, SkillLoadMethod Method), long> _pendingSkillUsage = [];
 
     // Process-lifetime totals (never reset, never persisted — lost on restart)
     private long _totalInputTokens;
