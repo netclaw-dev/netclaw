@@ -18,15 +18,14 @@ namespace Netclaw.Cli.Tests.Cli;
 [Collection("Update verification")]
 public sealed class UpdateCommandTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly Key _testSigningKey;
     private readonly byte[] _testPublicKeyBlob;
 
     public UpdateCommandTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-update-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
 
         _testSigningKey = Key.Create(SignatureAlgorithm.Ed25519,
@@ -50,9 +49,7 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = null;
         UpdateCheckService.ResetCache();
         _testSigningKey.Dispose();
-
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]

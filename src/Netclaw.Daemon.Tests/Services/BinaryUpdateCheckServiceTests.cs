@@ -17,15 +17,14 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class BinaryUpdateCheckServiceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly Key _testSigningKey;
     private readonly byte[] _testPublicKeyBlob;
 
     public BinaryUpdateCheckServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
 
         // Generate a test signing keypair for each test
@@ -417,8 +416,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         MinisignVerifier.TestVerifyResultOverride = null;
         UpdateCheckService.ResetCache();
         _testSigningKey.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     // ═══════════════════════════════════════════════════════════════

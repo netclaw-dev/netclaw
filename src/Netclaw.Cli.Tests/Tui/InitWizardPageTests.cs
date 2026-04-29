@@ -25,7 +25,7 @@ namespace Netclaw.Cli.Tests.Tui;
 /// </summary>
 public sealed class InitWizardPageTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
     private readonly FakeSlackProbe _fakeSlackProbe = new();
@@ -34,16 +34,11 @@ public sealed class InitWizardPageTests : IDisposable
 
     public InitWizardPageTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-tuipage-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     /// <summary>
     /// Verifies the Termina rendering pipeline: the provider step title and

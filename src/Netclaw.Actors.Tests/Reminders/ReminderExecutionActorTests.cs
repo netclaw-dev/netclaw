@@ -19,21 +19,19 @@ namespace Netclaw.Actors.Tests.Reminders;
 
 public class ReminderExecutionActorTests : TestKit, IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-exec-actor-tests-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
     private readonly ReminderHistoryStore _historyStore;
 
     public ReminderExecutionActorTests(ITestOutputHelper output) : base(output: output)
     {
-        Directory.CreateDirectory(_tempDir);
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         Directory.CreateDirectory(paths.RemindersDirectory);
         _historyStore = new ReminderHistoryStore(paths);
     }
 
     void IDisposable.Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

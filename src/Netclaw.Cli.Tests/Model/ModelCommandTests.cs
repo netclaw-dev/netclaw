@@ -13,23 +13,21 @@ namespace Netclaw.Cli.Tests.Model;
 
 public sealed class ModelCommandTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FakeProviderProbe _fakeProbe = new();
     private readonly StringWriter _output = new();
 
     public ModelCommandTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
     public void Dispose()
     {
         _output.Dispose();
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
+        _dir.Dispose();
     }
 
     [Fact]

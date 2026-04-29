@@ -18,7 +18,7 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class SystemSkillSyncServiceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _skillRegistry;
     private readonly SkillIndexContextLayer _skillIndexLayer;
@@ -27,8 +27,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
     public SystemSkillSyncServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _skillRegistry = new SkillRegistry();
         _skillIndexLayer = new SkillIndexContextLayer();
@@ -554,8 +553,7 @@ public sealed class SystemSkillSyncServiceTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     private SystemSkillSyncService CreateService(FakeHttpHandler handler, string daemonVersion = "0.1.0", ISkillContentScanner? scanner = null)

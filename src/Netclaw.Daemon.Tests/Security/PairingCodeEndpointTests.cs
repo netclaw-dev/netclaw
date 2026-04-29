@@ -32,19 +32,17 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class PairingCodeEndpointTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly FakeTimeProvider _time;
     private readonly DeviceRegistry _registry;
 
     public PairingCodeEndpointTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-pair-endpoint-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
         _time = new FakeTimeProvider(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero));
-        _registry = new DeviceRegistry(new NetclawPaths(_tempDir), _time, NullLogger<DeviceRegistry>.Instance);
+        _registry = new DeviceRegistry(new NetclawPaths(_dir.Path), _time, NullLogger<DeviceRegistry>.Instance);
     }
 
-    public void Dispose() => Directory.Delete(_tempDir, recursive: true);
+    public void Dispose() => _dir.Dispose();
 
     private async Task<WebApplication> CreateAppAsync(bool spoofLoopback = false)
     {

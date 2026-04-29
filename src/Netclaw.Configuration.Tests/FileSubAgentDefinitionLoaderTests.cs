@@ -11,16 +11,14 @@ namespace Netclaw.Configuration.Tests;
 
 public class FileSubAgentDefinitionLoaderTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly ListLogger<FileSubAgentDefinitionLoader> _logger;
     private readonly FileSubAgentDefinitionLoader _loader;
 
     public FileSubAgentDefinitionLoaderTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
         _logger = new ListLogger<FileSubAgentDefinitionLoader>();
         _loader = new FileSubAgentDefinitionLoader(_paths, _logger);
@@ -28,8 +26,7 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     private string WriteAgent(string fileName, string content)

@@ -24,14 +24,14 @@ namespace Netclaw.Actors.Tests.Jobs;
 /// </summary>
 public class BackgroundJobIntegrationTests : TestKit
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-bgjobs-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _dir = new();
     private BackgroundJobDefinitionStore _store = null!;
 
     public BackgroundJobIntegrationTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        var paths = new NetclawPaths(_tempDir);
+        var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _store = new BackgroundJobDefinitionStore(paths);
 
@@ -42,6 +42,12 @@ public class BackgroundJobIntegrationTests : TestKit
                 "background-job-manager");
             registry.Register<BackgroundJobManagerActorKey>(manager);
         });
+    }
+
+    protected override async Task AfterAllAsync()
+    {
+        _dir.Dispose();
+        await base.AfterAllAsync();
     }
 
     private IActorRef GetManager() => ActorRegistry.For(Sys).Get<BackgroundJobManagerActorKey>();

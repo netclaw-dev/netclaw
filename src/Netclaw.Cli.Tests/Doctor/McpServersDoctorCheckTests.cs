@@ -17,21 +17,16 @@ namespace Netclaw.Cli.Tests.Doctor;
 
 public sealed class McpServersDoctorCheckTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public McpServersDoctorCheckTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose()
-    {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, true);
-    }
+    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public async Task NoConfigFile_Passes()

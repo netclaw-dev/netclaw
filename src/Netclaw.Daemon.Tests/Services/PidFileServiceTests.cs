@@ -12,13 +12,12 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class PidFileServiceTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public PidFileServiceTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
@@ -72,7 +71,6 @@ public sealed class PidFileServiceTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_tempDir, recursive: true); }
-        catch (IOException) { } // slopwatch-ignore: SW003 test cleanup best-effort — directory may already be gone
+        _dir.Dispose();
     }
 }

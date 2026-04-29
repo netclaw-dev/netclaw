@@ -15,17 +15,15 @@ namespace Netclaw.Cli.Tests.Cli;
 /// </summary>
 public sealed class DaemonClientFactoryTests : IDisposable
 {
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public DaemonClientFactoryTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-factory-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
     }
 
-    public void Dispose() => Directory.Delete(_tempDir, recursive: true);
+    public void Dispose() => _dir.Dispose();
 
     // ── IsLoopback ────────────────────────────────────────────────────────────
 

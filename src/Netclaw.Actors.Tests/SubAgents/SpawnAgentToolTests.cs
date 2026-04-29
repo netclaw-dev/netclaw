@@ -15,21 +15,18 @@ public sealed class SpawnAgentToolTests : IDisposable
     private static readonly ToolExecutionContext PersonalCtx =
         new(null, null) { Audience = TrustAudience.Personal.ToWireValue() };
 
-    private readonly string _tempDir;
+    private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
     public SpawnAgentToolTests()
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), $"netclaw-spawn-agent-tool-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_tempDir);
-        _paths = new NetclawPaths(_tempDir);
+        _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_tempDir))
-            Directory.Delete(_tempDir, recursive: true);
+        _dir.Dispose();
     }
 
     [Fact]
