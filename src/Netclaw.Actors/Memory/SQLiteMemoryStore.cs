@@ -984,7 +984,7 @@ public sealed class SQLiteMemoryStore
         }
 
         var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-        var newId = $"rec-{Guid.NewGuid():N}";
+        var newId = MemoryTypedId.NewRecordId();
 
         await using var insert = conn.CreateCommand();
         insert.Transaction = tx;
@@ -1067,7 +1067,7 @@ public sealed class SQLiteMemoryStore
         }
 
         // Build the expected anchor ID for exact match detection
-        var normalizedProposedId = $"anchor:{proposedAnchorName.Trim().ToLowerInvariant().Replace(' ', '-')}";
+        var normalizedProposedId = MemoryTypedId.AnchorId(proposedAnchorName);
         var proposedTokens = AnchorNameMatcher.Tokenize(proposedAnchorName);
 
         var candidates = new List<ExistingMemoryCandidate>();
@@ -1239,7 +1239,7 @@ public sealed class SQLiteMemoryStore
 
             if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
-                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId;
+                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId() : operation.MemoryId;
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
@@ -1299,11 +1299,11 @@ public sealed class SQLiteMemoryStore
                     """;
                 lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
                 documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
-                    ?? $"doc-{Guid.NewGuid():N}";
+                    ?? MemoryTypedId.NewDocumentId();
             }
             else
             {
-                documentId = $"doc-{Guid.NewGuid():N}";
+                documentId = MemoryTypedId.NewDocumentId();
             }
 
             await using var documentCmd = conn.CreateCommand();
@@ -1394,7 +1394,7 @@ public sealed class SQLiteMemoryStore
 
             if (operation.Kind == MemoryKind.Record.ToWireValue())
             {
-                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? $"rec-{Guid.NewGuid():N}" : operation.MemoryId;
+                var recId = string.IsNullOrWhiteSpace(operation.MemoryId) ? MemoryTypedId.NewRecordId() : operation.MemoryId;
                 await using var recordCmd = conn.CreateCommand();
                 recordCmd.Transaction = tx;
                 recordCmd.CommandText = """
@@ -1457,11 +1457,11 @@ public sealed class SQLiteMemoryStore
                     """;
                 lookupCmd.Parameters.AddWithValue("$anchorId", anchor.AnchorId);
                 documentId = (string?)await lookupCmd.ExecuteScalarAsync(ct)
-                    ?? $"doc-{Guid.NewGuid():N}";
+                    ?? MemoryTypedId.NewDocumentId();
             }
             else
             {
-                documentId = $"doc-{Guid.NewGuid():N}";
+                documentId = MemoryTypedId.NewDocumentId();
             }
 
             await using var documentCmd = conn.CreateCommand();
@@ -1686,7 +1686,7 @@ public sealed class SQLiteMemoryStore
     {
         var nowMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         return new SQLiteMemoryAnchor(
-            AnchorId: $"anchor:{canonicalName.Trim().ToLowerInvariant().Replace(' ', '-')}",
+            AnchorId: MemoryTypedId.AnchorId(canonicalName),
             AnchorType: "concept",
             CanonicalName: canonicalName,
             ParentAnchorId: null,

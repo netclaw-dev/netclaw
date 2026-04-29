@@ -425,7 +425,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
             return;
 
         var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
-        var canonicalAnchorId = $"anchor:{canonicalAnchor.Trim().ToLowerInvariant().Replace(' ', '-')}";
+        var canonicalAnchorId = MemoryTypedId.AnchorId(canonicalAnchor);
 
         // For each consolidation target document, re-anchor it if it belongs to a different anchor,
         // then tombstone the redundant anchor

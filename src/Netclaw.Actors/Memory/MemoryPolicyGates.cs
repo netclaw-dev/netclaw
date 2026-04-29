@@ -41,8 +41,6 @@ public sealed class MemoryProposalGate
         IReadOnlyDictionary<string, int> RejectionReasons);
 
     private const int MaxProposalsPerRun = 3;
-    private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
-    private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
     private static readonly Regex IdentityTitlePattern = new(
         "\\b(name|tone|style|voice|persona|communication preference|response preference)\\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -205,8 +203,8 @@ public sealed class MemoryProposalGate
 
         return memoryClass switch
         {
-            MemoryClass.Evidence => freshnessAt + (long)EvidenceExpiry.TotalMilliseconds,
-            MemoryClass.Trace => freshnessAt + (long)TraceExpiry.TotalMilliseconds,
+            MemoryClass.Evidence => freshnessAt + (long)MemoryExpiryDefaults.EvidenceExpiry.TotalMilliseconds,
+            MemoryClass.Trace => freshnessAt + (long)MemoryExpiryDefaults.TraceExpiry.TotalMilliseconds,
             _ => null
         };
     }

@@ -6,8 +6,8 @@
 namespace Netclaw.Actors.Memory;
 
 /// <summary>
-/// Strongly-typed memory identity that includes a kind prefix (doc: or rec:).
-/// Centralizes parse/format logic previously duplicated across tool and store files.
+/// Strongly-typed memory identity with kind prefix (doc: or rec:).
+/// Centralizes ID parsing, formatting, and generation for the memory subsystem.
 /// </summary>
 public readonly record struct MemoryTypedId(MemoryKind Kind, string Id)
 {
@@ -35,4 +35,11 @@ public readonly record struct MemoryTypedId(MemoryKind Kind, string Id)
     }
 
     public override string ToString() => ToWireValue();
+
+    public static string AnchorId(string canonicalName)
+        => $"anchor:{canonicalName.Trim().ToLowerInvariant().Replace(' ', '-')}";
+
+    public static string NewDocumentId() => $"doc-{Guid.NewGuid():N}";
+
+    public static string NewRecordId() => $"rec-{Guid.NewGuid():N}";
 }

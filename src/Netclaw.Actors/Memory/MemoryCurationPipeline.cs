@@ -81,8 +81,6 @@ public sealed record MemoryCheckpointCandidate(
 
 public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 {
-    private static readonly TimeSpan EvidenceExpiry = TimeSpan.FromDays(30);
-    private static readonly TimeSpan TraceExpiry = TimeSpan.FromHours(72);
     private static readonly Regex ProjectStatementPattern = new(
         "^(?<subject>(?:[A-Z][A-Za-z0-9.+-]*)(?:\\s+[A-Z][A-Za-z0-9.+-]*){0,4}|(?:our|the)\\s+[a-z][a-z0-9_-]*(?:\\s+[a-z][a-z0-9_-]*){0,4})\\s+(?<verb>has|have|uses|use|supports|support|requires|require|needs|need|completed|completes)\\s+(?<object>.+)$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -251,8 +249,8 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         return memoryClass switch
         {
-            MemoryClass.Evidence => freshnessAt.Value + (long)EvidenceExpiry.TotalMilliseconds,
-            MemoryClass.Trace => freshnessAt.Value + (long)TraceExpiry.TotalMilliseconds,
+            MemoryClass.Evidence => freshnessAt.Value + (long)MemoryExpiryDefaults.EvidenceExpiry.TotalMilliseconds,
+            MemoryClass.Trace => freshnessAt.Value + (long)MemoryExpiryDefaults.TraceExpiry.TotalMilliseconds,
             _ => null
         };
     }
