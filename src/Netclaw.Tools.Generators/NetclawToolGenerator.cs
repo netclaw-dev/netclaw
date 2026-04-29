@@ -120,7 +120,7 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             description,
             grant,
             paramsType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-            parameters.ToImmutableArray());
+            [.. parameters]);
     }
 
     private static string GetJsonType(ITypeSymbol type)

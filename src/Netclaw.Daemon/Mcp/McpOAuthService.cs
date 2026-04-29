@@ -610,11 +610,11 @@ internal sealed class McpOAuthService
             {
                 var existing = File.ReadAllText(_paths.SecretsPath);
                 secrets = JsonSerializer.Deserialize<Dictionary<string, object>>(existing, JsonOptions)
-                    ?? new Dictionary<string, object>();
+                    ?? [];
             }
             else
             {
-                secrets = new Dictionary<string, object>();
+                secrets = [];
             }
 
             secrets[TokensSectionKey] = JsonSerializer.SerializeToElement(

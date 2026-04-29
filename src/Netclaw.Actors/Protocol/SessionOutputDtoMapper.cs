@@ -178,10 +178,10 @@ public static class SessionOutputDtoMapper
             ToolName = msg.ToolName,
             InteractionDisplayText = msg.DisplayText,
             RequesterSenderId = msg.RequesterSenderId,
-            InteractionPatterns = msg.Patterns.ToList(),
-            InteractionOptions = msg.Options.ToList(),
+            InteractionPatterns = [.. msg.Patterns],
+            InteractionOptions = [.. msg.Options],
             InteractionHasAdoptedContext = msg.HasAdoptedContext,
-            InteractionAdoptedSpeakerIds = msg.AdoptedSpeakerIds.ToList()
+            InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds]
         },
 
         _ => new SessionOutputDto

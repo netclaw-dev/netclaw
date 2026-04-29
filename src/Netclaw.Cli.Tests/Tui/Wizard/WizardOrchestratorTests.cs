@@ -295,7 +295,7 @@ public sealed class WizardOrchestratorTests : WizardStepTestBase
     // ── Helpers ──
 
     private static List<IWizardStepViewModel> CreateSteps(params string[] ids)
-        => ids.Select(id => (IWizardStepViewModel)new FakeStep(id)).ToList();
+        => [.. ids.Select(id => (IWizardStepViewModel)new FakeStep(id))];
 
     /// <summary>
     /// Minimal fake step for testing the orchestrator.

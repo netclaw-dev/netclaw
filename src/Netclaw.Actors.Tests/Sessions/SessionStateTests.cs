@@ -107,10 +107,10 @@ public class SessionStateTests
         {
             SessionId = TestSessionId,
             Summary = "Conversation summary",
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new() { Role = ChatRole.Assistant, Content = "Summary of prior conversation." }
-            }
+            ]
         });
 
         // System prompt preserved + compacted message
@@ -135,10 +135,10 @@ public class SessionStateTests
         var compacted = state.Apply(new SessionCompacted
         {
             SessionId = TestSessionId,
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new() { Role = ChatRole.Assistant, Content = "Compacted" }
-            }
+            ]
         });
 
         Assert.Single(compacted.History);
@@ -262,10 +262,10 @@ public class SessionStateTests
         var compacted = state.Apply(new SessionCompacted
         {
             SessionId = TestSessionId,
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new() { Role = ChatRole.User, Content = "[session-summary session:test/session]\nsummary" }
-            },
+            ],
             WorkingContext = null  // event does not carry an update
         });
 
@@ -291,10 +291,10 @@ public class SessionStateTests
         var compacted = state.Apply(new SessionCompacted
         {
             SessionId = TestSessionId,
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new() { Role = ChatRole.User, Content = "[session-summary session:test/session]\nsummary" }
-            },
+            ],
             WorkingContext = newContext
         });
 
@@ -333,7 +333,7 @@ public class SessionStateTests
         // WorkingContext.Empty, not null.
         var snapshot = new SessionSnapshot
         {
-            History = new List<SerializableChatMessage>(),
+            History = [],
             TurnCount = 0,
             Title = null,
             WorkingContext = null
@@ -481,10 +481,10 @@ public class SessionStateTests
         var compacted = state.Apply(new SessionCompacted
         {
             SessionId = TestSessionId,
-            CompactedMessages = new List<SerializableChatMessage>
-            {
+            CompactedMessages =
+            [
                 new() { Role = ChatRole.User, Content = "[session-summary session:test/session]\nsummary" }
-            }
+            ]
         });
 
         Assert.Contains("preserved:1", compacted.ProcessedReminderIds);

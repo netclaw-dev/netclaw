@@ -16,7 +16,7 @@ internal sealed class TurnStateTracker
     private const int DuplicateToolThreshold = 3;
     private const double BudgetNudgeRatio = 0.75;
 
-    private readonly Dictionary<ToolCallFingerprint, int> _toolCallCounts = new();
+    private readonly Dictionary<ToolCallFingerprint, int> _toolCallCounts = [];
 
     public int ToolCallCount { get; private set; }
     public int ToolIterationCount { get; private set; }

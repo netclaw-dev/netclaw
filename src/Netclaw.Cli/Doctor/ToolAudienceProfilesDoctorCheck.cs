@@ -64,8 +64,8 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         var mcpServers = root["McpServers"] is JsonObject mcpObj
-            ? JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpObj, JsonDefaults.ConfigRead) ?? new()
-            : new();
+            ? JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpObj, JsonDefaults.ConfigRead) ?? []
+            : [];
 
         var errors = new List<string>();
         ValidateNonPersonalProfile("public", toolConfig.AudienceProfiles.Public, errors);
@@ -205,7 +205,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             }
         }
 
-        return allowedServers.Except(grantedServers, StringComparer.OrdinalIgnoreCase).Order().ToList();
+        return [.. allowedServers.Except(grantedServers, StringComparer.OrdinalIgnoreCase).Order()];
     }
 
     /// <summary>
@@ -248,7 +248,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             result.Add(serverName);
         }
 
-        return result.Order(StringComparer.OrdinalIgnoreCase).ToList();
+        return [.. result.Order(StringComparer.OrdinalIgnoreCase)];
     }
 
     private static void CheckApprovalMismatch(ToolConfig toolConfig, List<string> warnings)

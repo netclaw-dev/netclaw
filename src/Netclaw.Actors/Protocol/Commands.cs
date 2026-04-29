@@ -24,7 +24,7 @@ public sealed class SendUserMessage : IWithSessionId
     /// Media references (images, audio, etc.) attached to this message.
     /// </summary>
     [ProtoMember(3)]
-    public List<SerializableMediaReference> MediaReferences { get; set; } = new();
+    public List<SerializableMediaReference> MediaReferences { get; set; } = [];
 
     /// <summary>
     /// Ephemeral channel metadata for ACL/audit. Not persisted.

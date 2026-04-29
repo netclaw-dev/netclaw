@@ -56,11 +56,10 @@ internal static class WizardStepHelpers
     internal static List<string> ParseUserIds(string? input)
         => string.IsNullOrWhiteSpace(input)
             ? []
-            : input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [.. input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(x => x.Trim())
                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
+                .Distinct(StringComparer.Ordinal)];
 }
 
 internal sealed record SelectionOption<T>(T Value, string Label)

@@ -680,7 +680,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     private sealed class RecordingChatClient : IChatClient
     {
         private readonly object _gate = new();
-        private readonly List<IList<AIContent>> _messages = new();
+        private readonly List<IList<AIContent>> _messages = [];
 
         public IReadOnlyList<IList<AIContent>> ReceivedMessages
         {

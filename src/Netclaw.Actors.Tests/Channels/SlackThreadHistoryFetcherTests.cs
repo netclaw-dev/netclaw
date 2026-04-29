@@ -364,7 +364,7 @@ public sealed class SlackThreadHistoryFetcherTests
 
     private sealed class FakeReplies
     {
-        private readonly Dictionary<string, ConversationMessagesResponse> _responses = new();
+        private readonly Dictionary<string, ConversationMessagesResponse> _responses = [];
         public SlackException? ThrowOnFetch { get; set; }
 
         public void Set(string channel, string threadTs, string? cursor, ConversationMessagesResponse response)

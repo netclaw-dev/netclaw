@@ -41,7 +41,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
     private DynamicLayoutNode? _contentNode;
-    private readonly CompositeDisposable _stepSubs = new();
+    private readonly CompositeDisposable _stepSubs = [];
 
     protected override void OnBound()
     {

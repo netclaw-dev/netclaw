@@ -48,7 +48,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     // V1 recovery so those anchors are not lost. New sessions use V2 events
     // and populate _proposedMemories instead.
     private readonly HashSet<string> _proposedAnchors = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<ProposedMemoryContext> _proposedMemories = new();
+    private readonly List<ProposedMemoryContext> _proposedMemories = [];
     private bool _hasNewContent;
     private bool _draining;
     private long _contentVersion;

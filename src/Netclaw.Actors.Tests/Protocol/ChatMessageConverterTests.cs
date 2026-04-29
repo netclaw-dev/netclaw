@@ -281,11 +281,11 @@ public class ChatMessageConverterTests
         var imageBytes = new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61 }; // GIF89a header
 
         // Step 1: AI message with DataContent → SerializableChatMessage
-        var originalAi = new AiChatMessage(AiChatRole.User, new List<AIContent>
-        {
+        var originalAi = new AiChatMessage(AiChatRole.User,
+        [
             new TextContent("Here is a gif"),
             new DataContent(imageBytes, "image/gif")
-        });
+        ]);
         var serializable = ChatMessageConverter.FromAiMessage(originalAi, sessionDir: tempDir.Path);
         Assert.Single(serializable.MediaReferences);
 

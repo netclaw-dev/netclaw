@@ -151,7 +151,7 @@ public sealed class SessionCompacted
     public string Summary { get; set; } = string.Empty;
 
     [ProtoMember(3)]
-    public List<SerializableChatMessage> CompactedMessages { get; set; } = new();
+    public List<SerializableChatMessage> CompactedMessages { get; set; } = [];
 
     [ProtoMember(4)]
     public int TurnCountBefore { get; set; }

@@ -143,7 +143,7 @@ internal sealed class OpenAiCodexRequestPolicy(string? accountId) : PipelinePoli
             if (tool is not JsonObject toolObj)
                 continue;
 
-            if (toolObj.ContainsKey("strict") && toolObj["strict"] is null)
+            if (toolObj.TryGetPropertyValue("strict", out var strictValue) && strictValue is null)
                 toolObj.Remove("strict");
         }
     }

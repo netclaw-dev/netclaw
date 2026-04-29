@@ -63,7 +63,7 @@ internal static class SessionCompactionPipeline
                 var meaiMessages = ChatMessageConverter.ToAiMessages(history);
                 var reduced = await reducer.ReduceAsync(meaiMessages, cts.Token);
 
-                var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage> ?? reduced.ToList();
+                var reducedList = reduced as IList<Microsoft.Extensions.AI.ChatMessage> ?? [.. reduced];
                 var keptNonSystemCount = reducedList.Count(m => m.Role != Microsoft.Extensions.AI.ChatRole.System);
 
                 var startIndex = history.Count - keptNonSystemCount;

@@ -56,11 +56,11 @@ internal static class SecretsCommand
         if (File.Exists(paths.SecretsPath))
         {
             var existing = File.ReadAllText(paths.SecretsPath);
-            root = JsonNode.Parse(existing)?.AsObject() ?? new JsonObject();
+            root = JsonNode.Parse(existing)?.AsObject() ?? [];
         }
         else
         {
-            root = new JsonObject();
+            root = [];
         }
 
         // Navigate/create the dotted key path and set the value

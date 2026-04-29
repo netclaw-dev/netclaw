@@ -54,11 +54,11 @@ public sealed class SessionSnapshot
         public bool ProjectionPersisted { get; set; }
 
         [ProtoMember(7)]
-        public List<AdoptedContextSnapshotMessage> Messages { get; set; } = new();
+        public List<AdoptedContextSnapshotMessage> Messages { get; set; } = [];
     }
 
     [ProtoMember(1)]
-    public List<SerializableChatMessage> History { get; set; } = new();
+    public List<SerializableChatMessage> History { get; set; } = [];
 
     [ProtoMember(2)]
     public int TurnCount { get; set; }
@@ -93,8 +93,8 @@ public sealed class SessionSnapshot
     /// are long-lived and must survive recovery.
     /// </summary>
     [ProtoMember(7)]
-    public List<ActiveJobInfo> ActiveBackgroundJobs { get; set; } = new();
+    public List<ActiveJobInfo> ActiveBackgroundJobs { get; set; } = [];
 
     [ProtoMember(8)]
-    public List<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; set; } = new();
+    public List<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; set; } = [];
 }

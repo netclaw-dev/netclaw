@@ -52,5 +52,5 @@ public sealed class WebhookExecutionService : IWebhookExecutionService
     }
 
     private static string Sanitize(string value)
-        => new string(value.Select(ch => char.IsLetterOrDigit(ch) ? ch : '-').ToArray()).Trim('-');
+        => new string([.. value.Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')]).Trim('-');
 }
