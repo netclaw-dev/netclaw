@@ -186,6 +186,135 @@ public sealed class InitWizardPageTests : IDisposable
             $"CurrentStep={vm.Orchestrator.CurrentStep?.StepId}, Screen:\n{terminal}");
     }
 
+    // ── Channel picker sub-flow key routing ──────────────────────────────────
+
+    /// <summary>
+    /// Regression test: entering a valid Slack bot token (xoxb-...) and pressing
+    /// Enter must advance to the app token sub-step, not loop back to bot token.
+    /// Exercises the full Termina rendering + ChannelPicker sub-flow pipeline.
+    /// </summary>
+    [Fact]
+    public async Task SlackSubFlow_BotTokenSubmit_AdvancesToAppToken()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        // Navigate to channel-picker step
+        vm.Orchestrator.GoNext(); // provider → security-posture
+        vm.Orchestrator.GoNext(); // security-posture → feature-selection
+        vm.Orchestrator.GoNext(); // feature-selection → channel-picker
+        Assert.Equal("channel-picker", vm.Orchestrator.CurrentStep?.StepId);
+
+        // In picker mode: Enter on Slack (index 0) toggles it on and enters sub-flow
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Now in Slack sub-flow at bot token (sub-step 1, since enable is skipped).
+        // Type a valid token and press Enter to submit.
+        input.EnqueueString("xoxb-test-token-12345");
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // If the bug is present, we'd still be on bot token.
+        // Ctrl+Q to exit after the advance should have happened.
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        // The Slack VM should have advanced past bot token to app token (sub-step 2)
+        var pickerVm = (ChannelPickerStepViewModel)vm.Orchestrator.CurrentStep!;
+        var slackVm = (SlackStepViewModel)pickerVm.ActiveAdapterVm!;
+        Assert.Equal("xoxb-test-token-12345", slackVm.BotToken);
+        Assert.True(terminal.Contains("App Token"),
+            $"Expected 'App Token' prompt after submitting bot token. Screen:\n{terminal}");
+    }
+
+    /// <summary>
+    /// Navigates to channel-picker via keyboard through the security-posture step
+    /// (instead of programmatic GoNext), building Termina's focus stack naturally.
+    /// The SecurityPostureStepView's SelectionListNode remains on the focus stack
+    /// when the Slack sub-flow's TextInputNode takes over — matching the real
+    /// terminal scenario where stale focused components may intercept keys.
+    /// </summary>
+    [Fact]
+    public async Task SlackSubFlow_WithFocusStackFromPriorSteps_BotTokenAdvances()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        // Skip provider (too many sub-steps to drive via keyboard)
+        vm.Orchestrator.GoNext(); // provider -> security-posture
+
+        // Enter on security-posture selects "Personal" (index 0).
+        // Personal skips feature-selection, lands on channel-picker.
+        // SecurityPostureStepView's SelectionListNode is now stale on the focus stack.
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Enter on channel-picker toggles Slack on and enters sub-flow.
+        // The picker's SelectionListNode is now also stale.
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Type valid bot token and submit
+        input.EnqueueString("xoxb-focus-stack-test");
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var pickerVm = (ChannelPickerStepViewModel)vm.Orchestrator.CurrentStep!;
+        var slackVm = (SlackStepViewModel)pickerVm.ActiveAdapterVm!;
+        Assert.Equal("xoxb-focus-stack-test", slackVm.BotToken);
+        Assert.True(terminal.Contains("App Token"),
+            $"Expected 'App Token' prompt after submitting bot token. Screen:\n{terminal}");
+    }
+
+    /// <summary>
+    /// Full Slack sub-flow traversal: bot token -> app token -> channel names -> DM enabled.
+    /// Exercises multiple TextInputNode and SelectionListNode transitions within the sub-flow,
+    /// verifying that focus state is correctly managed across sub-step boundaries.
+    /// By the time the DM SelectionListNode renders, multiple stale TextInputNodes sit
+    /// on the focus stack.
+    /// </summary>
+    [Fact]
+    public async Task SlackSubFlow_FullTraversal_BotTokenThroughDmEnabled()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        vm.Orchestrator.GoNext(); // provider -> security-posture
+
+        // Enter: selects Personal, skips feature-selection, lands on channel-picker
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Enter: toggles Slack on, enters sub-flow at bot token
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Sub-step 1: Bot token
+        input.EnqueueString("xoxb-full-traversal-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Sub-step 2: App token
+        input.EnqueueString("xapp-full-traversal-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Sub-step 3: Channel names (Enter to skip)
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Sub-step 4: DM enabled (SelectionListNode, Enter selects first = "Yes")
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var pickerVm = (ChannelPickerStepViewModel)vm.Orchestrator.CurrentStep!;
+        var slackVm = (SlackStepViewModel)pickerVm.ActiveAdapterVm!;
+
+        Assert.Equal("xoxb-full-traversal-token", slackVm.BotToken);
+        Assert.Equal("xapp-full-traversal-token", slackVm.AppToken);
+        Assert.True(slackVm.AllowDirectMessages,
+            "Expected DM to be enabled after selecting 'Yes' on the DM sub-step");
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm)
