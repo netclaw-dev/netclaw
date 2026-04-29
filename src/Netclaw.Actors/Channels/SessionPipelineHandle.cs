@@ -111,9 +111,22 @@ public sealed class SessionPipelineHandle
 
         _outputCompletion = outputTerminated;
 
-        ObserveStreamTermination(outputTerminated, generation, onStreamTerminated);
+        _ = ObserveTerminationAsync();
 
         _session = materialized;
+
+        async Task ObserveTerminationAsync()
+        {
+            try
+            {
+                await outputTerminated;
+                onStreamTerminated(generation, null);
+            }
+            catch (Exception ex)
+            {
+                onStreamTerminated(generation, ex);
+            }
+        }
         _inputQueue = inputQueue;
 
         _log.Info("{0} session pipeline initialized", _materializerNamePrefix);
@@ -241,19 +254,4 @@ public sealed class SessionPipelineHandle
         _inputQueue?.TryComplete();
     }
 
-    private async void ObserveStreamTermination(
-        Task outputTerminated,
-        int generation,
-        Action<int, Exception?> onStreamTerminated)
-    {
-        try
-        {
-            await outputTerminated;
-            onStreamTerminated(generation, null);
-        }
-        catch (Exception ex)
-        {
-            onStreamTerminated(generation, ex);
-        }
-    }
 }
