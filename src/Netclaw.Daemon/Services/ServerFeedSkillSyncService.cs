@@ -126,30 +126,30 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             _paths.ServerFeedSyncStatePath(feed.Name), _logger);
         var now = _timeProvider.GetUtcNow();
 
-        RfcSkillIndex? index;
-        using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-        {
-            cts.CancelAfter(TimeSpan.FromSeconds(feed.TimeoutSeconds));
-            try
+        var indexResult = await HttpTimeoutHelper.ExecuteWithTimeoutAsync(
+            async ct =>
             {
                 using var client = new SkillServerClient(feed.Url, feed.ApiKey?.Value);
-                index = await client.GetRfcIndexAsync(cts.Token);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
+                return await client.GetRfcIndexAsync(ct);
+            },
+            TimeSpan.FromSeconds(feed.TimeoutSeconds),
+            cancellationToken);
+
+        switch (indexResult.Outcome)
+        {
+            case HttpTimeoutOutcome.TimedOut:
                 _logger.LogWarning(
                     "Server feed '{FeedName}' RFC index fetch timed out — using on-disk skills",
                     feed.Name);
                 return;
-            }
-            catch (HttpRequestException ex)
-            {
+            case HttpTimeoutOutcome.HttpError:
                 _logger.LogWarning(
                     "Server feed '{FeedName}' RFC index fetch failed: {Message} — using on-disk skills",
-                    feed.Name, ex.Message);
+                    feed.Name, indexResult.Exception!.Message);
                 return;
-            }
         }
+
+        var index = indexResult.Value;
 
         if (index is null || index.Skills.Count == 0)
         {
@@ -287,34 +287,32 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         HttpClient httpClient, string url, string expectedSha256Hex, string label,
         int timeoutSeconds, CancellationToken cancellationToken)
     {
-        try
+        var result = await HttpTimeoutHelper.ExecuteWithTimeoutAsync(
+            ct => httpClient.GetStringAsync(url, ct),
+            TimeSpan.FromSeconds(timeoutSeconds),
+            cancellationToken);
+
+        switch (result.Outcome)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
-            var content = await httpClient.GetStringAsync(url, cts.Token);
-
-            var hash = SkillSyncHelpers.ComputeSha256(content);
-            if (!string.Equals(hash, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning(
-                    "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
-                    label, expectedSha256Hex, hash);
+            case HttpTimeoutOutcome.TimedOut:
+                _logger.LogWarning("Download timed out for {Label}", label);
                 return null;
-            }
+            case HttpTimeoutOutcome.HttpError:
+                _logger.LogWarning("Download failed for {Label}: {Message}", label, result.Exception!.Message);
+                return null;
+        }
 
-            return content;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        var content = result.Value!;
+        var hash = SkillSyncHelpers.ComputeSha256(content);
+        if (!string.Equals(hash, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogWarning("Download timed out for {Label}", label);
+            _logger.LogWarning(
+                "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
+                label, expectedSha256Hex, hash);
             return null;
         }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
-            return null;
-        }
+
+        return content;
     }
 
     private void RescanAndUpdateIndex()

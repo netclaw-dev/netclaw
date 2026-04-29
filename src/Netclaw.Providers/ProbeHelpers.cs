@@ -53,43 +53,47 @@ internal static class ProbeHelpers
         Func<string, ProviderProbeResult> parseResponse,
         CancellationToken ct)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ProbeTimeout);
-
+        HttpTimeoutResult<ProviderProbeResult> result;
         try
         {
-            var baseUrl = string.IsNullOrWhiteSpace(entryEndpoint)
-                ? defaultEndpoint
-                : entryEndpoint.TrimEnd('/');
-            var url = $"{baseUrl}{modelListingPath}";
+            result = await HttpTimeoutHelper.ExecuteWithTimeoutAsync(
+                async timeoutCt =>
+                {
+                    var baseUrl = string.IsNullOrWhiteSpace(entryEndpoint)
+                        ? defaultEndpoint
+                        : entryEndpoint.TrimEnd('/');
+                    var url = $"{baseUrl}{modelListingPath}";
 
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
-            configureRequest(request);
+                    using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                    configureRequest(request);
 
-            using var response = await httpClient.SendAsync(request, timeoutCts.Token);
+                    using var response = await httpClient.SendAsync(request, timeoutCt);
 
-            if (!response.IsSuccessStatusCode)
-            {
-                var apiErrorDetail = await ExtractApiErrorDetailAsync(response, timeoutCts.Token);
-                return FailForStatus(response.StatusCode, providerName, apiErrorDetail);
-            }
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        var apiErrorDetail = await ExtractApiErrorDetailAsync(response, timeoutCt);
+                        return FailForStatus(response.StatusCode, providerName, apiErrorDetail);
+                    }
 
-            var json = await response.Content.ReadAsStringAsync(timeoutCts.Token);
-            return parseResponse(json);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            return new ProviderProbeResult(false,
-                "Connection timed out after 10 seconds. Check that the endpoint is reachable.", []);
+                    var json = await response.Content.ReadAsStringAsync(timeoutCt);
+                    return parseResponse(json);
+                },
+                ProbeTimeout,
+                ct);
         }
         catch (OperationCanceledException)
         {
             return new ProviderProbeResult(false, "Validation cancelled.", []);
         }
-        catch (HttpRequestException ex)
+
+        return result.Outcome switch
         {
-            return new ProviderProbeResult(false, $"Connection failed: {ex.Message}", []);
-        }
+            HttpTimeoutOutcome.TimedOut => new ProviderProbeResult(false,
+                "Connection timed out after 10 seconds. Check that the endpoint is reachable.", []),
+            HttpTimeoutOutcome.HttpError => new ProviderProbeResult(false,
+                $"Connection failed: {result.Exception!.Message}", []),
+            _ => result.Value!,
+        };
     }
 
     /// <summary>

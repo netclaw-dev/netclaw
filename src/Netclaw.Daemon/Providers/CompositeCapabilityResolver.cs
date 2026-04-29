@@ -35,22 +35,32 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
         {
             try
             {
-                using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                timeoutCts.CancelAfter(ResolverTimeout);
+                var result = await HttpTimeoutHelper.ExecuteWithTimeoutAsync(
+                    innerCt => resolver.ResolveAsync(modelId, innerCt),
+                    ResolverTimeout,
+                    ct);
 
-                var result = await resolver.ResolveAsync(modelId, timeoutCts.Token);
-                if (result is not null)
+                if (result.Outcome == HttpTimeoutOutcome.TimedOut)
+                {
+                    _logger.LogDebug("{Resolver} timed out for model {ModelId}, trying next",
+                        resolver.GetType().Name, modelId);
+                    continue;
+                }
+
+                if (result.Outcome == HttpTimeoutOutcome.HttpError)
+                {
+                    _logger.LogDebug(result.Exception!, "{Resolver} failed for model {ModelId}, trying next",
+                        resolver.GetType().Name, modelId);
+                    continue;
+                }
+
+                if (result.Value is not null)
                 {
                     _logger.LogDebug(
                         "Resolved capabilities for {ModelId} via {Resolver}: input={Input}, output={Output}",
-                        modelId, resolver.GetType().Name, result.InputModalities, result.OutputModalities);
-                    return result;
+                        modelId, resolver.GetType().Name, result.Value.InputModalities, result.Value.OutputModalities);
+                    return result.Value;
                 }
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                _logger.LogDebug("{Resolver} timed out for model {ModelId}, trying next",
-                    resolver.GetType().Name, modelId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

@@ -121,45 +121,48 @@ internal sealed class SystemSkillSyncService : IHostedService
 
     private async Task<SkillFeedManifest?> FetchManifestAsync(CancellationToken cancellationToken)
     {
-        try
+        var result = await HttpTimeoutHelper.ExecuteWithTimeoutAsync(
+            async ct =>
+            {
+                var response = await _httpClient.GetAsync(
+                    FeedConstants.SystemSkillsManifestUrl, ct);
+                response.EnsureSuccessStatusCode();
+
+                var json = await response.Content.ReadAsStringAsync(ct);
+                return JsonSerializer.Deserialize<SkillFeedManifest>(json);
+            },
+            FeedConstants.FeedHttpTimeout,
+            cancellationToken);
+
+        switch (result.Outcome)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(FeedConstants.FeedHttpTimeout);
-
-            var response = await _httpClient.GetAsync(
-                FeedConstants.SystemSkillsManifestUrl, cts.Token);
-            response.EnsureSuccessStatusCode();
-
-            var json = await response.Content.ReadAsStringAsync(cts.Token);
-            var manifest = JsonSerializer.Deserialize<SkillFeedManifest>(json);
-
-            if (manifest is null)
-            {
-                _logger.LogWarning("Feed manifest deserialized to null");
+            case HttpTimeoutOutcome.TimedOut:
+                _logger.LogWarning("Feed manifest fetch timed out — using on-disk skills");
                 return null;
-            }
-
-            if (manifest.SchemaVersion != 1)
-            {
-                _logger.LogWarning("Unsupported feed schema version {Version} — skipping sync",
-                    manifest.SchemaVersion);
+            case HttpTimeoutOutcome.HttpError:
+                _logger.LogWarning("Feed manifest fetch failed: {Message} — using on-disk skills",
+                    result.Exception!.Message);
                 return null;
-            }
-
-            _logger.LogInformation("Fetched skill feed manifest ({SkillCount} skills, updated {UpdatedAt})",
-                manifest.Skills.Count, manifest.UpdatedAt);
-            return manifest;
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+
+        var manifest = result.Value;
+
+        if (manifest is null)
         {
-            _logger.LogWarning("Feed manifest fetch timed out — using on-disk skills");
+            _logger.LogWarning("Feed manifest deserialized to null");
             return null;
         }
-        catch (HttpRequestException ex)
+
+        if (manifest.SchemaVersion != 1)
         {
-            _logger.LogWarning("Feed manifest fetch failed: {Message} — using on-disk skills", ex.Message);
+            _logger.LogWarning("Unsupported feed schema version {Version} — skipping sync",
+                manifest.SchemaVersion);
             return null;
         }
+
+        _logger.LogInformation("Fetched skill feed manifest ({SkillCount} skills, updated {UpdatedAt})",
+            manifest.Skills.Count, manifest.UpdatedAt);
+        return manifest;
     }
 
     private async Task SyncSkillsAsync(
@@ -300,34 +303,32 @@ internal sealed class SystemSkillSyncService : IHostedService
     private async Task<string?> DownloadAndVerifyAsync(
         string url, string expectedSha256, string label, CancellationToken cancellationToken)
     {
-        try
+        var result = await HttpTimeoutHelper.ExecuteWithTimeoutAsync(
+            ct => _httpClient.GetStringAsync(url, ct),
+            FeedConstants.FeedHttpTimeout,
+            cancellationToken);
+
+        switch (result.Outcome)
         {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(FeedConstants.FeedHttpTimeout);
-
-            var content = await _httpClient.GetStringAsync(url, cts.Token);
-
-            var hash = SkillSyncHelpers.ComputeSha256(content);
-            if (!string.Equals(hash, expectedSha256, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning(
-                    "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
-                    label, expectedSha256, hash);
+            case HttpTimeoutOutcome.TimedOut:
+                _logger.LogWarning("Download timed out for {Label}", label);
                 return null;
-            }
+            case HttpTimeoutOutcome.HttpError:
+                _logger.LogWarning("Download failed for {Label}: {Message}", label, result.Exception!.Message);
+                return null;
+        }
 
-            return content;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        var content = result.Value!;
+        var hash = SkillSyncHelpers.ComputeSha256(content);
+        if (!string.Equals(hash, expectedSha256, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogWarning("Download timed out for {Label}", label);
+            _logger.LogWarning(
+                "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
+                label, expectedSha256, hash);
             return null;
         }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
-            return null;
-        }
+
+        return content;
     }
 
     /// <summary>
