@@ -53,32 +53,14 @@ public class MinisignVerifierTests
         Assert.Equal(0x44, parsed.Algorithm[1]);
     }
 
-    [Fact]
-    public void ParseSignature_MalformedBase64_ReturnsNull()
+    [Theory]
+    [InlineData("untrusted comment: test\n!!!not-base64!!!\n")]
+    [InlineData("untrusted comment: test\nAAECAwQFBgcICQ==\n")]
+    [InlineData("some other header\nRUQBAgMEBQYHCPkmuRAEYY6jkXIlXdUL0ECD0kJYh/IPELV1FUk9Jg3uMw4adHuycYOL9VAAUmY1exKfKMqyfhGgzjjZ9ejhZgg=\n")]
+    [InlineData("")]
+    public void ParseSignature_InvalidInput_ReturnsNull(string input)
     {
-        const string malformed = "untrusted comment: test\n!!!not-base64!!!\n";
-        Assert.Null(MinisignVerifier.ParseSignature(malformed));
-    }
-
-    [Fact]
-    public void ParseSignature_WrongBlobLength_ReturnsNull()
-    {
-        // base64 of 10 bytes (too short for 74-byte signature blob)
-        const string tooShort = "untrusted comment: test\nAAECAwQFBgcICQ==\n";
-        Assert.Null(MinisignVerifier.ParseSignature(tooShort));
-    }
-
-    [Fact]
-    public void ParseSignature_MissingUntrustedComment_ReturnsNull()
-    {
-        const string noComment = "some other header\nRUQBAgMEBQYHCPkmuRAEYY6jkXIlXdUL0ECD0kJYh/IPELV1FUk9Jg3uMw4adHuycYOL9VAAUmY1exKfKMqyfhGgzjjZ9ejhZgg=\n";
-        Assert.Null(MinisignVerifier.ParseSignature(noComment));
-    }
-
-    [Fact]
-    public void ParseSignature_EmptyString_ReturnsNull()
-    {
-        Assert.Null(MinisignVerifier.ParseSignature(""));
+        Assert.Null(MinisignVerifier.ParseSignature(input));
     }
 
     [Fact]

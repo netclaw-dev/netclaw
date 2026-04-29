@@ -11,22 +11,13 @@ namespace Netclaw.Actors.Tests.Reminders;
 
 public class CronScheduleHelperTests
 {
-    [Fact]
-    public void TryParse_valid_expression_returns_true()
+    [Theory]
+    [InlineData("not a cron", false)]
+    [InlineData("", false)]
+    [InlineData("0 */6 * * *", true)]
+    public void TryParse_validates_expressions(string expr, bool expected)
     {
-        Assert.True(CronScheduleHelper.TryParse("0 */6 * * *"));
-    }
-
-    [Fact]
-    public void TryParse_invalid_expression_returns_false()
-    {
-        Assert.False(CronScheduleHelper.TryParse("not a cron"));
-    }
-
-    [Fact]
-    public void TryParse_empty_string_returns_false()
-    {
-        Assert.False(CronScheduleHelper.TryParse(""));
+        Assert.Equal(expected, CronScheduleHelper.TryParse(expr));
     }
 
     [Theory]

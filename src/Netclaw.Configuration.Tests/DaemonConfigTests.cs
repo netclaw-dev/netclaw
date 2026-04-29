@@ -85,10 +85,12 @@ public sealed class DaemonConfigTests
             () => DaemonConfig.ParseExposureMode("not-a-mode"));
     }
 
-    [Fact]
-    public void ParseExposureMode_returns_local_for_null()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ParseExposureMode_returns_local_for_null_or_empty(string? value)
     {
-        Assert.Equal(ExposureMode.Local, DaemonConfig.ParseExposureMode(null));
+        Assert.Equal(ExposureMode.Local, DaemonConfig.ParseExposureMode(value));
     }
 
     [Fact]

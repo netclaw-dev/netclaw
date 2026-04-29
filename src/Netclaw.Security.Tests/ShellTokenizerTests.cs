@@ -109,23 +109,17 @@ public sealed class ShellTokenizerTests
 
     // ── ExtractVerbChain ──
 
-    [Fact]
-    public void ExtractVerbChain_simple_command()
+    [Theory]
+    [InlineData("git push origin main", "git push")]
+    [InlineData("ls -la /tmp", "ls")]
+    [InlineData("docker compose up -d", "docker compose")]
+    [InlineData("cat /etc/hosts", "cat")]
+    [InlineData("cat .gitignore", "cat")]
+    [InlineData("kubectl delete pod my-pod", "kubectl delete")]
+    [InlineData("", "")]
+    public void ExtractVerbChain_extracts_expected_chain(string input, string expected)
     {
-        Assert.Equal("git push", ShellTokenizer.ExtractVerbChain("git push origin main"));
-    }
-
-    [Fact]
-    public void ExtractVerbChain_stops_at_flag()
-    {
-        Assert.Equal("ls", ShellTokenizer.ExtractVerbChain("ls -la /tmp"));
-    }
-
-    [Fact]
-    public void ExtractVerbChain_multi_level_capped_at_default_depth()
-    {
-        // Default maxDepth=2 captures command + subcommand
-        Assert.Equal("docker compose", ShellTokenizer.ExtractVerbChain("docker compose up -d"));
+        Assert.Equal(expected, ShellTokenizer.ExtractVerbChain(input));
     }
 
     [Fact]
@@ -134,60 +128,24 @@ public sealed class ShellTokenizerTests
         Assert.Equal("docker compose up", ShellTokenizer.ExtractVerbChain("docker compose up -d", maxDepth: 3));
     }
 
-    [Fact]
-    public void ExtractVerbChain_stops_at_path()
-    {
-        Assert.Equal("cat", ShellTokenizer.ExtractVerbChain("cat /etc/hosts"));
-    }
-
-    [Fact]
-    public void ExtractVerbChain_stops_at_dotfile()
-    {
-        Assert.Equal("cat", ShellTokenizer.ExtractVerbChain("cat .gitignore"));
-    }
-
-    [Fact]
-    public void ExtractVerbChain_kubectl_subcommand()
-    {
-        // "pod" is a positional arg but maxDepth=2 stops before it
-        Assert.Equal("kubectl delete", ShellTokenizer.ExtractVerbChain("kubectl delete pod my-pod"));
-    }
-
-    [Fact]
-    public void ExtractVerbChain_empty_command()
-    {
-        Assert.Equal("", ShellTokenizer.ExtractVerbChain(""));
-    }
-
     // ── ExtractInnerCommands ──
 
-    [Fact]
-    public void ExtractInner_bash_c_wrapper()
+    [Theory]
+    [InlineData("bash -c \"git push --force\"", "git push --force")]
+    [InlineData("sh -c \"rm -rf /tmp/build\"", "rm -rf /tmp/build")]
+    public void ExtractInner_shell_c_wrapper_extracts_inner_command(string input, string expectedInner)
     {
-        var inner = ShellTokenizer.ExtractInnerCommands("bash -c \"git push --force\"");
+        var inner = ShellTokenizer.ExtractInnerCommands(input);
         Assert.Single(inner);
-        Assert.Equal("git push --force", inner[0]);
+        Assert.Equal(expectedInner, inner[0]);
     }
 
-    [Fact]
-    public void ExtractInner_sh_c_wrapper()
+    [Theory]
+    [InlineData("git push origin main")]
+    [InlineData("bash script.sh")]
+    public void ExtractInner_returns_empty_when_no_wrapper(string input)
     {
-        var inner = ShellTokenizer.ExtractInnerCommands("sh -c \"rm -rf /tmp/build\"");
-        Assert.Single(inner);
-        Assert.Equal("rm -rf /tmp/build", inner[0]);
-    }
-
-    [Fact]
-    public void ExtractInner_no_wrapper()
-    {
-        var inner = ShellTokenizer.ExtractInnerCommands("git push origin main");
-        Assert.Empty(inner);
-    }
-
-    [Fact]
-    public void ExtractInner_bash_without_c_flag()
-    {
-        var inner = ShellTokenizer.ExtractInnerCommands("bash script.sh");
+        var inner = ShellTokenizer.ExtractInnerCommands(input);
         Assert.Empty(inner);
     }
 

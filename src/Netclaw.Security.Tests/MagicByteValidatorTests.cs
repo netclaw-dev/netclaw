@@ -68,46 +68,16 @@ public sealed class MagicByteValidatorTests
 
     // ── Images ────────────────────────────────────────────────────────────
 
-    [Fact]
-    public void Validate_PngWithValidBytes_Allowed()
+    [Theory]
+    [InlineData(nameof(PngHeader), "image/png", "photo.png")]
+    [InlineData(nameof(JpegHeader), "image/jpeg", "photo.jpg")]
+    [InlineData(nameof(JpegHeader), "image/jpeg", "photo.jpeg")]
+    [InlineData(nameof(GifHeader), "image/gif", "animation.gif")]
+    [InlineData(nameof(WebpHeader), "image/webp", "photo.webp")]
+    public void Validate_ImageWithValidBytes_Allowed(string headerField, string mime, string filename)
     {
-        var result = MagicByteValidator.Validate(PngHeader, "image/png", "photo.png");
-
-        Assert.True(result.IsAllowed);
-        Assert.Null(result.Error);
-    }
-
-    [Fact]
-    public void Validate_JpegWithValidBytes_Allowed()
-    {
-        var result = MagicByteValidator.Validate(JpegHeader, "image/jpeg", "photo.jpg");
-
-        Assert.True(result.IsAllowed);
-        Assert.Null(result.Error);
-    }
-
-    [Fact]
-    public void Validate_JpegWithJpegExtension_Allowed()
-    {
-        var result = MagicByteValidator.Validate(JpegHeader, "image/jpeg", "photo.jpeg");
-
-        Assert.True(result.IsAllowed);
-        Assert.Null(result.Error);
-    }
-
-    [Fact]
-    public void Validate_GifWithValidBytes_Allowed()
-    {
-        var result = MagicByteValidator.Validate(GifHeader, "image/gif", "animation.gif");
-
-        Assert.True(result.IsAllowed);
-        Assert.Null(result.Error);
-    }
-
-    [Fact]
-    public void Validate_WebpWithValidBytes_Allowed()
-    {
-        var result = MagicByteValidator.Validate(WebpHeader, "image/webp", "photo.webp");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
         Assert.Null(result.Error);
@@ -124,19 +94,13 @@ public sealed class MagicByteValidatorTests
         Assert.Null(result.Error);
     }
 
-    [Fact]
-    public void Validate_PdfExtensionWithPngPayload_MimeTypeMismatch()
+    [Theory]
+    [InlineData(nameof(PngHeader), "application/pdf", "fake.pdf")]
+    [InlineData(nameof(PdfHeader), "image/png", "photo.png")]
+    public void Validate_PdfMimeTypeMismatch(string headerField, string mime, string filename)
     {
-        var result = MagicByteValidator.Validate(PngHeader, "application/pdf", "fake.pdf");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
-    }
-
-    [Fact]
-    public void Validate_PdfPayloadDeclaredAsPng_MimeTypeMismatch()
-    {
-        var result = MagicByteValidator.Validate(PdfHeader, "image/png", "photo.png");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
@@ -144,46 +108,17 @@ public sealed class MagicByteValidatorTests
 
     // ── OOXML / OLE / ODF documents ───────────────────────────────────────
 
-    [Fact]
-    public void Validate_DocxWithZipMagic_Allowed()
+    [Theory]
+    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx")]
+    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "budget.xlsx")]
+    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides.pptx")]
+    [InlineData(nameof(ZipHeader), "application/vnd.oasis.opendocument.text", "notes.odt")]
+    [InlineData(nameof(OleHeader), "application/msword", "legacy.doc")]
+    [InlineData(nameof(OleHeader), "application/vnd.ms-excel", "legacy.xls")]
+    public void Validate_DocumentWithMatchingMagic_Allowed(string headerField, string mime, string filename)
     {
-        var result = MagicByteValidator.Validate(
-            ZipHeader,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "report.docx");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_XlsxWithZipMagic_Allowed()
-    {
-        var result = MagicByteValidator.Validate(
-            ZipHeader,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "budget.xlsx");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_PptxWithZipMagic_Allowed()
-    {
-        var result = MagicByteValidator.Validate(
-            ZipHeader,
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            "slides.pptx");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_OdtWithZipMagic_Allowed()
-    {
-        var result = MagicByteValidator.Validate(
-            ZipHeader,
-            "application/vnd.oasis.opendocument.text",
-            "notes.odt");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
     }
@@ -191,7 +126,7 @@ public sealed class MagicByteValidatorTests
     [Fact]
     public void Validate_DocxWithOleHeader_MimeTypeMismatch()
     {
-        // Old .doc bytes declared as .docx (OOXML) — mismatch
+        // Old .doc bytes declared as .docx (OOXML) -- mismatch
         var result = MagicByteValidator.Validate(
             OleHeader,
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -201,44 +136,16 @@ public sealed class MagicByteValidatorTests
         Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
     }
 
-    [Fact]
-    public void Validate_LegacyDocWithOleHeader_Allowed()
-    {
-        var result = MagicByteValidator.Validate(OleHeader, "application/msword", "legacy.doc");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_LegacyXlsWithOleHeader_Allowed()
-    {
-        var result = MagicByteValidator.Validate(OleHeader, "application/vnd.ms-excel", "legacy.xls");
-
-        Assert.True(result.IsAllowed);
-    }
-
     // ── Plain / structured text ───────────────────────────────────────────
 
-    [Fact]
-    public void Validate_PlainTextWithoutMagic_Allowed()
+    [Theory]
+    [InlineData(nameof(PlainTextBytes), "text/plain", "notes.txt")]
+    [InlineData(nameof(PlainTextBytes), "text/markdown", "readme.md")]
+    [InlineData(nameof(PlainTextBytes), "text/csv", "data.csv")]
+    public void Validate_TextContentWithMatchingMime_Allowed(string headerField, string mime, string filename)
     {
-        var result = MagicByteValidator.Validate(PlainTextBytes, "text/plain", "notes.txt");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_MarkdownAllowed()
-    {
-        var result = MagicByteValidator.Validate(PlainTextBytes, "text/markdown", "readme.md");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_CsvAllowed()
-    {
-        var result = MagicByteValidator.Validate(PlainTextBytes, "text/csv", "data.csv");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
     }
@@ -338,42 +245,16 @@ public sealed class MagicByteValidatorTests
 
     // ── Archives ──────────────────────────────────────────────────────────
 
-    [Fact]
-    public void Validate_ZipAllowed()
+    [Theory]
+    [InlineData(nameof(ZipHeader), "application/zip", "archive.zip")]
+    [InlineData(nameof(SevenZipHeader), "application/x-7z-compressed", "archive.7z")]
+    [InlineData(nameof(GzipHeader), "application/gzip", "log.gz")]
+    [InlineData(nameof(Bzip2Header), "application/x-bzip2", "backup.bz2")]
+    [InlineData(nameof(XzHeader), "application/x-xz", "backup.xz")]
+    public void Validate_ArchiveWithMatchingMagic_Allowed(string headerField, string mime, string filename)
     {
-        var result = MagicByteValidator.Validate(ZipHeader, "application/zip", "archive.zip");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_SevenZipAllowed()
-    {
-        var result = MagicByteValidator.Validate(SevenZipHeader, "application/x-7z-compressed", "archive.7z");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_GzipAllowed()
-    {
-        var result = MagicByteValidator.Validate(GzipHeader, "application/gzip", "log.gz");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_Bzip2Allowed()
-    {
-        var result = MagicByteValidator.Validate(Bzip2Header, "application/x-bzip2", "backup.bz2");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_XzAllowed()
-    {
-        var result = MagicByteValidator.Validate(XzHeader, "application/x-xz", "backup.xz");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
     }
@@ -389,74 +270,20 @@ public sealed class MagicByteValidatorTests
 
     // ── Media ─────────────────────────────────────────────────────────────
 
-    [Fact]
-    public void Validate_Mp4WithFtypBox_Allowed()
+    [Theory]
+    [InlineData(nameof(Mp4FtypHeader), "video/mp4", "clip.mp4")]
+    [InlineData(nameof(Mp4FtypHeader), "video/quicktime", "clip.mov")]
+    [InlineData(nameof(Mp3Id3Header), "audio/mpeg", "song.mp3")]
+    [InlineData(nameof(Mp3FrameHeader), "audio/mpeg", "song.mp3")]
+    [InlineData(nameof(WavHeader), "audio/wav", "sound.wav")]
+    [InlineData(nameof(AviHeader), "video/x-msvideo", "clip.avi")]
+    [InlineData(nameof(OggHeader), "audio/ogg", "sound.ogg")]
+    [InlineData(nameof(EbmlHeader), "video/webm", "clip.webm")]
+    [InlineData(nameof(EbmlHeader), "video/x-matroska", "clip.mkv")]
+    public void Validate_MediaWithMatchingMagic_Allowed(string headerField, string mime, string filename)
     {
-        var result = MagicByteValidator.Validate(Mp4FtypHeader, "video/mp4", "clip.mp4");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_QuickTimeWithFtypBox_Allowed()
-    {
-        var result = MagicByteValidator.Validate(Mp4FtypHeader, "video/quicktime", "clip.mov");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_Mp3WithId3Tag_Allowed()
-    {
-        var result = MagicByteValidator.Validate(Mp3Id3Header, "audio/mpeg", "song.mp3");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_Mp3WithFrameSync_Allowed()
-    {
-        var result = MagicByteValidator.Validate(Mp3FrameHeader, "audio/mpeg", "song.mp3");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_WavAllowed()
-    {
-        var result = MagicByteValidator.Validate(WavHeader, "audio/wav", "sound.wav");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_AviAllowed()
-    {
-        var result = MagicByteValidator.Validate(AviHeader, "video/x-msvideo", "clip.avi");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_OggAllowed()
-    {
-        var result = MagicByteValidator.Validate(OggHeader, "audio/ogg", "sound.ogg");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_WebmAllowed()
-    {
-        var result = MagicByteValidator.Validate(EbmlHeader, "video/webm", "clip.webm");
-
-        Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_MatroskaAllowed()
-    {
-        var result = MagicByteValidator.Validate(EbmlHeader, "video/x-matroska", "clip.mkv");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
     }
@@ -483,29 +310,14 @@ public sealed class MagicByteValidatorTests
         Assert.Equal(ContentScanError.EmptyContent, result.Error);
     }
 
-    [Fact]
-    public void Validate_ExecutableBytes_AlwaysRejected()
+    [Theory]
+    [InlineData(nameof(ExeHeader))]
+    [InlineData(nameof(ElfHeader))]
+    [InlineData(nameof(ShebangHeader))]
+    public void Validate_ExecutableBytes_AlwaysRejected(string headerField)
     {
-        // EXE bytes disguised as PNG
-        var result = MagicByteValidator.Validate(ExeHeader, "image/png", "photo.png");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.ExecutableContent, result.Error);
-    }
-
-    [Fact]
-    public void Validate_ElfExecutable_AlwaysRejected()
-    {
-        var result = MagicByteValidator.Validate(ElfHeader, "image/png", "photo.png");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.ExecutableContent, result.Error);
-    }
-
-    [Fact]
-    public void Validate_ShebangScript_AlwaysRejected()
-    {
-        var result = MagicByteValidator.Validate(ShebangHeader, "image/png", "photo.png");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, "image/png", "photo.png");
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.ExecutableContent, result.Error);
@@ -817,4 +629,32 @@ public sealed class MagicByteValidatorTests
         Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF }));
         Assert.Null(MagicByteValidator.DetectMimeType(new byte[] { 0xFF, 0xD8 }));
     }
+
+    private byte[] ResolveHeader(string headerField) => headerField switch
+    {
+        nameof(PngHeader) => PngHeader,
+        nameof(JpegHeader) => JpegHeader,
+        nameof(GifHeader) => GifHeader,
+        nameof(WebpHeader) => WebpHeader,
+        nameof(PdfHeader) => PdfHeader,
+        nameof(ZipHeader) => ZipHeader,
+        nameof(OleHeader) => OleHeader,
+        nameof(RtfHeader) => RtfHeader,
+        nameof(SevenZipHeader) => SevenZipHeader,
+        nameof(GzipHeader) => GzipHeader,
+        nameof(Bzip2Header) => Bzip2Header,
+        nameof(XzHeader) => XzHeader,
+        nameof(Mp4FtypHeader) => Mp4FtypHeader,
+        nameof(WavHeader) => WavHeader,
+        nameof(AviHeader) => AviHeader,
+        nameof(Mp3Id3Header) => Mp3Id3Header,
+        nameof(Mp3FrameHeader) => Mp3FrameHeader,
+        nameof(OggHeader) => OggHeader,
+        nameof(EbmlHeader) => EbmlHeader,
+        nameof(ExeHeader) => ExeHeader,
+        nameof(ElfHeader) => ElfHeader,
+        nameof(ShebangHeader) => ShebangHeader,
+        nameof(PlainTextBytes) => PlainTextBytes,
+        _ => throw new ArgumentException($"Unknown header: {headerField}")
+    };
 }

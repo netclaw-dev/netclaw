@@ -74,17 +74,12 @@ public sealed class ModelIdNormalizerTests
 
     // === GGUF extension stripping ===
 
-    [Fact]
-    public void StripGgufExtension()
+    [Theory]
+    [InlineData("Model-Q5_K_M.gguf")]
+    [InlineData("Model-Q5_K_M.GGUF")]
+    public void StripGgufExtension(string input)
     {
-        var candidates = ModelIdNormalizer.GetCandidates("Model-Q5_K_M.gguf");
-        Assert.Contains("Model-Q5_K_M", candidates);
-    }
-
-    [Fact]
-    public void StripGgufExtension_CaseInsensitive()
-    {
-        var candidates = ModelIdNormalizer.GetCandidates("Model-Q5_K_M.GGUF");
+        var candidates = ModelIdNormalizer.GetCandidates(input);
         Assert.Contains("Model-Q5_K_M", candidates);
     }
 
