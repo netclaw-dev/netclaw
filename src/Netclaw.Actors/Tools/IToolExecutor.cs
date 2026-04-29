@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Protocol;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -24,7 +25,7 @@ public interface IToolExecutor
 /// </summary>
 public sealed record ToolAuditEntry
 {
-    public required string SessionId { get; init; }
+    public required SessionId SessionId { get; init; }
     public required string ToolName { get; init; }
     public required string CallId { get; init; }
     public required DateTimeOffset Timestamp { get; init; }

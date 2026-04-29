@@ -203,7 +203,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
         _ = RunDistillationAsync(
             _client,
-            _sessionId.Value,
+            _sessionId,
             _turnCount,
             transcriptText,
             _proposedMemories.ToArray(),
@@ -340,7 +340,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
     private async Task RunDistillationAsync(
         IChatClient client,
-        string sessionId,
+        SessionId sessionId,
         int turnCount,
         string transcript,
         IReadOnlyList<ProposedMemoryContext> existingProposals,
@@ -732,12 +732,12 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         """;
 
     internal static string BuildDistillationUserPrompt(
-        string sessionId,
+        SessionId sessionId,
         int turnCount,
         string transcript,
         IReadOnlyList<ProposedMemoryContext> existingProposals) => JsonSerializer.Serialize(new
     {
-        sessionId,
+        sessionId = sessionId.Value,
         turnCount,
         existingProposals = existingProposals.Select(p => new
         {

@@ -49,7 +49,7 @@ public sealed class SessionLogActor : ReceiveActor
     /// </summary>
     public static string GetSessionLogsDirectory(SessionId sessionId, string sessionLogsBasePath)
     {
-        var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId.Value);
+        var sanitized = SessionDirectoryHelper.SanitizeSessionId(sessionId);
         return Path.Combine(sessionLogsBasePath, sanitized);
     }
 

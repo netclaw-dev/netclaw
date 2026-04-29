@@ -36,7 +36,7 @@ public static class SessionDirectoryHelper
     /// </summary>
     public static string GetSessionDirectory(SessionId sessionId, string basePath)
     {
-        var sanitized = SanitizeSessionId(sessionId.Value);
+        var sanitized = SanitizeSessionId(sessionId);
         return Path.Combine(basePath, sanitized);
     }
 
@@ -63,7 +63,7 @@ public static class SessionDirectoryHelper
     public static string GetOrCreateAttachmentStagingDirectory(SessionId sessionId, string basePath)
     {
         var stagingRoot = Path.Combine(basePath, AttachmentStagingRootSubdirectory);
-        var stagingDir = Path.Combine(stagingRoot, SanitizeSessionId(sessionId.Value));
+        var stagingDir = Path.Combine(stagingRoot, SanitizeSessionId(sessionId));
         Directory.CreateDirectory(stagingDir);
         return stagingDir;
     }
@@ -98,11 +98,12 @@ public static class SessionDirectoryHelper
     /// Replaces non-alphanumeric characters (except hyphens) with underscores.
     /// Session IDs may contain slashes (e.g. "C123/1234567890.123456").
     /// </summary>
-    public static string SanitizeSessionId(string sessionId)
+    public static string SanitizeSessionId(SessionId sessionId)
     {
-        Span<char> buf = stackalloc char[sessionId.Length];
-        for (var i = 0; i < sessionId.Length; i++)
-            buf[i] = char.IsLetterOrDigit(sessionId[i]) || sessionId[i] == '-' ? sessionId[i] : '_';
+        var value = sessionId.Value;
+        Span<char> buf = stackalloc char[value.Length];
+        for (var i = 0; i < value.Length; i++)
+            buf[i] = char.IsLetterOrDigit(value[i]) || value[i] == '-' ? value[i] : '_';
         return new string(buf);
     }
 }

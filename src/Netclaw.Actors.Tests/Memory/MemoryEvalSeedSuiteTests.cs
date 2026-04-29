@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
@@ -51,7 +52,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
 
         var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "ops/thread-1",
+            SessionId: (SessionId)"ops/thread-1",
             Query: "router failover",
             RecentUserMessages: ["what was our vrrp delay"],
             MaxItems: 3), TestContext.Current.CancellationToken);
@@ -88,7 +89,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
 
         var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "ops/thread-1",
+            SessionId: (SessionId)"ops/thread-1",
             Query: "token",
             RecentUserMessages: ["what is token"],
             MaxItems: 3), TestContext.Current.CancellationToken);
@@ -312,7 +313,7 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         var coordinator = new SQLiteMemoryRecallCoordinator(_store, NullLogger<SQLiteMemoryRecallCoordinator>.Instance, sessionTuning: new SessionTuning());
         var start = TimeProvider.System.GetTimestamp();
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "latency/thread-1",
+            SessionId: (SessionId)"latency/thread-1",
             Query: "latency",
             RecentUserMessages: ["latency"],
             MaxItems: 3), TestContext.Current.CancellationToken);

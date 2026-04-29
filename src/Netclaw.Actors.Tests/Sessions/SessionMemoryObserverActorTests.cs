@@ -505,7 +505,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     public void BuildDistillationUserPrompt_includes_existing_proposals_for_legacy_anchor_context()
     {
         var prompt = SessionMemoryObserverActor.BuildDistillationUserPrompt(
-            "test-channel/legacy-recovery",
+            (SessionId)"test-channel/legacy-recovery",
             1,
             "check legacy skip context",
             [new ProposedMemoryContext("legacy-anchor", "legacy-anchor", string.Empty)]);
@@ -583,7 +583,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     public Task DistillationUserPromptTemplate_matches_approved_snapshot()
     {
         var prompt = SessionMemoryObserverActor.BuildDistillationUserPrompt(
-            sessionId: "synthetic/snapshot",
+            sessionId: (SessionId)"synthetic/snapshot",
             turnCount: 3,
             transcript: "user: synthetic transcript line one\nassistant: synthetic response line one",
             existingProposals: [new ProposedMemoryContext("synthetic-anchor", "Synthetic Anchor", "snippet")]);

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
@@ -18,7 +19,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding();
 
-        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, (SessionId)"project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Accepted, result.Decision);
         Assert.Null(result.Reason);
@@ -29,7 +30,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with { Durability = (SubAgentFindingDurability)999 };
 
-        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, (SessionId)"project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Equal("missing durability", result.Reason);
@@ -40,7 +41,7 @@ public class SubAgentFindingReviewTests
     {
         var finding = CreateFinding() with { Reusability = SubAgentFindingReusability.TaskLocal };
 
-        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, (SessionId)"project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Deferred, result.Decision);
         Assert.Equal("insufficient reusability", result.Reason);
@@ -55,7 +56,7 @@ public class SubAgentFindingReviewTests
             Content = "Step 1: I called file_read. Step 2: I inspected stdout: done."
         };
 
-        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, (SessionId)"project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Rejected, result.Decision);
         Assert.Equal("unsupported shape", result.Reason);
@@ -70,7 +71,7 @@ public class SubAgentFindingReviewTests
             RecallMode = SubAgentFindingRecallMode.Auto
         };
 
-        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, "project-a/thread-1");
+        var result = SessionToolExecutionPipeline.ReviewSubAgentFinding(finding, (SessionId)"project-a/thread-1");
 
         Assert.Equal(SubAgentFindingReviewDecision.Rejected, result.Decision);
         Assert.Equal("secret cannot auto-recall", result.Reason);
