@@ -8,6 +8,7 @@ using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
+using R3;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
@@ -276,5 +277,62 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
         Assert.True(picker.IsInPickerMode);
         // Should still be enabled because it was previously configured
         Assert.True(picker.IsAdapterEnabled(0));
+    }
+
+    // ── Regression tests for subscription accumulation (#792) ──
+
+    private StepViewCallbacks CreateTestCallbacks(CompositeDisposable subs) => new()
+    {
+        Subscriptions = subs,
+        InvalidateContent = () => { },
+        InvalidateHelp = () => { },
+        AdvanceStep = () => { },
+        RequestRedraw = () => { },
+    };
+
+    [Fact]
+    public void SubFlow_BuildContent_ClearsSubscriptionsOnReRender()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        var view = new ChannelPickerStepView();
+        using var subs = new CompositeDisposable();
+        var callbacks = CreateTestCallbacks(subs);
+
+        picker.OnEnter(Context, NavigationDirection.Forward);
+        picker.ToggleAdapter(0); // Slack sub-flow at bot token sub-step
+
+        // First render — adds subscriptions from SlackStepView.BuildBotTokenSubStep
+        view.BuildContent(picker, callbacks);
+        var countAfterFirst = subs.Count;
+        Assert.True(countAfterFirst > 0, "SlackStepView should add at least one subscription");
+
+        // Simulate a cursor-blink-timer re-render of the same sub-step
+        view.BuildContent(picker, callbacks);
+        Assert.Equal(countAfterFirst, subs.Count);
+    }
+
+    [Fact]
+    public void SubFlow_BuildContent_ClearsSubscriptionsAcrossSubStepTransitions()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        var view = new ChannelPickerStepView();
+        using var subs = new CompositeDisposable();
+        var callbacks = CreateTestCallbacks(subs);
+
+        picker.OnEnter(Context, NavigationDirection.Forward);
+        picker.ToggleAdapter(0); // Slack sub-flow
+
+        // Render bot token sub-step
+        view.BuildContent(picker, callbacks);
+        var countAtBotToken = subs.Count;
+
+        // Advance to app token sub-step
+        picker.TryAdvance();
+        view.BuildContent(picker, callbacks);
+
+        // Subscription count should not grow — old subs cleared before new ones added
+        Assert.True(subs.Count <= countAtBotToken,
+            $"Subscriptions should not accumulate across sub-steps: " +
+            $"bot token had {countAtBotToken}, app token has {subs.Count}");
     }
 }

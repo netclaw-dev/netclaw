@@ -191,6 +191,9 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             if (step is null) return Layouts.Empty();
 
             var currentView = ViewModel.StepViews[step.StepId];
+            // Views with ManagesOwnFocusState = true must clear
+            // callbacks.Subscriptions themselves to prevent subscription
+            // accumulation on cursor-blink-timer re-renders (#792).
             if (!currentView.ManagesOwnFocusState)
             {
                 _stepSubs.Clear();
