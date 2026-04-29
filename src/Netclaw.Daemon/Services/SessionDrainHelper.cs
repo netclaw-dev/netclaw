@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="SessionDrainHelper.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Globalization;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;

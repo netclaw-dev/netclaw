@@ -19,6 +19,14 @@
   - local Claude skills under `.claude/skills/`
   - flight recorder at `.ralph/runs/<run-id>/`
 
+## Copyright Header Enforcement
+
+| Command | Purpose |
+|---------|---------|
+| `scripts/Add-FileHeaders.ps1` | Add Petabridge copyright headers to all `.cs` files |
+| `scripts/Add-FileHeaders.ps1 -Verify` | CI: check all files have headers (exit 1 if missing) |
+| `scripts/Add-FileHeaders.ps1 -WhatIf` | Preview which files need headers |
+
 ## Source Control and CI Signals
 
 - `git` repository with active `dev` branch

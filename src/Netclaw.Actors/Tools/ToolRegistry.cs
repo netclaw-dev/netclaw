@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="ToolRegistry.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.AI;

@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="OpenRouterReasoningExcludePolicy.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Text.Json;

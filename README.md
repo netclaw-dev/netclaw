@@ -526,5 +526,5 @@ These files define how planning and implementation work should be routed.
 
 ## License
 
-Netclaw is source-available under AGPLv3 with Commons Clause.
-See `LICENSE` and `LICENSE-AGPL-3.0.txt`.
+Netclaw is licensed under the Apache License, Version 2.0.
+See `LICENSE` for the full text.

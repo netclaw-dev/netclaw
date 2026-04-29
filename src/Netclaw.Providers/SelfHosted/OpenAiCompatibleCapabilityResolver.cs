@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="OpenAiCompatibleCapabilityResolver.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;

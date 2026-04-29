@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="ProviderStepViewModel.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui;

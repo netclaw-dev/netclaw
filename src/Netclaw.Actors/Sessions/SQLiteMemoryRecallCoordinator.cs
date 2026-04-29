@@ -1,3 +1,8 @@
+﻿// -----------------------------------------------------------------------
+// <copyright file="SQLiteMemoryRecallCoordinator.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
 using Netclaw.Actors.Memory;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
