@@ -3,16 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Hosting;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
@@ -20,11 +15,11 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : LlmSessionTestBase(output)
 {
     private readonly HangingStreamingChatClient _chatClient = new();
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
         services.AddSingleton(new ModelCapabilities
@@ -44,29 +39,6 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
-
-        services.AddTestNetclawPaths();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]
@@ -168,33 +140,9 @@ public sealed class LlmSessionWatchdogTests(ITestOutputHelper output) : TestKit(
             var callNumber = Interlocked.Increment(ref _callCount);
 
             if (SucceedAfterFirstTimeout && callNumber > 1)
-                return ReturnTextAsync($"recovered after timeout on call {callNumber}", cancellationToken);
+                return TestStreamingHelpers.ReturnTextAsync($"recovered after timeout on call {callNumber}", cancellationToken);
 
-            return NeverCompletesAsync(CancellationToken.None);
-        }
-
-        private static async IAsyncEnumerable<ChatResponseUpdate> NeverCompletesAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            await gate.Task;
-            yield break;
-        }
-
-        private static async IAsyncEnumerable<ChatResponseUpdate> ReturnTextAsync(
-            string text,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            var response = new ChatResponse(new ChatMessage(
-                Microsoft.Extensions.AI.ChatRole.Assistant,
-                [new TextContent(text)]));
-
-            foreach (var update in response.ToChatResponseUpdates())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return update;
-                await Task.Yield();
-            }
+            return TestStreamingHelpers.NeverCompletesAsync(CancellationToken.None);
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;

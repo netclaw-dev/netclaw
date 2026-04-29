@@ -5,21 +5,16 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
-using Netclaw.Actors.Memory;
-using Netclaw.Actors.Tests.Memory;
 using Netclaw.Actors.Tests.SubAgents;
-using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -27,7 +22,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public class SubAgentSpawnIntegrationTests : TestKit
+public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 {
     private const string MainIdentityMarker = "You are a test assistant with subagent support.";
     private const string AgentsLayerMarker = "[agents] This marker should never appear in routed subagent calls.";
@@ -35,11 +30,11 @@ public class SubAgentSpawnIntegrationTests : TestKit
     private readonly RecordingRoleChatClientProvider _clientProvider = new();
     private RecordingContextTool? _recordingFileReadTool;
 
-    public SubAgentSpawnIntegrationTests(ITestOutputHelper output) : base(output: output)
+    public SubAgentSpawnIntegrationTests(ITestOutputHelper output) : base(output)
     {
     }
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(_clientProvider);
         services.AddSingleton(new ModelCapabilities
@@ -171,39 +166,6 @@ public class SubAgentSpawnIntegrationTests : TestKit
         services.AddSingleton<IToolExecutor>(new DispatchingToolExecutor(
             registry,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<DispatchingToolExecutor>.Instance));
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
-
-        services.AddTestNetclawPaths();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionToolServices(
-            sp.GetRequiredService<IToolExecutor>(),
-            sp.GetService<IToolAuditLogger>(),
-            sp.GetRequiredService<ToolRegistry>(),
-            sp.GetService<ToolAccessPolicy>(),
-            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
-            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>(),
-            sp.GetService<IToolApprovalService>(),
-            sp.GetService<SubAgentDefinitionRegistry>(),
-            sp.GetService<SubAgentSpawner>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]

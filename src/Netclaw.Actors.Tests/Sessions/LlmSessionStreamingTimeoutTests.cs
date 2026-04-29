@@ -6,13 +6,9 @@
 using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Hosting;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
@@ -21,11 +17,11 @@ using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : LlmSessionTestBase(output)
 {
     private readonly StreamingTimeoutTestChatClient _chatClient = new();
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_chatClient));
         services.AddSingleton(new ModelCapabilities
@@ -45,29 +41,6 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
-
-        services.AddTestNetclawPaths();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]
@@ -179,19 +152,11 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
         {
             return Mode switch
             {
-                StreamMode.HangForever => NeverCompletesAsync(CancellationToken.None),
+                StreamMode.HangForever => TestStreamingHelpers.NeverCompletesAsync(CancellationToken.None),
                 StreamMode.EmitThenHang => EmitThenHangAsync(cancellationToken),
-                StreamMode.SucceedImmediately => ReturnTextAsync("success response", cancellationToken),
+                StreamMode.SucceedImmediately => TestStreamingHelpers.ReturnTextAsync("success response", cancellationToken),
                 _ => throw new InvalidOperationException()
             };
-        }
-
-        private static async IAsyncEnumerable<ChatResponseUpdate> NeverCompletesAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            await gate.Task;
-            yield break;
         }
 
         private static async IAsyncEnumerable<ChatResponseUpdate> EmitThenHangAsync(
@@ -220,22 +185,6 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             await gate.Task;
             yield break;
-        }
-
-        private static async IAsyncEnumerable<ChatResponseUpdate> ReturnTextAsync(
-            string text,
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            var response = new ChatResponse(new ChatMessage(
-                AiChatRole.Assistant,
-                [new TextContent(text)]));
-
-            foreach (var update in response.ToChatResponseUpdates())
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return update;
-                await Task.Yield();
-            }
         }
 
         public object? GetService(Type serviceType, object? serviceKey = null) => null;

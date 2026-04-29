@@ -5,13 +5,10 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Akka.Streams;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
@@ -30,18 +27,18 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// Subscribers join sessions directly via <see cref="JoinSession"/> and receive
 /// <see cref="SessionOutput"/> events filtered by <see cref="OutputFilter"/>.
 /// </summary>
-public class LlmSessionIntegrationTests : TestKit
+public class LlmSessionIntegrationTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
     private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.Parse("2026-03-21T12:00:00Z"));
     private readonly RecordingSessionLifecycleObserver _lifecycleObserver = new();
 
-    public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output: output)
+    public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output)
     {
     }
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
         services.AddSingleton(new ModelCapabilities
@@ -79,41 +76,9 @@ public class LlmSessionIntegrationTests : TestKit
 
         services.AddSingleton(registry);
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
         services.AddSingleton<ISessionPipeline>(new UnusedSessionPipeline());
-
-        services.AddTestNetclawPaths();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionToolServices(
-            sp.GetRequiredService<IToolExecutor>(),
-            sp.GetService<IToolAuditLogger>(),
-            sp.GetRequiredService<ToolRegistry>(),
-            sp.GetService<ToolAccessPolicy>(),
-            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
-            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(sp => new SessionObservability(
-            sp.GetService<Telemetry.ISessionMetrics>(),
-            sp.GetService<ISessionLifecycleObserver>()));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]
