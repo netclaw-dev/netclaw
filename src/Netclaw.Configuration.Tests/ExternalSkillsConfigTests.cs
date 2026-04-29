@@ -4,24 +4,19 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
 public class ExternalSkillsConfigTests : IDisposable
 {
-    private readonly string _homeDir;
-
-    public ExternalSkillsConfigTests()
-    {
-        _homeDir = Path.Combine(Path.GetTempPath(), $"netclaw-home-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(_homeDir);
-    }
+    private readonly DisposableTempDir _dir = new();
+    private string _homeDir => _dir.Path;
 
     public void Dispose()
     {
-        if (Directory.Exists(_homeDir))
-            Directory.Delete(_homeDir, recursive: true);
+        _dir.Dispose();
     }
 
     private static string ClaudeSkillsPath(string home) => Path.Combine(home, ".claude", "skills");

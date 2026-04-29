@@ -1,8 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SystemPromptAssemblerTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
@@ -52,52 +53,30 @@ public sealed class SystemPromptAssemblerTests
     [Fact]
     public void TryReadProjectIdentityFile_returns_null_when_no_candidates_exist()
     {
-        var tmpDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tmpDir);
-        try
-        {
-            var result = FileSystemPromptProvider.TryReadProjectIdentityFile(tmpDir);
-            Assert.Null(result);
-        }
-        finally
-        {
-            Directory.Delete(tmpDir, recursive: true);
-        }
+        using var dir = new DisposableTempDir();
+        var result = FileSystemPromptProvider.TryReadProjectIdentityFile(dir.Path);
+        Assert.Null(result);
     }
 
     [Fact]
     public void TryReadProjectIdentityFile_reads_CLAUDE_md()
     {
-        var tmpDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tmpDir);
-        File.WriteAllText(Path.Combine(tmpDir, "CLAUDE.md"), "Project instructions here");
-        try
-        {
-            var result = FileSystemPromptProvider.TryReadProjectIdentityFile(tmpDir);
-            Assert.Equal("Project instructions here", result);
-        }
-        finally
-        {
-            Directory.Delete(tmpDir, recursive: true);
-        }
+        using var dir = new DisposableTempDir();
+        File.WriteAllText(Path.Combine(dir.Path, "CLAUDE.md"), "Project instructions here");
+
+        var result = FileSystemPromptProvider.TryReadProjectIdentityFile(dir.Path);
+        Assert.Equal("Project instructions here", result);
     }
 
     [Fact]
     public void TryReadProjectIdentityFile_prefers_netclaw_AGENTS_over_CLAUDE()
     {
-        var tmpDir = Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(tmpDir);
-        Directory.CreateDirectory(Path.Combine(tmpDir, ".netclaw"));
-        File.WriteAllText(Path.Combine(tmpDir, ".netclaw", "AGENTS.md"), "Netclaw agents");
-        File.WriteAllText(Path.Combine(tmpDir, "CLAUDE.md"), "Claude instructions");
-        try
-        {
-            var result = FileSystemPromptProvider.TryReadProjectIdentityFile(tmpDir);
-            Assert.Equal("Netclaw agents", result);
-        }
-        finally
-        {
-            Directory.Delete(tmpDir, recursive: true);
-        }
+        using var dir = new DisposableTempDir();
+        Directory.CreateDirectory(Path.Combine(dir.Path, ".netclaw"));
+        File.WriteAllText(Path.Combine(dir.Path, ".netclaw", "AGENTS.md"), "Netclaw agents");
+        File.WriteAllText(Path.Combine(dir.Path, "CLAUDE.md"), "Claude instructions");
+
+        var result = FileSystemPromptProvider.TryReadProjectIdentityFile(dir.Path);
+        Assert.Equal("Netclaw agents", result);
     }
 }

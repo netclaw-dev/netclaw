@@ -37,7 +37,7 @@ public class FileReadToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "test.txt");
         await File.WriteAllTextAsync(filePath, "hello world", TestContext.Current.CancellationToken);
 
-        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var args = ToolInput.Create("Path", filePath);
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Equal("hello world", result);
@@ -47,7 +47,7 @@ public class FileReadToolTests : IDisposable
     public async Task Read_missing_file_returns_error()
     {
         var filePath = Path.Combine(_dir.Path, "nonexistent.txt");
-        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var args = ToolInput.Create("Path", filePath);
 
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -61,12 +61,7 @@ public class FileReadToolTests : IDisposable
         var lines = Enumerable.Range(1, 10).Select(i => $"Line {i}");
         await File.WriteAllLinesAsync(filePath, lines, TestContext.Current.CancellationToken);
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Offset"] = 3,
-            ["Limit"] = 2
-        };
+        var args = ToolInput.Create("Path", filePath, "Offset", 3, "Limit", 2);
 
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -83,7 +78,7 @@ public class FileReadToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "large.txt");
         await File.WriteAllTextAsync(filePath, new string('x', 500), TestContext.Current.CancellationToken);
 
-        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var args = ToolInput.Create("Path", filePath);
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Contains("[output truncated]", result);
@@ -92,7 +87,7 @@ public class FileReadToolTests : IDisposable
     [Fact]
     public async Task Missing_path_returns_error()
     {
-        var args = new Dictionary<string, object?>();
+        var args = ToolInput.Empty();
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("Path", result);
@@ -114,7 +109,7 @@ public class FileReadToolTests : IDisposable
 
         var policy = new ToolPathPolicy([filePath]);
         var tool = new FileReadTool(new ToolConfig(), policy);
-        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var args = ToolInput.Create("Path", filePath);
 
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -128,7 +123,7 @@ public class FileReadToolTests : IDisposable
         var filePath = Path.Combine(_sessionDir, "public-note.txt");
         await File.WriteAllTextAsync(filePath, "session scoped", TestContext.Current.CancellationToken);
 
-        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var args = ToolInput.Create("Path", filePath);
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
 
         Assert.Equal("session scoped", result);
@@ -140,7 +135,7 @@ public class FileReadToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "host-secret.txt");
         await File.WriteAllTextAsync(filePath, "do not read", TestContext.Current.CancellationToken);
 
-        var args = new Dictionary<string, object?> { ["Path"] = filePath };
+        var args = ToolInput.Create("Path", filePath);
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
 
         Assert.Contains("Public trust context", result);
@@ -160,7 +155,7 @@ public class FileReadToolTests : IDisposable
         var paths = new NetclawPaths(_dir.Path);
         var tool = new FileReadTool(new ToolConfig(), paths: paths);
 
-        var args = new Dictionary<string, object?> { ["Path"] = skillFile };
+        var args = ToolInput.Create("Path", skillFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
 
         Assert.Equal("# Test Skill", result);
@@ -181,7 +176,7 @@ public class FileReadToolTests : IDisposable
 
         var tool = new FileReadTool(new ToolConfig(), paths: paths, skillRegistry: registry, sessionMetrics: metrics);
 
-        await tool.ExecuteAsync(new Dictionary<string, object?> { ["Path"] = skillFile }, CreateTeamContext(), CancellationToken.None);
+        await tool.ExecuteAsync(ToolInput.Create("Path", skillFile), CreateTeamContext(), CancellationToken.None);
 
         var call = Assert.Single(metrics.SkillLoadedCalls);
         Assert.Equal("tracked-skill", call.SkillName);
@@ -199,7 +194,7 @@ public class FileReadToolTests : IDisposable
 
         var tool = new FileReadTool(new ToolConfig(), paths: paths, skillRegistry: registry, sessionMetrics: metrics);
 
-        await tool.ExecuteAsync(new Dictionary<string, object?> { ["Path"] = filePath }, CreatePersonalContext(), CancellationToken.None);
+        await tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
 
         Assert.Empty(metrics.SkillLoadedCalls);
     }
@@ -215,7 +210,7 @@ public class FileReadToolTests : IDisposable
         var paths = new NetclawPaths(_dir.Path);
         var tool = new FileReadTool(new ToolConfig(), paths: paths);
 
-        var args = new Dictionary<string, object?> { ["Path"] = soulFile };
+        var args = ToolInput.Create("Path", soulFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
 
         Assert.Equal("# Soul", result);
@@ -231,7 +226,7 @@ public class FileReadToolTests : IDisposable
         var paths = new NetclawPaths(_dir.Path);
         var tool = new FileReadTool(new ToolConfig(), paths: paths);
 
-        var args = new Dictionary<string, object?> { ["Path"] = secretFile };
+        var args = ToolInput.Create("Path", secretFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
 
         Assert.Contains("Team trust context", result);
@@ -250,7 +245,7 @@ public class FileReadToolTests : IDisposable
         // No paths injected — no global read roots
         var tool = new FileReadTool(new ToolConfig());
 
-        var args = new Dictionary<string, object?> { ["Path"] = skillFile };
+        var args = ToolInput.Create("Path", skillFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
 
         Assert.Contains("Team trust context", result);
@@ -274,7 +269,7 @@ public class FileReadToolTests : IDisposable
         var paths = new NetclawPaths(_dir.Path);
         var tool = new FileReadTool(config, paths: paths);
 
-        var args = new Dictionary<string, object?> { ["Path"] = dataFile };
+        var args = ToolInput.Create("Path", dataFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
 
         Assert.Equal("shared content", result);
@@ -298,7 +293,7 @@ public class FileReadToolTests : IDisposable
         // No NetclawPaths injected — literal paths should still resolve
         var tool = new FileReadTool(config);
 
-        var args = new Dictionary<string, object?> { ["Path"] = dataFile };
+        var args = ToolInput.Create("Path", dataFile);
         var result = await tool.ExecuteAsync(args, CreateTeamContext(), CancellationToken.None);
 
         Assert.Equal("shared content", result);

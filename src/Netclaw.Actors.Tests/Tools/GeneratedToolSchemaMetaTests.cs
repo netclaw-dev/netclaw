@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Text.Json;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -61,13 +62,7 @@ public class GeneratedToolSchemaMetaTests
     public void Generated_ParseArguments_ignores_meta_fields()
     {
         var tool = new FileReadTool(new ToolConfig());
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = "/tmp/test.txt",
-            ["_rationale"] = "reading config file",
-            ["_timeout_seconds"] = 30,
-            ["_background"] = false
-        };
+        var args = ToolInput.Create("Path", "/tmp/test.txt", "_rationale", "reading config file", "_timeout_seconds", 30, "_background", false);
 
         // ParseArguments should succeed and ignore meta fields
         var parsed = tool.ParseArguments(args);

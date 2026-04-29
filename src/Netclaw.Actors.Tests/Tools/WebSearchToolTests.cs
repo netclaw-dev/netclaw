@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Search;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -22,7 +23,7 @@ public class WebSearchToolTests
 
         var tool = new WebSearchTool(backend);
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "akka.net" }, TestContext.Current.CancellationToken);
+            ToolInput.Create("Query", "akka.net"), TestContext.Current.CancellationToken);
 
         Assert.Contains("Akka.NET", result);
         Assert.Contains("https://getakka.net", result);
@@ -37,7 +38,7 @@ public class WebSearchToolTests
 
         var tool = new WebSearchTool(backend);
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "test" }, TestContext.Current.CancellationToken);
+            ToolInput.Create("Query", "test"), TestContext.Current.CancellationToken);
 
         Assert.Contains("Error:", result);
         Assert.Contains("Bot detection triggered", result);
@@ -51,7 +52,7 @@ public class WebSearchToolTests
 
         var tool = new WebSearchTool(backend);
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "xyzzy" }, TestContext.Current.CancellationToken);
+            ToolInput.Create("Query", "xyzzy"), TestContext.Current.CancellationToken);
 
         Assert.Contains("No results found", result);
     }

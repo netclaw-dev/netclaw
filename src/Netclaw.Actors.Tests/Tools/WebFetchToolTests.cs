@@ -276,7 +276,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/test" },
+            ToolInput.Create("Url", "https://example.com/test"),
             CancellationToken.None);
 
         // Should contain summary info
@@ -316,7 +316,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/test", ["Format"] = "text" },
+            ToolInput.Create("Url", "https://example.com/test", "Format", "text"),
             CancellationToken.None);
 
         Assert.Contains(".txt", result);
@@ -347,7 +347,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/page" },
+            ToolInput.Create("Url", "https://example.com/page"),
             CancellationToken.None);
 
         var files = Directory.GetFiles(_dir.Path, "*.html");
@@ -370,7 +370,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://api.example.com/data.json" },
+            ToolInput.Create("Url", "https://api.example.com/data.json"),
             CancellationToken.None);
 
         Assert.Contains("Saved to:", result);
@@ -392,7 +392,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://api.example.com/data" },
+            ToolInput.Create("Url", "https://api.example.com/data"),
             CancellationToken.None);
 
         Assert.Contains("Saved to:", result);
@@ -412,7 +412,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/install.sh" },
+            ToolInput.Create("Url", "https://example.com/install.sh"),
             CancellationToken.None);
 
         Assert.Contains("Saved to:", result);
@@ -431,7 +431,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "not-a-url" },
+            ToolInput.Create("Url", "not-a-url"),
             CancellationToken.None);
 
         Assert.Contains("Error", result);
@@ -444,7 +444,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://example.com/page" },
+            ToolInput.Create("Url", "http://example.com/page"),
             CancellationToken.None);
 
         Assert.Contains("HTTPS is required", result);
@@ -460,7 +460,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(config, httpClient, _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://example.com/page" },
+            ToolInput.Create("Url", "http://example.com/page"),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -475,7 +475,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://localhost:8080/api" },
+            ToolInput.Create("Url", "http://localhost:8080/api"),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -490,7 +490,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://127.0.0.1:3000/" },
+            ToolInput.Create("Url", "http://127.0.0.1:3000/"),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -505,7 +505,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://[::1]:5000/" },
+            ToolInput.Create("Url", "http://[::1]:5000/"),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -519,7 +519,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(config, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://localhost:8080/" },
+            ToolInput.Create("Url", "http://localhost:8080/"),
             CancellationToken.None);
 
         Assert.Contains("HTTPS is required", result);
@@ -534,7 +534,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(config, httpClient, _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "http://internal.corp/api" },
+            ToolInput.Create("Url", "http://internal.corp/api"),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -551,7 +551,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/photo.png" },
+            ToolInput.Create("Url", "https://example.com/photo.png"),
             CancellationToken.None);
 
         Assert.Contains("Fetched:", result);
@@ -579,7 +579,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://arxiv.org/pdf/2603.25414" },
+            ToolInput.Create("Url", "https://arxiv.org/pdf/2603.25414"),
             CancellationToken.None);
 
         Assert.Contains("Content-Type: application/pdf", result);
@@ -602,7 +602,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/animation.gif" },
+            ToolInput.Create("Url", "https://example.com/animation.gif"),
             CancellationToken.None);
 
         var files = Directory.GetFiles(_dir.Path, "*.gif");
@@ -619,7 +619,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "https://example.com/api/download" },
+            ToolInput.Create("Url", "https://example.com/api/download"),
             CancellationToken.None);
 
         var files = Directory.GetFiles(_dir.Path, "*.bin");
@@ -632,7 +632,7 @@ public class WebFetchToolTests : IDisposable
         var tool = new WebFetchTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Url"] = "ftp://files.example.com/doc.txt" },
+            ToolInput.Create("Url", "ftp://files.example.com/doc.txt"),
             CancellationToken.None);
 
         Assert.Contains("Error", result);

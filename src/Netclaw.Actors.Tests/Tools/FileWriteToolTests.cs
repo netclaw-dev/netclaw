@@ -33,11 +33,7 @@ public class FileWriteToolTests : IDisposable
     public async Task Write_new_file_creates_it()
     {
         var filePath = Path.Combine(_dir.Path, "new.txt");
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Content"] = "hello world"
-        };
+        var args = ToolInput.Create("Path", filePath, "Content", "hello world");
 
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -52,11 +48,7 @@ public class FileWriteToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "existing.txt");
         await File.WriteAllTextAsync(filePath, "old content", TestContext.Current.CancellationToken);
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Content"] = "new content"
-        };
+        var args = ToolInput.Create("Path", filePath, "Content", "new content");
 
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -68,11 +60,7 @@ public class FileWriteToolTests : IDisposable
     public async Task Creates_parent_directories()
     {
         var filePath = Path.Combine(_dir.Path, "sub", "dir", "deep.txt");
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Content"] = "deep content"
-        };
+        var args = ToolInput.Create("Path", filePath, "Content", "deep content");
 
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -83,7 +71,7 @@ public class FileWriteToolTests : IDisposable
     [Fact]
     public async Task Missing_path_returns_error()
     {
-        var args = new Dictionary<string, object?> { ["Content"] = "hello" };
+        var args = ToolInput.Create("Content", "hello");
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("Path", result);
@@ -93,7 +81,7 @@ public class FileWriteToolTests : IDisposable
     [Fact]
     public async Task Missing_content_returns_error()
     {
-        var args = new Dictionary<string, object?> { ["Path"] = "/tmp/test.txt" };
+        var args = ToolInput.Create("Path", "/tmp/test.txt");
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("Content", result);
@@ -114,11 +102,7 @@ public class FileWriteToolTests : IDisposable
         var policy = new ToolPathPolicy([filePath]);
         var tool = new FileWriteTool(new ToolConfig(), policy);
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Content"] = "malicious content"
-        };
+        var args = ToolInput.Create("Path", filePath, "Content", "malicious content");
 
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
@@ -130,11 +114,7 @@ public class FileWriteToolTests : IDisposable
     public async Task Public_context_can_write_inside_session_directory()
     {
         var filePath = Path.Combine(_sessionDir, "note.txt");
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Content"] = "session output"
-        };
+        var args = ToolInput.Create("Path", filePath, "Content", "session output");
 
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
 
@@ -146,11 +126,7 @@ public class FileWriteToolTests : IDisposable
     public async Task Public_context_cannot_write_outside_session_directory()
     {
         var filePath = Path.Combine(_dir.Path, "host-write.txt");
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["Content"] = "blocked"
-        };
+        var args = ToolInput.Create("Path", filePath, "Content", "blocked");
 
         var result = await _tool.ExecuteAsync(args, CreatePublicContext(), CancellationToken.None);
 

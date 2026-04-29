@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -197,7 +198,7 @@ public sealed class McpToolAudienceGrantsTests
             new ToolAccessPolicy(config, Defaults));
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "memor" },
+            ToolInput.Create("Query", "memor"),
             CreateExecutionContext(TrustAudience.Team),
             CancellationToken.None);
 
@@ -260,7 +261,7 @@ public sealed class McpToolAudienceGrantsTests
         var tool = new LoadToolTool(registry, policy);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Name"] = "memorizer/store" },
+            ToolInput.Create("Name", "memorizer/store"),
             CreateExecutionContext(TrustAudience.Team),
             CancellationToken.None);
 
@@ -282,7 +283,7 @@ public sealed class McpToolAudienceGrantsTests
         var tool = new LoadToolTool(registry, policy);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Name"] = "memorizer/search_memories" },
+            ToolInput.Create("Name", "memorizer/search_memories"),
             CreateExecutionContext(TrustAudience.Team),
             CancellationToken.None);
 

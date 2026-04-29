@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -19,7 +20,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "store" },
+            ToolInput.Create("Query", "store"),
             CancellationToken.None);
 
         Assert.Contains("memorizer/store", result);
@@ -36,7 +37,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "memories" },
+            ToolInput.Create("Query", "memories"),
             CancellationToken.None);
 
         Assert.Contains("memorizer/search_memories", result);
@@ -49,7 +50,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "nonexistent_xyz" },
+            ToolInput.Create("Query", "nonexistent_xyz"),
             CancellationToken.None);
 
         Assert.Contains("No tools found", result);
@@ -62,11 +63,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?>
-            {
-                ["Query"] = "store",
-                ["Server"] = "github"
-            },
+            ToolInput.Create("Query", "store", "Server", "github"),
             CancellationToken.None);
 
         // "github" server has no "store" tool — only memorizer does
@@ -80,11 +77,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?>
-            {
-                ["Query"] = "store",
-                ["Server"] = "default"
-            },
+            ToolInput.Create("Query", "store", "Server", "default"),
             CancellationToken.None);
 
         Assert.Contains("memorizer/store", result);
@@ -99,7 +92,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "shell" },
+            ToolInput.Create("Query", "shell"),
             CancellationToken.None);
 
         // Without server filter, non-MCP tools are included in search results
@@ -127,7 +120,7 @@ public class SearchToolsToolTests
 
         var tool = new SearchToolsTool(registry);
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "navigate" },
+            ToolInput.Create("Query", "navigate"),
             CancellationToken.None);
 
         Assert.Contains("params: url", result);
@@ -145,7 +138,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "navgite pg" },
+            ToolInput.Create("Query", "navgite pg"),
             CancellationToken.None);
 
         Assert.Contains("No exact tools found", result);
@@ -162,7 +155,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "servers" },
+            ToolInput.Create("Query", "servers"),
             CancellationToken.None);
 
         Assert.Contains("Available MCP servers", result);
@@ -177,11 +170,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?>
-            {
-                ["Query"] = "all",
-                ["Server"] = "memorizer"
-            },
+            ToolInput.Create("Query", "all", "Server", "memorizer"),
             CancellationToken.None);
 
         Assert.Contains("Found 2 tool(s) in server 'memorizer'", result);
@@ -196,7 +185,7 @@ public class SearchToolsToolTests
         var tool = new SearchToolsTool(registry);
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "all" },
+            ToolInput.Create("Query", "all"),
             CancellationToken.None);
 
         Assert.Contains("Available MCP servers", result);
@@ -230,7 +219,7 @@ public class SearchToolsToolTests
         };
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "memories" },
+            ToolInput.Create("Query", "memories"),
             context,
             CancellationToken.None);
 
@@ -265,7 +254,7 @@ public class SearchToolsToolTests
         };
 
         var result = await tool.ExecuteAsync(
-            new Dictionary<string, object?> { ["Query"] = "servers" },
+            ToolInput.Create("Query", "servers"),
             context,
             CancellationToken.None);
 
