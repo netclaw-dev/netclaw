@@ -10,37 +10,37 @@ namespace Netclaw.Channels.Discord;
 
 public static class DiscordAclPolicy
 {
-    public static DiscordAclDecision EvaluateInbound(
+    public static ChannelAclDecision EvaluateInbound(
         DiscordGatewayMessage message,
         DiscordChannelOptions options,
         DiscordChannelId? defaultChannelId)
     {
         if (string.IsNullOrWhiteSpace(message.SenderId.Value))
-            return DiscordAclDecision.Deny("missing_user_id");
+            return ChannelAclDecision.Deny(AclDenyReasons.MissingUserId);
 
         if (message.IsDirectMessage && !options.AllowDirectMessages)
-            return DiscordAclDecision.Deny("direct_messages_disabled");
+            return ChannelAclDecision.Deny(AclDenyReasons.DirectMessagesDisabled);
 
         if (!message.IsDirectMessage
             && !IsAllowedChannel(message.ChannelId, options, defaultChannelId))
-            return DiscordAclDecision.Deny("channel_not_allowed");
+            return ChannelAclDecision.Deny(AclDenyReasons.ChannelNotAllowed);
 
         var isExplicitUser = options.AllowedUserIds.Contains(message.SenderId.Value, StringComparer.Ordinal);
         if (options.AllowedUserIds.Length > 0 && !isExplicitUser)
-            return DiscordAclDecision.Deny("user_not_allowed");
+            return ChannelAclDecision.Deny(AclDenyReasons.UserNotAllowed);
 
         var isExplicitChannel = options.AllowedChannelIds.Contains(message.ChannelId.Value, StringComparer.Ordinal);
 
         var audienceResult = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
         if (audienceResult.Error is not null)
-            return DiscordAclDecision.Deny(audienceResult.Error);
+            return ChannelAclDecision.Deny(audienceResult.Error);
 
         var audience = audienceResult.Audience;
         var principal = isExplicitUser
             ? PrincipalClassification.TrustedInternal
             : PrincipalClassification.UntrustedExternal;
 
-        return DiscordAclDecision.Allow(
+        return ChannelAclDecision.Allow(
             audience,
             principal,
             new SourceProvenance
@@ -91,29 +91,4 @@ public static class DiscordAclPolicy
         return new AudienceResult(audience);
     }
 
-}
-
-public sealed record DiscordAclDecision(
-    bool IsAllowed,
-    string? DenyReason,
-    TrustAudience Audience,
-    PrincipalClassification Principal,
-    SourceProvenance Provenance) : IAclDecision
-{
-    public static DiscordAclDecision Deny(string reason) => new(
-        false,
-        reason,
-        TrustAudience.Public,
-        PrincipalClassification.UntrustedExternal,
-        SourceProvenance.StrictDefault());
-
-    public static DiscordAclDecision Allow(
-        TrustAudience audience,
-        PrincipalClassification principal,
-        SourceProvenance provenance) => new(
-        true,
-        null,
-        audience,
-        principal,
-        provenance);
 }

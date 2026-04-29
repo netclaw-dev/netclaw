@@ -80,72 +80,30 @@ public class SlackRoutingPolicyTests
         Assert.Null(decision.IgnoreReason);
     }
 
-    [Fact]
-    public void DirectMessage_ProcessesWithoutMention_WhenEnabled()
+    [Theory]
+    [InlineData(true, false, false, SlackRoutingDecisionKind.StartOrContinue, null)]
+    [InlineData(false, false, false, SlackRoutingDecisionKind.Ignore, SlackRoutingIgnoreReason.DmNotAllowed)]
+    [InlineData(true, true, false, SlackRoutingDecisionKind.Ignore, SlackRoutingIgnoreReason.DmMentionRequired)]
+    [InlineData(true, true, true, SlackRoutingDecisionKind.StartOrContinue, null)]
+    internal void DirectMessage_routing_decision(
+        bool allowDirectMessages,
+        bool mentionRequiredInDm,
+        bool containsBotMention,
+        SlackRoutingDecisionKind expectedKind,
+        SlackRoutingIgnoreReason? expectedReason)
     {
         var message = CreateMessage(text: "hey", threadTs: null, isDirectMessage: true);
 
         var decision = SlackRoutingPolicy.Evaluate(
             message,
             mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: false,
+            allowDirectMessages: allowDirectMessages,
+            mentionRequiredInDm: mentionRequiredInDm,
             threadExists: false,
-            containsBotMention: false);
+            containsBotMention: containsBotMention);
 
-        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
-        Assert.Null(decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void DirectMessage_Ignored_WhenDisabled()
-    {
-        var message = CreateMessage(text: "hey", threadTs: null, isDirectMessage: true);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: false,
-            mentionRequiredInDm: false,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(SlackRoutingIgnoreReason.DmNotAllowed, decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void DirectMessage_Ignored_WhenMentionRequired_AndNoMention()
-    {
-        var message = CreateMessage(text: "hey", threadTs: null, isDirectMessage: true);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: true,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(SlackRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(SlackRoutingIgnoreReason.DmMentionRequired, decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void DirectMessage_Processed_WhenMentionRequired_AndMentionPresent()
-    {
-        var message = CreateMessage(text: "<@U1> hey", threadTs: null, isDirectMessage: true);
-
-        var decision = SlackRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: true,
-            threadExists: false,
-            containsBotMention: true);
-
-        Assert.Equal(SlackRoutingDecisionKind.StartOrContinue, decision.Kind);
-        Assert.Null(decision.IgnoreReason);
+        Assert.Equal(expectedKind, decision.Kind);
+        Assert.Equal(expectedReason, decision.IgnoreReason);
     }
 
     [Fact]

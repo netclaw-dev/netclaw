@@ -15,30 +15,30 @@ namespace Netclaw.Channels.Slack;
 /// </summary>
 public static class SlackAclPolicy
 {
-    public static SlackAclDecision EvaluateInbound(
+    public static ChannelAclDecision EvaluateInbound(
         SlackInboundMessage message,
         SlackChannelOptions options,
         SlackChannelId? defaultChannelId)
     {
         if (message.UserId is not { } userId)
-            return SlackAclDecision.Deny("missing_user_id");
+            return ChannelAclDecision.Deny(AclDenyReasons.MissingUserId);
 
         var isConversationAllowed = message.IsDirectMessage
             ? options.AllowDirectMessages
             : IsAllowedChannel(message.ChannelId, options, defaultChannelId);
 
         if (!isConversationAllowed)
-            return SlackAclDecision.Deny("channel_not_allowed");
+            return ChannelAclDecision.Deny(AclDenyReasons.ChannelNotAllowed);
 
         if (!IsAllowedUser(userId, options))
-            return SlackAclDecision.Deny("user_not_allowed");
+            return ChannelAclDecision.Deny(AclDenyReasons.UserNotAllowed);
 
         var isExplicitUser = options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
         var isExplicitChannel = options.AllowedChannelIds.Contains(message.ChannelId.Value, StringComparer.Ordinal);
 
         var audienceResult = ResolveAudience(message, options, isExplicitUser, isExplicitChannel);
         if (audienceResult.Error is not null)
-            return SlackAclDecision.Deny(audienceResult.Error);
+            return ChannelAclDecision.Deny(audienceResult.Error);
 
         var audience = audienceResult.Audience;
 
@@ -46,7 +46,7 @@ public static class SlackAclPolicy
             ? PrincipalClassification.TrustedInternal
             : PrincipalClassification.UntrustedExternal;
 
-        return SlackAclDecision.Allow(
+        return ChannelAclDecision.Allow(
             audience,
             principal,
             new SourceProvenance
@@ -119,29 +119,4 @@ public static class SlackAclPolicy
 
         return options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
     }
-}
-
-public sealed record SlackAclDecision(
-    bool IsAllowed,
-    string? DenyReason,
-    TrustAudience Audience,
-    PrincipalClassification Principal,
-    SourceProvenance Provenance) : IAclDecision
-{
-    public static SlackAclDecision Deny(string reason) => new(
-        false,
-        reason,
-        TrustAudience.Public,
-        PrincipalClassification.UntrustedExternal,
-        SourceProvenance.StrictDefault());
-
-    public static SlackAclDecision Allow(
-        TrustAudience audience,
-        PrincipalClassification principal,
-        SourceProvenance provenance) => new(
-        true,
-        null,
-        audience,
-        principal,
-        provenance);
 }

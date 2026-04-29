@@ -11,51 +11,20 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 public sealed class ApprovalChannelTests
 {
-    [Fact]
-    public async Task WaitAndComplete_returns_decision()
+    [Theory]
+    [InlineData(ApprovalDecision.ApprovedOnce)]
+    [InlineData(ApprovalDecision.ApprovedAlways)]
+    [InlineData(ApprovalDecision.ApprovedSession)]
+    [InlineData(ApprovalDecision.Denied)]
+    public async Task WaitAndComplete_returns_expected_decision(ApprovalDecision decision)
     {
         var channel = new ApprovalChannel();
+        var callId = new ToolCallId($"call-{decision}");
 
-        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-1"), TimeSpan.FromSeconds(30), CancellationToken.None);
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
+        channel.Complete(callId, decision);
 
-        // Complete from another context (simulating actor mailbox)
-        channel.Complete(new ToolCallId("call-1"), ApprovalDecision.ApprovedOnce);
-
-        var result = await waitTask;
-        Assert.Equal(ApprovalDecision.ApprovedOnce, result);
-    }
-
-    [Fact]
-    public async Task WaitAndComplete_approve_always()
-    {
-        var channel = new ApprovalChannel();
-
-        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-2"), TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete(new ToolCallId("call-2"), ApprovalDecision.ApprovedAlways);
-
-        Assert.Equal(ApprovalDecision.ApprovedAlways, await waitTask);
-    }
-
-    [Fact]
-    public async Task WaitAndComplete_approve_session()
-    {
-        var channel = new ApprovalChannel();
-
-        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-2b"), TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete(new ToolCallId("call-2b"), ApprovalDecision.ApprovedSession);
-
-        Assert.Equal(ApprovalDecision.ApprovedSession, await waitTask);
-    }
-
-    [Fact]
-    public async Task WaitAndComplete_denied()
-    {
-        var channel = new ApprovalChannel();
-
-        var waitTask = channel.WaitForApprovalAsync(new ToolCallId("call-3"), TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete(new ToolCallId("call-3"), ApprovalDecision.Denied);
-
-        Assert.Equal(ApprovalDecision.Denied, await waitTask);
+        Assert.Equal(decision, await waitTask);
     }
 
     [Fact]

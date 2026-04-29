@@ -95,95 +95,38 @@ public class DiscordRoutingPolicyTests
         Assert.Null(decision.IgnoreReason);
     }
 
-    [Fact]
-    public void DirectMessage_ProcessesWithoutMention_WhenEnabled()
+    [Theory]
+    [InlineData(true, false, false, DiscordRoutingDecisionKind.StartOrContinue, null)]
+    [InlineData(false, false, false, DiscordRoutingDecisionKind.Ignore, DiscordRoutingIgnoreReason.DmNotAllowed)]
+    [InlineData(true, true, false, DiscordRoutingDecisionKind.Ignore, DiscordRoutingIgnoreReason.DmMentionRequired)]
+    [InlineData(true, true, true, DiscordRoutingDecisionKind.StartOrContinue, null)]
+    internal void DirectMessage_routing_decision(
+        bool allowDirectMessages,
+        bool mentionRequiredInDm,
+        bool containsBotMention,
+        DiscordRoutingDecisionKind expectedKind,
+        DiscordRoutingIgnoreReason? expectedReason)
     {
         var message = CreateMessage(text: "hey", isDirectMessage: true);
 
         var decision = DiscordRoutingPolicy.Evaluate(
             message,
             mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: false,
+            allowDirectMessages: allowDirectMessages,
+            mentionRequiredInDm: mentionRequiredInDm,
             threadExists: false,
-            containsBotMention: false);
+            containsBotMention: containsBotMention);
 
-        Assert.Equal(DiscordRoutingDecisionKind.StartOrContinue, decision.Kind);
-        Assert.Null(decision.IgnoreReason);
+        Assert.Equal(expectedKind, decision.Kind);
+        Assert.Equal(expectedReason, decision.IgnoreReason);
     }
 
-    [Fact]
-    public void DirectMessage_Ignored_WhenDisabled()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    internal void EmptyContent_Ignored(string text)
     {
-        var message = CreateMessage(text: "hey", isDirectMessage: true);
-
-        var decision = DiscordRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: false,
-            mentionRequiredInDm: false,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(DiscordRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(DiscordRoutingIgnoreReason.DmNotAllowed, decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void DirectMessage_Ignored_WhenMentionRequired_AndNoMention()
-    {
-        var message = CreateMessage(text: "hey", isDirectMessage: true);
-
-        var decision = DiscordRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: true,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(DiscordRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(DiscordRoutingIgnoreReason.DmMentionRequired, decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void DirectMessage_Processed_WhenMentionRequired_AndMentionPresent()
-    {
-        var message = CreateMessage(text: "<@123> hey", isDirectMessage: true);
-
-        var decision = DiscordRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: true,
-            allowDirectMessages: true,
-            mentionRequiredInDm: true,
-            threadExists: false,
-            containsBotMention: true);
-
-        Assert.Equal(DiscordRoutingDecisionKind.StartOrContinue, decision.Kind);
-        Assert.Null(decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void NoContent_Ignored()
-    {
-        var message = CreateMessage(text: "");
-
-        var decision = DiscordRoutingPolicy.Evaluate(
-            message,
-            mentionOnly: false,
-            allowDirectMessages: false,
-            mentionRequiredInDm: false,
-            threadExists: false,
-            containsBotMention: false);
-
-        Assert.Equal(DiscordRoutingDecisionKind.Ignore, decision.Kind);
-        Assert.Equal(DiscordRoutingIgnoreReason.NoContent, decision.IgnoreReason);
-    }
-
-    [Fact]
-    public void WhitespaceOnly_Ignored()
-    {
-        var message = CreateMessage(text: "   ");
+        var message = CreateMessage(text: text);
 
         var decision = DiscordRoutingPolicy.Evaluate(
             message,
