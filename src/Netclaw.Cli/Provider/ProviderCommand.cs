@@ -445,7 +445,7 @@ internal static class ProviderCommand
         writer.WriteLine("Provider types: " + string.Join(", ", registry.KnownTypeKeys));
         writer.WriteLine();
         writer.WriteLine("Examples:");
-        writer.WriteLine("  netclaw provider add my-ollama ollama --endpoint http://big-gpu:11434");
+        writer.WriteLine("  netclaw provider add my-ollama ollama --endpoint http://my-gpu-server:11434");
         writer.WriteLine("  netclaw provider add my-anthropic anthropic --api-key sk-ant-...");
         writer.WriteLine("  netclaw provider add my-openai openai --auth oauth-device");
         writer.WriteLine("  netclaw provider remove my-ollama");

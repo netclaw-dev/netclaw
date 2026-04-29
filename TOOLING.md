@@ -41,7 +41,7 @@
 - SQLite for Akka.Persistence journal and snapshots (in-memory for tests)
 - MCP servers for external tool integration (MVP requirement)
 - local Ollama endpoint can be used for optional smoke tests
-  - local dev host: `big-gpu` on Tailscale (`http://big-gpu:11434`)
+  - local dev host: `my-gpu-server` on Tailscale (`http://my-gpu-server:11434`)
   - preferred model: `qwen3:30b` (fallback `qwen3:14b`)
 
 ## Security-Relevant Surfaces
@@ -64,4 +64,4 @@
 - operator-controlled host and credentials
 - default-deny policy with explicit per-channel and per-sender allow rules
 - required CI tests do not depend on live model providers
-- `big-gpu` Ollama access is local-dev only and not available in CI/CD
+- `my-gpu-server` Ollama access is local-dev only and not available in CI/CD

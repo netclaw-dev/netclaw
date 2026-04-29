@@ -38,16 +38,35 @@ model list for OAuth-authenticated users.
 
 4. **Build and verify**: `dotnet build` to confirm no compilation errors.
 
-5. **Update the memorizer memory** (ID: `e3c8ac2b-0fa2-47d3-b9ff-50a78f2d2863`)
-   if the limitation status has changed.
-
 ## Why This Exists
 
-See the detailed memorizer memory for full context:
-https://memory.testlab.petabridge.net/view/e3c8ac2b-0fa2-47d3-b9ff-50a78f2d2863
+OAuth tokens obtained via the Codex CLI client ID (`app_EMoamEEZ73f0CkXaXp7hrann`)
+**cannot call `/v1/models`** — the endpoint returns HTTP 403 "Missing scopes:
+api.model.read". This is NOT fixable by requesting additional OAuth scopes:
 
-The Codex CLI public client ID (`app_EMoamEEZ73f0CkXaXp7hrann`) only grants
-identity OAuth scopes. API scope names like `model.request` and `api.model.read`
-are not valid OAuth scope values — the authorization endpoint rejects them.
-All third-party tools (OpenCode, OpenClaw) use curated/hardcoded model lists
-instead of live discovery for OAuth tokens.
+- `model.request` and `api.model.read` are **not valid OAuth scope names** — the
+  authorization endpoint rejects them as "invalid scope"
+- The only valid scopes are identity scopes: `openid profile email offline_access`
+- The client ID grants API access (chat completions) implicitly, but model listing
+  is blocked
+
+All third-party tools (OpenCode, OpenClaw, Codex CLI) use curated/hardcoded model
+lists instead of live discovery for OAuth tokens.
+
+### Responses API requirement
+
+Codex OAuth tokens MUST use the Responses API (`/v1/responses`), NOT Chat
+Completions (`/v1/chat/completions`). Chat Completions is deprecated for Codex
+and returns `insufficient_quota` even when the user has quota remaining.
+
+| Endpoint | OAuth Token | API Key |
+|----------|-------------|---------|
+| `/v1/models` | **BLOCKED** (403) | Works |
+| `/v1/chat/completions` | **BLOCKED** (429 insufficient_quota) | Works |
+| `/v1/responses` | Works | Works |
+
+### References
+
+- OpenCode implementation: https://github.com/anomalyco/opencode/issues/3281
+- OpenClaw scope fix: https://github.com/openclaw/openclaw/issues/24720
+- Codex models docs: https://developers.openai.com/codex/models

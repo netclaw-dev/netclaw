@@ -100,7 +100,7 @@ model provider credentials or network access to external inference services.
 ### MP-008 Local Dev Ollama Profile
 
 The default local smoke profile SHALL target the Tailscale-reachable Ollama
-server `big-gpu` (`http://big-gpu:11434`) and use `qwen3:30b` (fallback
+server `my-gpu-server` (`http://my-gpu-server:11434`) and use `qwen3:30b` (fallback
 `qwen3:14b`).
 
 ### MP-009 Primary + Fallback Configuration

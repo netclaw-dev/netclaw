@@ -84,7 +84,7 @@ keys used by model references.
     },
     "remote-gpu": {
       "Type": "ollama",
-      "Endpoint": "http://big-gpu:11434"
+      "Endpoint": "http://my-gpu-server:11434"
     },
     "openrouter": {
       "Type": "openrouter",

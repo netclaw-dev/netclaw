@@ -41,11 +41,11 @@ Session actors depend on provider-neutral chat client behavior.
 
 ## Local Dev Defaults (Non-CI)
 
-- preferred smoke endpoint: `http://big-gpu:11434`
+- preferred smoke endpoint: `http://my-gpu-server:11434`
 - preferred smoke model: `qwen3:30b`
 - fallback smoke model: `qwen3:14b`
 
-Rationale: `big-gpu` is available on Tailscale for local development and has
+Rationale: `my-gpu-server` is available on Tailscale for local development and has
 enough VRAM for a stronger coding-oriented model profile.
 
 ## Testing Constraints

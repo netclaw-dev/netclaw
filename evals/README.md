@@ -13,7 +13,7 @@ netclaw init
 
 # Run the full suite against your preferred LLM endpoint.
 NETCLAW_EVAL_PROVIDER_TYPE=ollama \
-NETCLAW_EVAL_PROVIDER_ENDPOINT=http://big-gpu.tailnet.ts.net:11434 \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://my-gpu-server.tailnet.ts.net:11434 \
 NETCLAW_EVAL_MODEL_ID=qwen3:30b \
   ./evals/run-evals.sh
 ```
@@ -48,7 +48,7 @@ default provider.
    handles files the daemon wrote as UID 0.
 
 `--network host` is the default because operators often host their LLM on
-a Tailscale node — MagicDNS hostnames like `big-gpu.tailnet.ts.net` only
+a Tailscale node — MagicDNS hostnames like `my-gpu-server.tailnet.ts.net` only
 resolve when the container shares the host's DNS resolver. macOS/Windows
 operators need a different endpoint resolution strategy (Docker Desktop
 reduces `--network host` to bridge mode).
@@ -125,7 +125,7 @@ the missing values. In non-interactive contexts it fails loudly.
 ```bash
 # Quick smoke test (1 run, lower threshold)
 NETCLAW_EVAL_PROVIDER_TYPE=ollama \
-NETCLAW_EVAL_PROVIDER_ENDPOINT=http://big-gpu:11434 \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://my-gpu-server:11434 \
 NETCLAW_EVAL_MODEL_ID=qwen3:30b \
 NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=0.50 \
   ./evals/run-evals.sh

@@ -30,7 +30,7 @@ Live provider checks run only through explicit command invocation.
 
 Ollama is treated as an OpenAI-compatible provider profile for smoke checks.
 
-### Decision 4: Local smoke defaults target big-gpu
+### Decision 4: Local smoke defaults target my-gpu-server
 
-Default local smoke profile points at `http://big-gpu:11434` with
+Default local smoke profile points at `http://my-gpu-server:11434` with
 `qwen3:30b` as preferred model and `qwen3:14b` as fallback.

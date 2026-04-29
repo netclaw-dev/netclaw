@@ -248,7 +248,7 @@ container completely decoupled from in-place host mutation.
 **Alternatives considered:**
 
 1. Default bridged network with `-p 5299:5199`. Rejected: Tailscale
-   MagicDNS hostnames (e.g. `big-gpu.tailnet.ts.net`) don't resolve
+   MagicDNS hostnames (e.g. `my-gpu-server.tailnet.ts.net`) don't resolve
    inside bridged containers on Linux because MagicDNS is exposed via
    the host's `systemd-resolved` entries, not propagated into container
    DNS. `--network host` shares the host's resolver and loopback,

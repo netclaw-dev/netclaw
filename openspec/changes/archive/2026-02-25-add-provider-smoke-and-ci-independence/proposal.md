@@ -16,7 +16,7 @@ the OSS-friendly CI pipeline must not require live provider credentials.
 1. Add requirements for optional live smoke tests against local providers.
 2. Add requirements that CI-required tests remain provider-independent.
 3. Add CLI and capability-level contracts for smoke command semantics.
-4. Capture local-dev defaults for the Tailscale Ollama host `big-gpu`.
+4. Capture local-dev defaults for the Tailscale Ollama host `my-gpu-server`.
 
 ## Scope
 

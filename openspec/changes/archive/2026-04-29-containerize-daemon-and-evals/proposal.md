@@ -39,7 +39,7 @@ contamination disappears, and the daemon gains a first-class
   container per suite run, forward provider/model config via `NETCLAW_`
   env vars, bind-mount the host's `~/.netclaw/identity` read-only, capture
   daemon logs from `docker logs`, run the container with `--network host`
-  so Tailscale MagicDNS hostnames (e.g. a local `big-gpu.tail...ts.net`
+  so Tailscale MagicDNS hostnames (e.g. a local `my-gpu-server.tail...ts.net`
   inference endpoint) resolve inside the container, and tear down the
   container on exit. Case definitions, assertion helpers, and the run-loop
   are untouched.
@@ -145,7 +145,7 @@ run locally against a host-provided LLM endpoint (self-hosted or cloud).
     running; in fact, the host daemon is irrelevant to the eval run.
   - `--network host` is the default container network mode for evals. This
     inherits the host's DNS resolver (so Tailscale MagicDNS entries like
-    `big-gpu.tail...ts.net` resolve automatically) and loopback namespace
+    `my-gpu-server.tail...ts.net` resolve automatically) and loopback namespace
     (so `http://127.0.0.1:1234/v1`-style LLM endpoints work without port
     mapping). It also means the container binds `$NETCLAW_EVAL_PORT`
     directly on the host — the script fails loudly if the port is already

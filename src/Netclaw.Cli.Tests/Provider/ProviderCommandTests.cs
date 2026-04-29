@@ -51,7 +51,7 @@ public sealed class ProviderCommandTests : IDisposable
                 ["my-ollama"] = new Dictionary<string, object>
                 {
                     ["Type"] = "ollama",
-                    ["Endpoint"] = "http://big-gpu:11434",
+                    ["Endpoint"] = "http://my-gpu-server:11434",
                     ["AuthMethod"] = "None"
                 }
             }
@@ -62,14 +62,14 @@ public sealed class ProviderCommandTests : IDisposable
 
         Assert.Contains("my-ollama", output);
         Assert.Contains("ollama", output);
-        Assert.Contains("http://big-gpu:11434", output);
+        Assert.Contains("http://my-gpu-server:11434", output);
     }
 
     [Fact]
     public async Task Add_OllamaProvider_WritesConfig()
     {
         var exitCode = await ProviderCommand.RunAsync(
-            ["provider", "add", "my-ollama", "ollama", "--endpoint", "http://big-gpu:11434"],
+            ["provider", "add", "my-ollama", "ollama", "--endpoint", "http://my-gpu-server:11434"],
             _paths, output: _output);
 
         Assert.Equal(0, exitCode);
@@ -78,7 +78,7 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.True(config.RootElement.TryGetProperty("Providers", out var providers));
         Assert.True(providers.TryGetProperty("my-ollama", out var entry));
         Assert.Equal("ollama", entry.GetProperty("Type").GetString());
-        Assert.Equal("http://big-gpu:11434", entry.GetProperty("Endpoint").GetString());
+        Assert.Equal("http://my-gpu-server:11434", entry.GetProperty("Endpoint").GetString());
     }
 
     [Fact]

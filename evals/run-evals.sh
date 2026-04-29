@@ -6,7 +6,7 @@
 #
 # Usage:
 #   NETCLAW_EVAL_PROVIDER_TYPE=ollama \
-#   NETCLAW_EVAL_PROVIDER_ENDPOINT=http://big-gpu.tailnet.ts.net:11434 \
+#   NETCLAW_EVAL_PROVIDER_ENDPOINT=http://my-gpu-server.tailnet.ts.net:11434 \
 #   NETCLAW_EVAL_MODEL_ID=qwen3:30b \
 #     ./evals/run-evals.sh
 #

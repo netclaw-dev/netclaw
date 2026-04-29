@@ -238,7 +238,7 @@ torn down on script exit (success, failure, or SIGINT). Eval state
 
 `evals/run-evals.sh` SHALL start the eval container with `--network host`
 by default. This inherits the host's DNS resolver so Tailscale MagicDNS
-hostnames (e.g. `big-gpu.tail...ts.net`) resolve inside the container, and
+hostnames (e.g. `my-gpu-server.tail...ts.net`) resolve inside the container, and
 it inherits the loopback namespace so `http://127.0.0.1:<port>`-style LLM
 endpoints are reachable without port mapping. The script SHALL fail loudly
 if `$NETCLAW_EVAL_PORT` is already bound on the host, rather than silently
@@ -246,7 +246,7 @@ falling through to a different port.
 
 #### Scenario: Tailscale-only endpoint resolves inside container
 
-- **GIVEN** the operator's LLM endpoint is `http://big-gpu.tailnet.ts.net:1234/v1`
+- **GIVEN** the operator's LLM endpoint is `http://my-gpu-server.tailnet.ts.net:1234/v1`
 - **AND** the host has a working Tailscale connection with MagicDNS enabled
 - **WHEN** the eval script starts the container and routes prompts through
   the eval daemon

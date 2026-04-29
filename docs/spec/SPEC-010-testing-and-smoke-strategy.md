@@ -44,7 +44,7 @@ tests can validate real provider integrations.
 ## Local Smoke Profile (Developer Default)
 
 - provider: `ollama`
-- endpoint: `http://big-gpu:11434` (Tailscale network)
+- endpoint: `http://my-gpu-server:11434` (Tailscale network)
 - model: `qwen3:30b`
 - fallback model: `qwen3:14b`
 

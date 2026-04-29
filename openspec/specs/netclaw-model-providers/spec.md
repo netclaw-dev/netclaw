@@ -71,7 +71,7 @@ OpenAI-compatible endpoint such as Ollama.
 
 - **GIVEN** local smoke profile is used
 - **WHEN** endpoint defaults are applied
-- **THEN** provider targets `http://big-gpu:11434`
+- **THEN** provider targets `http://my-gpu-server:11434`
 - **AND** model defaults to `qwen3:30b` with fallback `qwen3:14b`
 
 ### Requirement: CI provider independence
