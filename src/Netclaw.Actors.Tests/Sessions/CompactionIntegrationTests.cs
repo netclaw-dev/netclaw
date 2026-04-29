@@ -35,6 +35,8 @@ public class CompactionIntegrationTests : LlmSessionTestBase
     protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
+        // Small context window so 0.75 threshold (750 tokens) is easy to exceed.
+        // KeepRecentMessages=0 so single-turn tests actually reduce message count.
         services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
