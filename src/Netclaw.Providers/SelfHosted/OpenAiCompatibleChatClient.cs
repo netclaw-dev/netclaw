@@ -85,15 +85,20 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             foreach (var update in ParseStreamingUpdates(document.RootElement, pendingToolCalls))
             {
                 var suppressThisUpdate = false;
-                foreach (var tc in update.Contents.OfType<TextContent>())
+                foreach (var item in update.Contents)
                 {
-                    accumulatedText.Append(tc.Text);
-                    if (filter.ShouldSuppress(tc.Text))
-                        suppressThisUpdate = true;
+                    switch (item)
+                    {
+                        case TextContent tc:
+                            accumulatedText.Append(tc.Text);
+                            if (filter.ShouldSuppress(tc.Text))
+                                suppressThisUpdate = true;
+                            break;
+                        case FunctionCallContent:
+                            hadStructuredToolCalls = true;
+                            break;
+                    }
                 }
-
-                if (update.Contents.OfType<FunctionCallContent>().Any())
-                    hadStructuredToolCalls = true;
 
                 if (update.FinishReason is not null)
                     finalUpdate = update;
