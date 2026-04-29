@@ -28,8 +28,11 @@ public sealed class SessionPipelineHandle
     private readonly ILoggingAdapter _log;
     private readonly string _materializerNamePrefix;
 
+    private static readonly TimeSpan StreamDrainTimeout = TimeSpan.FromSeconds(5);
+
     private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
+    private Task? _outputCompletion;
     private ChannelWriter<ChannelInput>? _inputQueue;
     private int _pipelineGeneration;
     private bool _isReinitializing;
@@ -97,13 +100,16 @@ public sealed class SessionPipelineHandle
             .Run(_materializer);
 
         var generation = ++_pipelineGeneration;
-        var outputCompletion = materialized.Output
+        var outputTerminated = materialized.Output
+            .WatchTermination((_, done) => done)
             .ToMaterialized(
                 Sink.ForEach<SessionOutput>(onOutput),
-                Keep.Right)
+                Keep.Left)
             .Run(_materializer);
 
-        _ = outputCompletion.ContinueWith(t =>
+        _outputCompletion = outputTerminated;
+
+        _ = outputTerminated.ContinueWith(t =>
             {
                 var cause = t.IsFaulted ? t.Exception?.GetBaseException() : null;
                 onStreamTerminated(generation, cause);
@@ -144,8 +150,11 @@ public sealed class SessionPipelineHandle
             .ToMaterialized(materialized.Input, Keep.Left)
             .Run(_materializer);
 
-        materialized.Output
-            .To(Sink.ForEach<SessionOutput>(onOutput))
+        _outputCompletion = materialized.Output
+            .WatchTermination((_, done) => done)
+            .ToMaterialized(
+                Sink.ForEach<SessionOutput>(onOutput),
+                Keep.Left)
             .Run(_materializer);
 
         _session = materialized;
@@ -186,6 +195,20 @@ public sealed class SessionPipelineHandle
                 _session = null;
             }
 
+            if (_outputCompletion is not null)
+            {
+                try
+                {
+                    await _outputCompletion.WaitAsync(StreamDrainTimeout);
+                }
+                catch
+                {
+                    // stream faulted or timed out — safe to proceed with materializer disposal
+                }
+
+                _outputCompletion = null;
+            }
+
             _materializer?.Dispose();
             _materializer = null;
 
@@ -205,27 +228,45 @@ public sealed class SessionPipelineHandle
     }
 
     /// <summary>
-    /// Synchronous cleanup for actor <c>PostStop</c>. Completes input queue,
-    /// disposes session and materializer.
+    /// Shuts down the kill switch and waits for the output stream to finish
+    /// draining. Must be called <b>before</b> <c>Context.Stop(Self)</c> so
+    /// that stream stage actors (children of the materializer's actor context)
+    /// complete gracefully rather than being abruptly terminated when the
+    /// parent actor stops.
     /// </summary>
-    public void Dispose()
+    public async Task DrainAsync()
     {
         _inputQueue?.TryComplete();
 
         if (_session is not null)
         {
+            await _session.DisposeAsync();
+            _session = null;
+        }
+
+        if (_outputCompletion is not null)
+        {
             try
             {
-                var vt = _session.DisposeAsync();
-                if (!vt.IsCompletedSuccessfully)
-                    vt.AsTask().GetAwaiter().GetResult();
+                await _outputCompletion.WaitAsync(StreamDrainTimeout);
             }
             catch (Exception ex)
             {
-                _log.Debug(ex, "Failed to dispose {0} session during cleanup", _materializerNamePrefix);
+                _log.Debug(ex, "{0} output stream faulted or timed out during drain", _materializerNamePrefix);
             }
-        }
 
+            _outputCompletion = null;
+        }
+    }
+
+    /// <summary>
+    /// Final cleanup for actor <c>PostStop</c>. Disposes the materializer.
+    /// Stream stages should already be drained via <see cref="DrainAsync"/>
+    /// before the actor stops.
+    /// </summary>
+    public void Dispose()
+    {
+        _inputQueue?.TryComplete();
         _materializer?.Dispose();
     }
 }

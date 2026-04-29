@@ -148,7 +148,11 @@ internal sealed class WebhookExecutionActor : ReceiveActor
                 errorMessage);
         }
 
-        Context.Stop(Self);
+        RunTask(async () =>
+        {
+            await _handle.DrainAsync();
+            Context.Stop(Self);
+        });
     }
 
     protected override void PostStop()

@@ -443,7 +443,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             new ReminderId(_definition.Id),
             success,
             errorMessage));
-        Context.Stop(Self);
+
+        // Drain stream stages before stopping so they complete gracefully
+        // rather than being abruptly terminated as actor children.
+        RunTask(async () =>
+        {
+            await _handle.DrainAsync();
+            Context.Stop(Self);
+        });
     }
 
     protected override void PostStop()
