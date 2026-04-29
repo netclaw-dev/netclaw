@@ -340,7 +340,7 @@ public sealed class WizardConfigBuilder
 public sealed class WizardSecretsBuilder
 {
     private readonly NetclawPaths _paths;
-    private readonly Dictionary<string, object> _secrets = new();
+    private readonly Dictionary<string, object> _secrets = [];
 
     public WizardSecretsBuilder(NetclawPaths paths)
     {

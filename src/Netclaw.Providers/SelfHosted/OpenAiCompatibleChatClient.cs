@@ -127,7 +127,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     yield return new ChatResponseUpdate(ChatRole.Assistant, [new TextContent(cleaned)]);
                 }
 
-                yield return new ChatResponseUpdate(ChatRole.Assistant, textToolCalls.Cast<AIContent>().ToList())
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [.. textToolCalls.Cast<AIContent>()])
                 {
                     FinishReason = ChatFinishReason.ToolCalls
                 };
@@ -142,7 +142,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             var textToolCalls = TextToolCallParser.ExtractFromText(accumulatedText.ToString());
             if (textToolCalls.Count > 0)
             {
-                yield return new ChatResponseUpdate(ChatRole.Assistant, textToolCalls.Cast<AIContent>().ToList())
+                yield return new ChatResponseUpdate(ChatRole.Assistant, [.. textToolCalls.Cast<AIContent>()])
                 {
                     FinishReason = ChatFinishReason.ToolCalls
                 };
@@ -670,7 +670,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             Additional(details)[PredictedTokPerSecX100Key] = (long)(predictedPerSec * 100);
 
         static AdditionalPropertiesDictionary<long> Additional(UsageDetails d)
-            => d.AdditionalCounts ??= new AdditionalPropertiesDictionary<long>();
+            => d.AdditionalCounts ??= [];
     }
 
     private static bool TryGetLong(JsonElement obj, string name, out long value)

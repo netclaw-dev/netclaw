@@ -1278,7 +1278,7 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
         if (jsonOutput)
         {
             var node = JsonSerializer.SerializeToNode(status, JsonDefaults.Api)!;
-            var updateNode = (node["update"] as JsonObject) ?? new JsonObject();
+            var updateNode = (node["update"] as JsonObject) ?? [];
             var updateAvailable = string.Equals(cliUpdate.State, "update-available", StringComparison.Ordinal);
             updateNode["available"] = updateAvailable;
             updateNode["state"] = cliUpdate.State;

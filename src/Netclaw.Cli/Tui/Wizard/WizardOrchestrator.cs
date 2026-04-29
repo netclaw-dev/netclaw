@@ -195,7 +195,7 @@ public sealed class WizardOrchestrator : IDisposable
     private List<IWizardStepViewModel> BuildInitialActiveSteps()
     {
         _currentIndex = 0;
-        return _allSteps.Where(s => s.IsApplicable(_context)).ToList();
+        return [.. _allSteps.Where(s => s.IsApplicable(_context))];
     }
 
     /// <summary>

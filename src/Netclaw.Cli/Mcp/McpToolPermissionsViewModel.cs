@@ -48,16 +48,16 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public ToolAudienceProfiles Profiles { get; private set; } = ToolAudienceProfileDefaults.CreateProfiles();
 
     // Track pending changes
-    private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _pendingGrants = new();
+    private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _pendingGrants = [];
     // Track pending server access changes: (audience, server) → allowed
-    private readonly Dictionary<(string Audience, string Server), bool> _pendingServerAccess = new();
+    private readonly Dictionary<(string Audience, string Server), bool> _pendingServerAccess = [];
     // Track pending server-level approval defaults: (audience, server) → mode
-    private readonly Dictionary<(string Audience, string Server), ToolApprovalMode> _pendingServerDefaults = new();
+    private readonly Dictionary<(string Audience, string Server), ToolApprovalMode> _pendingServerDefaults = [];
     // Track pending per-tool approval overrides: (audience, server, tool) → mode.
     // A null value is the "inherit" sentinel: the entry is removed from
     // ToolOverrides on save so the effective mode falls through to the
     // server default / global default.
-    private readonly Dictionary<(string Audience, string Server, string Tool), ToolApprovalMode?> _pendingToolOverrides = new();
+    private readonly Dictionary<(string Audience, string Server, string Tool), ToolApprovalMode?> _pendingToolOverrides = [];
     public bool HasUnsavedChanges =>
         _pendingGrants.Count > 0
         || _pendingServerAccess.Count > 0
@@ -373,7 +373,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
-            serverGrants = new Dictionary<string, HashSet<string>>();
+            serverGrants = [];
             _pendingGrants[SelectedServer] = serverGrants;
         }
 
@@ -393,7 +393,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
-            serverGrants = new Dictionary<string, HashSet<string>>();
+            serverGrants = [];
             _pendingGrants[SelectedServer] = serverGrants;
         }
 
@@ -585,7 +585,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             // so the operator explicitly selects which tools to expose
             if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
             {
-                serverGrants = new Dictionary<string, HashSet<string>>();
+                serverGrants = [];
                 _pendingGrants[SelectedServer] = serverGrants;
             }
 

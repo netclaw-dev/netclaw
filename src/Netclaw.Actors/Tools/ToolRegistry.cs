@@ -27,7 +27,7 @@ public sealed record McpServerSummary(string ServerName, string Description, int
 /// </summary>
 public sealed class ToolRegistry
 {
-    private readonly List<ToolRegistration> _tools = new();
+    private readonly List<ToolRegistration> _tools = [];
 
     public void Register(INetclawTool tool)
     {

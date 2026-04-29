@@ -150,13 +150,13 @@ internal static class McpCommand
             {
                 // netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server
                 commandOrUrl = dashArgs[0];
-                commandArgs = dashArgs.Skip(1).ToArray();
+                commandArgs = [.. dashArgs.Skip(1)];
             }
             else if (positional.Count >= 2)
             {
                 // netclaw mcp add --transport stdio memorizer npx
                 commandOrUrl = positional[1];
-                commandArgs = positional.Skip(2).ToArray();
+                commandArgs = [.. positional.Skip(2)];
             }
 
             if (string.IsNullOrWhiteSpace(commandOrUrl))
@@ -873,7 +873,7 @@ internal static class McpCommand
 
                 if (prop.Value.TryGetProperty("EnvironmentVariables", out var envVars))
                 {
-                    entry.EnvironmentVariables ??= new Dictionary<string, string>();
+                    entry.EnvironmentVariables ??= [];
                     foreach (var ev in envVars.EnumerateObject())
                     {
                         var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, ev.Value.GetString());
@@ -883,7 +883,7 @@ internal static class McpCommand
 
                 if (prop.Value.TryGetProperty("Headers", out var hdrs))
                 {
-                    entry.Headers ??= new Dictionary<string, string>();
+                    entry.Headers ??= [];
                     foreach (var h in hdrs.EnumerateObject())
                     {
                         var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, h.Value.GetString());
@@ -923,10 +923,10 @@ internal static class McpCommand
                     audienceFilter = args[++i];
                     break;
                 case "--grant" when i + 1 < args.Length:
-                    grantTools = args[++i].Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToList();
+                    grantTools = [.. args[++i].Split(',').Select(t => t.Trim()).Where(t => t.Length > 0)];
                     break;
                 case "--revoke" when i + 1 < args.Length:
-                    revokeTools = args[++i].Split(',').Select(t => t.Trim()).Where(t => t.Length > 0).ToList();
+                    revokeTools = [.. args[++i].Split(',').Select(t => t.Trim()).Where(t => t.Length > 0)];
                     break;
                 case "--help" or "-h":
                     WriteToolsHelp(writer);
@@ -1110,9 +1110,9 @@ internal static class McpCommand
         var audienceNames = targetAudience switch
         {
             TrustAudience.Public => new[] { "Public" },
-            TrustAudience.Team => new[] { "Team" },
-            TrustAudience.Personal => new[] { "Personal" },
-            _ => new[] { "Public", "Team", "Personal" }
+            TrustAudience.Team => ["Team"],
+            TrustAudience.Personal => ["Personal"],
+            _ => ["Public", "Team", "Personal"]
         };
 
         var updated = 0;
@@ -1143,7 +1143,7 @@ internal static class McpCommand
             var grants = audienceSection.TryGetValue("McpServerToolGrants", out var existing)
                 && existing is Dictionary<string, object> dict
                     ? dict
-                    : new Dictionary<string, object>();
+                    : [];
 
             grants[serverName.Value] = discoveredTools;
             audienceSection["McpServerToolGrants"] = grants;
@@ -1217,7 +1217,7 @@ internal static class McpCommand
         var grants = audienceSection.TryGetValue("McpServerToolGrants", out var ex)
             && ex is Dictionary<string, object> dict
                 ? dict
-                : new Dictionary<string, object>();
+                : [];
 
         grants[serverName.Value] = currentTools.Order(StringComparer.Ordinal).ToList();
         audienceSection["McpServerToolGrants"] = grants;

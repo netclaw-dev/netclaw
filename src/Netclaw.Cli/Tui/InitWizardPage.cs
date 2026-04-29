@@ -36,7 +36,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private DynamicLayoutNode? _helpTextNode;
 
     // Step-specific subscriptions — cleared when step content is rebuilt.
-    private readonly CompositeDisposable _stepSubs = new();
+    private readonly CompositeDisposable _stepSubs = [];
 
     protected override void OnBound()
     {

@@ -25,7 +25,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Valid_file_within_session_directory_succeeds()
     {
         var filePath = Path.Combine(_dir.Path, "report.png");
-        await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 }, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
@@ -130,7 +130,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Display_name_is_used_when_provided()
     {
         var filePath = Path.Combine(_dir.Path, "abc123.png");
-        await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 }, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>
@@ -150,7 +150,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Successful_attach_populates_file_attachments_on_context()
     {
         var filePath = Path.Combine(_dir.Path, "chart.png");
-        await File.WriteAllBytesAsync(filePath, new byte[] { 0x89, 0x50, 0x4E, 0x47 }, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
         var args = new Dictionary<string, object?>

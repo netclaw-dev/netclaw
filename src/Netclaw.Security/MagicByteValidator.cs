@@ -223,73 +223,74 @@ public static class MagicByteValidator
 
     private static Dictionary<string, SignatureRule> BuildRules()
     {
-        var rules = new Dictionary<string, SignatureRule>(StringComparer.OrdinalIgnoreCase);
+        var rules = new Dictionary<string, SignatureRule>(StringComparer.OrdinalIgnoreCase)
+        {
+            // Images
+            ["image/png"] = new(Exts(".png"), IsPng),
+            ["image/jpeg"] = new(Exts(".jpg", ".jpeg"), IsJpeg),
+            ["image/gif"] = new(Exts(".gif"), IsGif),
+            ["image/webp"] = new(Exts(".webp"), IsWebp),
 
-        // Images
-        rules["image/png"] = new(Exts(".png"), IsPng);
-        rules["image/jpeg"] = new(Exts(".jpg", ".jpeg"), IsJpeg);
-        rules["image/gif"] = new(Exts(".gif"), IsGif);
-        rules["image/webp"] = new(Exts(".webp"), IsWebp);
+            // PDF
+            ["application/pdf"] = new(Exts(".pdf"), IsPdf),
 
-        // PDF
-        rules["application/pdf"] = new(Exts(".pdf"), IsPdf);
+            // OOXML (ZIP-based) — docx/xlsx/pptx
+            ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] =
+            new(Exts(".docx"), IsZip),
+            ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] =
+            new(Exts(".xlsx"), IsZip),
+            ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] =
+            new(Exts(".pptx"), IsZip),
 
-        // OOXML (ZIP-based) — docx/xlsx/pptx
-        rules["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] =
-            new(Exts(".docx"), IsZip);
-        rules["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] =
-            new(Exts(".xlsx"), IsZip);
-        rules["application/vnd.openxmlformats-officedocument.presentationml.presentation"] =
-            new(Exts(".pptx"), IsZip);
+            // OpenDocument (also ZIP-based)
+            ["application/vnd.oasis.opendocument.text"] = new(Exts(".odt"), IsZip),
+            ["application/vnd.oasis.opendocument.spreadsheet"] = new(Exts(".ods"), IsZip),
+            ["application/vnd.oasis.opendocument.presentation"] = new(Exts(".odp"), IsZip),
 
-        // OpenDocument (also ZIP-based)
-        rules["application/vnd.oasis.opendocument.text"] = new(Exts(".odt"), IsZip);
-        rules["application/vnd.oasis.opendocument.spreadsheet"] = new(Exts(".ods"), IsZip);
-        rules["application/vnd.oasis.opendocument.presentation"] = new(Exts(".odp"), IsZip);
+            // Legacy OLE Compound Document Office formats
+            ["application/msword"] = new(Exts(".doc"), IsOle),
+            ["application/vnd.ms-excel"] = new(Exts(".xls"), IsOle),
+            ["application/vnd.ms-powerpoint"] = new(Exts(".ppt"), IsOle),
 
-        // Legacy OLE Compound Document Office formats
-        rules["application/msword"] = new(Exts(".doc"), IsOle);
-        rules["application/vnd.ms-excel"] = new(Exts(".xls"), IsOle);
-        rules["application/vnd.ms-powerpoint"] = new(Exts(".ppt"), IsOle);
+            // Plain/structured text — no signature, but executable pre-check
+            // still blocks MZ / ELF / shebang payloads.
+            ["text/plain"] = new(Exts(".txt", ".log"), AnyContent),
+            ["text/markdown"] = new(Exts(".md", ".markdown"), AnyContent),
+            ["text/csv"] = new(Exts(".csv"), AnyContent),
+            ["text/xml"] = new(Exts(".xml"), AnyContent),
+            ["application/json"] = new(Exts(".json"), AnyContent),
+            ["application/xml"] = new(Exts(".xml"), AnyContent),
+            ["application/yaml"] = new(Exts(".yml", ".yaml"), AnyContent),
+            ["application/x-yaml"] = new(Exts(".yml", ".yaml"), AnyContent),
 
-        // Plain/structured text — no signature, but executable pre-check
-        // still blocks MZ / ELF / shebang payloads.
-        rules["text/plain"] = new(Exts(".txt", ".log"), AnyContent);
-        rules["text/markdown"] = new(Exts(".md", ".markdown"), AnyContent);
-        rules["text/csv"] = new(Exts(".csv"), AnyContent);
-        rules["text/xml"] = new(Exts(".xml"), AnyContent);
-        rules["application/json"] = new(Exts(".json"), AnyContent);
-        rules["application/xml"] = new(Exts(".xml"), AnyContent);
-        rules["application/yaml"] = new(Exts(".yml", ".yaml"), AnyContent);
-        rules["application/x-yaml"] = new(Exts(".yml", ".yaml"), AnyContent);
+            // Rich text
+            ["application/rtf"] = new(Exts(".rtf"), IsRtf),
+            ["text/rtf"] = new(Exts(".rtf"), IsRtf),
 
-        // Rich text
-        rules["application/rtf"] = new(Exts(".rtf"), IsRtf);
-        rules["text/rtf"] = new(Exts(".rtf"), IsRtf);
+            // Archives
+            ["application/zip"] = new(Exts(".zip"), IsZip),
+            ["application/x-zip-compressed"] = new(Exts(".zip"), IsZip),
+            ["application/x-7z-compressed"] = new(Exts(".7z"), Is7z),
+            ["application/gzip"] = new(Exts(".gz", ".tgz"), IsGzip),
+            ["application/x-gzip"] = new(Exts(".gz", ".tgz"), IsGzip),
+            ["application/x-bzip2"] = new(Exts(".bz2"), IsBzip2),
+            ["application/x-xz"] = new(Exts(".xz"), IsXz),
 
-        // Archives
-        rules["application/zip"] = new(Exts(".zip"), IsZip);
-        rules["application/x-zip-compressed"] = new(Exts(".zip"), IsZip);
-        rules["application/x-7z-compressed"] = new(Exts(".7z"), Is7z);
-        rules["application/gzip"] = new(Exts(".gz", ".tgz"), IsGzip);
-        rules["application/x-gzip"] = new(Exts(".gz", ".tgz"), IsGzip);
-        rules["application/x-bzip2"] = new(Exts(".bz2"), IsBzip2);
-        rules["application/x-xz"] = new(Exts(".xz"), IsXz);
+            // Audio
+            ["audio/mpeg"] = new(Exts(".mp3"), IsMp3FrameOrId3),
+            ["audio/mp4"] = new(Exts(".m4a", ".mp4"), IsFtyp),
+            ["audio/x-m4a"] = new(Exts(".m4a"), IsFtyp),
+            ["audio/wav"] = new(Exts(".wav"), IsWav),
+            ["audio/x-wav"] = new(Exts(".wav"), IsWav),
+            ["audio/ogg"] = new(Exts(".ogg", ".oga"), IsOgg),
 
-        // Audio
-        rules["audio/mpeg"] = new(Exts(".mp3"), IsMp3FrameOrId3);
-        rules["audio/mp4"] = new(Exts(".m4a", ".mp4"), IsFtyp);
-        rules["audio/x-m4a"] = new(Exts(".m4a"), IsFtyp);
-        rules["audio/wav"] = new(Exts(".wav"), IsWav);
-        rules["audio/x-wav"] = new(Exts(".wav"), IsWav);
-        rules["audio/ogg"] = new(Exts(".ogg", ".oga"), IsOgg);
-
-        // Video
-        rules["video/mp4"] = new(Exts(".mp4", ".m4v"), IsFtyp);
-        rules["video/quicktime"] = new(Exts(".mov"), IsFtyp);
-        rules["video/webm"] = new(Exts(".webm"), IsEbml);
-        rules["video/x-matroska"] = new(Exts(".mkv"), IsEbml);
-        rules["video/x-msvideo"] = new(Exts(".avi"), IsAvi);
+            // Video
+            ["video/mp4"] = new(Exts(".mp4", ".m4v"), IsFtyp),
+            ["video/quicktime"] = new(Exts(".mov"), IsFtyp),
+            ["video/webm"] = new(Exts(".webm"), IsEbml),
+            ["video/x-matroska"] = new(Exts(".mkv"), IsEbml),
+            ["video/x-msvideo"] = new(Exts(".avi"), IsAvi)
+        };
 
         return rules;
     }
@@ -299,18 +300,19 @@ public static class MagicByteValidator
 
     private static Dictionary<(string Extension, string DeclaredMime), string> BuildMimeNormalizationRules()
     {
-        var rules = new Dictionary<(string, string), string>(new ExtensionMimePairComparer());
+        var rules = new Dictionary<(string, string), string>(new ExtensionMimePairComparer())
+        {
+            // Slack reports .md files as text/plain instead of text/markdown
+            [(".md", "text/plain")] = "text/markdown",
+            [(".markdown", "text/plain")] = "text/markdown",
 
-        // Slack reports .md files as text/plain instead of text/markdown
-        rules[(".md", "text/plain")] = "text/markdown";
-        rules[(".markdown", "text/plain")] = "text/markdown";
-
-        // JSON/YAML/CSV/XML sometimes reported as text/plain by various providers
-        rules[(".json", "text/plain")] = "application/json";
-        rules[(".yaml", "text/plain")] = "application/yaml";
-        rules[(".yml", "text/plain")] = "application/yaml";
-        rules[(".csv", "text/plain")] = "text/csv";
-        rules[(".xml", "text/plain")] = "text/xml";
+            // JSON/YAML/CSV/XML sometimes reported as text/plain by various providers
+            [(".json", "text/plain")] = "application/json",
+            [(".yaml", "text/plain")] = "application/yaml",
+            [(".yml", "text/plain")] = "application/yaml",
+            [(".csv", "text/plain")] = "text/csv",
+            [(".xml", "text/plain")] = "text/xml"
+        };
 
         return rules;
     }

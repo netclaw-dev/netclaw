@@ -314,7 +314,7 @@ public static class McpSchemaSanitizer
         // Get or create properties object
         if (!dict.TryGetValue("properties", out var propsObj) || propsObj is not Dictionary<string, object?> props)
         {
-            props = new Dictionary<string, object?>();
+            props = [];
             dict["properties"] = props;
         }
 

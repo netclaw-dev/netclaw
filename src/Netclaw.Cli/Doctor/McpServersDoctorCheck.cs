@@ -35,7 +35,7 @@ public sealed class McpServersDoctorCheck(NetclawPaths paths, DaemonApi daemonAp
                     "No MCP servers configured (use `netclaw mcp add` to add one)");
 
             servers = JsonSerializer.Deserialize<Dictionary<string, McpServerEntry>>(mcpSection.GetRawText())
-                ?? new();
+                ?? [];
         }
         catch (Exception ex)
         {

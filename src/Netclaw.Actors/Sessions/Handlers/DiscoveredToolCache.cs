@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Sessions.Handlers;
 /// </summary>
 internal sealed class DiscoveredToolCache
 {
-    private readonly List<string> _order = new();
+    private readonly List<string> _order = [];
     private readonly Dictionary<string, int> _leases = new(StringComparer.Ordinal);
 
     /// <summary>

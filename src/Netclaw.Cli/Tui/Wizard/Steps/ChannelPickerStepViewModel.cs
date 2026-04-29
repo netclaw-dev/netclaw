@@ -29,8 +29,8 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     private WizardContext? _context;
 
     private readonly List<ChannelAdapterEntry> _adapters;
-    private readonly Dictionary<ChannelType, bool> _enabled = new();
-    private readonly Dictionary<ChannelType, string> _summaries = new();
+    private readonly Dictionary<ChannelType, bool> _enabled = [];
+    private readonly Dictionary<ChannelType, string> _summaries = [];
 
     public ChannelPickerStepViewModel(ISlackProbe slackProbe, IDiscordProbe discordProbe)
     {

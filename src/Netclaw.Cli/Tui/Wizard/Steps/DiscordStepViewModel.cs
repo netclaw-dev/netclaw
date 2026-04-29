@@ -383,11 +383,10 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
     internal static List<string> ParseChannelIds(string? input)
         => string.IsNullOrWhiteSpace(input)
             ? []
-            : input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            : [.. input.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .Select(x => x.Trim().TrimStart('#'))
                 .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
+                .Distinct(StringComparer.Ordinal)];
 
     private static List<string> ParseUserIds(string? input)
         => WizardStepHelpers.ParseUserIds(input);
