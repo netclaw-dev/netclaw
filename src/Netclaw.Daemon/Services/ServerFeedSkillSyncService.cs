@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ServerFeedSkillSyncService.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -25,12 +25,10 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 {
     private readonly SkillFeedsConfig _feedsConfig;
     private readonly NetclawPaths _paths;
-    private readonly SkillRegistry _skillRegistry;
-    private readonly SkillIndexContextLayer _skillIndexLayer;
     private readonly TimeProvider _timeProvider;
-    private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
+    private readonly ServerFeedSyncHelper _syncHelper;
 
     // Random jitter (0–5 min) so multiple daemon instances don't all poll at once
     private readonly TimeSpan _initialJitter;
@@ -47,13 +45,11 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
     {
         _feedsConfig = feedsConfig;
         _paths = paths;
-        _skillRegistry = skillRegistry;
-        _skillIndexLayer = skillIndexLayer;
         _timeProvider = timeProvider;
-        _scanner = scanner;
         _logger = logger;
         _externalSources = externalSources;
         _initialJitter = TimeSpan.FromSeconds(Random.Shared.Next(0, 300));
+        _syncHelper = new ServerFeedSyncHelper(scanner, skillRegistry, skillIndexLayer, logger);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -104,7 +100,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         {
             try
             {
-                await SyncFeedAsync(feed, cancellationToken);
+                await _syncHelper.SyncFeedAsync(feed, _paths, _timeProvider, cancellationToken);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -114,211 +110,6 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             }
         }
 
-        RescanAndUpdateIndex();
-    }
-
-    private async Task SyncFeedAsync(SkillFeedSource feed, CancellationToken cancellationToken)
-    {
-        var feedDir = _paths.ServerFeedDirectory(feed.Name);
-        Directory.CreateDirectory(feedDir);
-
-        var syncState = SkillSyncHelpers.ReadSyncState(
-            _paths.ServerFeedSyncStatePath(feed.Name), _logger);
-        var now = _timeProvider.GetUtcNow();
-
-        RfcSkillIndex? index;
-        using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-        {
-            cts.CancelAfter(TimeSpan.FromSeconds(feed.TimeoutSeconds));
-            try
-            {
-                using var client = new SkillServerClient(feed.Url, feed.ApiKey?.Value);
-                index = await client.GetRfcIndexAsync(cts.Token);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogWarning(
-                    "Server feed '{FeedName}' RFC index fetch timed out — using on-disk skills",
-                    feed.Name);
-                return;
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogWarning(
-                    "Server feed '{FeedName}' RFC index fetch failed: {Message} — using on-disk skills",
-                    feed.Name, ex.Message);
-                return;
-            }
-        }
-
-        if (index is null || index.Skills.Count == 0)
-        {
-            _logger.LogDebug("Server feed '{FeedName}' returned empty index", feed.Name);
-            return;
-        }
-
-        _logger.LogDebug(
-            "Fetched RFC index from server feed '{FeedName}' ({SkillCount} skills)",
-            feed.Name, index.Skills.Count);
-
-        var updated = false;
-
-        using var httpClient = CreateHttpClientForFeed(feed);
-
-        foreach (var entry in index.Skills)
-        {
-            var digestHex = NormalizeDigest(entry.Digest);
-            var version = entry.Version ?? "unknown";
-
-            if (syncState.Skills.TryGetValue(entry.Name, out var existing)
-                && existing.Version == version
-                && string.Equals(existing.Sha256, digestHex, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            try
-            {
-                var mainContent = await DownloadAndVerifyAsync(
-                    httpClient, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
-                if (mainContent is null)
-                    continue;
-
-                var mainScan = await _scanner.ScanAsync(entry.Name, mainContent, cancellationToken);
-                if (!mainScan.IsAllowed)
-                {
-                    _logger.LogWarning(
-                        "Rejected skill '{SkillName}' from feed '{FeedName}': {Reason}",
-                        entry.Name, feed.Name, mainScan.Reason);
-                    continue;
-                }
-
-                var downloadedFiles = new List<DownloadedSkillFile>
-                {
-                    new("SKILL.md", mainContent)
-                };
-
-                if (entry.Resources is { Count: > 0 })
-                {
-                    var allFilesOk = true;
-                    foreach (var resource in entry.Resources)
-                    {
-                        var normalizedPath = SkillSyncHelpers.ValidateResourcePath(resource.Path);
-                        if (normalizedPath is null)
-                        {
-                            _logger.LogWarning(
-                                "Rejected resource path for '{SkillName}' from feed '{FeedName}': {Path}",
-                                entry.Name, feed.Name, resource.Path);
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        var resourceDigest = NormalizeDigest(resource.Digest);
-                        var fileContent = await DownloadAndVerifyAsync(
-                            httpClient, resource.Url, resourceDigest,
-                            $"{entry.Name}/{resource.Path}", feed.TimeoutSeconds, cancellationToken);
-                        if (fileContent is null)
-                        {
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        var fileScan = await _scanner.ScanAsync(
-                            $"{entry.Name}:{normalizedPath}", fileContent, cancellationToken);
-                        if (!fileScan.IsAllowed)
-                        {
-                            _logger.LogWarning(
-                                "Rejected resource for '{SkillName}' from feed '{FeedName}' at {Path}: {Reason}",
-                                entry.Name, feed.Name, normalizedPath, fileScan.Reason);
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        downloadedFiles.Add(new DownloadedSkillFile(normalizedPath, fileContent));
-                    }
-
-                    if (!allFilesOk)
-                        continue;
-                }
-
-                await SkillSyncHelpers.ReplaceSkillDirectoryAsync(
-                    feedDir, entry.Name, downloadedFiles, cancellationToken);
-
-                syncState.Skills[entry.Name] = new SyncedSkillState
-                {
-                    Version = version,
-                    Sha256 = digestHex,
-                    SyncedAtUtc = now
-                };
-
-                _logger.LogInformation(
-                    "Synced skill '{SkillName}' v{Version} from feed '{FeedName}'",
-                    entry.Name, version, feed.Name);
-                updated = true;
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to sync skill '{SkillName}' from feed '{FeedName}' — keeping existing version",
-                    entry.Name, feed.Name);
-            }
-        }
-
-        if (updated)
-        {
-            syncState.LastSyncUtc = now;
-            SkillSyncHelpers.WriteSyncState(
-                _paths.ServerFeedSyncStatePath(feed.Name), syncState);
-        }
-    }
-
-    private static HttpClient CreateHttpClientForFeed(SkillFeedSource feed)
-    {
-        var client = new HttpClient();
-        if (feed.ApiKey is { Value: { } apiKey } && !string.IsNullOrWhiteSpace(apiKey))
-        {
-            client.DefaultRequestHeaders.Authorization =
-                new AuthenticationHeaderValue("Bearer", apiKey);
-        }
-        return client;
-    }
-
-    private async Task<string?> DownloadAndVerifyAsync(
-        HttpClient httpClient, string url, string expectedSha256Hex, string label,
-        int timeoutSeconds, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
-
-            var content = await httpClient.GetStringAsync(url, cts.Token);
-
-            var hash = SkillSyncHelpers.ComputeSha256(content);
-            if (!string.Equals(hash, expectedSha256Hex, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning(
-                    "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
-                    label, expectedSha256Hex, hash);
-                return null;
-            }
-
-            return content;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning("Download timed out for {Label}", label);
-            return null;
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
-            return null;
-        }
-    }
-
-    private void RescanAndUpdateIndex()
-    {
         var resolvedServerFeeds = new List<ResolvedExternalSource>();
         foreach (var feed in _feedsConfig.Feeds.Where(f => f.Enabled))
         {
@@ -328,31 +119,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                     $"server-feed:{feed.Name}", [feedDir], AllowSymlinks: false));
         }
 
-        var mergedResult = SkillScanner.ScanAndMerge(
-            _paths.SkillsDirectory, resolvedServerFeeds, _externalSources);
-        SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult,
-            _paths.SkillsDirectory, _externalSources);
-
-        if (mergedResult.Issues.Count > 0)
-        {
-            _logger.LogWarning(
-                "Skill inventory is degraded after server feed sync: accepted={AcceptedSkillCount} rejected={RejectedIssueCount}",
-                mergedResult.AcceptedSkills.Count, mergedResult.Issues.Count);
-
-            foreach (var issue in mergedResult.Issues)
-            {
-                _logger.LogWarning(
-                    "Rejected skill item during server feed sync rebuild: kind={IssueKind} path={Path} message={Message}",
-                    issue.Kind, issue.Path, issue.Message);
-            }
-        }
-        else
-        {
-            _logger.LogInformation(
-                "Skill index updated after server feed sync ({SkillCount} skills)",
-                mergedResult.AcceptedSkills.Count);
-        }
+        _syncHelper.RescanAndUpdateIndex(
+            _paths.SkillsDirectory, resolvedServerFeeds, _externalSources, "server feed sync");
     }
 
     internal static string NormalizeDigest(string digest)
@@ -360,5 +128,147 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
             return digest[7..];
         return digest;
+    }
+
+    /// <summary>
+    /// Inner helper that extends <see cref="SkillSyncServiceBase"/> to reuse
+    /// download-and-verify and per-skill sync logic. Separated from the
+    /// <see cref="BackgroundService"/> hosting so the base class stays
+    /// hosting-agnostic.
+    /// </summary>
+    private sealed class ServerFeedSyncHelper : SkillSyncServiceBase
+    {
+        private readonly ILogger _logger;
+
+        internal ServerFeedSyncHelper(
+            ISkillContentScanner scanner,
+            SkillRegistry skillRegistry,
+            SkillIndexContextLayer skillIndexLayer,
+            ILogger logger)
+            : base(scanner, skillRegistry, skillIndexLayer)
+        {
+            _logger = logger;
+        }
+
+        protected override ILogger Logger => _logger;
+
+        internal new void RescanAndUpdateIndex(
+            string skillsDirectory,
+            IReadOnlyList<ResolvedExternalSource> serverFeedSources,
+            IReadOnlyList<ResolvedExternalSource> externalSources,
+            string logLabel)
+            => base.RescanAndUpdateIndex(skillsDirectory, serverFeedSources, externalSources, logLabel);
+
+        internal async Task SyncFeedAsync(
+            SkillFeedSource feed, NetclawPaths paths, TimeProvider timeProvider,
+            CancellationToken cancellationToken)
+        {
+            var feedDir = paths.ServerFeedDirectory(feed.Name);
+            Directory.CreateDirectory(feedDir);
+
+            var syncState = SkillSyncHelpers.ReadSyncState(
+                paths.ServerFeedSyncStatePath(feed.Name), _logger);
+            var now = timeProvider.GetUtcNow();
+
+            RfcSkillIndex? index;
+            using (var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                cts.CancelAfter(TimeSpan.FromSeconds(feed.TimeoutSeconds));
+                try
+                {
+                    using var client = new SkillServerClient(feed.Url, feed.ApiKey?.Value);
+                    index = await client.GetRfcIndexAsync(cts.Token);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning(
+                        "Server feed '{FeedName}' RFC index fetch timed out — using on-disk skills",
+                        feed.Name);
+                    return;
+                }
+                catch (HttpRequestException ex)
+                {
+                    _logger.LogWarning(
+                        "Server feed '{FeedName}' RFC index fetch failed: {Message} — using on-disk skills",
+                        feed.Name, ex.Message);
+                    return;
+                }
+            }
+
+            if (index is null || index.Skills.Count == 0)
+            {
+                _logger.LogDebug("Server feed '{FeedName}' returned empty index", feed.Name);
+                return;
+            }
+
+            _logger.LogDebug(
+                "Fetched RFC index from server feed '{FeedName}' ({SkillCount} skills)",
+                feed.Name, index.Skills.Count);
+
+            var updated = false;
+            var feedTimeout = TimeSpan.FromSeconds(feed.TimeoutSeconds);
+
+            using var httpClient = CreateHttpClientForFeed(feed);
+
+            foreach (var entry in index.Skills)
+            {
+                var digestHex = NormalizeDigest(entry.Digest);
+                var version = entry.Version ?? "unknown";
+
+                if (syncState.Skills.TryGetValue(entry.Name, out var existing)
+                    && existing.Version == version
+                    && string.Equals(existing.Sha256, digestHex, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var resources = entry.Resources?.Select(
+                        r => new SkillResourceDescriptor(r.Path, r.Url, NormalizeDigest(r.Digest))).ToList();
+
+                    var synced = await SyncSingleSkillAsync(
+                        httpClient,
+                        entry.Name,
+                        version,
+                        entry.Url,
+                        digestHex,
+                        resources,
+                        feedDir,
+                        syncState,
+                        now,
+                        feedTimeout,
+                        logContext: $" from feed '{feed.Name}'",
+                        cancellationToken);
+
+                    if (synced)
+                        updated = true;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex,
+                        "Failed to sync skill '{SkillName}' from feed '{FeedName}' — keeping existing version",
+                        entry.Name, feed.Name);
+                }
+            }
+
+            if (updated)
+            {
+                syncState.LastSyncUtc = now;
+                SkillSyncHelpers.WriteSyncState(
+                    paths.ServerFeedSyncStatePath(feed.Name), syncState);
+            }
+        }
+
+        private static HttpClient CreateHttpClientForFeed(SkillFeedSource feed)
+        {
+            var client = new HttpClient();
+            if (feed.ApiKey is { Value: { } apiKey } && !string.IsNullOrWhiteSpace(apiKey))
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", apiKey);
+            }
+            return client;
+        }
     }
 }

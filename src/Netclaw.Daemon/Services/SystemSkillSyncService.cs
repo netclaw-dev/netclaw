@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SystemSkillSyncService.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -20,17 +20,14 @@ namespace Netclaw.Daemon.Services;
 /// Never blocks startup on network — if the feed is unreachable, the daemon
 /// starts with whatever skills are already on disk.
 /// </summary>
-internal sealed class SystemSkillSyncService : IHostedService
+internal sealed class SystemSkillSyncService : SkillSyncServiceBase, IHostedService
 {
     private readonly HttpClient _httpClient;
     private readonly NetclawPaths _paths;
     private readonly SkillSyncConfig _skillSyncConfig;
-    private readonly SkillRegistry _skillRegistry;
-    private readonly SkillIndexContextLayer _skillIndexLayer;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SystemSkillSyncService> _logger;
     private readonly string _daemonVersion;
-    private readonly ISkillContentScanner _scanner;
     private readonly IReadOnlyList<ResolvedExternalSource> _serverFeedSources;
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
 
@@ -65,19 +62,19 @@ internal sealed class SystemSkillSyncService : IHostedService
         string daemonVersion,
         IReadOnlyList<ResolvedExternalSource>? serverFeedSources = null,
         IReadOnlyList<ResolvedExternalSource>? externalSources = null)
+        : base(scanner, skillRegistry, skillIndexLayer)
     {
         _httpClient = httpClient;
         _paths = paths;
         _skillSyncConfig = skillSyncConfig;
-        _skillRegistry = skillRegistry;
-        _skillIndexLayer = skillIndexLayer;
         _timeProvider = timeProvider;
-        _scanner = scanner;
         _logger = logger;
         _daemonVersion = daemonVersion;
         _serverFeedSources = serverFeedSources ?? [];
         _externalSources = externalSources ?? [];
     }
+
+    protected override ILogger Logger => _logger;
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -85,7 +82,8 @@ internal sealed class SystemSkillSyncService : IHostedService
         {
             _logger.LogInformation(
                 "System skill sync disabled via SkillSync.DisableSystemSkillSync; using on-disk built-in skills only");
-            RescanAndUpdateIndex();
+            RescanAndUpdateIndex(
+                _paths.SkillsDirectory, _serverFeedSources, _externalSources, "sync rebuild");
             return;
         }
 
@@ -101,13 +99,15 @@ internal sealed class SystemSkillSyncService : IHostedService
                 await SyncSkillsAsync(manifest, syncState, cancellationToken);
             }
 
-            RescanAndUpdateIndex();
+            RescanAndUpdateIndex(
+                _paths.SkillsDirectory, _serverFeedSources, _externalSources, "sync rebuild");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _logger.LogWarning(ex, "System skill sync failed — continuing with on-disk skills");
             // Still re-scan on-disk skills even if sync failed
-            RescanAndUpdateIndex();
+            RescanAndUpdateIndex(
+                _paths.SkillsDirectory, _serverFeedSources, _externalSources, "sync rebuild");
         }
     }
 
@@ -188,91 +188,27 @@ internal sealed class SystemSkillSyncService : IHostedService
                 continue;
             }
 
-            // Download skill into its directory (skill-name/SKILL.md)
             try
             {
-                var mainContent = await DownloadAndVerifyAsync(entry.Url, entry.Sha256, entry.Name, cancellationToken);
-                if (mainContent is null)
-                    continue;
+                var resources = entry.Files?.Select(
+                    f => new SkillResourceDescriptor(f.Path, f.Url, f.Sha256)).ToList();
 
-                var mainScan = await _scanner.ScanAsync(
+                var synced = await SyncSingleSkillAsync(
+                    _httpClient,
                     entry.Name,
-                    mainContent,
+                    entry.Version,
+                    entry.Url,
+                    entry.Sha256,
+                    resources,
+                    _paths.SystemSkillsDirectory,
+                    syncState,
+                    now,
+                    FeedConstants.FeedHttpTimeout,
+                    logContext: "",
                     cancellationToken);
-                if (!mainScan.IsAllowed)
-                {
-                    _logger.LogWarning(
-                        "Rejected synced skill {SkillName} v{Version}: {Reason}",
-                        entry.Name,
-                        entry.Version,
-                        mainScan.Reason);
-                    continue;
-                }
 
-                var downloadedFiles = new List<DownloadedSkillFile>
-                {
-                    new("SKILL.md", mainContent)
-                };
-
-                if (entry.Files is { Count: > 0 })
-                {
-                    var allFilesOk = true;
-                    foreach (var file in entry.Files)
-                    {
-                        var normalizedPath = SkillSyncHelpers.ValidateResourcePath(file.Path);
-                        if (normalizedPath is null)
-                        {
-                            _logger.LogWarning(
-                                "Rejected synced resource path for {SkillName} v{Version}: {Path}",
-                                entry.Name,
-                                entry.Version,
-                                file.Path);
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        var fileContent = await DownloadAndVerifyAsync(file.Url, file.Sha256, $"{entry.Name}/{file.Path}", cancellationToken);
-                        if (fileContent is null)
-                        {
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        var fileScan = await _scanner.ScanAsync(
-                            $"{entry.Name}:{normalizedPath}",
-                            fileContent,
-                            cancellationToken);
-                        if (!fileScan.IsAllowed)
-                        {
-                            _logger.LogWarning(
-                                "Rejected synced resource for {SkillName} v{Version} at {Path}: {Reason}",
-                                entry.Name,
-                                entry.Version,
-                                normalizedPath,
-                                fileScan.Reason);
-                            allFilesOk = false;
-                            break;
-                        }
-
-                        downloadedFiles.Add(new DownloadedSkillFile(normalizedPath, fileContent));
-                    }
-
-                    if (!allFilesOk)
-                        continue;
-                }
-
-                await SkillSyncHelpers.ReplaceSkillDirectoryAsync(
-                    _paths.SystemSkillsDirectory, entry.Name, downloadedFiles, cancellationToken);
-
-                syncState.Skills[entry.Name] = new SyncedSkillState
-                {
-                    Version = entry.Version,
-                    Sha256 = entry.Sha256,
-                    SyncedAtUtc = now
-                };
-
-                _logger.LogInformation("Synced skill {SkillName} v{Version}", entry.Name, entry.Version);
-                updated = true;
+                if (synced)
+                    updated = true;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -294,72 +230,6 @@ internal sealed class SystemSkillSyncService : IHostedService
         {
             syncState.LastSyncUtc = now;
             WriteSyncState(syncState);
-        }
-    }
-
-    private async Task<string?> DownloadAndVerifyAsync(
-        string url, string expectedSha256, string label, CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            cts.CancelAfter(FeedConstants.FeedHttpTimeout);
-
-            var content = await _httpClient.GetStringAsync(url, cts.Token);
-
-            var hash = SkillSyncHelpers.ComputeSha256(content);
-            if (!string.Equals(hash, expectedSha256, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning(
-                    "SHA-256 mismatch for {Label}: expected {Expected}, got {Actual}",
-                    label, expectedSha256, hash);
-                return null;
-            }
-
-            return content;
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning("Download timed out for {Label}", label);
-            return null;
-        }
-        catch (HttpRequestException ex)
-        {
-            _logger.LogWarning("Download failed for {Label}: {Message}", label, ex.Message);
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Re-scans the entire skills directory and rebuilds the registry + context layer.
-    /// Called after sync completes (or fails) to ensure the agent sees current skills.
-    /// </summary>
-    private void RescanAndUpdateIndex()
-    {
-        var mergedResult = SkillScanner.ScanAndMerge(
-            _paths.SkillsDirectory, _serverFeedSources, _externalSources);
-        SkillRegistryUpdater.ApplyMergedScanResult(
-            _skillRegistry, _skillIndexLayer, mergedResult, _paths.SkillsDirectory, _externalSources);
-
-        if (mergedResult.Issues.Count > 0)
-        {
-            _logger.LogWarning(
-                "Skill inventory is degraded after sync rebuild: accepted={AcceptedSkillCount} rejected={RejectedIssueCount}",
-                mergedResult.AcceptedSkills.Count,
-                mergedResult.Issues.Count);
-
-            foreach (var issue in mergedResult.Issues)
-            {
-                _logger.LogWarning(
-                    "Rejected skill item during sync rebuild: kind={IssueKind} path={Path} message={Message}",
-                    issue.Kind,
-                    issue.Path,
-                    issue.Message);
-            }
-        }
-        else
-        {
-            _logger.LogInformation("Skill description menu updated ({SkillCount} skills)", mergedResult.AcceptedSkills.Count);
         }
     }
 
