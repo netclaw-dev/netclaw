@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ShellCommandPolicyTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -25,6 +25,22 @@ public sealed class ShellCommandPolicyTests
         var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
         Assert.Equal("self_destructive", decision.DenyCategory);
+    }
+
+    // ── Privilege escalation ──
+
+    [Theory]
+    [InlineData("sudo rm -rf /tmp/build")]
+    [InlineData("su -c 'whoami'")]
+    [InlineData("doas apt install curl")]
+    [InlineData("echo hello && sudo kill -9 123")]
+    [InlineData("SUDO rm -rf /tmp")]
+    [InlineData("bash -c \"sudo kill -9 123\"")]
+    public void Denies_privilege_escalation_commands(string command)
+    {
+        var decision = _policy.Evaluate(command);
+        Assert.False(decision.Allowed);
+        Assert.Equal("privilege_escalation", decision.DenyCategory);
     }
 
     // ── System-destructive ──

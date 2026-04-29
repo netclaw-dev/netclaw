@@ -76,16 +76,23 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
 
         app.MapGet("/api/provider/oauth/status/{state}", (
             string state,
+            HttpContext httpContext,
             OAuthPkceService pkceService) =>
         {
             var status = pkceService.GetFlowStatus(state);
             var result = pkceService.GetFlowResult(state);
+
+            // Only return raw tokens over loopback — remote paired devices
+            // see boolean flags only to prevent credential exfiltration.
+            var remoteIp = httpContext.Connection.RemoteIpAddress;
+            var isLoopback = remoteIp is not null && System.Net.IPAddress.IsLoopback(remoteIp);
+
             return Results.Ok(new
             {
                 status = status.ToString(),
                 hasToken = result is not null,
-                accessToken = result?.AccessToken.Value,
-                refreshToken = result?.RefreshToken?.Value,
+                accessToken = isLoopback ? result?.AccessToken.Value : null,
+                refreshToken = isLoopback ? result?.RefreshToken?.Value : null,
                 expiresAt = result?.ExpiresAt?.ToString("o"),
             });
         }).RequireAuthorization();

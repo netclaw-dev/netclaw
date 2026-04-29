@@ -66,6 +66,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 ? await tool.ExecuteAsync(toolCall.Arguments, context, ct)
                 : await tool.ExecuteAsync(toolCall.Arguments, ct);
 
+            result = SecretOutputRedactor.Redact(result);
+
             sw.Stop();
             _logger.LogInformation(
                 "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",

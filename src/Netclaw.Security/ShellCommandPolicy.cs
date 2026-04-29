@@ -118,6 +118,10 @@ public sealed class ShellCommandPolicy
         // Process killing patterns targeting netclaw
         new ProcessKillDenyPattern("Cannot kill processes from within a session", "self_destructive"),
 
+        // Privilege escalation: the agent must never elevate privileges.
+        // If it needs elevated access, the daemon should run as a user with those permissions.
+        new PrivilegeEscalationDenyPattern("Cannot escalate privileges from within a session", "privilege_escalation"),
+
         // System-destructive: rm -rf on root or home
         new RmRfRootDenyPattern("Cannot remove root or home directories", "system_destructive"),
 
@@ -206,6 +210,29 @@ public sealed class ShellCommandPolicy
 
             var verb = ShellTokenizer.TrimShellPunctuation(tokens[0]);
             return KillVerbs.Contains(verb);
+        }
+    }
+
+    /// <summary>
+    /// Matches privilege escalation commands (sudo, su, doas).
+    /// These are categorically denied because the agent should never
+    /// need to elevate privileges beyond the daemon user.
+    /// </summary>
+    internal sealed record PrivilegeEscalationDenyPattern(string Reason, string Category)
+        : DenyPattern(Reason, Category)
+    {
+        private static readonly HashSet<string> EscalationVerbs = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "sudo", "su", "doas"
+        };
+
+        public override bool Matches(IReadOnlyList<string> tokens)
+        {
+            if (tokens.Count == 0)
+                return false;
+
+            var verb = ShellTokenizer.TrimShellPunctuation(tokens[0]);
+            return EscalationVerbs.Contains(verb);
         }
     }
 
