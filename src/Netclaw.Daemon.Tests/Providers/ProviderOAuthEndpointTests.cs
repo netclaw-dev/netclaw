@@ -20,6 +20,7 @@ using Netclaw.Configuration;
 using Netclaw.Daemon.Providers;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Providers;
@@ -143,22 +144,6 @@ public sealed class ProviderOAuthEndpointTests
         {
             Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
         };
-    }
-
-    private sealed class FakeHttpMessageHandler : HttpMessageHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
-
-        public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
-        {
-            _handler = handler;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(_handler(request));
-        }
     }
 
     private sealed class NoOpProviderOAuthCallbackListener : IProviderOAuthCallbackListener

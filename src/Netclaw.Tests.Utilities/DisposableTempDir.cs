@@ -4,7 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 
-namespace Netclaw.Configuration.Tests;
+namespace Netclaw.Tests.Utilities;
 
 internal sealed class DisposableTempDir : IDisposable
 {

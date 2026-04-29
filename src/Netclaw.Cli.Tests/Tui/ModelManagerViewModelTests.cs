@@ -7,6 +7,7 @@ using System.Text.Json;
 using R3;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;

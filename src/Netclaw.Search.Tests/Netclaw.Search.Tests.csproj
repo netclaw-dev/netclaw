@@ -17,6 +17,7 @@
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Search/Netclaw.Search.csproj"/>
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj"/>
+    <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj"/>
   </ItemGroup>
 
   <ItemGroup>

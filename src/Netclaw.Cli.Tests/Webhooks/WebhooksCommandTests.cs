@@ -7,6 +7,7 @@ using System.Text.Json;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Webhooks;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Webhooks;

@@ -7,6 +7,7 @@ using System.Text.Json;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Model;

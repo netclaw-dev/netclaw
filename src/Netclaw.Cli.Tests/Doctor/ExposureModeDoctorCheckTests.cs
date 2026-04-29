@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;

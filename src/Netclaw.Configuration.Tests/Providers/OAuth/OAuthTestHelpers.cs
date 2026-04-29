@@ -6,6 +6,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Netclaw.Tests.Utilities;
 
 namespace Netclaw.Configuration.Tests.Providers.OAuth;
 
@@ -18,22 +19,5 @@ internal static class OAuthTestHelpers
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
-    }
-}
-
-internal sealed class FakeHttpMessageHandler : HttpMessageHandler
-{
-    private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
-
-    public FakeHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler)
-    {
-        _handler = handler;
-    }
-
-    protected override Task<HttpResponseMessage> SendAsync(
-        HttpRequestMessage request, CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_handler(request));
     }
 }

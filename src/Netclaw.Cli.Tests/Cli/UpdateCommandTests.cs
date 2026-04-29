@@ -10,6 +10,7 @@ using Netclaw.Cli.Update;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Configuration.Security;
+using Netclaw.Tests.Utilities;
 using NSec.Cryptography;
 using Xunit;
 
@@ -76,9 +77,9 @@ public sealed class UpdateCommandTests : IDisposable
         }
     }
 
-    private FakeHttpHandler CreateSignedHandler(BinaryFeedManifest manifest)
+    private FakeHttpMessageHandler CreateSignedHandler(BinaryFeedManifest manifest)
     {
-        var handler = new FakeHttpHandler();
+        var handler = new FakeHttpMessageHandler();
         var json = JsonSerializer.Serialize(manifest);
         handler.AddResponse(FeedConstants.BinaryManifestUrl, HttpStatusCode.OK, json, "application/json");
 
@@ -130,25 +131,4 @@ public sealed class UpdateCommandTests : IDisposable
         };
     }
 
-    private sealed class FakeHttpHandler : HttpMessageHandler
-    {
-        private readonly Dictionary<string, (HttpStatusCode Status, string Content, string ContentType)> _responses = new();
-
-        public void AddResponse(string url, HttpStatusCode status, string content, string contentType)
-        {
-            _responses[url] = (status, content, contentType);
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var url = request.RequestUri!.ToString();
-            if (!_responses.TryGetValue(url, out var entry))
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-
-            return Task.FromResult(new HttpResponseMessage(entry.Status)
-            {
-                Content = new StringContent(entry.Content, Encoding.UTF8, entry.ContentType)
-            });
-        }
-    }
 }

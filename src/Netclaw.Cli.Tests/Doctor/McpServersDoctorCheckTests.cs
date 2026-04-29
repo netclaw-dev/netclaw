@@ -11,6 +11,7 @@ using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;

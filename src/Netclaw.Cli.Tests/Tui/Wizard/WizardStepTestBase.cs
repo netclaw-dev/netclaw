@@ -6,6 +6,7 @@
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Tests.Utilities;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
 
