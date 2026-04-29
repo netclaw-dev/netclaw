@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions;
@@ -19,7 +20,7 @@ public interface IMemoryRecallCoordinator
 /// Request for automatic pre-turn memory recall.
 /// </summary>
 public sealed record AutomaticRecallRequest(
-    string SessionId,
+    SessionId SessionId,
     string Query,
     IReadOnlyList<string> RecentUserMessages,
     int MaxItems,

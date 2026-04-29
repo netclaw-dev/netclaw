@@ -6,6 +6,7 @@
 using System.Text;
 using Akka.Actor;
 using Microsoft.Extensions.AI;
+using SessionId = Netclaw.Actors.Protocol.SessionId;
 using Netclaw.Configuration;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -24,7 +25,7 @@ internal static class SessionLlmInvoker
         ChatOptions? options,
         IActorRef self,
         long callId,
-        string sessionId,
+        SessionId sessionId,
         CancellationToken cancellationToken)
     {
         // Set session affinity so the HTTP-layer DelegatingHandler adds an
@@ -32,7 +33,7 @@ internal static class SessionLlmInvoker
         // the same backend for KV cache reuse. Set here (not in the actor)
         // so sidecar calls (compaction, title gen) that bypass this invoker
         // naturally omit the header and round-robin across backends.
-        SessionAffinityContext.SessionId = sessionId;
+        SessionAffinityContext.SessionId = sessionId.Value;
         try
         {
             var response = await StreamAsync(client, messages, options, self, callId, cancellationToken);

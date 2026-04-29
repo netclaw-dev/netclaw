@@ -6,6 +6,7 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Xunit;
@@ -176,7 +177,7 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
             sessionTuning: new SessionTuning());
 
         var request = new AutomaticRecallRequest(
-            SessionId: TestSessionId,
+            SessionId: (SessionId)TestSessionId,
             Query: prompt,
             RecentUserMessages: string.IsNullOrEmpty(prompt) ? [] : [prompt],
             MaxItems: 3,

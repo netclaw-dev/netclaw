@@ -1219,8 +1219,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             // Persist extracted memories externally (fire-and-forget)
             var self = Self;
-            var sessionId = _sessionId.Value;
-            _ = PersistMemoriesAsync(_memoryExtractor, sessionId, msg.ExtractedMemories, self);
+            _ = PersistMemoriesAsync(_memoryExtractor, _sessionId, msg.ExtractedMemories, self);
 
             DrainBufferOrReady();
         });
@@ -1494,7 +1493,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private static async Task PersistMemoriesAsync(
-        IMemoryExtractor extractor, string sessionId, string memories, IActorRef self)
+        IMemoryExtractor extractor, SessionId sessionId, string memories, IActorRef self)
     {
         try
         {
@@ -1503,7 +1502,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         catch (Exception ex)
         {
             // Memory persistence is best-effort — log and continue compaction
-            Trace.TraceWarning("Memory persistence failed for session {0}: {1}", sessionId, ex.Message);
+            Trace.TraceWarning("Memory persistence failed for session {0}: {1}", sessionId.Value, ex.Message);
         }
     }
 
@@ -2417,7 +2416,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             forceNoTools,
             _activeCallId);
 
-        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId.Value, _activeLlmCts!.Token);
+        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId, _activeLlmCts!.Token);
     }
 
 

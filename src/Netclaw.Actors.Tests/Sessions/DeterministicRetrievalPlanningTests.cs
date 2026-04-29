@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -18,7 +19,7 @@ public sealed class DeterministicRetrievalPlanningTests
     {
         var planner = new DeterministicRetrievalRequestPlanner();
         var plan = planner.Plan(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-1",
+            SessionId: (SessionId)"signalr/thread-1",
             Query: "I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?",
             RecentUserMessages: ["I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?"],
             MaxItems: 3,
@@ -35,7 +36,7 @@ public sealed class DeterministicRetrievalPlanningTests
     {
         var planner = new DeterministicRetrievalRequestPlanner();
         var plan = planner.Plan(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-2",
+            SessionId: (SessionId)"signalr/thread-2",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
@@ -60,7 +61,7 @@ public sealed class DeterministicRetrievalPlanningTests
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-3",
+            SessionId: (SessionId)"signalr/thread-3",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
@@ -105,7 +106,7 @@ public sealed class DeterministicRetrievalPlanningTests
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-4",
+            SessionId: (SessionId)"signalr/thread-4",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
@@ -150,7 +151,7 @@ public sealed class DeterministicRetrievalPlanningTests
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-score",
+            SessionId: (SessionId)"signalr/thread-score",
             Query: "What's the pricing model for TextForge?",
             RecentUserMessages: ["What's the pricing model for TextForge?"],
             MaxItems: 3,
@@ -170,7 +171,7 @@ public sealed class DeterministicRetrievalPlanningTests
             "because we are planning a group outing after the keynote sessions conclude";
 
         var plan = planner.Plan(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-long",
+            SessionId: (SessionId)"signalr/thread-long",
             Query: longMessage,
             RecentUserMessages: [longMessage],
             MaxItems: 3));
@@ -184,7 +185,7 @@ public sealed class DeterministicRetrievalPlanningTests
     {
         var planner = new DeterministicRetrievalRequestPlanner();
         var plan = planner.Plan(new AutomaticRecallRequest(
-            SessionId: "D0AC6CKBK5K/1774371415.126439",
+            SessionId: (SessionId)"D0AC6CKBK5K/1774371415.126439",
             Query: "what did we find about Reel.Farm?",
             RecentUserMessages: ["what did we find about Reel.Farm?"],
             MaxItems: 3));
@@ -228,7 +229,7 @@ public sealed class DeterministicRetrievalPlanningTests
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "D0AC6CKBK5K/1774371415.126439",
+            SessionId: (SessionId)"D0AC6CKBK5K/1774371415.126439",
             Query: "what did we find about Reel.Farm?",
             RecentUserMessages: ["what did we find about Reel.Farm?"],
             MaxItems: 3), TestContext.Current.CancellationToken);
@@ -272,7 +273,7 @@ public sealed class DeterministicRetrievalPlanningTests
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "D0AC6CKBK5K/1774371415.126439",
+            SessionId: (SessionId)"D0AC6CKBK5K/1774371415.126439",
             Query: "what company does Aaron work at",
             RecentUserMessages: ["what company does Aaron work at"],
             MaxItems: 3), TestContext.Current.CancellationToken);
@@ -316,7 +317,7 @@ public sealed class DeterministicRetrievalPlanningTests
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
-            SessionId: "signalr/thread-5",
+            SessionId: (SessionId)"signalr/thread-5",
             Query: "what is TextForge",
             RecentUserMessages: ["what is TextForge"],
             MaxItems: 3,

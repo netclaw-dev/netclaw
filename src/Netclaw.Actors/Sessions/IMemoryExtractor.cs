@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
+
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
@@ -20,7 +22,7 @@ public interface IMemoryExtractor
     /// <param name="sessionId">The session that is being compacted.</param>
     /// <param name="extractedMemories">Structured memory text from the extraction LLM call.</param>
     /// <param name="ct">Cancellation token.</param>
-    Task PersistAsync(string sessionId, string extractedMemories, CancellationToken ct = default);
+    Task PersistAsync(SessionId sessionId, string extractedMemories, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -31,7 +33,7 @@ public sealed class NullMemoryExtractor : IMemoryExtractor
 {
     public static readonly NullMemoryExtractor Instance = new();
 
-    public Task PersistAsync(string sessionId, string extractedMemories, CancellationToken ct = default)
+    public Task PersistAsync(SessionId sessionId, string extractedMemories, CancellationToken ct = default)
     {
         return Task.CompletedTask;
     }

@@ -60,7 +60,7 @@ internal sealed class SessionRecallManager
             .ToArray();
 
         var request = new AutomaticRecallRequest(
-            sessionId.Value,
+            sessionId,
             query,
             recentUser,
             3,
