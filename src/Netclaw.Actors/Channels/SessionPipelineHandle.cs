@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionPipelineHandle.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -21,6 +21,9 @@ namespace Netclaw.Actors.Channels;
 ///   <item>Long-lived (with reinitialization) for binding actors (Slack, SignalR)</item>
 ///   <item>Short-lived (fire-and-forget) for execution actors (Reminders, Webhooks)</item>
 /// </list>
+/// The handle does not own the <see cref="ActorMaterializer"/>. The owning actor
+/// creates the materializer from its context and passes it in; Akka disposes it
+/// automatically when the actor stops.
 /// </summary>
 public sealed class SessionPipelineHandle
 {
@@ -30,7 +33,6 @@ public sealed class SessionPipelineHandle
 
     private static readonly TimeSpan StreamDrainTimeout = TimeSpan.FromSeconds(5);
 
-    private ActorMaterializer? _materializer;
     private MaterializedSession? _session;
     private Task? _outputCompletion;
     private ChannelWriter<ChannelInput>? _inputQueue;
@@ -88,16 +90,16 @@ public sealed class SessionPipelineHandle
 
         _log.Info("Initializing {0} session pipeline", _materializerNamePrefix);
 
-        _materializer = context.Materializer(namePrefix: _materializerNamePrefix);
+        var materializer = context.Materializer(namePrefix: _materializerNamePrefix);
 
         var materialized = await _pipeline.CreateAsync(
             sessionId, options,
-            materializer: _materializer,
+            materializer: materializer,
             cancellationToken: cancellationToken);
 
         var inputQueue = Source.Channel<ChannelInput>(512, true)
             .ToMaterialized(materialized.Input, Keep.Left)
-            .Run(_materializer);
+            .Run(materializer);
 
         var generation = ++_pipelineGeneration;
         var outputTerminated = materialized.Output
@@ -105,18 +107,11 @@ public sealed class SessionPipelineHandle
             .ToMaterialized(
                 Sink.ForEach<SessionOutput>(onOutput),
                 Keep.Left)
-            .Run(_materializer);
+            .Run(materializer);
 
         _outputCompletion = outputTerminated;
 
-        _ = outputTerminated.ContinueWith(t =>
-            {
-                var cause = t.IsFaulted ? t.Exception?.GetBaseException() : null;
-                onStreamTerminated(generation, cause);
-            },
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        ObserveStreamTermination(outputTerminated, generation, onStreamTerminated);
 
         _session = materialized;
         _inputQueue = inputQueue;
@@ -139,23 +134,23 @@ public sealed class SessionPipelineHandle
     {
         _log.Info("Initializing {0} execution pipeline", _materializerNamePrefix);
 
-        _materializer = context.Materializer(namePrefix: _materializerNamePrefix);
+        var materializer = context.Materializer(namePrefix: _materializerNamePrefix);
 
         var materialized = await _pipeline.CreateAsync(
             sessionId, options,
-            materializer: _materializer,
+            materializer: materializer,
             cancellationToken: cancellationToken);
 
         var inputQueue = Source.Queue<ChannelInput>(8, OverflowStrategy.Backpressure)
             .ToMaterialized(materialized.Input, Keep.Left)
-            .Run(_materializer);
+            .Run(materializer);
 
         _outputCompletion = materialized.Output
             .WatchTermination((_, done) => done)
             .ToMaterialized(
                 Sink.ForEach<SessionOutput>(onOutput),
                 Keep.Left)
-            .Run(_materializer);
+            .Run(materializer);
 
         _session = materialized;
 
@@ -186,31 +181,7 @@ public sealed class SessionPipelineHandle
         {
             _log.Warning("Reinitializing {0} session pipeline: {1}", _materializerNamePrefix, reason);
 
-            _inputQueue?.TryComplete();
-            _inputQueue = null;
-
-            if (_session is not null)
-            {
-                await _session.DisposeAsync();
-                _session = null;
-            }
-
-            if (_outputCompletion is not null)
-            {
-                try
-                {
-                    await _outputCompletion.WaitAsync(StreamDrainTimeout);
-                }
-                catch
-                {
-                    // stream faulted or timed out — safe to proceed with materializer disposal
-                }
-
-                _outputCompletion = null;
-            }
-
-            _materializer?.Dispose();
-            _materializer = null;
+            await DrainAsync();
 
             await InitializeWithChannelAsync(
                 _storedContext, _storedSessionId.Value, _storedOptions,
@@ -237,6 +208,7 @@ public sealed class SessionPipelineHandle
     public async Task DrainAsync()
     {
         _inputQueue?.TryComplete();
+        _inputQueue = null;
 
         if (_session is not null)
         {
@@ -260,13 +232,28 @@ public sealed class SessionPipelineHandle
     }
 
     /// <summary>
-    /// Final cleanup for actor <c>PostStop</c>. Disposes the materializer.
-    /// Stream stages should already be drained via <see cref="DrainAsync"/>
-    /// before the actor stops.
+    /// Best-effort cleanup for actor <c>PostStop</c>. Completes the input
+    /// queue if it wasn't already drained. Does not dispose the materializer —
+    /// the actor's context owns that lifecycle.
     /// </summary>
     public void Dispose()
     {
         _inputQueue?.TryComplete();
-        _materializer?.Dispose();
+    }
+
+    private async void ObserveStreamTermination(
+        Task outputTerminated,
+        int generation,
+        Action<int, Exception?> onStreamTerminated)
+    {
+        try
+        {
+            await outputTerminated;
+            onStreamTerminated(generation, null);
+        }
+        catch (Exception ex)
+        {
+            onStreamTerminated(generation, ex);
+        }
     }
 }
