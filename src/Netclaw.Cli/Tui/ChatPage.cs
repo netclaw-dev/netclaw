@@ -26,7 +26,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
     private TextAreaNode _promptInput = null!;
     private SelectionListNode<string>? _approvalList;
     private DynamicLayoutNode? _inputContentNode;
-    private readonly CompositeDisposable _inputSubs = new();
+    private readonly CompositeDisposable _inputSubs = [];
 
     private int _nextSegmentId = 1;
 

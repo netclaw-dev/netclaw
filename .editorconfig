@@ -7,6 +7,10 @@ insert_final_newline = true
 trim_trailing_whitespace = true
 
 [*.cs]
+# Prefer collection expressions and modern initializers.
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_prefer_collection_expression = true:suggestion
+
 # Start with one high-signal reliability rule as warning.
 dotnet_diagnostic.CA2016.severity = warning
 

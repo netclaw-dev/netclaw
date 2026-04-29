@@ -34,10 +34,9 @@ public sealed class OpenAiCompatibleModelsClient
             || data.ValueKind != JsonValueKind.Array)
             return [];
 
-        return data.EnumerateArray()
+        return [.. data.EnumerateArray()
             .Where(x => x.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
-            .Select(x => x.GetProperty("id").GetString()!)
-            .ToArray();
+            .Select(x => x.GetProperty("id").GetString()!)];
     }
 
     private void ApplyAuth(HttpRequestMessage request)

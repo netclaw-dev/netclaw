@@ -112,7 +112,7 @@ public sealed class DaemonClientSessionTests
     {
         private readonly object _gate = new();
         private readonly HashSet<string> _sessions = [];
-        private readonly Dictionary<string, string> _connectionSessions = new();
+        private readonly Dictionary<string, string> _connectionSessions = [];
         public (string CallId, string SelectedKey)? LastInteractionResponse { get; private set; }
 
         public SessionEnsureResultDto Ensure(string connectionId, string? sessionId)

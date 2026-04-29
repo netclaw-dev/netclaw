@@ -58,36 +58,13 @@ public sealed class NetclawPathsTests : IDisposable
         Assert.Equal(Path.Combine(envPath, "identity"), paths.IdentityDirectory);
     }
 
-    [Fact]
-    public void Unset_env_var_falls_back_to_user_profile_default()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Missing_or_blank_env_var_falls_back_to_user_profile_default(string? envValue)
     {
-        Environment.SetEnvironmentVariable(EnvVar, null);
-        var expected = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".netclaw");
-
-        var paths = new NetclawPaths();
-
-        Assert.Equal(expected, paths.BasePath);
-    }
-
-    [Fact]
-    public void Empty_env_var_falls_back_to_default()
-    {
-        Environment.SetEnvironmentVariable(EnvVar, "");
-        var expected = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".netclaw");
-
-        var paths = new NetclawPaths();
-
-        Assert.Equal(expected, paths.BasePath);
-    }
-
-    [Fact]
-    public void Whitespace_only_env_var_falls_back_to_default()
-    {
-        Environment.SetEnvironmentVariable(EnvVar, "   ");
+        Environment.SetEnvironmentVariable(EnvVar, envValue);
         var expected = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".netclaw");

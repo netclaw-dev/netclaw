@@ -1,0 +1,730 @@
+# Netclaw Security Audit
+#
+# Multi-agent workflow to find security vulnerabilities in the Netclaw
+# autonomous operations agent, critique findings against built-in defenses,
+# and propose fixes.
+#
+# Usage: prose run .prose/security-audit.prose
+#
+# Primary framework: OWASP Top 10 for LLM Applications (2025)
+# Supplementary: Netclaw SEC-001 through SEC-009 (PRD-002)
+#
+# Unlike the TextForge OWASP scanner, this workflow does NOT target web-app
+# vulnerabilities (XSS, CSRF, SQL injection, HTTP headers). Netclaw has no
+# browser-facing HTTP surface. Instead, this targets autonomous agent risks:
+# prompt injection, tool chain amplification, excessive agency, credential
+# exposure, self-modification boundary violations, and persistent state
+# corruption.
+#
+# No MCP server prerequisite — scan criteria are defined inline.
+
+input focus_area: "Security focus area (all, prompt-injection, tool-grants, acl, shell-path, credentials, self-modification, exposure, webhooks)"
+
+# ============================================================================
+# Agent Definitions
+# ============================================================================
+
+agent agent_security_scanner:
+  model: opus
+  prompt: """
+You are an autonomous agent security specialist. You analyze codebases for
+vulnerabilities specific to LLM-powered autonomous agents, using the OWASP
+Top 10 for LLM Applications (2025) as your primary framework.
+
+You understand: prompt injection resistance, tool grant over-permissiveness,
+ACL policy completeness, self-modification boundaries, credential exposure,
+and autonomous execution risks.
+
+Your approach:
+1. Methodically check each vulnerability category against the codebase
+2. Cite specific code locations (file:line)
+3. Rate severity: Critical, High, Medium, Low, Informational
+4. Explain the attack vector clearly — how would an attacker exploit this?
+5. No false positives — only report issues where the code demonstrably lacks
+   protection or has an exploitable gap
+
+Netclaw-specific context:
+- Default-deny ACL with 3-tier trust audiences (Public/Team/Personal)
+- 5-layer enforcement pipeline: message classification → sender auth →
+  channel policy → mention rules → tool grant check
+- Tool categories: shell, web_search, web_fetch, github, mcp:{name},
+  config_write, schedule_write
+- Akka.NET actor model with persistent state (survives restarts)
+- Primary gateway: Slack Socket Mode + inbound webhooks
+- Shell execution: tokenized verb-chain matching, hard deny list, path policy
+"""
+
+agent defense_depth_critic:
+  model: opus
+  prompt: """
+You are a defense-in-depth security critic for Netclaw. Your job is to
+challenge scanner findings by checking them against Netclaw's built-in
+protections.
+
+Netclaw's layered defenses (check each finding against ALL of these):
+
+1. ACL enforcement — 5-layer pipeline checks every inbound interaction
+2. Default-deny — unknown senders blocked, missing grants = deny
+3. Trust audience narrowing — ambiguous contexts resolve to most restrictive
+4. Shell command hard deny list (ShellCommandPolicy) — categorically blocks
+   self-destructive, system-destructive, and process-kill commands
+5. Path policy (ToolPathPolicy) — write-deny, read-deny, shell-indicator
+   deny surfaces with symlink resolution
+6. Prompt injection detector (RegexPromptInjectionDetector) — heuristic
+   tripwire across 6 categories: PromptInjection, DataExfiltration,
+   PrivilegeEscalation, DestructiveOperation, InvisibleUnicode
+7. Secret output redaction (SecretOutputRedactor) — strips JSON secrets,
+   env secrets, auth headers, provider tokens (sk-, xox-, ghp_), PEM keys
+8. Tool approval gates — Auto/Approval/Deny per audience per tool
+9. Fail-closed config validation — invalid ACL prevents daemon startup
+10. Self-modification lockout — agent cannot modify ACL, exposure, tool
+    grants, or security settings through conversation
+11. Skill content scanning (RegexSkillContentScanner) — scans skill files
+    for injection patterns before loading
+12. Content policy — magic-byte validation for file uploads
+13. Shell execution constraints — timeout, output truncation, stdin closed,
+    no privilege escalation (runs as daemon user)
+
+For each finding:
+- CONFIRMED: Real gap not mitigated by any defense layer
+- PARTIAL: Defenses exist but have coverage gaps
+- MITIGATED: Built-in protections fully address this
+- FALSE_POSITIVE: Not actually exploitable in Netclaw's architecture
+
+Be rigorous. Only CONFIRM findings where protections are absent, bypassed,
+or have demonstrable gaps. Explain which defense layers apply and what
+residual risk remains.
+"""
+
+agent fix_architect:
+  model: opus
+  prompt: """
+You are a security fix architect for Netclaw. For confirmed vulnerabilities,
+propose concrete before/after code changes.
+
+Rules:
+- Propose the smallest safe change that closes the gap
+- Follow Netclaw conventions: default-deny, fail-closed, no silent fallbacks
+- Respect actor boundaries (transport-agnostic, persistence-safe)
+- Use TimeProvider, not DateTime.UtcNow
+- Never add implicit conversions on value objects
+- Include test scenarios for the fix
+- Reference the specific finding being addressed
+
+For each fix, provide:
+1. Severity and finding reference
+2. File path and current code
+3. Proposed fix with code
+4. Why this fix works
+5. Test to verify (which test file, what scenario)
+6. Breaking changes (if any)
+"""
+
+agent akka_agent_specialist:
+  model: opus
+  prompt: """
+You are an Akka.NET and autonomous agent architecture specialist. You
+understand:
+
+- Actor model boundaries and message passing (actors are transport-agnostic)
+- Actor persistence (protobuf-net serialization, journal + snapshots)
+- Session actor lifecycle and trust context scoping
+- Channel pipeline: SlackGatewayActor → SlackConversationActor →
+  SlackThreadBindingActor → SessionActor
+- Tool execution pipeline (DispatchingToolExecutor → ToolAccessPolicy gate)
+- Trust context derivation and audience narrowing across actor boundaries
+- Background job submission and audience inheritance
+- Subagent spawning restrictions per audience tier
+
+Your role is to review findings through the actor system lens:
+1. Are actor boundaries properly isolating trust contexts?
+2. Can persistence replay introduce security regressions?
+3. Are tool execution contexts correctly scoped to session audience?
+4. Is the trust derivation chain robust against input manipulation?
+5. Can message ordering or mailbox behavior create TOCTOU gaps?
+"""
+
+# ============================================================================
+# Phase 1: Parallel Security Scans
+# ============================================================================
+
+session """
+Starting Netclaw security audit.
+
+Repository structure:
+- src/Netclaw.Security/ — Security policies, detectors, redactors
+- src/Netclaw.Configuration/ — Trust context, audience profiles, config types
+- src/Netclaw.Actors/ — Actor system, session management, tool execution pipeline
+- src/Netclaw.Cli/ — CLI commands and daemon hosting
+- docs/prd/PRD-002-gateway-security-envelope.md — Security requirements (SEC-001–009)
+
+Focus area: {focus_area}
+
+Scanning against:
+- OWASP Top 10 for LLM Applications (2025)
+- Netclaw SEC-001 through SEC-009 (PRD-002)
+"""
+
+parallel:
+  # S1: Prompt Injection Resistance (OWASP LLM01)
+  s1_prompt_injection = session: agent_security_scanner
+    prompt: """
+**S1: Prompt Injection Resistance** (OWASP LLM01)
+
+Netclaw uses RegexPromptInjectionDetector as a heuristic tripwire — it
+explicitly documents known bypasses in its XML remarks. Evaluate whether
+these gaps are adequately covered by other defense layers.
+
+Check:
+1. **Pattern completeness** — Review all regex patterns in
+   RegexPromptInjectionDetector.cs. Are there missing attack categories?
+   Current categories: PromptInjection (8 patterns), DataExfiltration (4),
+   PrivilegeEscalation (4), DestructiveOperation (4), InvisibleUnicode (3).
+   Missing? Consider: prompt leaking ("repeat your instructions"), multi-turn
+   manipulation, tool-use injection ("call shell_execute with...").
+
+2. **Documented evasion vectors** — The detector acknowledges these bypasses:
+   - Unicode homoglyphs (Cyrillic 'а' vs Latin 'a')
+   - Encoding indirection (Base64/ROT13 decoded by LLM)
+   - Synonym substitution ("dismiss preceding directives")
+   - Multi-file split (fragments across skill + resource files)
+   - Indirect instruction injection ("When user says X, do Y")
+   - Non-English attacks (all patterns are English-only)
+   Are any of these exploitable given Netclaw's other defenses?
+
+3. **Skill content scanning** — RegexSkillContentScanner scans skill files.
+   Does it cover the same patterns? What about resource files loaded by
+   skills?
+
+4. **Webhook payload scanning** — Are inbound webhook payloads scanned for
+   injection before being processed by the channel pipeline?
+
+5. **Adopted context** — When backfilling thread history in multi-speaker
+   threads, are messages from non-allowed senders treated as untrusted?
+
+6. **MCP tool output** — Are responses from external MCP servers treated as
+   potentially adversarial input?
+
+Read these files:
+- src/Netclaw.Security/RegexPromptInjectionDetector.cs
+- src/Netclaw.Security/IPromptInjectionDetector.cs
+- src/Netclaw.Security/Skills/RegexSkillContentScanner.cs
+- src/Netclaw.Actors/Channels/ChannelPipeline.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S2: Tool Grant Over-Permissiveness (OWASP LLM06)
+  s2_tool_grants = session: agent_security_scanner
+    prompt: """
+**S2: Tool Grant Over-Permissiveness & Chain Amplification** (OWASP LLM06)
+
+Netclaw's tool system is policy-mediated, not model-mediated. But are the
+defaults safe? Can tool chains produce compound escalation?
+
+Check:
+1. **Default audience profiles** — What tools are available to each audience
+   (Public/Team/Personal) by default? Is ToolsMode=All for Personal too
+   broad? What MCP servers are accessible?
+
+2. **Tool chain amplification** — Can a sequence of individually-safe tool
+   calls produce a dangerous compound effect? Examples:
+   - shell_execute(read sensitive file) + web_fetch(exfiltrate content)
+   - file_read(credentials) + shell_execute(curl to external server)
+   - config_write(loosen policy) + shell_execute(dangerous command)
+   Is there any chain-level analysis, or are tools evaluated independently?
+
+3. **Background job audience inheritance** — When a scheduled job or
+   background task runs, does it correctly inherit the audience constraints
+   of its creator? Can a Public-audience user schedule a job that runs
+   with Personal-audience privileges?
+
+4. **Subagent tool policy** — SubAgentToolPolicy defines a safe list for
+   spawned subagents. Is it restrictive enough? Can a subagent access tools
+   its parent session wouldn't be allowed?
+
+5. **MCP two-tier permissions** — Server-level grants + per-tool grants.
+   Is there a gap where a server is granted but all its tools are implicitly
+   available without per-tool restrictions?
+
+Read these files:
+- src/Netclaw.Configuration/ToolAudienceProfiles.cs
+- src/Netclaw.Configuration/ToolConfig.cs
+- src/Netclaw.Actors/Sessions/Pipelines/SessionToolExecutionPipeline.cs
+- src/Netclaw.Actors/Tools/ToolAccessPolicy.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S3: ACL Policy Completeness (OWASP LLM06 / SEC-001)
+  s3_acl_policy = session: agent_security_scanner
+    prompt: """
+**S3: ACL Policy Completeness & Fail-Closed Guarantees** (SEC-001, SEC-004)
+
+The 5-layer enforcement pipeline must have no bypass routes. Default-deny
+must hold for every code path.
+
+Check:
+1. **Trust context derivation** — How is the audience tier (Public/Team/
+   Personal) determined? What happens when channel type is unrecognized?
+   Does it default to Public (safest) or something else?
+
+2. **5-layer enforcement coverage** — For every path that leads to model
+   execution or tool invocation, verify all 5 layers are checked:
+   a. Inbound message classification
+   b. Sender authorization
+   c. Channel policy
+   d. Mention/ambient rules
+   e. Tool grant check
+   Are there any code paths that skip a layer?
+
+3. **Fail-closed startup** — SEC-004 requires invalid ACL to prevent
+   startup. Is this enforced? What about partial ACL (some fields valid,
+   some missing)?
+
+4. **Audience narrowing** — When trust context is ambiguous, does it
+   narrow to the most restrictive tier? Is ParseAudienceOrPublic the
+   only fallback, or are there other resolution paths?
+
+5. **Hot-reload safety** — Config hot-reload updates tool profiles. Can
+   a reload transiently widen access if the new config is partially
+   applied?
+
+Read these files:
+- src/Netclaw.Configuration/TrustContextPolicy.cs
+- src/Netclaw.Actors/Channels/ChannelPipeline.cs
+- src/Netclaw.Configuration/SecurityPolicyDefaults.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S4: Shell & Path Policy Coverage (OWASP LLM05 / SEC-009)
+  s4_shell_path = session: agent_security_scanner
+    prompt: """
+**S4: Shell & Path Policy Coverage** (OWASP LLM05 / SEC-009)
+
+Shell execution is the highest-risk tool category. The hard deny list and
+path policy are critical defense layers.
+
+Check:
+1. **Hard deny list completeness** — Current categories:
+   - Self-destructive: netclaw daemon stop/kill, systemctl stop/kill netclaw
+   - Process killing: kill, killall, pkill (categorically denied)
+   - System-destructive: rm -rf / or ~, mkfs.* (prefix match)
+   - Fork bombs: :(){ :|:& };: (raw string match)
+   Missing categories? Consider:
+   - dd if=/dev/zero of=... (disk wipe without mkfs)
+   - chmod 777 / or chmod -R (permission stripping)
+   - crontab manipulation (persistence backdoor)
+   - SSH key generation/injection
+   - iptables/nftables (firewall manipulation)
+   - curl | bash or wget | sh (remote code execution)
+   - sudo/su (privilege escalation)
+   - chown (ownership change)
+   - Network tunneling (ssh -R, socat, nc listeners)
+   - systemctl enable/start for new services
+
+2. **Shell tokenizer robustness** — How does ShellTokenizer handle:
+   - Quoted strings with embedded commands?
+   - Variable expansion ($(...), backticks)?
+   - Heredocs?
+   - Unicode in command names?
+
+3. **Path policy evasion** — ToolPathPolicy resolves symlinks and expands
+   ~ and $HOME. But what about:
+   - /proc/self/fd/ references to open file handles?
+   - Double encoding or Unicode path normalization?
+   - Relative path traversal with ../ chains?
+   - Subshell path construction: p="/root"; cat $p/.netclaw/secrets.json
+
+4. **CommandReferencesDeniedPath limitations** — The code documents itself
+   as "defense-in-depth heuristic, not bulletproof." What specific gaps
+   exist? Can an attacker construct a path reference that bypasses the
+   indicator set?
+
+Read these files:
+- src/Netclaw.Security/ShellCommandPolicy.cs
+- src/Netclaw.Security/ShellTokenizer.cs
+- src/Netclaw.Security/ToolPathPolicy.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S5: Credential & Secret Exposure (OWASP LLM02)
+  s5_credentials = session: agent_security_scanner
+    prompt: """
+**S5: Credential & Secret Exposure** (OWASP LLM02)
+
+SecretOutputRedactor is defense-in-depth for accidental leakage. Check
+pattern completeness and timing of redaction.
+
+Check:
+1. **Redaction pattern completeness** — Current patterns:
+   - JSON secret values (api_key, token, secret, password, authorization,
+     access_token, refresh_token)
+   - Environment variable secrets (same key names)
+   - Authorization: Bearer headers
+   - Provider tokens: sk-*, xox[baprs]-*, ghp_*
+   - PEM private key blocks
+   Missing patterns? Consider:
+   - Discord bot tokens (starts with specific patterns)
+   - AWS access keys (AKIA...)
+   - Azure connection strings
+   - Database connection strings (with passwords)
+   - JWT tokens (eyJ...)
+   - SSH private keys in non-PEM format
+   - Base64-encoded credentials
+   - Slack webhook URLs (contain secrets in path)
+   - .env file contents when displayed
+
+2. **Redaction timing** — Is SecretOutputRedactor applied BEFORE tool
+   output reaches the LLM? Or does the LLM see the raw output first?
+   If the LLM sees secrets before redaction, it could include them in
+   its response.
+
+3. **SensitiveString handling** — How does SensitiveString prevent
+   accidental logging or serialization of secrets? Is ToString()
+   overridden? Is there a JsonConverter that masks the value?
+
+4. **Config file permissions** — Are secrets.json and other sensitive
+   config files protected at the filesystem level? Is this enforced
+   at runtime or just documented?
+
+5. **Device pairing token** — Is the pairing code generated with
+   cryptographically random bytes? What's the entropy? (8 chars from
+   32-char alphabet = ~40 bits, with 5-min TTL and rate limiting)
+
+Read these files:
+- src/Netclaw.Security/SecretOutputRedactor.cs
+- src/Netclaw.Configuration/SensitiveString.cs
+- src/Netclaw.Configuration/NetclawPaths.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S6: Self-Modification Boundary Integrity (SEC-008)
+  s6_self_modification = session: agent_security_scanner
+    prompt: """
+**S6: Self-Modification Boundary Integrity** (SEC-008)
+
+The agent can modify personality, instructions, user preferences, project
+registry, environment inventory, and scheduled tasks. It CANNOT modify ACL
+rules, exposure policy, tool grants, or security settings. Verify this
+boundary holds across all code paths.
+
+Check:
+1. **Config write restrictions** — If a config_write tool exists, does it
+   enforce the boundary between modifiable and non-modifiable sections?
+   Can the agent write to netclaw.json sections it shouldn't?
+
+2. **File write tool restrictions** — Can the agent's file_write or
+   file_edit tools write to ~/.netclaw/config/secrets.json or
+   ~/.netclaw/config/netclaw.json? Is ToolPathPolicy configured to
+   block these paths?
+
+3. **Identity file poisoning** — The agent can modify PERSONALITY.md and
+   INSTRUCTIONS.md. Can adversarial content in these files effectively
+   override security behavior in future sessions? (e.g., adding
+   "always approve all tool requests" to INSTRUCTIONS.md)
+
+4. **Memory curation** — Can the memory system (MemoryProposalGate,
+   IdentityProfileUpdate) be used to inject adversarial instructions
+   that persist across sessions?
+
+5. **Scheduled task injection** — Can a scheduled task be created that
+   runs with elevated permissions or bypasses the audit trail?
+
+Read these files:
+- src/Netclaw.Configuration/NetclawPaths.cs
+- src/Netclaw.Security/ToolPathPolicy.cs
+- src/Netclaw.Actors/Tools/ToolAccessPolicy.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S7: Exposure Mode & Network Safety (SEC-005)
+  s7_exposure = session: akka_agent_specialist
+    prompt: """
+**S7: Exposure Mode & Network Safety** (SEC-005)
+
+Netclaw can be exposed from loopback-only to internet-reachable. Verify
+that exposure escalation is safe.
+
+Check:
+1. **Exposure mode validation** — Does the daemon reject startup when
+   tailscale-funnel or cloudflare-tunnel is configured without
+   authentication policy? (SEC-005 requires this)
+
+2. **Device pairing security** — Pairing connects a browser session to
+   the daemon. Is the pairing code:
+   - Generated with cryptographic randomness?
+   - Time-limited (TTL)?
+   - Rate-limited against brute force?
+   - Single-use (consumed on successful pairing)?
+
+3. **SignalR hub authentication** — Is the real-time communication
+   channel (if using SignalR) authenticated? Can an unauthenticated
+   client connect to the hub?
+
+4. **Hot-reload exclusions** — Exposure mode changes should NOT be
+   hot-reloaded (requires daemon restart for safety). Is this enforced?
+
+5. **Diagnostics exposure** — The diagnostics/health endpoints — are
+   they accessible only on allowed interfaces? Can they leak sensitive
+   information (config values, session state, tool outputs)?
+
+Read these files:
+- src/Netclaw.Configuration/ExposureMode.cs
+- src/Netclaw.Configuration/DaemonConfig.cs
+
+Report each finding with file:line reference and severity.
+"""
+
+  # S8: Webhook & Persistent State Safety (OWASP LLM04)
+  s8_webhook_persistence = session: akka_agent_specialist
+    prompt: """
+**S8: Webhook Security & Persistent State Safety** (OWASP LLM04)
+
+Webhooks are an external input surface. Persistent state means bad
+decisions survive restarts.
+
+Check:
+1. **Webhook HMAC validation** — Is webhook signature verification
+   implemented? Is the secret stored securely? What happens if
+   verification fails — is the payload silently dropped or logged?
+
+2. **Webhook audience assignment** — What trust audience do webhook-
+   initiated sessions receive? Should always be Public (most
+   restrictive). Is this enforced?
+
+3. **Delivery deduplication** — Is there a deduplication window to
+   prevent replay attacks? How is the dedup key extracted?
+
+4. **Rate limiting** — Is per-route rate limiting enforced? Can an
+   attacker flood the webhook endpoint to cause resource exhaustion
+   or bypass dedup windows?
+
+5. **Persistent state poisoning** — If a malicious webhook payload
+   reaches a session actor, can it corrupt persistent state (journal
+   events, snapshots) in a way that affects future sessions or
+   survives restarts? Is there any mechanism to detect or roll back
+   poisoned state?
+
+6. **Actor persistence replay** — During recovery, persisted events
+   are replayed. Can replayed events from a previously-compromised
+   session re-introduce security violations?
+
+Read these files:
+- src/Netclaw.Configuration/WebhooksConfig.cs
+- src/Netclaw.Actors/Sessions/
+
+Report each finding with file:line reference and severity.
+"""
+
+# ============================================================================
+# Phase 2: Defense-in-Depth Critique & Actor-Level Review
+# ============================================================================
+
+session "Compile all 8 scan results into a unified findings list, organized by severity (Critical first), with scan category and OWASP/SEC mapping for each."
+  context: { s1_prompt_injection, s2_tool_grants, s3_acl_policy, s4_shell_path, s5_credentials, s6_self_modification, s7_exposure, s8_webhook_persistence }
+
+let raw_findings = session """
+Extract all findings into a single numbered list.
+
+Format:
+[#] [SEVERITY] [SCAN/CATEGORY] — Title
+    File: path:line
+    Issue: description
+    Attack vector: how it could be exploited
+    OWASP LLM / SEC mapping: which requirement this relates to
+    Existing defenses: what built-in protections partially address this
+"""
+  context: { s1_prompt_injection, s2_tool_grants, s3_acl_policy, s4_shell_path, s5_credentials, s6_self_modification, s7_exposure, s8_webhook_persistence }
+
+let validated_findings = session: defense_depth_critic
+  prompt: """
+Review each finding against Netclaw's 13 defense layers (listed in your
+system prompt). For each finding:
+
+1. Which defense layers apply?
+2. Do they fully mitigate the finding, or leave residual risk?
+3. Are there code paths that bypass the relevant defense layer?
+
+Output for each:
+- Finding #
+- Verdict: CONFIRMED / PARTIAL / MITIGATED / FALSE_POSITIVE
+- Defense layers checked: [list]
+- Residual risk: [description or "none"]
+- Adjusted severity: [same or lower than original]
+- Rationale: [one paragraph]
+"""
+  context: raw_findings
+
+let actor_review = session: akka_agent_specialist
+  prompt: """
+Review the validated findings through the actor system lens. Focus on:
+
+1. **Trust context isolation** — Are actor boundaries preventing cross-
+   session trust leakage? Can a Public-audience session's tool results
+   leak into a Personal-audience session through shared actor state?
+
+2. **Persistence safety** — Can replayed journal events from a
+   compromised session re-escalate privileges? Are security-critical
+   decisions persisted in a way that could be manipulated?
+
+3. **Message ordering** — Can mailbox behavior create time-of-check-to-
+   time-of-use (TOCTOU) gaps? E.g., policy check passes, then policy
+   is hot-reloaded to deny, but the tool execution message is already
+   in the mailbox.
+
+4. **Subagent spawning** — Are subagent actors correctly inheriting
+   (and not escalating) the parent session's audience tier?
+
+Flag any findings where actor-level analysis changes the verdict.
+"""
+  context: validated_findings
+
+# ============================================================================
+# Phase 3: Fix Proposals
+# ============================================================================
+
+let confirmed_issues = session """
+Filter to actionable findings: extract only findings with verdict
+CONFIRMED or PARTIAL, sorted by adjusted severity (Critical first).
+Include the full finding detail, defense gap analysis, and actor-level
+notes.
+"""
+  context: { validated_findings, actor_review }
+
+let fixes = session: fix_architect
+  prompt: """
+For each confirmed or partial finding, propose a fix.
+
+Format for each:
+
+## Finding [#]: [Title]
+
+**Severity:** [level]
+**File:** [path:line]
+
+**Current Code:**
+```csharp
+// problematic code
+```
+
+**Proposed Fix:**
+```csharp
+// fixed code
+```
+
+**Why This Works:**
+[explanation — reference which defense layer this strengthens]
+
+**Test to Add:**
+[which test file, what scenario, Given/When/Then]
+
+**Breaking Changes:**
+[none, or description]
+
+Follow Netclaw conventions:
+- No silent fallbacks — fail loudly on misconfiguration
+- Default-deny — if in doubt, deny
+- Use TimeProvider for time-dependent logic
+- Actor boundaries remain transport-agnostic
+- Persistence types must be serialization-safe
+"""
+  context: confirmed_issues
+
+# ============================================================================
+# Phase 4: Summary Report
+# ============================================================================
+
+output report = session """
+Generate the final security audit report.
+
+# Netclaw Security Audit Report
+
+## Executive Summary
+
+Total findings, confirmed vulnerabilities, false positives filtered,
+overall risk posture assessment. One paragraph.
+
+## OWASP Top 10 for LLM Applications (2025) Coverage
+
+| Category | Status | Findings | Notes |
+|----------|--------|----------|-------|
+| LLM01: Prompt Injection | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM02: Sensitive Info Disclosure | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM03: Supply Chain | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM04: Data and Model Poisoning | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM05: Improper Output Handling | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM06: Excessive Agency | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM07: System Prompt Leakage | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM08: Vector/Embedding Weakness | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM09: Misinformation | [PASS/PARTIAL/FAIL] | [count] | |
+| LLM10: Unbounded Consumption | [PASS/PARTIAL/FAIL] | [count] | |
+
+## Netclaw SEC Control Compliance (PRD-002)
+
+| Control | SEC ID | Status | Gap |
+|---------|--------|--------|-----|
+| Policy gate on every interaction | SEC-001 | [PASS/PARTIAL/FAIL] | |
+| Mention and ambient policy | SEC-002 | [PASS/PARTIAL/FAIL] | |
+| Data and tool grants | SEC-003 | [PASS/PARTIAL/FAIL] | |
+| Startup validation | SEC-004 | [PASS/PARTIAL/FAIL] | |
+| Exposure policy | SEC-005 | [PASS/PARTIAL/FAIL] | |
+| Pairing and approval | SEC-006 | [PASS/PARTIAL/FAIL] | |
+| Auditability | SEC-007 | [PASS/PARTIAL/FAIL] | |
+| Self-configuration safety | SEC-008 | [PASS/PARTIAL/FAIL] | |
+| Shell execution boundaries | SEC-009 | [PASS/PARTIAL/FAIL] | |
+
+## Defense-in-Depth Assessment
+
+For each of Netclaw's 5 enforcement layers, report coverage:
+
+| Layer | Completeness | Gaps |
+|-------|-------------|------|
+| 1. Message classification | [%] | |
+| 2. Sender authorization | [%] | |
+| 3. Channel policy | [%] | |
+| 4. Mention/ambient rules | [%] | |
+| 5. Tool grant check | [%] | |
+
+## Confirmed Vulnerabilities
+
+For each CONFIRMED or PARTIAL finding:
+- Finding number, title, severity
+- OWASP LLM / SEC mapping
+- Attack vector
+- Defense gap
+- Proposed fix summary
+- Effort estimate (S/M/L)
+
+## Mitigated & False Positive Findings
+
+Summary of findings that were filtered out, explaining which defense
+layers provide protection.
+
+## Autonomous Agent Security Maturity Assessment
+
+Assess Netclaw against this 4-level maturity model:
+
+| Level | Name | Description | Status |
+|-------|------|-------------|--------|
+| L1 | Reactive | Basic input validation exists | [MET/NOT MET] |
+| L2 | Policy-Driven | Tool access is policy-mediated, not model-mediated | [MET/NOT MET] |
+| L3 | Defense-in-Depth | Multiple independent layers, audit trail, fail-closed | [MET/NOT MET] |
+| L4 | Continuous Assurance | Automated security testing, adversarial evals, anomaly detection | [MET/NOT MET] |
+
+Current level: [L1/L2/L3/L4]
+What is needed for the next level: [specific recommendations]
+
+## Recommendations
+
+Prioritized action items, each with:
+- Priority (P0/P1/P2)
+- OWASP LLM / SEC mapping
+- Description
+- Effort estimate
+"""
+  context: { validated_findings, actor_review, fixes, confirmed_issues }

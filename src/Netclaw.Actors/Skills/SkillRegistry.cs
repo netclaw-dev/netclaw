@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Skills;
 /// </summary>
 public sealed class SkillRegistry
 {
-    private readonly List<SkillEntry> _skills = new();
+    private readonly List<SkillEntry> _skills = [];
     private volatile IReadOnlyList<SkillScanIssue> _scanIssues = [];
 
     /// <summary>

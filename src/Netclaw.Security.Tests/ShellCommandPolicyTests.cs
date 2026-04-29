@@ -11,80 +11,33 @@ public sealed class ShellCommandPolicyTests
 {
     private readonly ShellCommandPolicy _policy = new();
 
-    // ── Self-destruction: daemon stop ──
+    // ── Self-destruction ──
 
-    [Fact]
-    public void Denies_netclaw_daemon_stop()
+    [Theory]
+    [InlineData("netclaw daemon stop")]
+    [InlineData("netclaw daemon kill")]
+    [InlineData("systemctl stop netclaw")]
+    [InlineData("kill -9 12345")]
+    [InlineData("killall netclaw")]
+    [InlineData("pkill -f netclaw")]
+    public void Denies_self_destructive_commands(string command)
     {
-        var decision = _policy.Evaluate("netclaw daemon stop");
+        var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
         Assert.Equal("self_destructive", decision.DenyCategory);
     }
 
-    [Fact]
-    public void Denies_netclaw_daemon_kill()
+    // ── System-destructive ──
+
+    [Theory]
+    [InlineData("rm -rf /")]
+    [InlineData("rm -rf ~")]
+    [InlineData("rm -rf $HOME")]
+    [InlineData("mkfs.ext4 /dev/sda1")]
+    [InlineData(":(){ :|:& };:")]
+    public void Denies_system_destructive_commands(string command)
     {
-        var decision = _policy.Evaluate("netclaw daemon kill");
-        Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
-    }
-
-    [Fact]
-    public void Denies_systemctl_stop_netclaw()
-    {
-        var decision = _policy.Evaluate("systemctl stop netclaw");
-        Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
-    }
-
-    // ── Self-destruction: process killing ──
-
-    [Fact]
-    public void Denies_kill_command()
-    {
-        var decision = _policy.Evaluate("kill -9 12345");
-        Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
-    }
-
-    [Fact]
-    public void Denies_killall_command()
-    {
-        var decision = _policy.Evaluate("killall netclaw");
-        Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
-    }
-
-    [Fact]
-    public void Denies_pkill_command()
-    {
-        var decision = _policy.Evaluate("pkill -f netclaw");
-        Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
-    }
-
-    // ── System-destructive: rm -rf ──
-
-    [Fact]
-    public void Denies_rm_rf_root()
-    {
-        var decision = _policy.Evaluate("rm -rf /");
-        Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
-    }
-
-    [Fact]
-    public void Denies_rm_rf_home()
-    {
-        var decision = _policy.Evaluate("rm -rf ~");
-        Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
-    }
-
-    [Fact]
-    public void Denies_rm_rf_home_env()
-    {
-        var decision = _policy.Evaluate("rm -rf $HOME");
+        var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
         Assert.Equal("system_destructive", decision.DenyCategory);
     }
@@ -96,60 +49,17 @@ public sealed class ShellCommandPolicyTests
         Assert.True(decision.Allowed);
     }
 
-    // ── System-destructive: mkfs ──
-
-    [Fact]
-    public void Denies_mkfs()
-    {
-        var decision = _policy.Evaluate("mkfs.ext4 /dev/sda1");
-        Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
-    }
-
-    // ── Fork bombs ──
-
-    [Fact]
-    public void Denies_fork_bomb()
-    {
-        var decision = _policy.Evaluate(":(){ :|:& };:");
-        Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
-    }
-
     // ── Safe commands allowed ──
 
-    [Fact]
-    public void Allows_git_push()
+    [Theory]
+    [InlineData("git push origin main")]
+    [InlineData("ls -la /tmp")]
+    [InlineData("dotnet build")]
+    [InlineData("git status")]
+    [InlineData("")]
+    public void Allows_safe_commands(string command)
     {
-        var decision = _policy.Evaluate("git push origin main");
-        Assert.True(decision.Allowed);
-    }
-
-    [Fact]
-    public void Allows_ls()
-    {
-        var decision = _policy.Evaluate("ls -la /tmp");
-        Assert.True(decision.Allowed);
-    }
-
-    [Fact]
-    public void Allows_dotnet_build()
-    {
-        var decision = _policy.Evaluate("dotnet build");
-        Assert.True(decision.Allowed);
-    }
-
-    [Fact]
-    public void Allows_git_status()
-    {
-        var decision = _policy.Evaluate("git status");
-        Assert.True(decision.Allowed);
-    }
-
-    [Fact]
-    public void Allows_empty_command()
-    {
-        var decision = _policy.Evaluate("");
+        var decision = _policy.Evaluate(command);
         Assert.True(decision.Allowed);
     }
 
@@ -172,10 +82,12 @@ public sealed class ShellCommandPolicyTests
 
     // ── bash -c recursion ──
 
-    [Fact]
-    public void Denies_bash_c_wrapping_denied_command()
+    [Theory]
+    [InlineData("bash -c \"netclaw daemon stop\"")]
+    [InlineData("bash -lc \"netclaw daemon stop\"")]
+    public void Denies_bash_wrapping_denied_command(string command)
     {
-        var decision = _policy.Evaluate("bash -c \"netclaw daemon stop\"");
+        var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
         Assert.Equal("self_destructive", decision.DenyCategory);
     }
@@ -187,44 +99,17 @@ public sealed class ShellCommandPolicyTests
         Assert.True(decision.Allowed);
     }
 
-    [Fact]
-    public void Denies_bash_lc_wrapping_denied_command()
-    {
-        var decision = _policy.Evaluate("bash -lc \"netclaw daemon stop\"");
-        Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
-    }
+    // ── Case insensitivity and flag variants ──
 
-    // ── Case insensitivity ──
-
-    [Fact]
-    public void Denies_case_insensitive_netclaw_daemon_stop()
+    [Theory]
+    [InlineData("Netclaw Daemon Stop")]
+    [InlineData("KILL -9 123")]
+    [InlineData("rm -r -f /")]
+    [InlineData("rm --recursive --force /")]
+    public void Denies_case_insensitive_and_flag_variants(string command)
     {
-        var decision = _policy.Evaluate("Netclaw Daemon Stop");
+        var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
-    }
-
-    [Fact]
-    public void Denies_case_insensitive_kill()
-    {
-        var decision = _policy.Evaluate("KILL -9 123");
-        Assert.False(decision.Allowed);
-    }
-
-    [Fact]
-    public void Denies_rm_with_split_short_flags_targeting_root()
-    {
-        var decision = _policy.Evaluate("rm -r -f /");
-        Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
-    }
-
-    [Fact]
-    public void Denies_rm_with_long_flags_targeting_root()
-    {
-        var decision = _policy.Evaluate("rm --recursive --force /");
-        Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
     }
 
     // ── Custom patterns ──

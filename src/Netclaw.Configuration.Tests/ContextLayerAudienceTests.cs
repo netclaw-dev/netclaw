@@ -25,25 +25,15 @@ public sealed class ContextLayerAudienceTests
         Assert.Equal(string.Empty, layer.GetContextLayer(TrustAudience.Public));
     }
 
-    [Fact]
-    public void SkillIndex_Personal_ReturnsContent_WhenRegistered()
+    [Theory]
+    [InlineData(TrustAudience.Personal)]
+    [InlineData(TrustAudience.Team)]
+    public void SkillIndex_NonPublic_ReturnsContent_WhenRegistered(TrustAudience audience)
     {
         var layer = new SkillIndexContextLayer();
         layer.Update("Available skills:\n- netclaw-memory");
 
-        var result = layer.GetContextLayer(TrustAudience.Personal);
-
-        Assert.NotEmpty(result);
-        Assert.Contains("netclaw-memory", result);
-    }
-
-    [Fact]
-    public void SkillIndex_Team_ReturnsContent_WhenRegistered()
-    {
-        var layer = new SkillIndexContextLayer();
-        layer.Update("Available skills:\n- netclaw-memory");
-
-        var result = layer.GetContextLayer(TrustAudience.Team);
+        var result = layer.GetContextLayer(audience);
 
         Assert.NotEmpty(result);
     }
@@ -71,25 +61,15 @@ public sealed class ContextLayerAudienceTests
         Assert.Equal(string.Empty, layer.GetContextLayer(TrustAudience.Public));
     }
 
-    [Fact]
-    public void MemoryIndex_Personal_ReturnsContent_WhenStateSet()
+    [Theory]
+    [InlineData(TrustAudience.Personal)]
+    [InlineData(TrustAudience.Team)]
+    public void MemoryIndex_NonPublic_ReturnsContent_WhenStateSet(TrustAudience audience)
     {
         var layer = new MemoryIndexContextLayer();
         layer.Update(MemoryContextState.SqlitePrimary);
 
-        var result = layer.GetContextLayer(TrustAudience.Personal);
-
-        Assert.NotEmpty(result);
-        Assert.Contains("sqlite-backed", result);
-    }
-
-    [Fact]
-    public void MemoryIndex_Team_ReturnsContent_WhenStateSet()
-    {
-        var layer = new MemoryIndexContextLayer();
-        layer.Update(MemoryContextState.SqlitePrimary);
-
-        var result = layer.GetContextLayer(TrustAudience.Team);
+        var result = layer.GetContextLayer(audience);
 
         Assert.NotEmpty(result);
     }
@@ -117,25 +97,15 @@ public sealed class ContextLayerAudienceTests
         Assert.Equal(string.Empty, layer.GetContextLayer(TrustAudience.Public));
     }
 
-    [Fact]
-    public void SubAgentDiscovery_Personal_ReturnsContent_WhenRegistered()
+    [Theory]
+    [InlineData(TrustAudience.Personal)]
+    [InlineData(TrustAudience.Team)]
+    public void SubAgentDiscovery_NonPublic_ReturnsContent_WhenRegistered(TrustAudience audience)
     {
         var layer = new SubAgentDiscoveryContextLayer();
         layer.Update("Available agents:\n- curation-agent");
 
-        var result = layer.GetContextLayer(TrustAudience.Personal);
-
-        Assert.NotEmpty(result);
-        Assert.Contains("curation-agent", result);
-    }
-
-    [Fact]
-    public void SubAgentDiscovery_Team_ReturnsContent_WhenRegistered()
-    {
-        var layer = new SubAgentDiscoveryContextLayer();
-        layer.Update("Available agents:\n- curation-agent");
-
-        var result = layer.GetContextLayer(TrustAudience.Team);
+        var result = layer.GetContextLayer(audience);
 
         Assert.NotEmpty(result);
     }

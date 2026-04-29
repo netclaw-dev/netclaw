@@ -318,7 +318,7 @@ internal sealed class DeterministicRecallEngine
             x => x.DocumentId,
             x => (IReadOnlyList<string>)(_inferredNeighborsByAnchor.TryGetValue(_documents.First(d => d.DocumentId == x.DocumentId).AnchorId, out var list)
                 ? list.Select(n => $"{n.ToAnchorId} ({n.Reason}, {n.Weight:F2})").ToArray()
-                : Array.Empty<string>()),
+                : []),
             StringComparer.OrdinalIgnoreCase);
 
         return new RetrievalExplanation(

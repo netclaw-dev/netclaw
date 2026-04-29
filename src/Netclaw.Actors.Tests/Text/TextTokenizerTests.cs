@@ -60,53 +60,19 @@ public class TextTokenizerTests
         Assert.Contains("category", tokens);
     }
 
-    [Fact]
-    public void NormalizePlural_prices_to_price()
+    [Theory]
+    [InlineData("prices", "price")]
+    [InlineData("flights", "flight")]
+    [InlineData("categories", "category")]
+    [InlineData("matches", "match")]
+    [InlineData("buses", "bus")]
+    [InlineData("class", "class")]
+    [InlineData("miss", "miss")]
+    [InlineData("us", "us")]
+    [InlineData("has", "has")]
+    public void NormalizePlural_produces_expected_singular(string input, string expected)
     {
-        Assert.Equal("price", TextTokenizer.NormalizePlural("prices"));
-    }
-
-    [Fact]
-    public void NormalizePlural_flights_to_flight()
-    {
-        Assert.Equal("flight", TextTokenizer.NormalizePlural("flights"));
-    }
-
-    [Fact]
-    public void NormalizePlural_categories_to_category()
-    {
-        Assert.Equal("category", TextTokenizer.NormalizePlural("categories"));
-    }
-
-    [Fact]
-    public void NormalizePlural_matches_to_match()
-    {
-        Assert.Equal("match", TextTokenizer.NormalizePlural("matches"));
-    }
-
-    [Fact]
-    public void NormalizePlural_buses_to_bus()
-    {
-        Assert.Equal("bus", TextTokenizer.NormalizePlural("buses"));
-    }
-
-    [Fact]
-    public void NormalizePlural_class_stays_class()
-    {
-        Assert.Equal("class", TextTokenizer.NormalizePlural("class"));
-    }
-
-    [Fact]
-    public void NormalizePlural_miss_stays_miss()
-    {
-        Assert.Equal("miss", TextTokenizer.NormalizePlural("miss"));
-    }
-
-    [Fact]
-    public void NormalizePlural_short_words_unchanged()
-    {
-        Assert.Equal("us", TextTokenizer.NormalizePlural("us"));
-        Assert.Equal("has", TextTokenizer.NormalizePlural("has"));
+        Assert.Equal(expected, TextTokenizer.NormalizePlural(input));
     }
 
     [Fact]

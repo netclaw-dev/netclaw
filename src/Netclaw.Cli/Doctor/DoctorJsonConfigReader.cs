@@ -26,10 +26,9 @@ internal static class DoctorJsonConfigReader
         if (obj[property] is not JsonArray arr)
             return [];
 
-        return arr.Select(v => v?.GetValue<string>())
+        return [.. arr.Select(v => v?.GetValue<string>())
             .Where(s => !string.IsNullOrWhiteSpace(s))
-            .Cast<string>()
-            .ToList();
+            .Cast<string>()];
     }
 
     public static (JsonObject? Root, DoctorCheckResult? Error) TryReadConfig(NetclawPaths paths)

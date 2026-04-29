@@ -33,7 +33,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     private readonly HashSet<string> _activeJobIds = [];
     private readonly Queue<string> _deferredQueue = new();
-    private readonly Dictionary<string, BackgroundJobDefinition> _definitions = new();
+    private readonly Dictionary<string, BackgroundJobDefinition> _definitions = [];
 
     public BackgroundJobManagerActor(
         BackgroundJobDefinitionStore store,

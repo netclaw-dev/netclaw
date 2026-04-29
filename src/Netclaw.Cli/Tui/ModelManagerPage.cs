@@ -31,7 +31,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     private IFocusable? _lastFocusedList;
     private TextInputNode? _lastFocusedInput;
     private DynamicLayoutNode? _contentNode;
-    private readonly CompositeDisposable _stepSubs = new();
+    private readonly CompositeDisposable _stepSubs = [];
 
     protected override void OnBound()
     {

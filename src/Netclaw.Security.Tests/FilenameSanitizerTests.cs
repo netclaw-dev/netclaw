@@ -61,21 +61,12 @@ public sealed class FilenameSanitizerTests
         Assert.EndsWith(".png", result, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void HasSuspiciousDoubleExtension_SingleExtension_ReturnsFalse()
+    [Theory]
+    [InlineData("photo.png", false)]
+    [InlineData("malware.exe.png", true)]
+    [InlineData("README", false)]
+    public void HasSuspiciousDoubleExtension_ClassifiesCorrectly(string filename, bool expected)
     {
-        Assert.False(FilenameSanitizer.HasSuspiciousDoubleExtension("photo.png"));
-    }
-
-    [Fact]
-    public void HasSuspiciousDoubleExtension_DoubleExtension_ReturnsTrue()
-    {
-        Assert.True(FilenameSanitizer.HasSuspiciousDoubleExtension("malware.exe.png"));
-    }
-
-    [Fact]
-    public void HasSuspiciousDoubleExtension_NoExtension_ReturnsFalse()
-    {
-        Assert.False(FilenameSanitizer.HasSuspiciousDoubleExtension("README"));
+        Assert.Equal(expected, FilenameSanitizer.HasSuspiciousDoubleExtension(filename));
     }
 }

@@ -47,20 +47,12 @@ public class ProbeHelpersTests
         Assert.Contains("Invalid API key provided.", result.ErrorMessage);
     }
 
-    [Fact]
-    public void FailForStatus_Unauthorized_SaysCredentials_NotApiKey()
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public void FailForStatus_SaysCredentials_NotApiKey(HttpStatusCode status)
     {
-        var result = ProbeHelpers.FailForStatus(HttpStatusCode.Unauthorized, "openai");
-
-        Assert.False(result.Success);
-        Assert.Contains("credentials", result.ErrorMessage);
-        Assert.DoesNotContain("API key", result.ErrorMessage);
-    }
-
-    [Fact]
-    public void FailForStatus_Forbidden_SaysCredentials_NotApiKey()
-    {
-        var result = ProbeHelpers.FailForStatus(HttpStatusCode.Forbidden, "openai");
+        var result = ProbeHelpers.FailForStatus(status, "openai");
 
         Assert.False(result.Success);
         Assert.Contains("credentials", result.ErrorMessage);
@@ -121,6 +113,7 @@ public class ProbeHelpersTests
     [Fact]
     public async Task ExtractApiErrorDetail_NoErrorProperty_ReturnsNull()
     {
+        // Body has JSON but no "error" key
         var response = JsonErrorResponse(new { status = "error", reason = "unknown" });
 
         var detail = await ProbeHelpers.ExtractApiErrorDetailAsync(response, CancellationToken.None);

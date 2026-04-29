@@ -19,7 +19,7 @@ public sealed class DiscordGatewayActor : ReceiveActor
 
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly ILoggingAdapter _log;
-    private readonly Dictionary<DiscordEventId, byte> _processedEventIds = new();
+    private readonly Dictionary<DiscordEventId, byte> _processedEventIds = [];
     private readonly Queue<DiscordEventId> _processedEventOrder = new();
 
     public DiscordGatewayActor(DiscordGatewayDependencies dependencies)

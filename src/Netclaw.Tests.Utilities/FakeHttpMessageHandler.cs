@@ -13,7 +13,7 @@ internal sealed class FakeHttpMessageHandler : HttpMessageHandler
 {
     private const string JsonMediaType = "application/json";
 
-    private readonly Dictionary<string, Func<HttpRequestMessage, HttpResponseMessage>> _routes = new();
+    private readonly Dictionary<string, Func<HttpRequestMessage, HttpResponseMessage>> _routes = [];
     private readonly Func<HttpRequestMessage, HttpResponseMessage>? _catchAll;
 
     public FakeHttpMessageHandler() { }

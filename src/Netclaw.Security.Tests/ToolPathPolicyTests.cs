@@ -178,94 +178,50 @@ public sealed class ToolPathPolicyTests
         return new ToolPathPolicy(writeDeny, readDeny, shellIndicators);
     }
 
-    [Fact]
-    public void IsDenied_blocks_sqlite_db_when_listed()
+    [Theory]
+    [InlineData("/home/user/.netclaw/netclaw.db")]
+    [InlineData("/home/user/.netclaw/netclaw.pid")]
+    [InlineData("/home/user/.netclaw/netclaw.lock")]
+    [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
+    public void IsDenied_blocks_control_plane_files(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.True(policy.IsDenied("/home/user/.netclaw/netclaw.db"));
+        Assert.True(policy.IsDenied(path));
     }
 
-    [Fact]
-    public void IsDenied_blocks_pid_and_lock_files()
+    [Theory]
+    [InlineData("/home/user/.netclaw/config/netclaw.json")]
+    [InlineData("/home/user/.netclaw/config/devices.json")]
+    [InlineData("/home/user/.netclaw/config/tool-approvals.json")]
+    [InlineData("/home/user/.netclaw/config/mcp-oauth-metadata.json")]
+    [InlineData("/home/user/.netclaw/identity/SOUL.md")]
+    [InlineData("/home/user/.netclaw/identity/AGENTS.md")]
+    [InlineData("/home/user/.netclaw/skills/my-skill/SKILL.md")]
+    [InlineData("/tmp/foo.json")]
+    [InlineData("/home/user/Documents/notes.txt")]
+    public void IsDenied_allows_safe_write_paths(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.True(policy.IsDenied("/home/user/.netclaw/netclaw.pid"));
-        Assert.True(policy.IsDenied("/home/user/.netclaw/netclaw.lock"));
+        Assert.False(policy.IsDenied(path));
     }
 
-    [Fact]
-    public void IsDenied_blocks_restart_manifest()
+    [Theory]
+    [InlineData("/home/user/.netclaw/config/secrets.json")]
+    [InlineData("/home/user/.netclaw/keys/keyring.xml")]
+    [InlineData("/home/user/.netclaw/config/webhooks/github-issues.json")]
+    public void IsReadDenied_blocks_sensitive_paths(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.True(policy.IsDenied("/home/user/.netclaw/cache/restart-manifest.json"));
+        Assert.True(policy.IsReadDenied(path));
     }
 
-    [Fact]
-    public void IsDenied_allows_writes_to_netclaw_config_json_so_approval_gate_can_fire()
+    [Theory]
+    [InlineData("/home/user/.netclaw/config/netclaw.json")]
+    [InlineData("/home/user/.netclaw/netclaw.db")]
+    public void IsReadDenied_allows_non_sensitive_paths(string path)
     {
         var policy = CreateProductionPolicy();
-        Assert.False(policy.IsDenied("/home/user/.netclaw/config/netclaw.json"));
-        Assert.False(policy.IsDenied("/home/user/.netclaw/config/devices.json"));
-        Assert.False(policy.IsDenied("/home/user/.netclaw/config/tool-approvals.json"));
-        Assert.False(policy.IsDenied("/home/user/.netclaw/config/mcp-oauth-metadata.json"));
-    }
-
-    [Fact]
-    public void IsDenied_allows_writes_to_identity_directory()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.False(policy.IsDenied("/home/user/.netclaw/identity/SOUL.md"));
-        Assert.False(policy.IsDenied("/home/user/.netclaw/identity/AGENTS.md"));
-    }
-
-    [Fact]
-    public void IsDenied_allows_writes_to_skills_directory()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.False(policy.IsDenied("/home/user/.netclaw/skills/my-skill/SKILL.md"));
-    }
-
-    [Fact]
-    public void IsDenied_allows_writes_to_arbitrary_user_paths()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.False(policy.IsDenied("/tmp/foo.json"));
-        Assert.False(policy.IsDenied("/home/user/Documents/notes.txt"));
-    }
-
-    [Fact]
-    public void IsReadDenied_blocks_secrets_json()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.True(policy.IsReadDenied("/home/user/.netclaw/config/secrets.json"));
-    }
-
-    [Fact]
-    public void IsReadDenied_blocks_keys_directory_children()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.True(policy.IsReadDenied("/home/user/.netclaw/keys/keyring.xml"));
-    }
-
-    [Fact]
-    public void IsReadDenied_blocks_webhook_configs()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.True(policy.IsReadDenied("/home/user/.netclaw/config/webhooks/github-issues.json"));
-    }
-
-    [Fact]
-    public void IsReadDenied_allows_netclaw_json()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.False(policy.IsReadDenied("/home/user/.netclaw/config/netclaw.json"));
-    }
-
-    [Fact]
-    public void IsReadDenied_allows_netclaw_db()
-    {
-        var policy = CreateProductionPolicy();
-        Assert.False(policy.IsReadDenied("/home/user/.netclaw/netclaw.db"));
+        Assert.False(policy.IsReadDenied(path));
     }
 
     [Fact]

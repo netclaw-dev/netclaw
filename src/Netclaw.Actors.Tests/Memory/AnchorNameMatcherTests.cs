@@ -115,8 +115,8 @@ public sealed class AnchorNameMatcherTests
     public void IsFuzzyMatch_returns_false_for_empty_tokens()
     {
         Assert.False(AnchorNameMatcher.IsFuzzyMatch([], []));
-        Assert.False(AnchorNameMatcher.IsFuzzyMatch([], new[] { "a" }));
-        Assert.False(AnchorNameMatcher.IsFuzzyMatch(new[] { "a" }, []));
+        Assert.False(AnchorNameMatcher.IsFuzzyMatch([], ["a"]));
+        Assert.False(AnchorNameMatcher.IsFuzzyMatch(["a"], []));
     }
 
     [Fact]
@@ -291,7 +291,7 @@ public sealed class AnchorNameMatcherTests
     [Fact]
     public void ComputeAnchorJaccard_returns_0_for_empty_tokens()
     {
-        Assert.Equal(0.0, AnchorNameMatcher.ComputeAnchorJaccard([], new[] { "a" }));
-        Assert.Equal(0.0, AnchorNameMatcher.ComputeAnchorJaccard(new[] { "a" }, []));
+        Assert.Equal(0.0, AnchorNameMatcher.ComputeAnchorJaccard([], ["a"]));
+        Assert.Equal(0.0, AnchorNameMatcher.ComputeAnchorJaccard(["a"], []));
     }
 }

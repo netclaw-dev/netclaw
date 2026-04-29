@@ -40,17 +40,12 @@ public sealed class SystemPromptAssemblerTests
         Assert.Equal("# Project Rules", result);
     }
 
-    [Fact]
-    public void TryReadProjectIdentityFile_returns_null_for_null_directory()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void TryReadProjectIdentityFile_returns_null_for_null_or_empty_directory(string? directory)
     {
-        var result = FileSystemPromptProvider.TryReadProjectIdentityFile(null);
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public void TryReadProjectIdentityFile_returns_null_for_empty_directory()
-    {
-        var result = FileSystemPromptProvider.TryReadProjectIdentityFile(string.Empty);
+        var result = FileSystemPromptProvider.TryReadProjectIdentityFile(directory);
         Assert.Null(result);
     }
 

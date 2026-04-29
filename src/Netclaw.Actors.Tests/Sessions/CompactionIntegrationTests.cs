@@ -980,7 +980,7 @@ internal sealed class FakeMemoryExtractor : IMemoryExtractor
 
     public int CallCount => _callCount;
 
-    public List<(SessionId SessionId, string Memories)> Entries { get; } = new();
+    public List<(SessionId SessionId, string Memories)> Entries { get; } = [];
 
     public Task PersistAsync(SessionId sessionId, string extractedMemories, CancellationToken ct = default)
     {
