@@ -90,7 +90,7 @@ public static class SlackAclPolicy
         {
             return SecurityPolicyDefaults.TryParseAudience(channelOverride, out var channelAudience)
                 ? new AudienceResult(channelAudience)
-                : new AudienceResult($"invalid_channel_audience:{message.ChannelId.Value}={channelOverride}");
+                : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:{message.ChannelId.Value}={channelOverride}");
         }
 
         // 2. DM key mapping
@@ -99,7 +99,7 @@ public static class SlackAclPolicy
         {
             return SecurityPolicyDefaults.TryParseAudience(dmOverride, out var dmAudience)
                 ? new AudienceResult(dmAudience)
-                : new AudienceResult($"invalid_channel_audience:dm={dmOverride}");
+                : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:dm={dmOverride}");
         }
 
         // 3. Existing heuristic fallback (no key matched — this is the only legitimate fallback)

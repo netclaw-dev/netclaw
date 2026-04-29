@@ -48,4 +48,5 @@ public static class AclDenyReasons
     public const string ChannelNotAllowed = "channel_not_allowed";
     public const string UserNotAllowed = "user_not_allowed";
     public const string DirectMessagesDisabled = "direct_messages_disabled";
+    public const string InvalidChannelAudiencePrefix = "invalid_channel_audience";
 }

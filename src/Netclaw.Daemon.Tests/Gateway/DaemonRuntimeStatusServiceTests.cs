@@ -292,7 +292,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         var before = slack.GetSnapshot();
 
         slack.RecordEventReceived("message");
-        slack.RecordEventDropped("channel_not_allowed");
+        slack.RecordEventDropped(AclDenyReasons.ChannelNotAllowed);
         slack.RecordEventRouted("message");
         slack.RecordMessageEnqueued();
         slack.RecordReplyPosted(42);

@@ -74,7 +74,7 @@ public static class DiscordAclPolicy
         {
             return SecurityPolicyDefaults.TryParseAudience(channelOverride, out var channelAudience)
                 ? new AudienceResult(channelAudience)
-                : new AudienceResult($"invalid_channel_audience:{message.ChannelId.Value}={channelOverride}");
+                : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:{message.ChannelId.Value}={channelOverride}");
         }
 
         if (message.IsDirectMessage
@@ -82,7 +82,7 @@ public static class DiscordAclPolicy
         {
             return SecurityPolicyDefaults.TryParseAudience(dmOverride, out var dmAudience)
                 ? new AudienceResult(dmAudience)
-                : new AudienceResult($"invalid_channel_audience:dm={dmOverride}");
+                : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:dm={dmOverride}");
         }
 
         var audience = (message.IsDirectMessage || isExplicitUser || isExplicitChannel)
