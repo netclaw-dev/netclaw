@@ -5,11 +5,8 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -25,33 +22,33 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// Verifies: threshold trigger, tool result clearing, structured summarization,
 /// session recovery after compaction, and buffer drain post-compaction.
 /// </summary>
-public class CompactionIntegrationTests : TestKit
+public class CompactionIntegrationTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeMemoryExtractor _fakeMemoryExtractor = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
 
-    public CompactionIntegrationTests(ITestOutputHelper output) : base(output: output)
+    public CompactionIntegrationTests(ITestOutputHelper output) : base(output)
     {
     }
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
+        // Small context window so 0.75 threshold (750 tokens) is easy to exceed.
+        // KeepRecentMessages=0 so single-turn tests actually reduce message count.
         services.AddSingleton(new ModelCapabilities
         {
             ModelId = "fake-model",
             ContextWindowTokens = 1000,
         });
-        // Small context window for easy threshold triggering in tests.
-        // KeepRecentMessages=0 so minimal-history tests (1 turn) actually reduce message count.
         services.AddSingleton(new SessionConfig
         {
             TurnLlmTimeout = TimeSpan.FromSeconds(1),
             SidecarLlmTimeout = TimeSpan.FromSeconds(1),
             Tuning = new SessionTuning
             {
-                CompactionThreshold = 0.75, // 750 tokens triggers compaction
+                CompactionThreshold = 0.75,
                 SnapshotInterval = 5,
                 KeepRecentToolResults = 1,
                 KeepRecentMessages = 0,
@@ -61,48 +58,13 @@ public class CompactionIntegrationTests : TestKit
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider(
             "You are a test assistant."));
         services.AddSingleton<IMemoryExtractor>(_fakeMemoryExtractor);
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
 
-        // Tool registry + fake executor so tool-execution tests can exercise
-        // the WorkingContext-through-compaction path. Other tests in this
-        // class don't drive tool calls and are unaffected.
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         var registry = new ToolRegistry();
         registry.Register(
             AIFunctionFactory.Create((string path) => $"contents of {path}", "file_read"),
             "file_read");
         services.AddSingleton(registry);
-
-        services.AddTestNetclawPaths();
-
-        // Composite records for LlmSessionActor constructor
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionToolServices(
-            sp.GetRequiredService<IToolExecutor>(),
-            sp.GetService<IToolAuditLogger>(),
-            sp.GetRequiredService<ToolRegistry>(),
-            sp.GetService<ToolAccessPolicy>(),
-            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
-            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]

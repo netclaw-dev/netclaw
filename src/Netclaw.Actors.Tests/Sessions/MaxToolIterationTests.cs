@@ -5,15 +5,11 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Xunit;
@@ -24,17 +20,17 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// Integration tests for the max tool iterations safety circuit breaker.
 /// Verifies that unbounded agentic tool loops are terminated after the configured limit.
 /// </summary>
-public class MaxToolIterationTests : TestKit
+public class MaxToolIterationTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
     private readonly FakeToolAuditLogger _fakeAuditLogger = new();
 
-    public MaxToolIterationTests(ITestOutputHelper output) : base(output: output)
+    public MaxToolIterationTests(ITestOutputHelper output) : base(output)
     {
     }
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
         services.AddSingleton(new ModelCapabilities
@@ -44,7 +40,7 @@ public class MaxToolIterationTests : TestKit
         });
         services.AddSingleton(new SessionConfig
         {
-            MaxToolCallsPerTurn = 3, // Low limit for testing
+            MaxToolCallsPerTurn = 3,
             Tuning = new SessionTuning
             {
                 SnapshotInterval = 5,
@@ -61,36 +57,6 @@ public class MaxToolIterationTests : TestKit
             AIFunctionFactory.Create(() => "search result", "web_search"),
             "web_search");
         services.AddSingleton(registry);
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
-
-        services.AddTestNetclawPaths();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionToolServices(
-            sp.GetRequiredService<IToolExecutor>(),
-            sp.GetService<IToolAuditLogger>(),
-            sp.GetRequiredService<ToolRegistry>(),
-            sp.GetService<ToolAccessPolicy>(),
-            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
-            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]

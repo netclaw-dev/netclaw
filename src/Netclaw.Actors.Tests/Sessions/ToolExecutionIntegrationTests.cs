@@ -5,15 +5,11 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
-using Akka.Hosting.TestKit;
-using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
-using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Xunit;
@@ -24,17 +20,17 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// Integration tests for the tool execution loop:
 /// LLM returns tool call → actor executes tool → feeds result back → LLM completes.
 /// </summary>
-public class ToolExecutionIntegrationTests : TestKit
+public class ToolExecutionIntegrationTests : LlmSessionTestBase
 {
     private readonly FakeChatClient _fakeChatClient = new();
     private readonly FakeToolExecutor _fakeToolExecutor = new();
     private readonly FakeToolAuditLogger _fakeAuditLogger = new();
 
-    public ToolExecutionIntegrationTests(ITestOutputHelper output) : base(output: output)
+    public ToolExecutionIntegrationTests(ITestOutputHelper output) : base(output)
     {
     }
 
-    protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
+    protected override void ConfigureSessionServices(IServiceCollection services)
     {
         services.AddSingleton<IChatClientProvider>(new SingleClientProvider(_fakeChatClient));
         services.AddSingleton(new ModelCapabilities
@@ -56,7 +52,6 @@ public class ToolExecutionIntegrationTests : TestKit
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         services.AddSingleton<IToolAuditLogger>(_fakeAuditLogger);
 
-        // Register a tool in the registry
         var registry = new ToolRegistry();
         registry.Register(
             AIFunctionFactory.Create(() => "search result", "web_search"),
@@ -65,36 +60,6 @@ public class ToolExecutionIntegrationTests : TestKit
             AIFunctionFactory.Create((string path) => $"contents of {path}", "file_read"),
             "file_read");
         services.AddSingleton(registry);
-        services.AddSingleton<IModelCapabilityResolver>(new FakeCapabilityResolver());
-
-        services.AddTestNetclawPaths();
-        services.AddSingleton(sp => new SessionServices(
-            sp.GetRequiredService<IChatClientProvider>(),
-            sp.GetRequiredService<ISystemPromptProvider>(),
-            sp.GetService<IReadOnlyList<IContextLayerProvider>>() ?? Array.Empty<IContextLayerProvider>(),
-            sp.GetService<TimeProvider>() ?? TimeProvider.System,
-            sp.GetRequiredService<NetclawPaths>()));
-        services.AddSingleton(sp => new SessionToolServices(
-            sp.GetRequiredService<IToolExecutor>(),
-            sp.GetService<IToolAuditLogger>(),
-            sp.GetRequiredService<ToolRegistry>(),
-            sp.GetService<ToolAccessPolicy>(),
-            sp.GetService<Netclaw.Actors.Channels.TrustContextDeriver>(),
-            sp.GetService<Netclaw.Actors.Skills.SkillRegistry>()));
-        services.AddSingleton(sp => new SessionMemoryServices(
-            sp.GetService<IMemoryExtractor>() ?? NullMemoryExtractor.Instance,
-            sp.GetService<IMemoryRecallCoordinator>() ?? NullMemoryRecallCoordinator.Instance,
-            sp.GetService<IMemoryCheckpointSink>() ?? NullMemoryCheckpointSink.Instance,
-            sp.GetService<SQLiteMemoryStore>()));
-        services.AddSingleton(new SessionObservability(null, null));
-    }
-
-    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
-    {
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawActors();
     }
 
     [Fact]
