@@ -1,63 +1,22 @@
-# security-posture-tui Specification
-
-## Purpose
-
-Define the interactive TUI step for deployment posture selection during
-`netclaw init`.
-
-## Requirements
-
-### Requirement: Security posture selection step
-
-The wizard SHALL present an interactive step where the user selects a
-deployment posture (Personal, Team, or Public) with explanatory text for
-each option. In this context, `Public` refers to the agent participating in
-public Slack or Discord channels; it does NOT refer to anonymous daemon
-network exposure. Audience/posture selection is independent from exposure-mode
-selection, which separately controls daemon network reachability.
-
-#### Scenario: User selects Personal posture
-
-- **GIVEN** the wizard is at the SecurityPosture step
-- **WHEN** the user selects "Personal"
-- **THEN** deployment posture is set to Personal
-- **AND** shell execution mode defaults to HostAllowed
-- **AND** DM audience defaults to Personal
-- **AND** channel audience defaults to Team
-
-#### Scenario: User selects Team posture
-
-- **GIVEN** the wizard is at the SecurityPosture step
-- **WHEN** the user selects "Team"
-- **THEN** deployment posture is set to Team
-- **AND** shell execution mode defaults to Off
-- **AND** DM audience defaults to Team
-- **AND** channel audience defaults to Team
-
-#### Scenario: User selects Public posture
-
-- **GIVEN** the wizard is at the SecurityPosture step
-- **WHEN** the user selects "Public"
-- **THEN** deployment posture is set to Public
-- **AND** shell execution mode defaults to Off
-- **AND** DM audience defaults to Public
-- **AND** channel audience defaults to Public
+## MODIFIED Requirements
 
 ### Requirement: Posture step position in wizard flow
 
-The SecurityPosture step SHALL appear after ChatServices and before ACL in
-the wizard flow, so posture defaults are available for channel audience
-assignment.
+The SecurityPosture step SHALL appear after ChatServices and before the
+Feature Selection step in the wizard flow. For non-Personal postures, the
+Feature Selection step SHALL appear immediately after SecurityPosture so
+that feature availability is configured before channel audience assignment.
 
-#### Scenario: Step order
+#### Scenario: Step order with Feature Selection
 
-- **WHEN** the user completes the ChatServices step
-- **THEN** the next step is SecurityPosture
-- **AND** after SecurityPosture, the next step is ACL
+- **WHEN** the user completes the SecurityPosture step
+- **AND** the selected posture is Team or Public
+- **THEN** the next step is Feature Selection
+- **AND** after Feature Selection, the next applicable step follows
 
-#### Scenario: Skip when no chat services
+#### Scenario: Step order without Feature Selection
 
-- **GIVEN** Slack is disabled in the ChatServices step
-- **WHEN** the wizard advances past ChatServices
-- **THEN** SecurityPosture is still shown (posture applies to all channels,
-  not just Slack)
+- **WHEN** the user completes the SecurityPosture step
+- **AND** the selected posture is Personal
+- **THEN** the Feature Selection step is skipped
+- **AND** the next applicable step follows directly
