@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -29,7 +30,7 @@ public static class SensitiveStringExtensions
     /// <summary>
     /// Returns true when <paramref name="token"/> is null or wraps a null/whitespace value.
     /// </summary>
-    public static bool IsNullOrEmpty(this SensitiveString? token)
+    public static bool IsNullOrEmpty([NotNullWhen(false)] this SensitiveString? token)
         => token is null || string.IsNullOrWhiteSpace(token.Value);
 
     /// <summary>
@@ -41,7 +42,7 @@ public static class SensitiveStringExtensions
     {
         if (token.IsNullOrEmpty())
             throw new InvalidOperationException($"{context} is required but was not configured.");
-        return token!;
+        return token;
     }
 }
 
