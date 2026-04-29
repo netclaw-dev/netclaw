@@ -60,9 +60,7 @@ public static class SlackChannelRegistrationExtensions
         services.AddSingleton<ISlackTargetResolver, SlackTargetResolver>();
         services.AddSingleton<IReminderTargetResolver, SlackReminderTargetResolver>();
         services.AddSingleton<SlackApprovalHandler>();
-        services.AddKeyedSingleton<IChannel, SlackChannel>(SlackChannelKey);
-        services.AddSingleton<IChannel>(sp =>
-            sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
+        services.AddChannelSingleton<SlackChannel>(SlackChannelKey);
         services.AddSingleton<SlackChannel>(sp =>
             (SlackChannel)sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
 
@@ -101,8 +99,5 @@ public static class SlackChannelRegistrationExtensions
             return new LookupSlackUserTool(slackApi.Users, slackOptions, timeProvider);
         });
         services.AddSingleton<IChannelTool>(sp => sp.GetRequiredService<LookupSlackUserTool>());
-
-        services.AddSingleton<IHostedService>(sp =>
-            (IHostedService)sp.GetRequiredKeyedService<IChannel>(SlackChannelKey));
     }
 }

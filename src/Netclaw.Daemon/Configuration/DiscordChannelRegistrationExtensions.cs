@@ -64,11 +64,6 @@ public static class DiscordChannelRegistrationExtensions
         });
         services.AddSingleton<IReminderTargetResolver, DiscordReminderTargetResolver>();
 
-        services.AddKeyedSingleton<IChannel, DiscordChannel>(DiscordChannelKey);
-        services.AddSingleton<IChannel>(sp =>
-            sp.GetRequiredKeyedService<IChannel>(DiscordChannelKey));
-
-        services.AddSingleton<IHostedService>(sp =>
-            (IHostedService)sp.GetRequiredKeyedService<IChannel>(DiscordChannelKey));
+        services.AddChannelSingleton<DiscordChannel>(DiscordChannelKey);
     }
 }
