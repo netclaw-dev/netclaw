@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -49,10 +50,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
     public static Props CreateProps(ToolApprovalStore? persistentStore = null)
         => Props.Create(() => new ToolApprovalActor(persistentStore));
 
-    private bool IsApproved(string? sessionId, TrustAudience audience, ToolName toolName, string pattern)
+    private bool IsApproved(SessionId? sessionId, TrustAudience audience, ToolName toolName, string pattern)
     {
-        if (!string.IsNullOrWhiteSpace(sessionId)
-            && _sessionApprovals.TryGetValue(BuildSessionKey(sessionId, audience), out var toolMap)
+        if (sessionId.HasValue
+            && _sessionApprovals.TryGetValue(BuildSessionKey(sessionId.Value, audience), out var toolMap)
             && toolMap.TryGetValue(toolName.Value, out var patterns)
             && ApprovalPatternMatching.MatchesAny(pattern, patterns))
         {
@@ -65,7 +66,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
         return ApprovalPatternMatching.MatchesAny(pattern, _persistentStore.GetApprovedPatterns(audience, toolName.Value));
     }
 
-    private void AddSessionApproval(string sessionId, TrustAudience audience, ToolName toolName, string pattern)
+    private void AddSessionApproval(SessionId sessionId, TrustAudience audience, ToolName toolName, string pattern)
     {
         var sessionKey = BuildSessionKey(sessionId, audience);
         if (!_sessionApprovals.TryGetValue(sessionKey, out var toolMap))
@@ -83,8 +84,8 @@ internal sealed class ToolApprovalActor : ReceiveActor
         patterns.Add(pattern);
     }
 
-    private static string BuildSessionKey(string sessionId, TrustAudience audience)
-        => $"{sessionId}|{audience.ToWireValue()}";
+    private static string BuildSessionKey(SessionId sessionId, TrustAudience audience)
+        => $"{sessionId.Value}|{audience.ToWireValue()}";
 }
 
 internal sealed record ToolApprovalRecorded

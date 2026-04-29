@@ -10,6 +10,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -71,7 +72,7 @@ public class DispatchingToolExecutorTests
     {
         var toolCall = new FunctionCallContent(
             "call-1", "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo routed" });
+            ToolInput.Create("Command", "echo routed"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
@@ -91,7 +92,7 @@ public class DispatchingToolExecutorTests
     {
         var toolCall = new FunctionCallContent(
             "call-2", "file_read",
-            new Dictionary<string, object?> { ["Path"] = "/nonexistent/file.txt" });
+            ToolInput.Create("Path", "/nonexistent/file.txt"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", Path.GetTempPath())
         {
@@ -110,7 +111,7 @@ public class DispatchingToolExecutorTests
     {
         var toolCall = new FunctionCallContent(
             "call-deny", "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo denied" });
+            ToolInput.Create("Command", "echo denied"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
         {
@@ -145,7 +146,7 @@ public class DispatchingToolExecutorTests
 
         var toolCall = new FunctionCallContent(
             "call-shell-profile-deny", "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo denied" });
+            ToolInput.Create("Command", "echo denied"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
@@ -180,7 +181,7 @@ public class DispatchingToolExecutorTests
 
         var toolCall = new FunctionCallContent(
             "call-shell-off", "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo denied" });
+            ToolInput.Create("Command", "echo denied"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
@@ -198,7 +199,7 @@ public class DispatchingToolExecutorTests
     {
         var toolCall = new FunctionCallContent(
             "call-allow", "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo allowed" });
+            ToolInput.Create("Command", "echo allowed"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
@@ -221,7 +222,7 @@ public class DispatchingToolExecutorTests
         {
             var toolCall = new FunctionCallContent(
                 "call-file-read-deny", "file_read",
-                new Dictionary<string, object?> { ["Path"] = filePath });
+                ToolInput.Create("Path", filePath));
 
             var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
@@ -252,11 +253,7 @@ public class DispatchingToolExecutorTests
         {
             var toolCall = new FunctionCallContent(
                 "call-file-write-deny", "file_write",
-                new Dictionary<string, object?>
-                {
-                    ["Path"] = filePath,
-                    ["Content"] = "blocked"
-                });
+                ToolInput.Create("Path", filePath, "Content", "blocked"));
 
             var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
@@ -287,11 +284,7 @@ public class DispatchingToolExecutorTests
         {
             var toolCall = new FunctionCallContent(
                 "call-3", "file_write",
-                new Dictionary<string, object?>
-                {
-                    ["Path"] = filePath,
-                    ["Content"] = "dispatch test"
-                });
+                ToolInput.Create("Path", filePath, "Content", "dispatch test"));
 
             var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
@@ -318,7 +311,7 @@ public class DispatchingToolExecutorTests
     {
         var toolCall = new FunctionCallContent(
             "call-4", "unknown_tool",
-            new Dictionary<string, object?> { ["arg"] = "value" });
+            ToolInput.Create("arg", "value"));
 
         var result = await _executor.ExecuteAsync(toolCall, null, TestContext.Current.CancellationToken);
 
@@ -381,7 +374,7 @@ public class DispatchingToolExecutorTests
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false)));
 
-        var toolCall = new FunctionCallContent("call-mcp-deny", "memorizer/search_memories", new Dictionary<string, object?>());
+        var toolCall = new FunctionCallContent("call-mcp-deny", "memorizer/search_memories", ToolInput.Empty());
         var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
         {
             Audience = TrustAudience.Team.ToWireValue(),
@@ -427,7 +420,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent(
                 "call-approve-once",
                 "shell_execute",
-                new Dictionary<string, object?> { ["Command"] = "echo once" });
+                ToolInput.Create("Command", "echo once"));
 
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
             {
@@ -486,7 +479,7 @@ public class DispatchingToolExecutorTests
         var toolCall = new FunctionCallContent(
             "call-approve-once-bypass",
             "shell_execute",
-            new Dictionary<string, object?> { ["Command"] = "echo bypass" });
+            ToolInput.Create("Command", "echo bypass"));
 
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
@@ -543,11 +536,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent(
                 "call-file-approve-once-bypass",
                 "file_write",
-                new Dictionary<string, object?>
-                {
-                    ["Path"] = targetPath,
-                    ["Content"] = "approved once"
-                });
+                ToolInput.Create("Path", targetPath, "Content", "approved once"));
 
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
             {
@@ -570,11 +559,7 @@ public class DispatchingToolExecutorTests
             var secondCall = new FunctionCallContent(
                 "call-file-approve-once-bypass-second",
                 "file_write",
-                new Dictionary<string, object?>
-                {
-                    ["Path"] = secondPath,
-                    ["Content"] = "different path"
-                });
+                ToolInput.Create("Path", secondPath, "Content", "different path"));
 
             await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(secondCall, context, TestContext.Current.CancellationToken));
@@ -642,10 +627,7 @@ public class DispatchingToolExecutorTests
             var call = new FunctionCallContent(
                 "call-filtered-once",
                 "shell_execute",
-                new Dictionary<string, object?>
-                {
-                    ["Command"] = "pwd && ls"
-                });
+                ToolInput.Create("Command", "pwd && ls"));
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
@@ -705,7 +687,7 @@ public class DispatchingToolExecutorTests
             var toolCall = new FunctionCallContent(
                 "call-session-approve",
                 "shell_execute",
-                new Dictionary<string, object?> { ["Command"] = "echo session" });
+                ToolInput.Create("Command", "echo session"));
 
             var firstContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
             {

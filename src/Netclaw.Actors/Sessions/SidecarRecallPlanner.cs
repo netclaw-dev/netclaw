@@ -3,12 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
+
 namespace Netclaw.Actors.Sessions;
 
 public sealed class SidecarRecallPlanner
 {
     public RecallPlanningRequest BuildRequest(
-        string sessionId,
+        SessionId sessionId,
         string userText,
         IReadOnlyList<string> recentUserTurns,
         IReadOnlyList<string> recentAssistantTurns,
@@ -18,7 +20,7 @@ public sealed class SidecarRecallPlanner
         int maxResults)
     {
         return new RecallPlanningRequest(
-            sessionId,
+            sessionId.Value,
             mode,
             userText,
             recentUserTurns,

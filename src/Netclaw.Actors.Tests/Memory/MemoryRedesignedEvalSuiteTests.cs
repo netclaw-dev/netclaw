@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -68,7 +69,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             sessionTuning: new SessionTuning());
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
-            "slack/thread-1",
+            (SessionId)"slack/thread-1",
             "what airline do I usually use",
             ["I usually fly United"],
             3), TestContext.Current.CancellationToken);
@@ -129,7 +130,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
-            "signalr/thread-iah",
+            (SessionId)"signalr/thread-iah",
             "What airport do I usually fly out of?",
             ["What airport do I usually fly out of?"],
             3,
@@ -190,7 +191,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
-            "signalr/thread-united",
+            (SessionId)"signalr/thread-united",
             "What airline do I usually take?",
             ["What airline do I usually take?"],
             3,
@@ -258,7 +259,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             sessionTuning: new SessionTuning());
 
         var auto = await recall.RecallAsync(new AutomaticRecallRequest(
-            "slack/thread-2",
+            (SessionId)"slack/thread-2",
             "where should I stay",
             ["where should I stay near Stir Trek"],
             3), TestContext.Current.CancellationToken);
@@ -550,7 +551,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
             CancellationToken.None);
 
         var auto = await recall.RecallAsync(new AutomaticRecallRequest(
-            "slack/thread-report",
+            (SessionId)"slack/thread-report",
             "what airline do I use and where should I stay",
             ["what airline do I use and where should I stay near Stir Trek"],
             3), TestContext.Current.CancellationToken);

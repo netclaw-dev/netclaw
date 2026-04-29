@@ -28,10 +28,7 @@ public class AttachFileToolTests : IDisposable
         await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath
-        };
+        var args = ToolInput.Create("Path", filePath);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -50,10 +47,7 @@ public class AttachFileToolTests : IDisposable
         try
         {
             var context = new ToolExecutionContext("test-session", _dir.Path);
-            var args = new Dictionary<string, object?>
-            {
-                ["Path"] = outsidePath
-            };
+            var args = ToolInput.Create("Path", outsidePath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -70,10 +64,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Dotdot_traversal_is_rejected()
     {
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = Path.Combine(_dir.Path, "..", "..", "etc", "passwd")
-        };
+        var args = ToolInput.Create("Path", Path.Combine(_dir.Path, "..", "..", "etc", "passwd"));
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -86,10 +77,7 @@ public class AttachFileToolTests : IDisposable
     {
         var filePath = Path.Combine(_dir.Path, "nonexistent.png");
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath
-        };
+        var args = ToolInput.Create("Path", filePath);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -101,10 +89,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Empty_path_returns_error()
     {
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ""
-        };
+        var args = ToolInput.Create("Path", "");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -115,10 +100,7 @@ public class AttachFileToolTests : IDisposable
     public async Task No_session_directory_returns_error()
     {
         var context = new ToolExecutionContext("test-session", null);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = "/tmp/anything.png"
-        };
+        var args = ToolInput.Create("Path", "/tmp/anything.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -133,11 +115,7 @@ public class AttachFileToolTests : IDisposable
         await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath,
-            ["DisplayName"] = "My Custom Report.png"
-        };
+        var args = ToolInput.Create("Path", filePath, "DisplayName", "My Custom Report.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -153,10 +131,7 @@ public class AttachFileToolTests : IDisposable
         await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = filePath
-        };
+        var args = ToolInput.Create("Path", filePath);
 
         await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -170,10 +145,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Failed_attach_does_not_populate_file_attachments()
     {
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = Path.Combine(_dir.Path, "nonexistent.png")
-        };
+        var args = ToolInput.Create("Path", Path.Combine(_dir.Path, "nonexistent.png"));
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -190,10 +162,7 @@ public class AttachFileToolTests : IDisposable
         await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
 
         var context = new ToolExecutionContext("test-session", _dir.Path);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = outsideFile
-        };
+        var args = ToolInput.Create("Path", outsideFile);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -215,10 +184,7 @@ public class AttachFileToolTests : IDisposable
             File.CreateSymbolicLink(symlinkPath, outsideFile);
 
             var context = new ToolExecutionContext("test-session", _dir.Path);
-            var args = new Dictionary<string, object?>
-            {
-                ["Path"] = symlinkPath
-            };
+            var args = ToolInput.Create("Path", symlinkPath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -257,11 +223,7 @@ public class AttachFileToolTests : IDisposable
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             ChannelType = "signalr"
         };
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = sourcePath,
-            ["DisplayName"] = "Copied Report.png"
-        };
+        var args = ToolInput.Create("Path", sourcePath, "DisplayName", "Copied Report.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -291,10 +253,7 @@ public class AttachFileToolTests : IDisposable
             ChannelType = "slack"
         };
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = outsidePath
-        };
+        var args = ToolInput.Create("Path", outsidePath);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -325,10 +284,7 @@ public class AttachFileToolTests : IDisposable
                 Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
                 ChannelType = "signalr"
             };
-            var args = new Dictionary<string, object?>
-            {
-                ["Path"] = symlinkPath
-            };
+            var args = ToolInput.Create("Path", symlinkPath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 

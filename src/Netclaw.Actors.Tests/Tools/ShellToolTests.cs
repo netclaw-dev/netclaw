@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -18,7 +19,7 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_echo_returns_output()
     {
-        var args = new Dictionary<string, object?> { ["Command"] = "echo hello" };
+        var args = ToolInput.Create("Command", "echo hello");
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("hello", result);
@@ -28,7 +29,7 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_captures_stderr()
     {
-        var args = new Dictionary<string, object?> { ["Command"] = "echo error >&2" };
+        var args = ToolInput.Create("Command", "echo error >&2");
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("error", result);
@@ -38,7 +39,7 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_returns_nonzero_exit_code()
     {
-        var args = new Dictionary<string, object?> { ["Command"] = "exit 42" };
+        var args = ToolInput.Create("Command", "exit 42");
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("Exit code: 42", result);
@@ -48,7 +49,7 @@ public class ShellToolTests
     public async Task Timeout_kills_long_running_process()
     {
         var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 1 });
-        var args = new Dictionary<string, object?> { ["Command"] = "sleep 100" };
+        var args = ToolInput.Create("Command", "sleep 100");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -59,7 +60,7 @@ public class ShellToolTests
     public async Task Requested_timeout_overrides_default_timeout()
     {
         var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 1 });
-        var args = new Dictionary<string, object?> { ["Command"] = "sleep 2" };
+        var args = ToolInput.Create("Command", "sleep 2");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
             RequestedTimeoutSeconds = 3
@@ -78,7 +79,7 @@ public class ShellToolTests
         var command = OperatingSystem.IsWindows()
             ? "python -c \"print('x' * 200)\""
             : "printf 'x%.0s' {1..200}";
-        var args = new Dictionary<string, object?> { ["Command"] = command };
+        var args = ToolInput.Create("Command", command);
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -91,11 +92,7 @@ public class ShellToolTests
         var tmpDir = Path.GetTempPath();
         // Use platform-appropriate command to print working directory
         var command = OperatingSystem.IsWindows() ? "cd" : "pwd";
-        var args = new Dictionary<string, object?>
-        {
-            ["Command"] = command,
-            ["WorkingDirectory"] = tmpDir
-        };
+        var args = ToolInput.Create("Command", command, "WorkingDirectory", tmpDir);
 
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -108,7 +105,7 @@ public class ShellToolTests
     [Fact]
     public async Task Missing_command_returns_error()
     {
-        var args = new Dictionary<string, object?>();
+        var args = ToolInput.Empty();
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("Command", result);
@@ -146,10 +143,7 @@ public class ShellToolTests
         var policy = new ToolPathPolicy([secretsPath]);
         var tool = new ShellTool(new ToolConfig(), policy);
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Command"] = $"cat {secretsPath}"
-        };
+        var args = ToolInput.Create("Command", $"cat {secretsPath}");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -160,7 +154,7 @@ public class ShellToolTests
     [Fact]
     public async Task Execute_redacts_secret_like_output()
     {
-        var args = new Dictionary<string, object?> { ["Command"] = "echo API_KEY=secret123" };
+        var args = ToolInput.Create("Command", "echo API_KEY=secret123");
 
         var result = await _tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -175,10 +169,7 @@ public class ShellToolTests
         var policy = new ToolPathPolicy([secretsPath]);
         var tool = new ShellTool(new ToolConfig(), policy);
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Command"] = "cat ~/.netclaw/config/*.json"
-        };
+        var args = ToolInput.Create("Command", "cat ~/.netclaw/config/*.json");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
@@ -192,7 +183,7 @@ public class ShellToolTests
         var commandPolicy = new ShellCommandPolicy();
         var tool = new ShellTool(new ToolConfig(), commandPolicy: commandPolicy);
 
-        var args = new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" };
+        var args = ToolInput.Create("Command", "netclaw daemon stop");
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("hard deny policy", result);
@@ -204,7 +195,7 @@ public class ShellToolTests
         var commandPolicy = new ShellCommandPolicy();
         var tool = new ShellTool(new ToolConfig(), commandPolicy: commandPolicy);
 
-        var args = new Dictionary<string, object?> { ["Command"] = "kill -9 12345" };
+        var args = ToolInput.Create("Command", "kill -9 12345");
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Contains("hard deny policy", result);
@@ -217,7 +208,7 @@ public class ShellToolTests
         var pathPolicy = new ToolPathPolicy(["/some/path"]);
         var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
 
-        var args = new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" };
+        var args = ToolInput.Create("Command", "netclaw daemon stop");
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
         // Should hit hard deny, not path policy
@@ -232,10 +223,7 @@ public class ShellToolTests
         var pathPolicy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
         var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Command"] = "cat /home/user/.netclaw/config/secrets.json"
-        };
+        var args = ToolInput.Create("Command", "cat /home/user/.netclaw/config/secrets.json");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 

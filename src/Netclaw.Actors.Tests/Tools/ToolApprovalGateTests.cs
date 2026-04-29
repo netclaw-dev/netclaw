@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -47,7 +48,7 @@ public sealed class ToolApprovalGateTests
     public void Shell_in_approval_mode_returns_RequiresApproval_when_unapproved()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = new Dictionary<string, object?> { ["Command"] = "git push origin main" };
+        var args = ToolInput.Create("Command", "git push origin main");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -61,7 +62,7 @@ public sealed class ToolApprovalGateTests
     public void Shell_in_deny_mode_returns_deny()
     {
         var policy = CreatePolicy(ToolApprovalMode.Deny);
-        var args = new Dictionary<string, object?> { ["Command"] = "git push" };
+        var args = ToolInput.Create("Command", "git push");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -73,7 +74,7 @@ public sealed class ToolApprovalGateTests
     public void Shell_in_auto_mode_allows_without_approval()
     {
         var policy = CreatePolicy(ToolApprovalMode.Auto);
-        var args = new Dictionary<string, object?> { ["Command"] = "git push" };
+        var args = ToolInput.Create("Command", "git push");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -95,7 +96,7 @@ public sealed class ToolApprovalGateTests
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false));
 
-        var args = new Dictionary<string, object?> { ["Command"] = "git pull --ff-only" };
+        var args = ToolInput.Create("Command", "git pull --ff-only");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -108,7 +109,7 @@ public sealed class ToolApprovalGateTests
     public void Unsupported_channel_auto_denies()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = new Dictionary<string, object?> { ["Command"] = "git push" };
+        var args = ToolInput.Create("Command", "git push");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(supportsApproval: false), args);
 
@@ -120,7 +121,7 @@ public sealed class ToolApprovalGateTests
     public void Compound_command_surfaces_all_approval_patterns_for_service_filtering()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = new Dictionary<string, object?> { ["Command"] = "git add . && git commit -m fix && git push" };
+        var args = ToolInput.Create("Command", "git add . && git commit -m fix && git push");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -154,7 +155,7 @@ public sealed class ToolApprovalGateTests
         var decision = policy.AuthorizeInvocation(
             ShellTool(),
             PersonalContext(),
-            new Dictionary<string, object?> { ["Command"] = "netclaw daemon stop" });
+            ToolInput.Create("Command", "netclaw daemon stop"));
 
         Assert.False(decision.Allowed);
         Assert.False(decision.NeedsApproval);
@@ -184,11 +185,7 @@ public sealed class ToolApprovalGateTests
     public void file_write_to_netclaw_json_requires_approval_under_fail_closed_default()
     {
         var policy = CreateFileWritePolicy(approvalPolicy: null);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ControlPlaneRoot + "/netclaw.json",
-            ["Content"] = "{}"
-        };
+        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -210,11 +207,7 @@ public sealed class ToolApprovalGateTests
             }
         };
         var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ControlPlaneRoot + "/netclaw.json",
-            ["Content"] = "{}"
-        };
+        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -229,11 +222,7 @@ public sealed class ToolApprovalGateTests
     public void file_write_to_non_control_plane_path_auto_approves_under_null_policy()
     {
         var policy = CreateFileWritePolicy(approvalPolicy: null);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = "/tmp/scratch.txt",
-            ["Content"] = "hello"
-        };
+        var args = ToolInput.Create("Path", "/tmp/scratch.txt", "Content", "hello");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -245,12 +234,7 @@ public sealed class ToolApprovalGateTests
     public void file_edit_of_netclaw_json_requires_approval()
     {
         var policy = CreateFileWritePolicy(approvalPolicy: null);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ControlPlaneRoot + "/netclaw.json",
-            ["OldString"] = "a",
-            ["NewString"] = "b"
-        };
+        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "OldString", "a", "NewString", "b");
 
         var decision = policy.AuthorizeInvocation(FileEditToolInstance(), PersonalContext(), args);
 
@@ -265,11 +249,11 @@ public sealed class ToolApprovalGateTests
     {
         var matcher = new FilePathApprovalMatcher(ControlPlaneRoot);
         var netclawJson = matcher.ExtractPatterns(new ToolName("file_write"),
-            new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/netclaw.json" });
+            ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json"));
         var toolApprovals = matcher.ExtractPatterns(new ToolName("file_write"),
-            new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/tool-approvals.json" });
+            ToolInput.Create("Path", ControlPlaneRoot + "/tool-approvals.json"));
         var devices = matcher.ExtractPatterns(new ToolName("file_write"),
-            new Dictionary<string, object?> { ["Path"] = ControlPlaneRoot + "/devices.json" });
+            ToolInput.Create("Path", ControlPlaneRoot + "/devices.json"));
 
         Assert.NotEqual(netclawJson[0], toolApprovals[0]);
         Assert.NotEqual(netclawJson[0], devices[0]);
@@ -287,11 +271,7 @@ public sealed class ToolApprovalGateTests
             }
         };
         var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ControlPlaneRoot + "/netclaw.json",
-            ["Content"] = "{}"
-        };
+        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -311,11 +291,7 @@ public sealed class ToolApprovalGateTests
             }
         };
         var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ControlPlaneRoot + "/netclaw.json",
-            ["Content"] = "{}"
-        };
+        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -335,11 +311,7 @@ public sealed class ToolApprovalGateTests
             }
         };
         var policy = CreateFileWritePolicy(approvalPolicy);
-        var args = new Dictionary<string, object?>
-        {
-            ["Path"] = ControlPlaneRoot + "/netclaw.json",
-            ["Content"] = "{}"
-        };
+        var args = ToolInput.Create("Path", ControlPlaneRoot + "/netclaw.json", "Content", "{}");
 
         var decision = policy.AuthorizeInvocation(FileWriteToolInstance(), PersonalContext(), args);
 
@@ -460,7 +432,7 @@ public sealed class ToolApprovalGateTests
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false));
 
-        var args = new Dictionary<string, object?> { ["Command"] = "git pull --ff-only" };
+        var args = ToolInput.Create("Command", "git pull --ff-only");
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         // Shell default matcher fails closed on Personal → approval, not deny.

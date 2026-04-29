@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -30,7 +31,7 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
     {
         var actor = await _actorProvider.GetAsync(ct);
         var response = await actor.Ask<UnapprovedPatternsResponse>(
-            new GetUnapprovedPatterns(sessionId, audience, toolName, patterns),
+            new GetUnapprovedPatterns(sessionId is not null ? (SessionId)sessionId : null, audience, toolName, patterns),
             TimeSpan.FromSeconds(5),
             ct);
 
@@ -47,7 +48,7 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
     {
         var actor = await _actorProvider.GetAsync(ct);
         await actor.Ask<ToolApprovalRecorded>(
-            new RecordToolApproval(sessionId, audience, toolName, patterns, persistent),
+            new RecordToolApproval((SessionId)sessionId, audience, toolName, patterns, persistent),
             TimeSpan.FromSeconds(5),
             ct);
     }

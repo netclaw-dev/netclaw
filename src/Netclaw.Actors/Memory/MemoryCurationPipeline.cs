@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 
@@ -142,7 +143,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         var kind = ResolveKind(payload);
         var title = ResolveTitle(payload, kind, content);
         var updateSemantics = ResolveUpdateSemantics(payload, kind, memoryClass);
-        var anchor = ResolveAnchor(content, payload.SessionId);
+        var anchor = ResolveAnchor(content, (SessionId)payload.SessionId);
         var anchorType = kind == MemoryKind.Record ? "event" : "concept";
         var fingerprint = BuildFingerprint(kind.ToWireValue(), title, content);
         if (fingerprintSet.Contains(fingerprint))
@@ -266,7 +267,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         return content.Length <= 72 ? content : content[..72];
     }
 
-    private static string ResolveAnchor(string content, string sessionId)
+    private static string ResolveAnchor(string content, SessionId sessionId)
     {
         var firstWord = content
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
@@ -274,8 +275,9 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
         if (!string.IsNullOrWhiteSpace(firstWord))
             return firstWord.ToLowerInvariant();
 
-        var slash = sessionId.IndexOf('/', StringComparison.Ordinal);
-        return slash > 0 ? sessionId[..slash].ToLowerInvariant() : "session";
+        var value = sessionId.Value;
+        var slash = value.IndexOf('/', StringComparison.Ordinal);
+        return slash > 0 ? value[..slash].ToLowerInvariant() : "session";
     }
 
     public static string BuildFingerprint(string kind, string title, string content)

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
@@ -48,7 +49,7 @@ public class McpToolAdapterTests
         var fakeTool = AIFunctionFactory.Create(() => "hello from mcp", "greet");
         var adapter = new McpToolAdapter(fakeTool, "server", "greet");
 
-        var result = await adapter.ExecuteAsync(new Dictionary<string, object?>(), CancellationToken.None);
+        var result = await adapter.ExecuteAsync(ToolInput.Empty(), CancellationToken.None);
 
         Assert.Equal("hello from mcp", result);
     }
@@ -60,7 +61,7 @@ public class McpToolAdapterTests
         var fakeTool = AIFunctionFactory.Create((Func<string>)ThrowingFunc, "fail_tool");
         var adapter = new McpToolAdapter(fakeTool, "server", "fail_tool");
 
-        var result = await adapter.ExecuteAsync(new Dictionary<string, object?>(), CancellationToken.None);
+        var result = await adapter.ExecuteAsync(ToolInput.Empty(), CancellationToken.None);
 
         Assert.Contains("connection lost", result);
         Assert.StartsWith("Error:", result);
@@ -74,7 +75,7 @@ public class McpToolAdapterTests
         var fakeTool = AIFunctionFactory.Create(EchoLimit, "search");
         var adapter = new McpToolAdapter(fakeTool, "server", "search");
 
-        var args = new Dictionary<string, object?> { ["limit"] = "10" };
+        var args = ToolInput.Create("limit", "10");
         var result = await adapter.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Equal("limit=10", result);
@@ -87,7 +88,7 @@ public class McpToolAdapterTests
         var fakeTool = AIFunctionFactory.Create(EchoUrl, "navigate_page");
         var adapter = new McpToolAdapter(fakeTool, "browser", "navigate_page");
 
-        var args = new Dictionary<string, object?> { ["Url"] = "https://example.com" };
+        var args = ToolInput.Create("Url", "https://example.com");
         var result = await adapter.ExecuteAsync(args, CancellationToken.None);
 
         Assert.Equal("https://example.com", result);
@@ -102,7 +103,7 @@ public class McpToolAdapterTests
         var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
 
         var context = new ToolExecutionContext("chan/thread", null);
-        var args = new Dictionary<string, object?> { ["Url"] = "https://example.com" };
+        var args = ToolInput.Create("Url", "https://example.com");
 
         var result = await adapter.ExecuteAsync(args, context, CancellationToken.None);
 
@@ -124,7 +125,7 @@ public class McpToolAdapterTests
         var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
 
         var context = new ToolExecutionContext("chan/thread", null);
-        var result = await adapter.ExecuteAsync(new Dictionary<string, object?>(), context, CancellationToken.None);
+        var result = await adapter.ExecuteAsync(ToolInput.Empty(), context, CancellationToken.None);
 
         Assert.StartsWith("Error:", result);
         Assert.Contains("session transport failed", result);
@@ -244,13 +245,7 @@ public class McpSchemaSanitizerTests
     [Fact]
     public void CoerceArguments_ConvertsStringNumbers()
     {
-        var args = new Dictionary<string, object?>
-        {
-            ["count"] = "42",
-            ["ratio"] = "3.14",
-            ["name"] = "hello",
-            ["flag"] = "true"
-        };
+        var args = ToolInput.Create("count", "42", "ratio", "3.14", "name", "hello", "flag", "true");
 
         var coerced = McpSchemaSanitizer.CoerceArguments(args)!;
 
@@ -279,11 +274,7 @@ public class McpSchemaSanitizerTests
             }
             """).RootElement;
 
-        var args = new Dictionary<string, object?>
-        {
-            ["Url"] = "https://example.com",
-            ["Timeout"] = "1000"
-        };
+        var args = ToolInput.Create("Url", "https://example.com", "Timeout", "1000");
 
         var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(args, schema)!;
 
@@ -629,13 +620,7 @@ public class McpSchemaSanitizerTests
     [Fact]
     public void StripMetaFields_RemovesMetaKeysOnly()
     {
-        var args = new Dictionary<string, object?>
-        {
-            ["query"] = "test",
-            ["_rationale"] = "searching for docs",
-            ["_timeout_seconds"] = 300,
-            ["_background"] = false
-        };
+        var args = ToolInput.Create("query", "test", "_rationale", "searching for docs", "_timeout_seconds", 300, "_background", false);
 
         var stripped = McpSchemaSanitizer.StripMetaFields(args)!;
 
@@ -646,11 +631,7 @@ public class McpSchemaSanitizerTests
     [Fact]
     public void StripMetaFields_NoMetaKeys_ReturnsSameInstance()
     {
-        var args = new Dictionary<string, object?>
-        {
-            ["query"] = "test",
-            ["limit"] = 10
-        };
+        var args = ToolInput.Create("query", "test", "limit", 10);
 
         var stripped = McpSchemaSanitizer.StripMetaFields(args)!;
         Assert.Same(args, stripped);
@@ -685,12 +666,7 @@ public class McpSchemaSanitizerTests
         var adapter = new McpToolAdapter(fakeTool, "memorizer", "search_memories", invoker: invoker);
 
         var context = new ToolExecutionContext("chan/thread", null);
-        var args = new Dictionary<string, object?>
-        {
-            ["query"] = "Akka.NET",
-            ["_rationale"] = "looking up docs",
-            ["_timeout_seconds"] = 30
-        };
+        var args = ToolInput.Create("query", "Akka.NET", "_rationale", "looking up docs", "_timeout_seconds", 30);
 
         await adapter.ExecuteAsync(args, context, CancellationToken.None);
 

@@ -980,9 +980,9 @@ internal sealed class FakeMemoryExtractor : IMemoryExtractor
 
     public int CallCount => _callCount;
 
-    public List<(string SessionId, string Memories)> Entries { get; } = [];
+    public List<(SessionId SessionId, string Memories)> Entries { get; } = [];
 
-    public Task PersistAsync(string sessionId, string extractedMemories, CancellationToken ct = default)
+    public Task PersistAsync(SessionId sessionId, string extractedMemories, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
         lock (Entries)

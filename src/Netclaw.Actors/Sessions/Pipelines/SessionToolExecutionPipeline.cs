@@ -166,7 +166,7 @@ internal static class SessionToolExecutionPipeline
 
                 if (info.Success && info.Findings.Count == 1)
                 {
-                    var singleDecision = ReviewSubAgentFinding(info.Findings[0], sessionId.Value);
+                    var singleDecision = ReviewSubAgentFinding(info.Findings[0], sessionId);
                     decision = singleDecision.Decision.ToWireValue();
                     reason = singleDecision.Reason;
                 }
@@ -187,7 +187,7 @@ internal static class SessionToolExecutionPipeline
             {
                 foreach (var finding in info.Findings)
                 {
-                    var findingDecision = ReviewSubAgentFinding(finding, sessionId.Value);
+                    var findingDecision = ReviewSubAgentFinding(finding, sessionId);
                     acceptedFindings.Add(new AcceptedSubAgentFinding
                     {
                         RunId = info.RunId,
@@ -456,7 +456,7 @@ internal static class SessionToolExecutionPipeline
     /// </summary>
     internal static SubAgentFindingReviewResult ReviewSubAgentFinding(
         SubAgentFinding finding,
-        string sessionId)
+        SessionId sessionId)
     {
         if (string.IsNullOrWhiteSpace(finding.Title))
             return new(SubAgentFindingReviewDecision.Deferred, "missing title");
@@ -610,7 +610,7 @@ internal static class SessionToolExecutionPipeline
         TimeSpan duration,
         ToolCallMeta? meta) => new()
     {
-        SessionId = sessionId.Value,
+        SessionId = sessionId,
         ToolName = tc.Name,
         CallId = tc.CallId,
         Timestamp = timeProvider.GetUtcNow(),

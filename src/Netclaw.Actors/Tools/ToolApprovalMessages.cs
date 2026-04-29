@@ -3,13 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
 internal sealed record GetUnapprovedPatterns(
-    string? SessionId,
+    SessionId? SessionId,
     TrustAudience Audience,
     ToolName ToolName,
     IReadOnlyList<string> Patterns);
@@ -17,7 +18,7 @@ internal sealed record GetUnapprovedPatterns(
 internal sealed record UnapprovedPatternsResponse(IReadOnlyList<string> Patterns);
 
 internal sealed record RecordToolApproval(
-    string SessionId,
+    SessionId SessionId,
     TrustAudience Audience,
     ToolName ToolName,
     IReadOnlyList<string> Patterns,
