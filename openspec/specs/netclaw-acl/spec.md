@@ -1,67 +1,4 @@
-# netclaw-acl Specification
-
-## Purpose
-
-Define ACL evaluation semantics for channel, sender, mention policy, and tool
-grants.
-
-## Requirements
-
-### Requirement: Channel and sender allow checks
-
-The system SHALL evaluate channel and sender policy before executable turn
-dispatch. For threaded channel adapters, only authorized senders SHALL create
-live executable inbound turns.
-
-Unauthorized live messages in a thread SHALL NOT be forwarded as ordinary
-`SendUserMessage` turns. They remain source-thread material that MAY later be
-adopted as quoted context by a subsequent authorized turn, but they do not
-independently pass the executable-turn ACL gate.
-
-When a later authorized turn adopts pending thread material, any
-`authority-at-inclusion` value recorded for those adopted messages SHALL be
-derived from the same live turn-creation authorization basis that the adapter
-applies to threaded inbound messages at adoption time.
-
-#### Scenario: Sender allowed, channel allowed
-
-- **GIVEN** sender and channel are explicitly allowed
-- **WHEN** a threaded message arrives
-- **THEN** ACL evaluation returns allow for executable turn creation
-
-#### Scenario: Sender disallowed
-
-- **WHEN** sender is not allowed by policy
-- **THEN** ACL evaluation returns deny
-- **AND** no executable turn is dispatched for that live message
-
-#### Scenario: Unauthorized thread message remains non-executable
-
-- **GIVEN** `AllowedUserIds` contains `"U111"`
-- **WHEN** user `U999` sends a message in the same thread
-- **THEN** the live message is denied for executable turn creation
-- **AND** the message does not become a `SendUserMessage`
-- **AND** the message may only appear later inside adopted quoted context if an
-  authorized user speaks
-
-### Requirement: Mention and ambient mode behavior
-
-The system SHALL respect `require_mention` per channel, and mention or ambient
-eligibility SHALL NOT override sender authorization for executable turns.
-
-#### Scenario: Mention-required channel without mention
-
-- **GIVEN** channel has `require_mention=true`
-- **WHEN** message has no mention
-- **THEN** no model turn is dispatched
-
-#### Scenario: Unauthorized ambient candidate still denied
-
-- **GIVEN** channel has `require_mention=false`
-- **AND** sender is not authorized by policy
-- **WHEN** the message arrives
-- **THEN** the message does not create an executable turn even though the
-  channel is ambient-enabled
+## MODIFIED Requirements
 
 ### Requirement: Tool and data grants
 
@@ -80,8 +17,9 @@ Each `ToolAudienceProfile` SHALL support an optional `ApprovalPolicy` of type
 `ToolApprovalConfig`. The `ApprovalPolicy` SHALL define a `DefaultMode` (Auto,
 Approval, Deny) and per-tool overrides via `ToolOverrides`. The approval check
 SHALL execute after the tool access grant check passes. Tools in Approval mode
-SHALL consult the approval cache (session-scoped and persistent) before
-execution. Tools in Deny mode SHALL be blocked without an approval prompt.
+SHALL surface approval context for the executor, and the executor SHALL consult
+`IToolApprovalService` before execution. Tools in Deny mode SHALL be blocked
+without an approval prompt.
 
 #### Scenario: Missing grant blocks tool call
 
@@ -119,7 +57,7 @@ execution. Tools in Deny mode SHALL be blocked without an approval prompt.
 
 - **GIVEN** the session has a grant for `shell_execute`
 - **AND** the Personal `ApprovalPolicy` sets `shell_execute` to Approval mode
-- **AND** the command pattern `git push` is not in the approval cache
+- **AND** the command pattern `git push` is not already approved in `IToolApprovalService`
 - **WHEN** the agent invokes `shell_execute` with `git push origin main`
 - **THEN** the grant check passes
 - **AND** the approval check returns `RequiresApproval`
@@ -127,7 +65,7 @@ execution. Tools in Deny mode SHALL be blocked without an approval prompt.
 #### Scenario: Tool granted with approval already cached
 
 - **GIVEN** the session has a grant for `shell_execute`
-- **AND** `git push` is in the session or persistent approval cache
+- **AND** `git push` is already approved through `IToolApprovalService`
 - **WHEN** the agent invokes `shell_execute` with `git push origin main`
 - **THEN** both the grant check and approval check pass
 - **AND** the tool executes immediately
@@ -137,86 +75,3 @@ execution. Tools in Deny mode SHALL be blocked without an approval prompt.
 - **GIVEN** ACL does not grant `config_write` for the current sender
 - **WHEN** the agent attempts to write configuration files through conversation
 - **THEN** the write is denied with a policy reason code
-
-### Requirement: Self-configuration prohibition
-
-ACL and security policy files MUST NOT be modifiable by the agent through
-conversation. These files SHALL only be modified through the CLI or direct file
-edit by the operator. This prohibition SHALL be enforced regardless of any
-grants in the ACL policy.
-
-#### Scenario: Agent cannot modify ACL through conversation
-
-- **WHEN** an agent session attempts to modify ACL policy files
-- **THEN** the modification is denied regardless of active grants
-- **AND** the denial reason indicates that ACL files require CLI or direct edit
-
-#### Scenario: Agent cannot modify security policy through conversation
-
-- **WHEN** an agent session attempts to modify gateway security policy files
-- **THEN** the modification is denied regardless of active grants
-
-### Requirement: Scheduled task tool grants
-
-Each scheduled task definition SHALL specify the required tool grants for its
-execution. At execution time, the system SHALL verify that all required tool
-grants are still valid before running the task.
-
-#### Scenario: Scheduled task with valid grants executes
-
-- **GIVEN** a scheduled task requires `web_search` and `mcp:memorizer`
-- **AND** both grants are present in the current ACL policy
-- **WHEN** the scheduled task fires
-- **THEN** the task executes with the granted tools available
-
-#### Scenario: Scheduled task with revoked grant is blocked
-
-- **GIVEN** a scheduled task requires `web_search`
-- **AND** the `web_search` grant has been removed from ACL policy since the task
-  was created
-- **WHEN** the scheduled task fires
-- **THEN** execution is denied with a policy reason code
-- **AND** the task failure is recorded with the missing grant details
-
-### Requirement: Reminder audience authorization
-
-The system SHALL authorize reminder minting against the creator's current
-source audience / authority before a reminder definition is persisted. A
-requested reminder audience SHALL be accepted only when it is equal to or
-narrower than the creator's current source audience. Lowering audience is
-always allowed. Raising audience above the creator's current authority SHALL be
-denied. For conversational and tool-created reminders, omitted `audience`
-SHALL resolve to the creating channel/session audience before persistence.
-
-#### Scenario: Equal audience reminder allowed
-
-- **GIVEN** the current session source audience is `Team`
-- **WHEN** the creator saves a reminder with `audience: Team`
-- **THEN** ACL reminder minting authorization allows the write
-
-#### Scenario: Lower audience reminder allowed
-
-- **GIVEN** the current session source audience is `Personal`
-- **WHEN** the creator saves a reminder with `audience: Public`
-- **THEN** ACL reminder minting authorization allows the write
-
-#### Scenario: Higher audience reminder denied
-
-- **GIVEN** the current session source audience is `Public`
-- **WHEN** the creator saves a reminder with `audience: Team`
-- **THEN** ACL reminder minting authorization denies the write
-- **AND** the denial reason states that the requested audience exceeds the creator's authority
-
-#### Scenario: Omitted conversational audience resolves from source
-
-- **GIVEN** a reminder is being created from a Slack session with source audience `Team`
-- **WHEN** the request omits `audience`
-- **THEN** the effective reminder audience is resolved to `Team` before persistence
-
-#### Scenario: Import path validates serialized audience
-
-- **GIVEN** an authenticated import request carries a serialized reminder definition with `audience: Personal`
-- **AND** the import caller's source audience is `Team`
-- **WHEN** the server validates the reminder definition
-- **THEN** the import is denied before persistence
-- **AND** no over-privileged reminder is stored

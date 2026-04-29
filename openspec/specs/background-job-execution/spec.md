@@ -1,12 +1,4 @@
-# background-job-execution Specification
-
-## Purpose
-
-Define the background job execution infrastructure: manager lifecycle,
-process execution, pipeline routing, session state tracking, job monitoring
-tool, delivery scoping, and deduplication.
-
-## Requirements
+## ADDED Requirements
 
 ### Requirement: Background job manager lifecycle
 
