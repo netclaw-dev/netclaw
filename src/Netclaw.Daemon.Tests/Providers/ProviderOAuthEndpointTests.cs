@@ -86,6 +86,27 @@ public sealed class ProviderOAuthEndpointTests
     }
 
     [Fact]
+    public async Task StatusEndpoint_HidesTokens_ForNonLoopbackRequests()
+    {
+        await using var host = await CreateHostAsync(_ => SuccessfulTokenResponse(), remoteIp: IPAddress.Parse("192.168.1.100"));
+        var client = host.GetTestClient();
+        client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
+
+        var startResponse = await client.PostAsync("/api/provider/oauth/start?provider=test-oauth", null, TestContext.Current.CancellationToken);
+        var startPayload = await startResponse.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        var state = startPayload.GetProperty("state").GetString();
+
+        var callbackResponse = await client.GetAsync($"/api/provider/oauth/callback?code=test-code&state={state}", TestContext.Current.CancellationToken);
+        callbackResponse.EnsureSuccessStatusCode();
+
+        var statusPayload = await client.GetFromJsonAsync<JsonElement>($"/api/provider/oauth/status/{state}", TestContext.Current.CancellationToken);
+        Assert.Equal("Completed", statusPayload.GetProperty("status").GetString());
+        Assert.True(statusPayload.GetProperty("hasToken").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("accessToken").ValueKind);
+        Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("refreshToken").ValueKind);
+    }
+
+    [Fact]
     public async Task CallbackEndpoint_OnExchangeFailure_Returns500_AndFailedStatus()
     {
         await using var host = await CreateHostAsync(_ =>
@@ -107,7 +128,9 @@ public sealed class ProviderOAuthEndpointTests
         Assert.False(statusPayload.GetProperty("hasToken").GetBoolean());
     }
 
-    private static async Task<WebApplication> CreateHostAsync(Func<HttpRequestMessage, HttpResponseMessage> tokenHandler)
+    private static async Task<WebApplication> CreateHostAsync(
+        Func<HttpRequestMessage, HttpResponseMessage> tokenHandler,
+        IPAddress? remoteIp = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -121,6 +144,12 @@ public sealed class ProviderOAuthEndpointTests
         builder.Services.AddSingleton(new ProviderDescriptorRegistry([new TestOAuthDescriptor()]));
 
         var app = builder.Build();
+        var effectiveIp = remoteIp ?? IPAddress.Loopback;
+        app.Use(async (context, next) =>
+        {
+            context.Connection.RemoteIpAddress ??= effectiveIp;
+            await next();
+        });
         app.UseAuthentication();
         app.UseAuthorization();
         app.MapProviderOAuthEndpoints();
