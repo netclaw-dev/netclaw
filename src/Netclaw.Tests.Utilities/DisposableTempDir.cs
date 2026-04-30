@@ -16,7 +16,30 @@ internal sealed class DisposableTempDir : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(Path, recursive: true); }
-        catch (DirectoryNotFoundException) { } // slopwatch-ignore: SW003 test cleanup — directory may already be gone
+        if (!Directory.Exists(Path))
+            return;
+
+        // Retry loop for Windows CI where SQLite pooled connections can
+        // briefly hold file handles after the test completes.
+        for (var i = 0; i < 5; i++)
+        {
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+                return;
+            }
+            catch (IOException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
+            {
+                Thread.Sleep(50 * (i + 1));
+            }
+            catch (UnauthorizedAccessException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
+            {
+                Thread.Sleep(50 * (i + 1));
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+        }
     }
 }

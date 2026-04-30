@@ -34,6 +34,9 @@ public class BackgroundJobExecutionActorTests : TestKit
         await base.AfterAllAsync();
     }
 
+    private static string LongRunningCommand =>
+        OperatingSystem.IsWindows() ? "ping -n 300 127.0.0.1" : "sleep 300";
+
     private BackgroundJobDefinition MakeDefinition(string command, int timeoutSeconds = 600) => new()
     {
         Id = Guid.NewGuid().ToString("N")[..12],
@@ -75,7 +78,7 @@ public class BackgroundJobExecutionActorTests : TestKit
     [Fact]
     public async Task ProcessTimeout_KillsAndReportsTimedOut()
     {
-        var definition = MakeDefinition("sleep 300", timeoutSeconds: 1);
+        var definition = MakeDefinition(LongRunningCommand, timeoutSeconds: 1);
         var probe = CreateTestProbe("parent");
         SpawnExecution(definition, probe);
 
@@ -90,7 +93,7 @@ public class BackgroundJobExecutionActorTests : TestKit
     [Fact]
     public async Task Cancellation_KillsAndReportsCancelled()
     {
-        var definition = MakeDefinition("sleep 300");
+        var definition = MakeDefinition(LongRunningCommand);
         var probe = CreateTestProbe("parent");
         var actor = SpawnExecution(definition, probe);
 

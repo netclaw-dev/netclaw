@@ -224,8 +224,22 @@ internal sealed class PrototypeSqliteStore : IDisposable
 
     public void Dispose()
     {
+        SqliteConnection.ClearAllPools();
         var path = Path.GetDirectoryName(_dbPath);
-        if (path is not null && Directory.Exists(path))
-            Directory.Delete(path, recursive: true);
+        if (path is null || !Directory.Exists(path))
+            return;
+
+        for (var i = 0; i < 5; i++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (i < 4)
+            {
+                Thread.Sleep(50 * (i + 1));
+            }
+        }
     }
 }
