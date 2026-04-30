@@ -83,12 +83,6 @@ message SendUserMessageProto {
 
 // ── Events ──
 
-message SystemPromptSetProto {
-  SessionIdProto session_id = 1;
-  string content = 2;
-  int64 set_at_ms = 3;
-}
-
 message TurnRecordedProto {
   SessionIdProto session_id = 1;
   SerializableChatMessageProto user_message = 2;
@@ -96,25 +90,6 @@ message TurnRecordedProto {
   int64 recorded_at_ms = 4;
   optional string source_reminder_id = 5;
   optional string source_background_job_id = 6;
-}
-
-message AdoptedContextRecordedProto {
-  message AdoptedMessageRecord {
-    string message_id = 1;
-    string sender_id = 2;
-    int64 timestamp_ms = 3;
-    string authority_at_inclusion = 4;
-  }
-
-  SessionIdProto session_id = 1;
-  string authorized_message_id = 2;
-  optional string authorizer_sender_id = 3;
-  optional string lower_bound = 4;
-  optional string upper_bound = 5;
-  string projection = 6;
-  repeated AdoptedMessageRecord messages = 7;
-  bool projection_persisted = 8;
-  int64 recorded_at_ms = 9;
 }
 
 message SessionTitleSetProto {
