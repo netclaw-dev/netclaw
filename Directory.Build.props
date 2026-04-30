@@ -7,20 +7,32 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.16.1</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.16.1 — Private skill feed sync, MCP permissions navigation fix, and dependency update
+    <VersionPrefix>0.16.2</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.16.2 — Apache 2.0 license, security hardening, and stability fixes
 
-**Features**
+**License**
 
-* Added private skill server feed sync via `Netclaw.SkillClient` — operators can now configure private skill-server instances under `SkillFeeds.Feeds` in `netclaw.yaml`; a new `ServerFeedSkillSyncService` syncs skills from those feeds at startup using the Cloudflare Agent Skills RFC discovery protocol, with per-feed error isolation, SHA-256 verification, and content security scanning. Skills follow three-tier precedence (native &gt; server-feed &gt; external) so server-feed skills can extend but never override built-in capabilities. A new "Skill Feeds" step in the `netclaw init` wizard supports live probe validation and error recovery. Closes [#532](https://github.com/Aaronontheweb/netclaw/issues/532). ([#785](https://github.com/Aaronontheweb/netclaw/pull/785))
+* Migrated from AGPL v3.0 + Commons Clause to Apache License 2.0 — all source files now carry Petabridge LLC copyright headers, a new `scripts/Add-FileHeaders.ps1` script manages header enforcement with a `-Verify` mode for CI, and the PR validation workflow includes a `copyright-headers` job that fails builds missing headers. ([#790](https://github.com/Aaronontheweb/netclaw/pull/790))
+
+**Security**
+
+* Fixed privilege escalation bypass in `ShellCommandPolicy` — `sudo`, `su`, and `doas` commands now receive a categorical deny regardless of what follows, closing a bypass where prepending `sudo` to any denied command evaded all deny patterns because matching only operated on the first token. Closes finding S4-20 from the 2026-04-29 audit. ([#830](https://github.com/Aaronontheweb/netclaw/pull/830))
+
+* Moved `SecretOutputRedactor` to `DispatchingToolExecutor` so all tool outputs are redacted before reaching the LLM — previously only shell and background job outputs were covered. Extended redaction patterns now cover AWS access keys (`AKIA...`), JWT tokens, and other structured secrets. Closes finding S5-01. ([#830](https://github.com/Aaronontheweb/netclaw/pull/830))
+
+* Gated raw OAuth token values in the provider status endpoint to loopback connections only — remote paired devices now receive boolean flags instead of raw access and refresh token values. Closes finding S7-5.5. ([#830](https://github.com/Aaronontheweb/netclaw/pull/830))
+
+* Enforced `SubAgentToolPolicy` at spawn time and auto-granted safe-list tools — user-facing subagents are now restricted to the safe-list (`attach_file`, `file_read`, `web_fetch`, `web_search`) at tool resolution time. Safe-list tools are auto-granted in non-interactive contexts instead of being denied by the approval gate, fixing subagents that had zero usable tools. Closes [#831](https://github.com/Aaronontheweb/netclaw/issues/831). ([#830](https://github.com/Aaronontheweb/netclaw/pull/830))
 
 **Bug Fixes**
 
-* Fixed MCP permissions page navigation — Up/Down now navigates all configurable rows (Audience, Server Enabled, Server Default, Tools) using a unified grid cursor, and Left/Right performs context-sensitive cycling per row. The footer is simplified to the six most common shortcuts; legacy shortcuts still work. The `*unsaved*` indicator now clears reliably after saving. Closes [#786](https://github.com/Aaronontheweb/netclaw/issues/786). ([#788](https://github.com/Aaronontheweb/netclaw/pull/788))
+* Fixed daemon crash logs from unobserved `AbruptTerminationException` on actor shutdown — `SessionPipelineHandle.Dispose()` was disposing the materializer in `PostStop` while stream stage actors (children of the materializer's actor context) had already been killed by Akka's child-first shutdown, producing `AbruptTerminationException` as unobserved tasks that triggered `DaemonCrashMonitor`. Output streams now use `WatchTermination`, and `ReminderExecutionActor` / `WebhookExecutionActor` call a new `DrainAsync()` before stopping so all stream stages complete gracefully while the parent actor is still alive. ([#802](https://github.com/Aaronontheweb/netclaw/pull/802))
+
+* Fixed erratic navigation during `netclaw init` caused by duplicated channel picker subscriptions — `ChannelPickerStepView.BuildContent()` was adding new `Submitted` subscriptions on every re-render without disposing old ones, causing multiple `AdvanceStep()` calls per Enter key and erratic step navigation. Subscriptions are now cleared at the top of `BuildContent()` and focus state is reset before sub-step delegation. Closes [#792](https://github.com/Aaronontheweb/netclaw/issues/792). ([#797](https://github.com/Aaronontheweb/netclaw/pull/797))
 
 **Dependencies**
 
-* Bumped `Cronos` from 0.8.4 to 0.12.0 — includes support for schedule jitter via the `H` character, nullable reference type annotations, strong-named assembly signing, removal of the year 2499 limitation, and several bug fixes across the 0.9–0.12 release series. ([#572](https://github.com/Aaronontheweb/netclaw/pull/572))</PackageReleaseNotes>
+* Bumped `Akka.Persistence.Sql.Hosting` from 1.5.62 to 1.5.67 (patch update). ([#799](https://github.com/Aaronontheweb/netclaw/pull/799))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
