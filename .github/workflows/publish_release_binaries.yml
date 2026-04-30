@@ -14,7 +14,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   create-release:
     name: Create GitHub Release
-    runs-on: arc-netclaw
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
     - name: Checkout
@@ -75,17 +75,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: arc-netclaw
+          - os: ubuntu-latest
             rid: linux-x64
             archive_ext: tar.gz
-          # Disabled: no self-hosted ARM runner available yet
-          # - os: ubuntu-24.04-arm
-          #   rid: linux-arm64
-          #   archive_ext: tar.gz
-          # Disabled: no self-hosted Windows runner available yet
-          # - os: windows-latest
-          #   rid: win-x64
-          #   archive_ext: zip
+          - os: ubuntu-24.04-arm
+            rid: linux-arm64
+            archive_ext: tar.gz
+          - os: windows-latest
+            rid: win-x64
+            archive_ext: zip
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -137,18 +135,21 @@ jobs:
         tar czf "./archives/netclawd-${VERSION}-${RID}.tar.gz" \
           -C ./publish/daemon netclawd
 
-    # Disabled: no self-hosted Windows runner available yet
-    # - name: Package archives (Windows)
-    #   if: runner.os == 'Windows'
-    #   shell: pwsh
-    #   run: |
-    #     $VERSION = "${{ github.ref_name }}"
-    #     $RID = "${{ matrix.rid }}"
-    #     New-Item -ItemType Directory -Path ./archives -Force
-    #     Compress-Archive -Path ./publish/cli/netclaw.exe `
-    #       -DestinationPath "./archives/netclaw-${VERSION}-${RID}.zip"
-    #     Compress-Archive -Path ./publish/daemon/netclawd.exe `
-    #       -DestinationPath "./archives/netclawd-${VERSION}-${RID}.zip"
+    - name: Package archives (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $VERSION = "${{ github.ref_name }}"
+        $RID = "${{ matrix.rid }}"
+        New-Item -ItemType Directory -Path ./archives -Force
+
+        # CLI archive
+        Compress-Archive -Path ./publish/cli/netclaw.exe `
+          -DestinationPath "./archives/netclaw-${VERSION}-${RID}.zip"
+
+        # Daemon archive
+        Compress-Archive -Path ./publish/daemon/netclawd.exe `
+          -DestinationPath "./archives/netclawd-${VERSION}-${RID}.zip"
 
     - name: Compute checksums
       shell: bash
@@ -176,11 +177,13 @@ jobs:
         files: 'archives/*'
 
     - name: Install Wrangler
+      shell: bash
       run: |
         npm install wrangler@3.90.0 --include=optional
         echo "$(pwd)/node_modules/.bin" >> $GITHUB_PATH
 
     - name: Upload CLI archive to R2
+      shell: bash
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -191,6 +194,7 @@ jobs:
         --content-type=application/octet-stream
 
     - name: Upload Daemon archive to R2
+      shell: bash
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -226,10 +230,9 @@ jobs:
   publish-docker:
     name: Publish Docker Image
     needs: publish-binaries
-    # Temporarily disabled — not ready to publish netclawd images to GHCR yet.
-    # Flip to `true` (or remove the guard) when the Docker release is ready.
+    # Disabled until GHCR image path is updated for the new org
     if: false
-    runs-on: arc-netclaw
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -306,7 +309,7 @@ jobs:
   publish-binary-manifest:
     name: Publish Binary Manifest
     needs: publish-binaries
-    runs-on: arc-netclaw
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
     - name: Checkout

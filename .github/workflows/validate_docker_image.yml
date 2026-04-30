@@ -38,7 +38,7 @@ on:
 jobs:
   validate-docker-build:
     name: Validate Docker Build
-    runs-on: arc-netclaw
+    runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
