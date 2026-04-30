@@ -1,10 +1,8 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="Events.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using ProtoBuf;
-
 namespace Netclaw.Actors.Protocol;
 
 // TODO: delete SystemPromptSet and its Recover<> handler once old journals have been migrated
@@ -12,17 +10,13 @@ namespace Netclaw.Actors.Protocol;
 /// Retained for backward compatibility with pre-v0.9 journals.
 /// No longer persisted — the system prompt is now read fresh from identity files on every recovery.
 /// </summary>
-[ProtoContract]
 [Obsolete("No longer persisted. Retained so old journals can still deserialize during recovery.")]
 public sealed class SystemPromptSet
 {
-    [ProtoMember(1)]
     public SessionId SessionId { get; set; }
 
-    [ProtoMember(2)]
     public string Content { get; set; } = string.Empty;
 
-    [ProtoMember(3)]
     public long SetAtMs { get; set; }
 
     public DateTimeOffset SetAt => DateTimeOffset.FromUnixTimeMilliseconds(SetAtMs);
@@ -31,19 +25,14 @@ public sealed class SystemPromptSet
 /// <summary>
 /// Persisted event recording a completed turn (user message + assistant reply).
 /// </summary>
-[ProtoContract]
 public sealed class TurnRecorded
 {
-    [ProtoMember(1)]
     public SessionId SessionId { get; set; }
 
-    [ProtoMember(2)]
     public SerializableChatMessage UserMessage { get; set; } = new();
 
-    [ProtoMember(3)]
     public SerializableChatMessage AssistantReply { get; set; } = new();
 
-    [ProtoMember(4)]
     public long RecordedAtMs { get; set; }
 
     /// <summary>
@@ -55,7 +44,6 @@ public sealed class TurnRecorded
     /// (<see cref="Sessions.SessionState.ProcessedReminderIds"/>) from
     /// event replay.
     /// </summary>
-    [ProtoMember(5)]
     public string? SourceReminderId { get; set; }
 
     /// <summary>
@@ -64,56 +52,40 @@ public sealed class TurnRecorded
     /// <see cref="Channels.MessageSource.BackgroundJobId"/> by the
     /// background job manager. Null for regular user turns.
     /// </summary>
-    [ProtoMember(6)]
     public string? SourceBackgroundJobId { get; set; }
 
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 }
 
-[ProtoContract]
 public sealed class AdoptedContextRecorded
 {
-    [ProtoContract]
     public sealed class AdoptedMessageRecord
     {
-        [ProtoMember(1)]
         public string MessageId { get; set; } = string.Empty;
 
-        [ProtoMember(2)]
         public string SenderId { get; set; } = string.Empty;
 
-        [ProtoMember(3)]
         public long TimestampMs { get; set; }
 
-        [ProtoMember(4)]
         public string AuthorityAtInclusion { get; set; } = string.Empty;
     }
 
-    [ProtoMember(1)]
     public SessionId SessionId { get; set; }
 
-    [ProtoMember(2)]
     public string AuthorizedMessageId { get; set; } = string.Empty;
 
-    [ProtoMember(3)]
     public string? AuthorizerSenderId { get; set; }
 
-    [ProtoMember(4)]
     public string? LowerBound { get; set; }
 
-    [ProtoMember(5)]
     public string? UpperBound { get; set; }
 
-    [ProtoMember(6)]
     public string Projection { get; set; } = string.Empty;
 
-    [ProtoMember(7)]
     public List<AdoptedMessageRecord> Messages { get; set; } = [];
 
-    [ProtoMember(8)]
     public bool ProjectionPersisted { get; set; }
 
-    [ProtoMember(9)]
     public long RecordedAtMs { get; set; }
 
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
@@ -122,16 +94,12 @@ public sealed class AdoptedContextRecorded
 /// <summary>
 /// Persisted event recording that the session title was set or updated.
 /// </summary>
-[ProtoContract]
 public sealed class SessionTitleSet
 {
-    [ProtoMember(1)]
     public SessionId SessionId { get; set; }
 
-    [ProtoMember(2)]
     public string Title { get; set; } = string.Empty;
 
-    [ProtoMember(3)]
     public long SetAtMs { get; set; }
 
     public DateTimeOffset SetAt => DateTimeOffset.FromUnixTimeMilliseconds(SetAtMs);
@@ -141,29 +109,17 @@ public sealed class SessionTitleSet
 /// Persisted event recording that a session's conversation history was compacted.
 /// A snapshot is also taken after this event to avoid replaying the full journal.
 /// </summary>
-[ProtoContract]
 public sealed class SessionCompacted
 {
-    [ProtoMember(1)]
     public SessionId SessionId { get; set; }
 
-    [ProtoMember(2)]
     public string Summary { get; set; } = string.Empty;
 
-    [ProtoMember(3)]
     public List<SerializableChatMessage> CompactedMessages { get; set; } = [];
 
-    [ProtoMember(4)]
     public int TurnCountBefore { get; set; }
 
-    [ProtoMember(5)]
     public long CompactedAtMs { get; set; }
-
-    // ProtoMember(6) reserved — formerly CompactionBoundaryIndex, removed
-    // before the compaction-rework change merged. Do not reuse this field
-    // number; local dev journals written during the rework development
-    // window may still contain an int at position 6, and re-binding it to
-    // a different type would fail deserialization silently.
 
     /// <summary>
     /// Updated working-context state carried on the event so
@@ -171,7 +127,6 @@ public sealed class SessionCompacted
     /// preserve it across compaction. Null means "no update — retain
     /// the existing <see cref="Sessions.WorkingContext"/> unchanged."
     /// </summary>
-    [ProtoMember(7)]
     public Sessions.WorkingContext? WorkingContext { get; set; }
 
     public DateTimeOffset CompactedAt => DateTimeOffset.FromUnixTimeMilliseconds(CompactedAtMs);

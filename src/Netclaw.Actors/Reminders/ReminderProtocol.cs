@@ -1,10 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderProtocol.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Serialization;
-using ProtoBuf;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Reminders;
@@ -12,9 +11,7 @@ namespace Netclaw.Actors.Reminders;
 /// <summary>
 /// Strongly-typed reminder identity.
 /// </summary>
-[ProtoContract]
-public readonly record struct ReminderId(
-    [property: ProtoMember(1)] string Value)
+public readonly record struct ReminderId(string Value)
 {
     public override string ToString() => Value;
 }
@@ -22,7 +19,6 @@ public readonly record struct ReminderId(
 /// <summary>
 /// How reminder results are delivered.
 /// </summary>
-[ProtoContract]
 public enum DeliveryKind
 {
     /// <summary>
@@ -48,33 +44,28 @@ public enum DeliveryKind
 /// <summary>
 /// Structured delivery target for a reminder.
 /// </summary>
-[ProtoContract]
 public sealed class ReminderDelivery
 {
     /// <summary>
     /// How results are delivered.
     /// </summary>
-    [ProtoMember(1)]
     public DeliveryKind Kind { get; set; }
 
     /// <summary>
     /// Transport identifier for Channel delivery (e.g., "slack").
     /// Null for CurrentSession and None.
     /// </summary>
-    [ProtoMember(2)]
     public string? Transport { get; set; }
 
     /// <summary>
     /// Canonical target address for Channel delivery (e.g., "C0123ABC").
     /// Resolved and validated at set time. Null for CurrentSession and None.
     /// </summary>
-    [ProtoMember(3)]
     public string? Address { get; set; }
 
     /// <summary>
     /// Session ID for CurrentSession delivery. Null for Channel and None.
     /// </summary>
-    [ProtoMember(4)]
     public string? SessionId { get; set; }
 
     /// <summary>
@@ -82,7 +73,6 @@ public sealed class ReminderDelivery
     /// Used to route DeliverTrustedSessionTurn to the correct gateway.
     /// Null for Channel and None.
     /// </summary>
-    [ProtoMember(5)]
     public Channels.ChannelType? OriginChannelType { get; set; }
 
     /// <summary>
@@ -102,7 +92,6 @@ public sealed class ReminderDelivery
 /// <summary>
 /// The type of schedule for a reminder.
 /// </summary>
-[ProtoContract]
 public enum ReminderScheduleType
 {
     OneShot = 0,
@@ -113,10 +102,8 @@ public enum ReminderScheduleType
 /// <summary>
 /// Describes when and how a reminder fires.
 /// </summary>
-[ProtoContract]
 public sealed class ReminderSchedule
 {
-    [ProtoMember(1)]
     public ReminderScheduleType Type { get; set; }
 
     /// <summary>
@@ -124,10 +111,8 @@ public sealed class ReminderSchedule
     /// For Interval: optional explicit first fire.
     /// For Cron: not used.
     /// </summary>
-    [ProtoMember(2)]
     public long? FireAtMs { get; set; }
 
-    [ProtoIgnore]
     public DateTimeOffset? FireAt
     {
         get => FireAtMs is not null ? DateTimeOffset.FromUnixTimeMilliseconds(FireAtMs.Value) : null;
@@ -137,10 +122,8 @@ public sealed class ReminderSchedule
     /// <summary>
     /// For Interval schedules: repeat interval.
     /// </summary>
-    [ProtoMember(3)]
     public long? IntervalTicks { get; set; }
 
-    [ProtoIgnore]
     public TimeSpan? Interval
     {
         get => IntervalTicks is not null ? TimeSpan.FromTicks(IntervalTicks.Value) : null;
@@ -150,13 +133,11 @@ public sealed class ReminderSchedule
     /// <summary>
     /// For Cron schedules: cron expression.
     /// </summary>
-    [ProtoMember(4)]
     public string? CronExpression { get; set; }
 
     /// <summary>
     /// Original expression as entered by user (e.g. "6h", "0 */6 * * *").
     /// </summary>
-    [ProtoMember(5)]
     public string? OriginalExpression { get; set; }
 }
 
@@ -250,10 +231,8 @@ public sealed record ReminderDefinition
 /// <summary>
 /// Message persisted inside Akka.Reminders. Intentionally lightweight: pointer to disk definition.
 /// </summary>
-[ProtoContract]
 public sealed class ReminderPayload
 {
-    [ProtoMember(1)]
     public ReminderId Id { get; set; }
 }
 

@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
-using ProtoBuf;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -23,7 +22,6 @@ namespace Netclaw.Actors.Sessions;
 ///   root the session is working on. Set via <c>set_working_directory</c>
 ///   tool, persisted across crash/restart. Null means "no project selected."
 /// </summary>
-[ProtoContract]
 public sealed record WorkingContext
 {
     /// <summary>
@@ -34,11 +32,9 @@ public sealed record WorkingContext
 
     public static readonly WorkingContext Empty = new();
 
-    [ProtoMember(1)]
     public ImmutableList<string> RecentFiles { get; init; } =
         [];
 
-    [ProtoMember(2)]
     public string? ProjectDirectory { get; init; }
 
     /// <summary>

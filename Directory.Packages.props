@@ -57,7 +57,8 @@
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
-    <PackageVersion Include="protobuf-net" Version="3.2.56" />
+    <PackageVersion Include="Google.Protobuf" Version="3.34.1" />
+    <PackageVersion Include="Grpc.Tools" Version="2.80.0" />
     <PackageVersion Include="YamlDotNet" Version="16.3.0" />
   </ItemGroup>
   <!-- Test dependencies -->

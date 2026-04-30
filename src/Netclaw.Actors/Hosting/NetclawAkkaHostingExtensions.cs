@@ -158,8 +158,8 @@ public static class NetclawAkkaHostingExtensions
     }
 
     /// <summary>
-    /// Configures protobuf-net serialization for Netclaw protocol types.
-    /// Registered types use efficient protobuf encoding; our serializer throws
+    /// Configures Google Protobuf serialization for Netclaw protocol types.
+    /// Wire format defined in <c>netclaw_messages.proto</c>; our serializer throws
     /// for unregistered manifests to fail loudly on schema drift.
     /// </summary>
     public static AkkaConfigurationBuilder WithNetclawSerialization(

@@ -1,21 +1,20 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="NetclawProtobufSerializer.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using Akka.Actor;
 using Akka.Serialization;
+using Google.Protobuf;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
-using ProtoBuf;
 
 namespace Netclaw.Actors.Serialization;
 
 /// <summary>
-/// Akka.NET serializer using protobuf-net for Netclaw protocol types.
+/// Akka.NET serializer using Google Protobuf for Netclaw protocol types.
 /// Manifests are constant strings decoupled from type names for safe schema evolution.
 /// </summary>
 public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
@@ -58,26 +57,6 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(ReminderPayload)] = ReminderPayloadManifest,
     }.ToFrozenDictionary();
 
-    private static readonly FrozenDictionary<string, Type> ManifestToType = new Dictionary<string, Type>
-    {
-        [SessionIdManifest] = typeof(SessionId),
-        [SendUserMessageManifest] = typeof(SendUserMessage),
-        [SerializableChatMessageManifest] = typeof(SerializableChatMessage),
-        [SerializableMediaReferenceManifest] = typeof(SerializableMediaReference),
-        [SerializableToolCallManifest] = typeof(SerializableToolCall),
-        [TurnRecordedManifest] = typeof(TurnRecorded),
-        [SessionTitleSetManifest] = typeof(SessionTitleSet),
-        [SessionCompactedManifest] = typeof(SessionCompacted),
-        [SessionSnapshotManifest] = typeof(SessionSnapshot),
-        [TurnBroadcastManifest] = typeof(TurnBroadcast),
-        [CompactionBroadcastManifest] = typeof(CompactionBroadcast),
-        [WorkingContextManifest] = typeof(WorkingContext),
-        [ReminderIdManifest] = typeof(ReminderId),
-        [ReminderDeliveryManifest] = typeof(ReminderDelivery),
-        [ReminderScheduleManifest] = typeof(ReminderSchedule),
-        [ReminderPayloadManifest] = typeof(ReminderPayload),
-    }.ToFrozenDictionary();
-
     public override int Identifier => 150;
 
     public NetclawProtobufSerializer(ExtendedActorSystem system) : base(system)
@@ -95,18 +74,47 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
 
     public override byte[] ToBinary(object obj)
     {
-        using var stream = new MemoryStream();
-        ProtoBuf.Serializer.Serialize(stream, obj);
-        return stream.ToArray();
+        return NetclawProtoMapper.ToProtoMessage(obj).ToByteArray();
     }
 
     public override object FromBinary(byte[] bytes, string manifest)
     {
-        if (!ManifestToType.TryGetValue(manifest, out var type))
-            throw new ArgumentException($"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.");
-
-        using var stream = new MemoryStream(bytes);
-        return ProtoBuf.Serializer.Deserialize(type, stream)
-            ?? throw new InvalidOperationException($"Deserialization returned null for manifest '{manifest}'");
+        return manifest switch
+        {
+            SessionIdManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionIdProto.Parser.ParseFrom(bytes)),
+            SendUserMessageManifest => NetclawProtoMapper.FromProto(
+                Proto.SendUserMessageProto.Parser.ParseFrom(bytes)),
+            SerializableChatMessageManifest => NetclawProtoMapper.FromProto(
+                Proto.SerializableChatMessageProto.Parser.ParseFrom(bytes)),
+            SerializableMediaReferenceManifest => NetclawProtoMapper.FromProto(
+                Proto.SerializableMediaReferenceProto.Parser.ParseFrom(bytes)),
+            SerializableToolCallManifest => NetclawProtoMapper.FromProto(
+                Proto.SerializableToolCallProto.Parser.ParseFrom(bytes)),
+            TurnRecordedManifest => NetclawProtoMapper.FromProto(
+                Proto.TurnRecordedProto.Parser.ParseFrom(bytes)),
+            SessionTitleSetManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionTitleSetProto.Parser.ParseFrom(bytes)),
+            SessionCompactedManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionCompactedProto.Parser.ParseFrom(bytes)),
+            SessionSnapshotManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionSnapshotProto.Parser.ParseFrom(bytes)),
+            TurnBroadcastManifest => NetclawProtoMapper.FromProto(
+                Proto.TurnBroadcastProto.Parser.ParseFrom(bytes)),
+            CompactionBroadcastManifest => NetclawProtoMapper.FromProto(
+                Proto.CompactionBroadcastProto.Parser.ParseFrom(bytes)),
+            WorkingContextManifest => NetclawProtoMapper.FromProto(
+                Proto.WorkingContextProto.Parser.ParseFrom(bytes)),
+            ReminderIdManifest => NetclawProtoMapper.FromProto(
+                Proto.ReminderIdProto.Parser.ParseFrom(bytes)),
+            ReminderDeliveryManifest => NetclawProtoMapper.FromProto(
+                Proto.ReminderDeliveryProto.Parser.ParseFrom(bytes)),
+            ReminderScheduleManifest => NetclawProtoMapper.FromProto(
+                Proto.ReminderScheduleProto.Parser.ParseFrom(bytes)),
+            ReminderPayloadManifest => NetclawProtoMapper.FromProto(
+                Proto.ReminderPayloadProto.Parser.ParseFrom(bytes)),
+            _ => throw new ArgumentException(
+                $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
+        };
     }
 }

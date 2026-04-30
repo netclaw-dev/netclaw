@@ -11,8 +11,8 @@ namespace Netclaw.Actors.Channels;
 /// <summary>
 /// Ephemeral metadata describing where a user message originated.
 /// Used for ACL checks and audit logging — NOT persisted with the session.
-/// <see cref="Protocol.SendUserMessage.Source"/> is marked
-/// <c>[ProtoIgnore]</c> so runtime-only fields such as
+/// <see cref="Protocol.SendUserMessage.Source"/> is excluded from the proto
+/// wire format so runtime-only fields such as
 /// <see cref="AckTarget"/> and <see cref="ReminderId"/> are safe to add.
 /// </summary>
 public sealed record MessageSource

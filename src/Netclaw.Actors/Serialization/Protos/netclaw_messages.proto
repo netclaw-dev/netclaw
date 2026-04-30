@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+option csharp_namespace = "Netclaw.Actors.Serialization.Proto";
+
+// ── Enums ──
+
+enum ChatRole {
+  CHAT_ROLE_USER = 0;
+  CHAT_ROLE_ASSISTANT = 1;
+  CHAT_ROLE_SYSTEM = 2;
+  CHAT_ROLE_TOOL = 3;
+}
+
+enum DeliveryKind {
+  DELIVERY_KIND_CURRENT_SESSION = 0;
+  DELIVERY_KIND_CHANNEL = 1;
+  DELIVERY_KIND_NONE = 2;
+}
+
+enum ReminderScheduleType {
+  REMINDER_SCHEDULE_TYPE_ONE_SHOT = 0;
+  REMINDER_SCHEDULE_TYPE_INTERVAL = 1;
+  REMINDER_SCHEDULE_TYPE_CRON = 2;
+}
+
+enum TrustAudience {
+  TRUST_AUDIENCE_PUBLIC = 0;
+  TRUST_AUDIENCE_TEAM = 1;
+  TRUST_AUDIENCE_PERSONAL = 2;
+}
+
+enum ChannelType {
+  CHANNEL_TYPE_SLACK = 0;
+  CHANNEL_TYPE_TUI = 1;
+  CHANNEL_TYPE_HEADLESS = 2;
+  CHANNEL_TYPE_SIGNALR = 3;
+  CHANNEL_TYPE_REMINDER = 4;
+  CHANNEL_TYPE_WEBHOOK = 5;
+  CHANNEL_TYPE_DISCORD = 6;
+}
+
+// ── Value types ──
+
+message SessionIdProto {
+  string value = 1;
+}
+
+message ReminderIdProto {
+  string value = 1;
+}
+
+// ── Chat messages ──
+
+message SerializableMediaReferenceProto {
+  string relative_path = 1;
+  string mime_type = 2;
+  int32 modality = 3;
+}
+
+message SerializableToolCallProto {
+  string call_id = 1;
+  string name = 2;
+  string arguments_json = 3;
+  optional string meta_json = 4;
+}
+
+message SerializableChatMessageProto {
+  ChatRole role = 1;
+  string content = 2;
+  optional string name = 3;
+  repeated SerializableToolCallProto tool_calls = 4;
+  optional string tool_call_id = 5;
+  repeated SerializableMediaReferenceProto media_references = 6;
+}
+
+// ── Commands ──
+
+message SendUserMessageProto {
+  SessionIdProto session_id = 1;
+  string content = 2;
+  repeated SerializableMediaReferenceProto media_references = 3;
+}
+
+// ── Events ──
+
+message SystemPromptSetProto {
+  SessionIdProto session_id = 1;
+  string content = 2;
+  int64 set_at_ms = 3;
+}
+
+message TurnRecordedProto {
+  SessionIdProto session_id = 1;
+  SerializableChatMessageProto user_message = 2;
+  SerializableChatMessageProto assistant_reply = 3;
+  int64 recorded_at_ms = 4;
+  optional string source_reminder_id = 5;
+  optional string source_background_job_id = 6;
+}
+
+message AdoptedContextRecordedProto {
+  message AdoptedMessageRecord {
+    string message_id = 1;
+    string sender_id = 2;
+    int64 timestamp_ms = 3;
+    string authority_at_inclusion = 4;
+  }
+
+  SessionIdProto session_id = 1;
+  string authorized_message_id = 2;
+  optional string authorizer_sender_id = 3;
+  optional string lower_bound = 4;
+  optional string upper_bound = 5;
+  string projection = 6;
+  repeated AdoptedMessageRecord messages = 7;
+  bool projection_persisted = 8;
+  int64 recorded_at_ms = 9;
+}
+
+message SessionTitleSetProto {
+  SessionIdProto session_id = 1;
+  string title = 2;
+  int64 set_at_ms = 3;
+}
+
+message SessionCompactedProto {
+  SessionIdProto session_id = 1;
+  string summary = 2;
+  repeated SerializableChatMessageProto compacted_messages = 3;
+  int32 turn_count_before = 4;
+  int64 compacted_at_ms = 5;
+  reserved 6;
+  WorkingContextProto working_context = 7;
+}
+
+// ── Snapshots ──
+
+message ActiveJobInfoProto {
+  string job_id = 1;
+  string command = 2;
+  string rationale = 3;
+  int64 started_at_ms = 4;
+  TrustAudience audience = 5;
+  string boundary = 6;
+}
+
+message SessionSnapshotProto {
+  message AdoptedContextSnapshotRecord {
+    message AdoptedContextSnapshotMessage {
+      string message_id = 1;
+      string sender_id = 2;
+      int64 timestamp_ms = 3;
+      string authority_at_inclusion = 4;
+    }
+
+    string authorized_message_id = 1;
+    optional string authorizer_sender_id = 2;
+    optional string lower_bound = 3;
+    optional string upper_bound = 4;
+    string projection = 5;
+    bool projection_persisted = 6;
+    repeated AdoptedContextSnapshotMessage messages = 7;
+  }
+
+  repeated SerializableChatMessageProto history = 1;
+  int32 turn_count = 2;
+  optional string title = 3;
+  optional int32 eligible_delivery_turn_number = 4;
+  reserved 5;
+  WorkingContextProto working_context = 6;
+  repeated ActiveJobInfoProto active_background_jobs = 7;
+  repeated AdoptedContextSnapshotRecord adopted_context_records = 8;
+}
+
+// ── Broadcasts ──
+
+message TurnBroadcastProto {
+  SessionIdProto session_id = 1;
+  SerializableChatMessageProto assistant_reply = 2;
+  int64 broadcast_at_ms = 3;
+}
+
+message CompactionBroadcastProto {
+  SessionIdProto session_id = 1;
+  string summary = 2;
+  int64 compacted_at_ms = 3;
+}
+
+// ── Session state ──
+
+message WorkingContextProto {
+  repeated string recent_files = 1;
+  optional string project_directory = 2;
+}
+
+// ── Reminders ──
+
+message ReminderDeliveryProto {
+  DeliveryKind kind = 1;
+  optional string transport = 2;
+  optional string address = 3;
+  optional string session_id = 4;
+  optional ChannelType origin_channel_type = 5;
+}
+
+message ReminderScheduleProto {
+  ReminderScheduleType type = 1;
+  optional int64 fire_at_ms = 2;
+  optional int64 interval_ticks = 3;
+  optional string cron_expression = 4;
+  optional string original_expression = 5;
+}
+
+message ReminderPayloadProto {
+  ReminderIdProto id = 1;
+}

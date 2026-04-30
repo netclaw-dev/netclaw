@@ -22,8 +22,13 @@
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="ModelContextProtocol.Core" />
-    <PackageReference Include="protobuf-net" />
+    <PackageReference Include="Google.Protobuf" />
+    <PackageReference Include="Grpc.Tools" PrivateAssets="All" />
     <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Serialization\Protos\netclaw_messages.proto" GrpcServices="None" />
   </ItemGroup>
 
   <ItemGroup>
