@@ -108,6 +108,27 @@ message SessionCompactedProto {
   WorkingContextProto working_context = 7;
 }
 
+// ── Adopted context ──
+
+message AdoptedContextRecordedProto {
+  message AdoptedMessageRecordProto {
+    string message_id = 1;
+    string sender_id = 2;
+    int64 timestamp_ms = 3;
+    string authority_at_inclusion = 4;
+  }
+
+  SessionIdProto session_id = 1;
+  string authorized_message_id = 2;
+  optional string authorizer_sender_id = 3;
+  optional string lower_bound = 4;
+  optional string upper_bound = 5;
+  string projection = 6;
+  repeated AdoptedMessageRecordProto messages = 7;
+  bool projection_persisted = 8;
+  int64 recorded_at_ms = 9;
+}
+
 // ── Snapshots ──
 
 message ActiveJobInfoProto {

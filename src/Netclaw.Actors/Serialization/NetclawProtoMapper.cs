@@ -34,6 +34,7 @@ internal static class NetclawProtoMapper
         ReminderDelivery v => ToProto(v),
         ReminderSchedule v => ToProto(v),
         ReminderPayload v => ToProto(v),
+        AdoptedContextRecorded v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
 
@@ -421,6 +422,63 @@ internal static class NetclawProtoMapper
     internal static ReminderPayload FromProto(Proto.ReminderPayloadProto proto) => new()
     {
         Id = FromProto(proto.Id)
+    };
+
+    // ── AdoptedContextRecorded ──
+
+    internal static Proto.AdoptedContextRecordedProto ToProto(AdoptedContextRecorded evt)
+    {
+        var proto = new Proto.AdoptedContextRecordedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            AuthorizedMessageId = evt.AuthorizedMessageId,
+            Projection = evt.Projection,
+            ProjectionPersisted = evt.ProjectionPersisted,
+            RecordedAtMs = evt.RecordedAtMs
+        };
+        if (evt.AuthorizerSenderId is not null)
+            proto.AuthorizerSenderId = evt.AuthorizerSenderId;
+        if (evt.LowerBound is not null)
+            proto.LowerBound = evt.LowerBound;
+        if (evt.UpperBound is not null)
+            proto.UpperBound = evt.UpperBound;
+        proto.Messages.AddRange(evt.Messages.Select(ToAdoptedMessageRecord));
+        return proto;
+    }
+
+    internal static AdoptedContextRecorded FromProto(Proto.AdoptedContextRecordedProto proto)
+    {
+        var evt = new AdoptedContextRecorded
+        {
+            SessionId = FromProto(proto.SessionId),
+            AuthorizedMessageId = proto.AuthorizedMessageId,
+            AuthorizerSenderId = proto.HasAuthorizerSenderId ? proto.AuthorizerSenderId : null,
+            LowerBound = proto.HasLowerBound ? proto.LowerBound : null,
+            UpperBound = proto.HasUpperBound ? proto.UpperBound : null,
+            Projection = proto.Projection,
+            ProjectionPersisted = proto.ProjectionPersisted,
+            RecordedAtMs = proto.RecordedAtMs
+        };
+        evt.Messages.AddRange(proto.Messages.Select(FromAdoptedMessageRecord));
+        return evt;
+    }
+
+    private static Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto ToAdoptedMessageRecord(
+        AdoptedContextRecorded.AdoptedMessageRecord m) => new()
+    {
+        MessageId = m.MessageId,
+        SenderId = m.SenderId,
+        TimestampMs = m.TimestampMs,
+        AuthorityAtInclusion = m.AuthorityAtInclusion
+    };
+
+    private static AdoptedContextRecorded.AdoptedMessageRecord FromAdoptedMessageRecord(
+        Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto proto) => new()
+    {
+        MessageId = proto.MessageId,
+        SenderId = proto.SenderId,
+        TimestampMs = proto.TimestampMs,
+        AuthorityAtInclusion = proto.AuthorityAtInclusion
     };
 
     // ── ActiveJobInfo ──

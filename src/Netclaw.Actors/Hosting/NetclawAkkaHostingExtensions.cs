@@ -183,6 +183,7 @@ public static class NetclawAkkaHostingExtensions
             typeof(ReminderDelivery),
             typeof(ReminderSchedule),
             typeof(ReminderPayload),
+            typeof(AdoptedContextRecorded),
         };
 
         return builder

@@ -36,6 +36,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string ReminderDeliveryManifest = "rd-v1";
     private const string ReminderScheduleManifest = "rs-v1";
     private const string ReminderPayloadManifest = "rp-v1";
+    private const string AdoptedContextRecordedManifest = "acr-v1";
 
     private static readonly FrozenDictionary<Type, string> TypeToManifest = new Dictionary<Type, string>
     {
@@ -55,6 +56,7 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(ReminderDelivery)] = ReminderDeliveryManifest,
         [typeof(ReminderSchedule)] = ReminderScheduleManifest,
         [typeof(ReminderPayload)] = ReminderPayloadManifest,
+        [typeof(AdoptedContextRecorded)] = AdoptedContextRecordedManifest,
     }.ToFrozenDictionary();
 
     public override int Identifier => 150;
@@ -113,6 +115,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.ReminderScheduleProto.Parser.ParseFrom(bytes)),
             ReminderPayloadManifest => NetclawProtoMapper.FromProto(
                 Proto.ReminderPayloadProto.Parser.ParseFrom(bytes)),
+            AdoptedContextRecordedManifest => NetclawProtoMapper.FromProto(
+                Proto.AdoptedContextRecordedProto.Parser.ParseFrom(bytes)),
             _ => throw new ArgumentException(
                 $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
         };

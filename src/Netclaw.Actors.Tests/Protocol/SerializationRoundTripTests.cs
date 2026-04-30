@@ -369,6 +369,71 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void AdoptedContextRecorded_round_trips()
+    {
+        var original = new AdoptedContextRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            AuthorizedMessageId = "msg-42",
+            AuthorizerSenderId = "U12345",
+            LowerBound = "msg-40",
+            UpperBound = "msg-42",
+            Projection = "Alice said hello; Bob replied",
+            ProjectionPersisted = true,
+            RecordedAtMs = 1708531200000,
+            Messages =
+            [
+                new AdoptedContextRecorded.AdoptedMessageRecord
+                {
+                    MessageId = "msg-41",
+                    SenderId = "U67890",
+                    TimestampMs = 1708531190000,
+                    AuthorityAtInclusion = "verified"
+                }
+            ]
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.SessionId, result.SessionId);
+        Assert.Equal("msg-42", result.AuthorizedMessageId);
+        Assert.Equal("U12345", result.AuthorizerSenderId);
+        Assert.Equal("msg-40", result.LowerBound);
+        Assert.Equal("msg-42", result.UpperBound);
+        Assert.Equal("Alice said hello; Bob replied", result.Projection);
+        Assert.True(result.ProjectionPersisted);
+        Assert.Equal(1708531200000, result.RecordedAtMs);
+        var msg = Assert.Single(result.Messages);
+        Assert.Equal("msg-41", msg.MessageId);
+        Assert.Equal("U67890", msg.SenderId);
+        Assert.Equal(1708531190000, msg.TimestampMs);
+        Assert.Equal("verified", msg.AuthorityAtInclusion);
+    }
+
+    [Fact]
+    public void AdoptedContextRecorded_round_trips_with_null_optionals()
+    {
+        var original = new AdoptedContextRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            AuthorizedMessageId = "msg-1",
+            AuthorizerSenderId = null,
+            LowerBound = null,
+            UpperBound = null,
+            Projection = "",
+            ProjectionPersisted = false,
+            RecordedAtMs = 1708531200000
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Null(result.AuthorizerSenderId);
+        Assert.Null(result.LowerBound);
+        Assert.Null(result.UpperBound);
+        Assert.Empty(result.Messages);
+    }
+
+    [Fact]
     public void Unknown_manifest_throws_on_deserialize()
     {
         var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
