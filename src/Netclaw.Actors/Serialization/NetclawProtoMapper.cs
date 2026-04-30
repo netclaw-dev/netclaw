@@ -24,9 +24,6 @@ internal static class NetclawProtoMapper
         SerializableMediaReference v => ToProto(v),
         SerializableToolCall v => ToProto(v),
         TurnRecorded v => ToProto(v),
-#pragma warning disable CS0612, CS0618
-        SystemPromptSet v => ToProto(v),
-#pragma warning restore CS0612, CS0618
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
         SessionSnapshot v => ToProto(v),
@@ -145,24 +142,6 @@ internal static class NetclawProtoMapper
         return cmd;
     }
 
-    // ── SystemPromptSet (obsolete — retained for old journal recovery) ──
-
-#pragma warning disable CS0612, CS0618
-    internal static Proto.SystemPromptSetProto ToProto(SystemPromptSet evt) => new()
-    {
-        SessionId = ToProto(evt.SessionId),
-        Content = evt.Content,
-        SetAtMs = evt.SetAtMs
-    };
-
-    internal static SystemPromptSet FromProto(Proto.SystemPromptSetProto proto) => new()
-    {
-        SessionId = FromProto(proto.SessionId),
-        Content = proto.Content,
-        SetAtMs = proto.SetAtMs
-    };
-#pragma warning restore CS0612, CS0618
-
     // ── TurnRecorded ──
 
     internal static Proto.TurnRecordedProto ToProto(TurnRecorded evt)
@@ -189,63 +168,6 @@ internal static class NetclawProtoMapper
         RecordedAtMs = proto.RecordedAtMs,
         SourceReminderId = proto.HasSourceReminderId ? proto.SourceReminderId : null,
         SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? proto.SourceBackgroundJobId : null
-    };
-
-    // ── AdoptedContextRecorded ──
-
-    internal static Proto.AdoptedContextRecordedProto ToProto(AdoptedContextRecorded evt)
-    {
-        var proto = new Proto.AdoptedContextRecordedProto
-        {
-            SessionId = ToProto(evt.SessionId),
-            AuthorizedMessageId = evt.AuthorizedMessageId,
-            Projection = evt.Projection,
-            ProjectionPersisted = evt.ProjectionPersisted,
-            RecordedAtMs = evt.RecordedAtMs
-        };
-        if (evt.AuthorizerSenderId is not null)
-            proto.AuthorizerSenderId = evt.AuthorizerSenderId;
-        if (evt.LowerBound is not null)
-            proto.LowerBound = evt.LowerBound;
-        if (evt.UpperBound is not null)
-            proto.UpperBound = evt.UpperBound;
-        proto.Messages.AddRange(evt.Messages.Select(ToAdoptedMessageRecord));
-        return proto;
-    }
-
-    internal static AdoptedContextRecorded FromProto(Proto.AdoptedContextRecordedProto proto)
-    {
-        var evt = new AdoptedContextRecorded
-        {
-            SessionId = FromProto(proto.SessionId),
-            AuthorizedMessageId = proto.AuthorizedMessageId,
-            AuthorizerSenderId = proto.HasAuthorizerSenderId ? proto.AuthorizerSenderId : null,
-            LowerBound = proto.HasLowerBound ? proto.LowerBound : null,
-            UpperBound = proto.HasUpperBound ? proto.UpperBound : null,
-            Projection = proto.Projection,
-            ProjectionPersisted = proto.ProjectionPersisted,
-            RecordedAtMs = proto.RecordedAtMs
-        };
-        evt.Messages.AddRange(proto.Messages.Select(FromAdoptedMessageRecord));
-        return evt;
-    }
-
-    private static Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecord ToAdoptedMessageRecord(
-        AdoptedContextRecorded.AdoptedMessageRecord r) => new()
-    {
-        MessageId = r.MessageId,
-        SenderId = r.SenderId,
-        TimestampMs = r.TimestampMs,
-        AuthorityAtInclusion = r.AuthorityAtInclusion
-    };
-
-    private static AdoptedContextRecorded.AdoptedMessageRecord FromAdoptedMessageRecord(
-        Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecord proto) => new()
-    {
-        MessageId = proto.MessageId,
-        SenderId = proto.SenderId,
-        TimestampMs = proto.TimestampMs,
-        AuthorityAtInclusion = proto.AuthorityAtInclusion
     };
 
     // ── SessionTitleSet ──
