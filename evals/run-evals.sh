@@ -21,7 +21,7 @@
 #     NETCLAW_EVAL_COMPACTION_MODEL_ID
 #
 #   Container + runtime:
-#     NETCLAW_IMAGE              Image ref (default: ghcr.io/aaronontheweb/netclawd:dev — built locally)
+#     NETCLAW_IMAGE              Image ref (default: ghcr.io/netclaw-dev/netclaw:dev — built locally)
 #     NETCLAW_EVAL_PORT          Host-side port for the eval daemon (default 5299)
 #     NETCLAW_EVAL_CONTEXT_WINDOW  Override model context window (future compaction evals)
 #
@@ -54,7 +54,7 @@ FILTER_CASE="${NETCLAW_EVAL_CASE:-}"
 
 # Image and CLI binary default to the locally-built artifacts. Evals should
 # always test the current source tree, not a stale published image.
-NETCLAW_IMAGE="${NETCLAW_IMAGE:-ghcr.io/aaronontheweb/netclawd:dev}"
+NETCLAW_IMAGE="${NETCLAW_IMAGE:-ghcr.io/netclaw-dev/netclaw:dev}"
 NETCLAW_BIN="${NETCLAW_BIN:-$REPO_ROOT/publish/cli/netclaw}"
 
 # Eval target — resolved by check_prerequisites after optional interactive prompt.
@@ -759,7 +759,7 @@ assert_identity_version() {
 }
 
 assert_identity_repo() {
-    stdout_contains 'github.com/Aaronontheweb/netclaw'
+    stdout_contains 'github.com/netclaw-dev/netclaw'
 }
 
 assert_identity_session() {

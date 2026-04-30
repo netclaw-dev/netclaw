@@ -294,7 +294,7 @@ jobs:
         VERSION="${{ github.ref_name }}"
         STRIPPED="${VERSION#v}"
         MAJOR_MINOR=$(echo "$STRIPPED" | awk -F. '{print $1"."$2}')
-        REPO="ghcr.io/aaronontheweb/netclawd"
+        REPO="ghcr.io/netclaw-dev/netclaw"
 
         TAGS="${REPO}:${VERSION},${REPO}:latest,${REPO}:v${MAJOR_MINOR}"
         echo "tags=$TAGS" >> "$GITHUB_OUTPUT"

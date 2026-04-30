@@ -15,7 +15,7 @@ isolation problem cleanly and simultaneously delivers the
 Docker-deployment-ready artifact the `exposure-modes` change flagged as a
 blocker for remote-host operation. One build graph, two wins: eval
 contamination disappears, and the daemon gains a first-class
-`docker run ghcr.io/aaronontheweb/netclawd:latest` story.
+`docker run ghcr.io/netclaw-dev/netclaw:latest` story.
 
 ## What Changes
 
@@ -114,7 +114,7 @@ run locally against a host-provided LLM endpoint (self-hosted or cloud).
   - `.github/workflows/pr_validation.yml` — adds `validate-docker-build`
     job gated on PR events, self-hosted runner.
   - `.github/workflows/publish_release_binaries.yml` — adds `publish-docker`
-    job after `publish-binaries`; publishes to `ghcr.io/aaronontheweb/netclawd`
+    job after `publish-binaries`; publishes to `ghcr.io/netclaw-dev/netclaw`
     on tag push with semver + latest tags.
 - **Release artifact surface**: new Docker image published to GHCR alongside
   the existing tar.gz binary archives and skills feed. First push will

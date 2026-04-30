@@ -101,14 +101,14 @@ public sealed class StatusUpdateCheckerTests : IDisposable
     public async Task CheckAsync_IncludesReleaseNotesUrl_WhenUpdateAvailable()
     {
         var manifest = CreateManifest("0.9.0", UpdateCheckService.GetCurrentRid(),
-            releaseNotesUrl: "https://github.com/stannardlabs/netclaw/releases/tag/0.9.0");
+            releaseNotesUrl: "https://github.com/netclaw-dev/netclaw/releases/tag/0.9.0");
         var handler = CreateSignedHandler(manifest);
 
         using var httpClient = new HttpClient(handler);
         var result = await StatusUpdateChecker.CheckAsync(httpClient, "0.1.0", TestContext.Current.CancellationToken);
 
         Assert.Equal("update-available", result.State);
-        Assert.Equal("https://github.com/stannardlabs/netclaw/releases/tag/0.9.0", result.ReleaseNotesUrl);
+        Assert.Equal("https://github.com/netclaw-dev/netclaw/releases/tag/0.9.0", result.ReleaseNotesUrl);
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────────────

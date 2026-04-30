@@ -3,7 +3,7 @@
 ### Requirement: Release-grade Docker image published on tag
 
 The project SHALL publish a `netclawd` Docker image to the GitHub Container
-Registry (`ghcr.io/aaronontheweb/netclawd`) on every release tag. The image
+Registry (`ghcr.io/netclaw-dev/netclaw`) on every release tag. The image
 SHALL be tagged with the exact version (`{{version}}`), major.minor
 (`{{major}}.{{minor}}`), and `latest`. The image SHALL be built from
 `docker/Dockerfile` via the shared `scripts/docker/build-image.sh` entrypoint
@@ -13,7 +13,7 @@ so that PR validation and release publishing share one code path.
 
 - **GIVEN** the release workflow runs on a tag push of `v0.12.0`
 - **WHEN** the `publish-docker` job succeeds
-- **THEN** `ghcr.io/aaronontheweb/netclawd:v0.12.0`, `:v0.12`, and `:latest`
+- **THEN** `ghcr.io/netclaw-dev/netclaw:v0.12.0`, `:v0.12`, and `:latest`
   all reference the same image digest
 
 #### Scenario: PR validation and release use the same build script
@@ -154,7 +154,7 @@ expected binary outputs are absent after `dotnet publish`.
 #### Scenario: Default invocation builds :dev tag
 
 - **WHEN** a contributor runs `scripts/docker/build-image.sh` with no arguments
-- **THEN** the script builds `ghcr.io/aaronontheweb/netclawd:dev`
+- **THEN** the script builds `ghcr.io/netclaw-dev/netclaw:dev`
 - **AND** `docker images` lists the tag
 
 #### Scenario: Custom version and repo

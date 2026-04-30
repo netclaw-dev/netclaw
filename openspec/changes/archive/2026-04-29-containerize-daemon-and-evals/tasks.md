@@ -16,7 +16,7 @@
 
 ## 3. Local build script
 
-- [x] 3.1 Create `scripts/docker/build-image.sh` with positional version arg (default `dev`), `IMAGE_REPO` env default `ghcr.io/aaronontheweb/netclawd`, and `NO_BUILD` escape hatch
+- [x] 3.1 Create `scripts/docker/build-image.sh` with positional version arg (default `dev`), `IMAGE_REPO` env default `ghcr.io/netclaw-dev/netclaw`, and `NO_BUILD` escape hatch
 - [x] 3.2 Script invokes `dotnet publish` for CLI and Daemon (self-contained, single-file, linux-x64) into `./publish/{cli,daemon}` unless `NO_BUILD=1`
 - [x] 3.3 Script asserts `./publish/cli/netclaw` and `./publish/daemon/netclawd` exist before `docker build`, exits non-zero with an error pointing at the missing path if not
 - [x] 3.4 Script invokes `docker build -f docker/Dockerfile -t "$IMAGE_REPO:$VERSION" --build-arg NETCLAW_VERSION=$VERSION .`
@@ -39,9 +39,9 @@
 - [x] 5.1 Add `publish-docker` job to `.github/workflows/publish_release_binaries.yml` after `publish-binaries`
 - [x] 5.2 Job needs `contents: read` and `packages: write` permissions; `runs-on: arc-netclaw`, `timeout-minutes: 30`
 - [x] 5.3 Checkout + install .NET SDK + setup Buildx + `docker/login-action@v3` to `ghcr.io` using `secrets.GITHUB_TOKEN`
-- [x] 5.4 Run `scripts/docker/build-image.sh "${{ github.ref_name }}"` with `IMAGE_REPO=ghcr.io/aaronontheweb/netclawd`
+- [x] 5.4 Run `scripts/docker/build-image.sh "${{ github.ref_name }}"` with `IMAGE_REPO=ghcr.io/netclaw-dev/netclaw`
 - [x] 5.5 Add follow-up `docker tag` step that adds `:latest` and `:${major}.${minor}` aliases (strip leading `v` for semver math)
-- [x] 5.6 `docker push --all-tags ghcr.io/aaronontheweb/netclawd`
+- [x] 5.6 `docker push --all-tags ghcr.io/netclaw-dev/netclaw`
 - [x] 5.7 Confirm the existing `publish-binary-manifest` and `publish-skills` jobs still chain correctly (they depend on `publish-binaries`, not on `publish-docker`)
 - [x] 5.8 Note in the PR description that the first GHCR push creates a private package; owner must flip visibility to public once
 
@@ -81,7 +81,7 @@
 - [x] 9.1 Run `dotnet slopwatch analyze` after all code changes land; address any new violations or baseline them with justification
 - [x] 9.2 Run `dotnet test` for `Netclaw.Configuration.Tests`, `Netclaw.Cli.Tests`, `Netclaw.Daemon.Tests` and confirm green
 - [ ] 9.3 Open the PR on a feature branch; confirm `pr_validation.yml` runs the `validate-docker-build` job and the job succeeds
-- [ ] 9.4 After merge, push a release tag on a follow-up PR to confirm `publish-docker` runs end-to-end and lands the image at `ghcr.io/aaronontheweb/netclawd`
+- [ ] 9.4 After merge, push a release tag on a follow-up PR to confirm `publish-docker` runs end-to-end and lands the image at `ghcr.io/netclaw-dev/netclaw`
 
 ## 10. OpenSpec follow-up
 

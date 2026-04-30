@@ -105,7 +105,7 @@ except:
 fi
 
 # GitHub release notes URL
-RELEASE_NOTES_URL="https://github.com/stannardlabs/netclaw/releases/tag/${VERSION}"
+RELEASE_NOTES_URL="https://github.com/netclaw-dev/netclaw/releases/tag/${VERSION}"
 
 mkdir -p "$(dirname "$MANIFEST_PATH")"
 cat > "$MANIFEST_PATH" << EOF

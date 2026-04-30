@@ -59,7 +59,7 @@ publishable release artifact and rewires `run-evals.sh` to use it.
 
 **Goals:**
 
-- Produce a release-grade `ghcr.io/aaronontheweb/netclawd` image on every
+- Produce a release-grade `ghcr.io/netclaw-dev/netclaw` image on every
   tag, published alongside existing binary archives.
 - PR-gate the Dockerfile via `.github/workflows/pr_validation.yml` so
   image regressions fail before merge.
@@ -197,7 +197,7 @@ invoke it — no inline `docker build` anywhere in the workflows.
 
 - Positional arg 1: image version tag (default `dev`).
 - `IMAGE_REPO` env: image repository (default
-  `ghcr.io/aaronontheweb/netclawd`).
+  `ghcr.io/netclaw-dev/netclaw`).
 - `NO_BUILD=1`: skip `dotnet publish`, reuse binaries already in
   `./publish/{cli,daemon}` (for CI jobs that publish binaries in a
   prior step, though this change's release job re-runs publish for
@@ -207,7 +207,7 @@ invoke it — no inline `docker build` anywhere in the workflows.
 
 ### Decision 4: GHCR as the registry
 
-**Choice**: `ghcr.io/aaronontheweb/netclawd`.
+**Choice**: `ghcr.io/netclaw-dev/netclaw`.
 
 **Alternatives considered:**
 

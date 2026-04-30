@@ -61,7 +61,7 @@ internal static class UpdateCommand
                 Console.Error.WriteLine(fetchResult.Status == ManifestFetchStatus.PlatformUnavailable
                     ? "The update manifest could not be verified because signature verification is unavailable on this platform."
                     : "The update manifest could not be verified. This may indicate tampering.");
-                Console.Error.WriteLine("If this persists, report the issue at https://github.com/stannardlabs/netclaw/issues");
+                Console.Error.WriteLine("If this persists, report the issue at https://github.com/netclaw-dev/netclaw/issues");
                 return 1;
             }
 

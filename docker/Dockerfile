@@ -89,7 +89,7 @@ EXPOSE 5199
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -sf http://127.0.0.1:5199/api/health/ready || exit 1
 
-LABEL org.opencontainers.image.source="https://github.com/Aaronontheweb/netclaw" \
+LABEL org.opencontainers.image.source="https://github.com/netclaw-dev/netclaw" \
       org.opencontainers.image.title="netclawd" \
       org.opencontainers.image.description="Netclaw autonomous operations daemon" \
       org.opencontainers.image.version="${NETCLAW_VERSION}" \

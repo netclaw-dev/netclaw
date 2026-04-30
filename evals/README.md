@@ -108,7 +108,7 @@ the missing values. In non-interactive contexts it fails loudly.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `NETCLAW_IMAGE` | `ghcr.io/aaronontheweb/netclawd:latest` | Image ref |
+| `NETCLAW_IMAGE` | `ghcr.io/netclaw-dev/netclaw:latest` | Image ref |
 | `NETCLAW_EVAL_PORT` | `5299` | Host-side port for the eval daemon |
 | `NETCLAW_BIN` | `netclaw` | Path to the netclaw CLI on the host |
 
@@ -131,7 +131,7 @@ NETCLAW_EVAL_RUNS=1 NETCLAW_EVAL_THRESHOLD=0.50 \
   ./evals/run-evals.sh
 
 # Run against a locally-built dev image
-NETCLAW_IMAGE=ghcr.io/aaronontheweb/netclawd:dev \
+NETCLAW_IMAGE=ghcr.io/netclaw-dev/netclaw:dev \
 NETCLAW_EVAL_PROVIDER_TYPE=ollama \
 NETCLAW_EVAL_PROVIDER_ENDPOINT=http://127.0.0.1:11434 \
 NETCLAW_EVAL_MODEL_ID=qwen3:30b \

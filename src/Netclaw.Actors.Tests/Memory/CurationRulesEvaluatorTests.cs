@@ -252,12 +252,12 @@ public sealed class CurationRulesEvaluatorTests
         // Content overlap > 60% and anchor Jaccard > 50%
         var proposal = MakeProposal(
             anchor: "netclaw-github-repo",
-            content: "Netclaw GitHub repository at https://github.com/Aaronontheweb/netclaw, private repo");
+            content: "Netclaw GitHub repository at https://github.com/netclaw-dev/netclaw, private repo");
         var candidates = new[]
         {
             MakeCandidate(
                 anchorName: "netclaw-github-repository",
-                content: "Netclaw GitHub repository: https://github.com/Aaronontheweb/netclaw. The repository is private.",
+                content: "Netclaw GitHub repository: https://github.com/netclaw-dev/netclaw. The repository is private.",
                 isExact: false)
         };
 

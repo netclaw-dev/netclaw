@@ -81,7 +81,7 @@ hidden directories are scanned.
 ### 6. File GitHub issue for real content scanning
 
 - [x] Create issue: "Implement skill content scanning using shared prompt
-      injection detection infrastructure" — https://github.com/Aaronontheweb/netclaw/issues/395
+      injection detection infrastructure" — https://github.com/netclaw-dev/netclaw/issues/395
 - [x] Reference `ISkillContentScanner` interface
 - [x] Reference `IContentScanner` and `IPromptInjectionDetector` in
       `Netclaw.Security`

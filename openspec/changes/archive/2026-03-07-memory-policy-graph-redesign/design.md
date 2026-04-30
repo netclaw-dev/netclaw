@@ -233,11 +233,11 @@ checkpoints(
 [project:netclaw]
   |-- document: project-brief
   |-- child_of --> [domain:business]
-  |-- contains --> [repo:stannardlabs/netclaw]
+  |-- contains --> [repo:netclaw-dev/netclaw]
   |-- related_to --> [service:slack-adapter]
   `-- related_to --> [concept:memory-policy-graph-redesign]
 
-[repo:stannardlabs/netclaw]
+[repo:netclaw-dev/netclaw]
   |-- document: current-focus
   |-- depends_on --> [service:sqlite-memory]
   `-- record: issue-164-fixed@2026-03-07

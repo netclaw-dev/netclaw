@@ -14,7 +14,7 @@
 #                                                        # reuse existing ./publish output
 #
 # Environment:
-#   IMAGE_REPO   Registry + image name (default: ghcr.io/aaronontheweb/netclawd)
+#   IMAGE_REPO   Registry + image name (default: ghcr.io/netclaw-dev/netclaw)
 #   NO_BUILD     Set to 1 to skip `dotnet publish` (binaries must already exist)
 #   RID          Runtime identifier (default: linux-x64)
 set -euo pipefail
@@ -23,7 +23,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 VERSION="${1:-dev}"
-IMAGE_REPO="${IMAGE_REPO:-ghcr.io/aaronontheweb/netclawd}"
+IMAGE_REPO="${IMAGE_REPO:-ghcr.io/netclaw-dev/netclaw}"
 IMAGE_TAG="${IMAGE_REPO}:${VERSION}"
 RID="${RID:-linux-x64}"
 NO_BUILD="${NO_BUILD:-0}"

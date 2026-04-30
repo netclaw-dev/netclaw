@@ -353,7 +353,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
                 new BinaryRelease
                 {
                     Version = "0.2.0",
-                    ReleaseNotesUrl = "https://github.com/stannardlabs/netclaw/releases/tag/0.2.0",
+                    ReleaseNotesUrl = "https://github.com/netclaw-dev/netclaw/releases/tag/0.2.0",
                     Assets =
                     [
                         new BinaryAsset
@@ -371,7 +371,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0");
 
-        Assert.Equal("https://github.com/stannardlabs/netclaw/releases/tag/0.2.0",
+        Assert.Equal("https://github.com/netclaw-dev/netclaw/releases/tag/0.2.0",
             result.ReleaseNotesUrl);
     }
 
@@ -482,7 +482,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
                 {
                     Version = version,
                     ReleasedAt = DateTimeOffset.UtcNow,
-                    ReleaseNotesUrl = $"https://github.com/stannardlabs/netclaw/releases/tag/{version}",
+                    ReleaseNotesUrl = $"https://github.com/netclaw-dev/netclaw/releases/tag/{version}",
                     Assets =
                     [
                         new BinaryAsset

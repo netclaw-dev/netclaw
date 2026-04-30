@@ -17,7 +17,7 @@ cd "$REPO_ROOT"
 
 EVAL_PORT="${NETCLAW_EVAL_PORT:-5399}"
 CONTAINER_NAME="netclaw-multi-turn-test-$$"
-IMAGE="${NETCLAW_IMAGE:-ghcr.io/aaronontheweb/netclawd:dev}"
+IMAGE="${NETCLAW_IMAGE:-ghcr.io/netclaw-dev/netclaw:dev}"
 NETCLAW_BIN="$REPO_ROOT/publish/cli/netclaw"
 NO_BUILD="${NETCLAW_EVAL_NO_BUILD:-0}"
 PROMPT_TIMEOUT=90
