@@ -14,8 +14,6 @@ using Proto = Netclaw.Actors.Serialization.Proto;
 
 namespace Netclaw.Actors.Serialization;
 
-#pragma warning disable CS0612, CS0618 // SystemPromptSet is obsolete but must remain serializable for journal recovery
-
 internal static class NetclawProtoMapper
 {
     internal static IMessage ToProtoMessage(object obj) => obj switch
@@ -26,7 +24,9 @@ internal static class NetclawProtoMapper
         SerializableMediaReference v => ToProto(v),
         SerializableToolCall v => ToProto(v),
         TurnRecorded v => ToProto(v),
+#pragma warning disable CS0612, CS0618
         SystemPromptSet v => ToProto(v),
+#pragma warning restore CS0612, CS0618
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
         SessionSnapshot v => ToProto(v),
@@ -145,8 +145,9 @@ internal static class NetclawProtoMapper
         return cmd;
     }
 
-    // ── SystemPromptSet ──
+    // ── SystemPromptSet (obsolete — retained for old journal recovery) ──
 
+#pragma warning disable CS0612, CS0618
     internal static Proto.SystemPromptSetProto ToProto(SystemPromptSet evt) => new()
     {
         SessionId = ToProto(evt.SessionId),
@@ -160,6 +161,7 @@ internal static class NetclawProtoMapper
         Content = proto.Content,
         SetAtMs = proto.SetAtMs
     };
+#pragma warning restore CS0612, CS0618
 
     // ── TurnRecorded ──
 
@@ -521,5 +523,3 @@ internal static class NetclawProtoMapper
         Boundary = proto.Boundary
     };
 }
-
-#pragma warning restore CS0612, CS0618
