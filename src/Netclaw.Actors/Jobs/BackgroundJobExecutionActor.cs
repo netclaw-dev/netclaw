@@ -77,14 +77,14 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             psi.ArgumentList.Add("/c");
             psi.ArgumentList.Add(_definition.Command);
         }
-
-        if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
-            psi.WorkingDirectory = _definition.WorkingDirectory;
         else
         {
             psi.ArgumentList.Add("-c");
             psi.ArgumentList.Add(_definition.Command);
         }
+
+        if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
+            psi.WorkingDirectory = _definition.WorkingDirectory;
 
         _process = Process.Start(psi);
         if (_process is null)

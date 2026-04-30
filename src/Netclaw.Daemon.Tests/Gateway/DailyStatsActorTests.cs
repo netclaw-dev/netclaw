@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
@@ -64,6 +65,7 @@ public sealed class DailyStatsActorTests : IDisposable
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
+        SqliteConnection.ClearAllPools();
         _dir.Dispose();
     }
 
