@@ -82,6 +82,18 @@ if [[ ! -x ./publish/daemon/netclawd ]]; then
     exit 1
 fi
 
+# Map RID to Docker TARGETARCH so the Dockerfile's arch-suffixed COPY works.
+case "$RID" in
+    linux-x64)  DOCKER_ARCH="amd64" ;;
+    linux-arm64) DOCKER_ARCH="arm64" ;;
+    *) echo "ERROR: unsupported RID '$RID' for Docker build" >&2; exit 1 ;;
+esac
+
+# Symlink the single-arch publish output to the arch-suffixed paths the
+# Dockerfile expects (publish/cli-{arch}/, publish/daemon-{arch}/).
+ln -sfn cli "publish/cli-${DOCKER_ARCH}"
+ln -sfn daemon "publish/daemon-${DOCKER_ARCH}"
+
 echo "→ Building image $IMAGE_TAG..."
 docker build \
     -f docker/Dockerfile \

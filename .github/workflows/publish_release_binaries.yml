@@ -210,12 +210,10 @@ jobs:
         name: checksums-${{ matrix.rid }}
         path: ./checksums/
 
-    # Share the self-contained binaries with publish-docker so it doesn't
-    # have to re-run `dotnet publish`. Only the linux-x64 variant is
-    # consumed by the Docker image today — if other RIDs get wired up
-    # they can share this same artifact upload pattern.
+    # Share the self-contained binaries with publish-docker for multi-arch
+    # image builds. Both linux-x64 and linux-arm64 upload their output.
     - name: Upload publish output for downstream jobs
-      if: matrix.rid == 'linux-x64'
+      if: runner.os == 'Linux'
       uses: actions/upload-artifact@v7
       with:
         name: publish-output-${{ matrix.rid }}
@@ -228,7 +226,7 @@ jobs:
   # Job 3: Build and publish netclawd Docker image to GHCR
   # ────────────────────────────────────────────────────────────────────
   publish-docker:
-    name: Publish Docker Image
+    name: Publish Docker Image (multi-arch)
     needs: publish-binaries
     # Disabled until GHCR image path is updated for the new org
     if: false
@@ -244,6 +242,9 @@ jobs:
         lfs: true
         fetch-depth: 0
 
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
 
@@ -254,54 +255,61 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    # Reuse the binaries produced by the publish-binaries job instead of
-    # re-running `dotnet publish`. The Docker build script falls through
-    # to its NO_BUILD=1 code path so it only invokes `docker build`.
-    - name: Download publish output from publish-binaries
+    - name: Download linux-x64 publish output
       uses: actions/download-artifact@v8
       with:
         name: publish-output-linux-x64
-        path: .
+        path: ./artifacts/linux-x64
 
-    - name: Restore executable bit on published binaries
+    - name: Download linux-arm64 publish output
+      uses: actions/download-artifact@v8
+      with:
+        name: publish-output-linux-arm64
+        path: ./artifacts/linux-arm64
+
+    - name: Prepare multi-arch publish layout
       shell: bash
       run: |
-        ls -la ./publish/cli/netclaw ./publish/daemon/netclawd
-        chmod +x ./publish/cli/netclaw ./publish/daemon/netclawd
+        set -euo pipefail
+        # The Dockerfile expects publish/cli-{arch}/ and publish/daemon-{arch}/
+        mkdir -p publish/cli-amd64 publish/daemon-amd64
+        mkdir -p publish/cli-arm64 publish/daemon-arm64
 
-    # Reuse the shared build script so the release image build matches the
-    # PR validation build byte-for-byte. NO_BUILD=1 skips `dotnet publish`
-    # and reuses the downloaded binaries directly.
-    - name: Build image via scripts/docker/build-image.sh
-      shell: bash
-      run: |
-        chmod +x scripts/docker/build-image.sh
-        IMAGE_REPO=ghcr.io/aaronontheweb/netclawd \
-        NO_BUILD=1 \
-          scripts/docker/build-image.sh "${{ github.ref_name }}"
+        cp ./artifacts/linux-x64/publish/cli/netclaw    publish/cli-amd64/netclaw
+        cp ./artifacts/linux-x64/publish/daemon/netclawd publish/daemon-amd64/netclawd
+        cp ./artifacts/linux-arm64/publish/cli/netclaw    publish/cli-arm64/netclaw
+        cp ./artifacts/linux-arm64/publish/daemon/netclawd publish/daemon-arm64/netclawd
 
-    - name: Tag additional aliases (latest + major.minor)
+        chmod +x publish/cli-amd64/netclaw publish/daemon-amd64/netclawd
+        chmod +x publish/cli-arm64/netclaw publish/daemon-arm64/netclawd
+
+        echo "Layout:"
+        ls -la publish/cli-amd64/ publish/daemon-amd64/ publish/cli-arm64/ publish/daemon-arm64/
+
+    - name: Compute image tags
+      id: tags
       shell: bash
       run: |
         set -euo pipefail
         VERSION="${{ github.ref_name }}"
         STRIPPED="${VERSION#v}"
         MAJOR_MINOR=$(echo "$STRIPPED" | awk -F. '{print $1"."$2}')
+        REPO="ghcr.io/aaronontheweb/netclawd"
 
-        docker tag \
-          "ghcr.io/aaronontheweb/netclawd:${VERSION}" \
-          "ghcr.io/aaronontheweb/netclawd:latest"
-        docker tag \
-          "ghcr.io/aaronontheweb/netclawd:${VERSION}" \
-          "ghcr.io/aaronontheweb/netclawd:v${MAJOR_MINOR}"
+        TAGS="${REPO}:${VERSION},${REPO}:latest,${REPO}:v${MAJOR_MINOR}"
+        echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+        echo "Tags: $TAGS"
 
-        echo "Tags ready:"
-        docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/aaronontheweb/netclawd
-
-    - name: Push all tags
-      shell: bash
-      run: |
-        docker push --all-tags ghcr.io/aaronontheweb/netclawd
+    - name: Build and push multi-arch image
+      uses: docker/build-push-action@v7
+      with:
+        context: .
+        file: docker/Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.tags.outputs.tags }}
+        build-args: |
+          NETCLAW_VERSION=${{ github.ref_name }}
 
   # ────────────────────────────────────────────────────────────────────
   # Job 4: Generate binary manifest and deploy to Cloudflare Pages

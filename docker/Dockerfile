@@ -1,8 +1,17 @@
 # Release image for netclawd: the Netclaw autonomous operations daemon.
 #
-# This is the published image (ghcr.io/aaronontheweb/netclawd) that ships
-# alongside the self-contained binary archives. It is distinct from
-# docker/smoke/Dockerfile, which is a test fixture for the CLI smoke suite.
+# Supports multi-arch builds (linux/amd64, linux/arm64) via buildx.
+# For multi-arch, pre-built binaries are laid out as:
+#   publish/cli-{amd64,arm64}/netclaw
+#   publish/daemon-{amd64,arm64}/netclawd
+# The TARGETARCH arg (injected by buildx) selects the right directory.
+#
+# For single-arch local builds (build-image.sh), the binaries are at:
+#   publish/cli/netclaw
+#   publish/daemon/netclawd
+# TARGETARCH defaults to amd64, and the COPY falls through to the
+# arch-suffixed path — the build script symlinks the single-arch
+# layout to the expected path.
 #
 # A wrapper entrypoint (entrypoint.sh) runs as PID 1 and supervises the
 # netclawd process, restarting it on exit so the container survives
@@ -19,6 +28,7 @@
 FROM ubuntu:24.04
 
 ARG NETCLAW_VERSION=unknown
+ARG TARGETARCH=amd64
 
 # Pre-install the general-purpose toolkit an autonomous agent is expected
 # to reach for via its shell_execute tool. An Ubuntu base (not a chiseled
@@ -53,10 +63,10 @@ RUN apt-get update \
 
 WORKDIR /opt/netclaw
 
-# Self-contained single-file binaries published on the host by the
-# shared build script (scripts/docker/build-image.sh) and copied in.
-COPY publish/cli/netclaw /opt/netclaw/cli/netclaw
-COPY publish/daemon/netclawd /opt/netclaw/daemon/netclawd
+# Self-contained single-file binaries. TARGETARCH selects the right
+# platform directory (amd64 or arm64).
+COPY publish/cli-${TARGETARCH}/netclaw /opt/netclaw/cli/netclaw
+COPY publish/daemon-${TARGETARCH}/netclawd /opt/netclaw/daemon/netclawd
 COPY docker/entrypoint.sh /opt/netclaw/entrypoint.sh
 
 RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/entrypoint.sh \
