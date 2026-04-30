@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
 
-public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
+public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 {
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-memory-redesigned-evals", Guid.NewGuid().ToString("N"));
     private readonly string _dbPath;
@@ -589,9 +589,8 @@ public sealed class MemoryRedesignedEvalSuiteTests : IDisposable
         Assert.Equal(0.0, evidenceLeakage);
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (Directory.Exists(_baseDir))
-            Directory.Delete(_baseDir, recursive: true);
+        await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
     }
 }

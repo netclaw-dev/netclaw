@@ -41,35 +41,13 @@ jobs:
         with:
           global-json-file: ./global.json
 
-      - name: Publish CLI
-        run: >
-          dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
-          -c Release
-          -r linux-x64
-          --self-contained true
-          /p:PublishSingleFile=true
-          /p:EnableCompressionInSingleFile=true
-          /p:IncludeNativeLibrariesForSelfExtract=true
-          -o ./publish/cli
-
-      - name: Publish Daemon
-        run: >
-          dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj
-          -c Release
-          -r linux-x64
-          --self-contained true
-          /p:PublishSingleFile=true
-          /p:EnableCompressionInSingleFile=true
-          /p:IncludeNativeLibrariesForSelfExtract=true
-          -o ./publish/daemon
-
       - name: Build smoke sandbox image
-        timeout-minutes: 5
-        run: >
-          docker build
-          -f docker/Dockerfile
-          -t netclaw-smoke:local
-          .
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          chmod +x scripts/docker/build-image.sh
+          IMAGE_REPO=netclaw-smoke \
+            scripts/docker/build-image.sh local
 
       - name: Start smoke sandbox
         run: bash scripts/smoke/up.sh

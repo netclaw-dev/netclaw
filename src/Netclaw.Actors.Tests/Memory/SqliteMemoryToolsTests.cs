@@ -11,7 +11,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
 
-public sealed class SqliteMemoryToolsTests : IDisposable
+public sealed class SqliteMemoryToolsTests : IAsyncDisposable
 {
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-memory-tool-tests", Guid.NewGuid().ToString("N"));
     private readonly string _dbPath;
@@ -276,10 +276,9 @@ public sealed class SqliteMemoryToolsTests : IDisposable
         Assert.DoesNotContain("Security issue", result);
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
-        if (Directory.Exists(_baseDir))
-            Directory.Delete(_baseDir, recursive: true);
+        await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
     }
 
 }
