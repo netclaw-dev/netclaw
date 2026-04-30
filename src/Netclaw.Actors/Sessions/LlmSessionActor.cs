@@ -225,11 +225,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _baseToolCount = _availableTools.Count;
 
         // ── Recovery handlers ──
-        // Backward compat: old journals contain SystemPromptSet events.
-        // Ignore the content — we always read fresh from disk in RecoveryCompleted.
-#pragma warning disable CS0618 // Obsolete type retained for journal deserialization
-        Recover<SystemPromptSet>(_ => { });
-#pragma warning restore CS0618
         Recover<TurnRecorded>(evt => _state = _state.Apply(evt));
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
         Recover<SessionCompacted>(evt => _state = _state.Apply(evt));

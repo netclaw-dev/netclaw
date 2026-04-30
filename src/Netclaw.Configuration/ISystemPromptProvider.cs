@@ -41,9 +41,9 @@ public enum ContextLayerTiming
 
 /// <summary>
 /// Provides a dynamic context layer that is injected into LLM calls
-/// but NOT persisted as part of <c>SystemPromptSet</c>. This allows
-/// transient data (e.g. tool index) to be refreshed on every call
-/// without stale state in rehydrated sessions.
+/// but NOT persisted with the session. This allows transient data
+/// (e.g. tool index) to be refreshed on every call without stale
+/// state in rehydrated sessions.
 /// </summary>
 public interface IContextLayerProvider
 {

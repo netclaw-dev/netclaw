@@ -5,23 +5,6 @@
 // -----------------------------------------------------------------------
 namespace Netclaw.Actors.Protocol;
 
-// TODO: delete SystemPromptSet and its Recover<> handler once old journals have been migrated
-/// <summary>
-/// Retained for backward compatibility with pre-v0.9 journals.
-/// No longer persisted — the system prompt is now read fresh from identity files on every recovery.
-/// </summary>
-[Obsolete("No longer persisted. Retained so old journals can still deserialize during recovery.")]
-public sealed class SystemPromptSet
-{
-    public SessionId SessionId { get; set; }
-
-    public string Content { get; set; } = string.Empty;
-
-    public long SetAtMs { get; set; }
-
-    public DateTimeOffset SetAt => DateTimeOffset.FromUnixTimeMilliseconds(SetAtMs);
-}
-
 /// <summary>
 /// Persisted event recording a completed turn (user message + assistant reply).
 /// </summary>
