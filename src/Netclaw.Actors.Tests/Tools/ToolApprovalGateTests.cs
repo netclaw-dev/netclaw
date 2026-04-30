@@ -486,4 +486,56 @@ public sealed class ToolApprovalGateTests
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
     }
+
+    // ── Subagent approval gate (SupportsInteractiveApproval=false) ──
+
+    [Fact]
+    public void Safe_list_tool_auto_grants_when_interactive_approval_unsupported()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Approval
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("file_read", "content");
+        var subagentCtx = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(tool, subagentCtx);
+
+        Assert.True(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void Non_safe_list_tool_denied_when_interactive_approval_unsupported()
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Approval
+        };
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var tool = new Netclaw.Actors.Tests.Memory.FakeNetclawTool("store_memory", "ok");
+        var subagentCtx = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(tool, subagentCtx);
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("channel_does_not_support_approval", decision.DenyReason);
+    }
 }

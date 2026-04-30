@@ -173,28 +173,52 @@ public sealed class SubAgentSpawner
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile)
     {
+        var isUserFacing = profile.Visibility == SubAgentVisibility.UserFacing;
+
         // When no tools specified, inherit all registered tools (matches Claude Code behavior).
         // When tools are specified, use them as a whitelist to limit access.
+        IEnumerable<INetclawTool> candidates;
         if (profile.ToolNames.Count == 0)
         {
-            return _toolRegistry.GetAllRegistrations()
-                .Select(r => r.Tool)
-                .ToList();
+            candidates = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
+        }
+        else
+        {
+            var resolved = new List<INetclawTool>();
+            foreach (var name in profile.ToolNames)
+            {
+                var tool = _toolRegistry.GetByName(name);
+                if (tool is not null)
+                {
+                    resolved.Add(tool);
+                }
+                else
+                {
+                    _logger.LogWarning(
+                        "SubAgent [{AgentName}] references tool '{ToolName}' which is not registered — skipping",
+                        profile.Name, name);
+                }
+            }
+
+            candidates = resolved;
         }
 
+        if (!isUserFacing)
+            return candidates.ToList();
+
+        // User-facing subagents are restricted to SubAgentToolPolicy's safe list.
         var tools = new List<INetclawTool>();
-        foreach (var name in profile.ToolNames)
+        foreach (var tool in candidates)
         {
-            var tool = _toolRegistry.GetByName(name);
-            if (tool is not null)
+            if (SubAgentToolPolicy.IsAllowedForUserFacing(tool.Name))
             {
                 tools.Add(tool);
             }
             else
             {
-                _logger.LogWarning(
-                    "SubAgent [{AgentName}] references tool '{ToolName}' which is not registered — skipping",
-                    profile.Name, name);
+                _logger.LogDebug(
+                    "SubAgent [{AgentName}] tool '{ToolName}' filtered by SubAgentToolPolicy",
+                    profile.Name, tool.Name);
             }
         }
 

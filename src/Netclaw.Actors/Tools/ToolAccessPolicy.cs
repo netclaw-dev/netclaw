@@ -191,8 +191,14 @@ public sealed class ToolAccessPolicy
         if (mode == ToolApprovalMode.Auto)
             return ToolAccessDecision.Allow();
 
+        // Subagents can't prompt for approval. Tools on the SubAgentToolPolicy
+        // safe list are auto-granted; everything else is denied.
         if (context?.SupportsInteractiveApproval == false)
-            return ToolAccessDecision.Deny("channel_does_not_support_approval");
+        {
+            return SubAgentToolPolicy.IsAllowedForUserFacing(toolName.Value)
+                ? ToolAccessDecision.Allow()
+                : ToolAccessDecision.Deny("channel_does_not_support_approval");
+        }
 
         var allPatterns = matcher.ExtractPatterns(toolName, arguments);
         var displayText = matcher.FormatForDisplay(toolName, arguments);
