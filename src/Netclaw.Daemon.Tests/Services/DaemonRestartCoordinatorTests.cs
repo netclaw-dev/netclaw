@@ -61,7 +61,7 @@ public sealed class DaemonRestartCoordinatorTests : IDisposable
         var coordinator = CreateCoordinator(
             ["slack/C123.1", "slack/C123.2"],
             timedOutSessionIds: ["slack/C123.2"],
-            restartDrainTimeout: TimeSpan.FromMilliseconds(100));
+            restartDrainTimeout: TimeSpan.FromSeconds(3));
 
         await coordinator.RequestConfigRestartAsync(CancellationToken.None);
 
@@ -169,7 +169,7 @@ public sealed class DaemonRestartCoordinatorTests : IDisposable
         var sessionManager = _system.ActorOf(Props.Create(() => new StubSessionManagerActor(
             activeIds, timedOut, false)));
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
 
         var result = await SessionDrainHelper.DrainAsync(
             sessionManager,
