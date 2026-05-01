@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/netclaw-dev/netclaw-brand/dev/logo/netclaw-horizontal-purple.png" alt="Netclaw" width="400" />
+</p>
+
 # Netclaw
 
 Netclaw is an open-source, self-hosted autonomous operations agent built on top
@@ -20,7 +24,7 @@ Netclaw uses a **daemon + thin client** architecture:
 
 ### Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned at `10.0.102`
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned at `10.0.203`
   via `global.json`, `rollForward: major`)
 - A local [Ollama](https://ollama.com/) instance (default provider), or an
   OpenRouter API key
@@ -453,17 +457,24 @@ Primary constraints:
 - default-deny ACL and explicit policy checks
 - session identity is Slack thread: `{channelId}/{threadTs}`
 - MCP server integration is included in MVP scope
-- protobuf-net for persistence types (no direct serialization of
+- Google Protobuf for persistence types (no direct serialization of
   `Microsoft.Extensions.AI` message types)
 
 ## Project Structure
 
 - Solution: `Netclaw.slnx`
-- Daemon: `src/Netclaw.Daemon/Netclaw.Daemon.csproj` (Web API host, `netclawd`)
-- CLI: `src/Netclaw.Cli/Netclaw.Cli.csproj` (thin client, `netclaw`)
+- Daemon: `src/Netclaw.Daemon/` (Web API host, `netclawd`)
+- CLI: `src/Netclaw.Cli/` (thin client, `netclaw`)
 - Actors: `src/Netclaw.Actors/` (session management, persistence, tools)
 - Configuration: `src/Netclaw.Configuration/` (paths, providers, models)
 - Channels: `src/Netclaw.Channels/` (channel abstractions)
+- Slack: `src/Netclaw.Channels.Slack/` (Slack Socket Mode gateway)
+- Discord: `src/Netclaw.Channels.Discord/` (Discord gateway)
+- Providers: `src/Netclaw.Providers/` (LLM provider implementations)
+- OpenAI Compatible: `src/Netclaw.OpenAICompatible/` (OpenAI-compatible API layer)
+- Search: `src/Netclaw.Search/` (web search backends)
+- Security: `src/Netclaw.Security/` (ACL, device pairing, token management)
+- Tools: `src/Netclaw.Tools.Abstractions/` and `src/Netclaw.Tools.Generators/`
 
 Build and test:
 
@@ -528,3 +539,7 @@ These files define how planning and implementation work should be routed.
 
 Netclaw is licensed under the Apache License, Version 2.0.
 See `LICENSE` for the full text.
+
+---
+
+Built with care by [Petabridge](https://petabridge.com).
