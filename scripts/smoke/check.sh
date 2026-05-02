@@ -350,7 +350,7 @@ fi
 
 # ── Reminder lifecycle smoke tests ──
 # Schedule a one-shot reminder, wait for it to execute and record history,
-# then cancel it and verify it is fully removed.
+# then permanently delete it and verify it is fully removed.
 
 REMINDER_ID="smoke-lifecycle-$$"
 
@@ -384,14 +384,14 @@ if [[ "$history_found" != "true" ]]; then
   exit 1
 fi
 
-echo "Cancelling reminder $REMINDER_ID..."
-run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder cancel "$REMINDER_ID"
+echo "Deleting reminder $REMINDER_ID..."
+run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder delete "$REMINDER_ID"
 
-echo "Verifying reminder is absent from list after cancel..."
-after_cancel_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder list)"
-echo "$after_cancel_list"
-if [[ "$after_cancel_list" == *"$REMINDER_ID"* ]]; then
-  echo "Expected $REMINDER_ID to be absent from reminder list after cancel."
+echo "Verifying reminder is absent from list after delete..."
+after_delete_list="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw reminder list)"
+echo "$after_delete_list"
+if [[ "$after_delete_list" == *"$REMINDER_ID"* ]]; then
+  echo "Expected $REMINDER_ID to be absent from reminder list after delete."
   exit 1
 fi
 
