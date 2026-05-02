@@ -304,55 +304,6 @@ netclaw daemon devices                  # List all paired devices
 netclaw daemon devices revoke myphone   # Revoke a specific device
 ```
 
-## Developer Smoke Sandbox (Docker)
-
-Developer-only integration sandbox for daemon lifecycle and gateway checks.
-This is intentionally script-driven (not a user-facing `netclaw test smoke`
-command yet).
-
-```bash
-# Start sandbox (build local image + start Ollama + pull tiny model)
-scripts/smoke/up.sh
-
-# Start without rebuilding image (useful after pre-building or in CI)
-SMOKE_BUILD=0 scripts/smoke/up.sh
-
-# Run smoke checks (daemon start/status/health/stop)
-scripts/smoke/check.sh
-
-# Tear down sandbox
-scripts/smoke/down.sh
-
-# Optional: remove volumes too
-SMOKE_REMOVE_VOLUMES=1 scripts/smoke/down.sh
-```
-
-Optional model override:
-
-```bash
-SMOKE_OLLAMA_MODEL=qwen2:0.5b scripts/smoke/up.sh
-```
-
-Useful timeout overrides for `scripts/smoke/check.sh`:
-
-```bash
-# Wait up to 20 minutes for model pull/bootstrap (default: 1200)
-INIT_TIMEOUT_SECONDS=1200 scripts/smoke/check.sh
-
-# Per-command timeout inside sandbox (default: 120)
-STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
-```
-
-### CI Smoke Workflow
-
-`smoke_sandbox` is available in GitHub Actions:
-
-- Runs manually via `workflow_dispatch`.
-- Runs on every pull request update.
-- Uses Docker Buildx + GitHub Actions cache for smoke image layers.
-- Always uploads `smoke-logs-*` artifact (including `check.log`, container
-  logs, compose status, daemon log, PID snapshot) for debugging.
-
 ## Operations Runbooks
 
 - Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
