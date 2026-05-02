@@ -264,9 +264,16 @@ public sealed record ReminderAudienceAuthorizationContext(
     string? SourceDescription = null);
 
 /// <summary>
-/// Permanently deletes a reminder definition and cancels any active schedule.
+/// Disables a reminder and cancels any active schedule. The definition file
+/// is preserved on disk so history and configuration remain available for diagnosis.
 /// </summary>
 public sealed record CancelReminderCommand(ReminderId Id);
+
+/// <summary>
+/// Permanently deletes a reminder definition, its schedule, and history from disk.
+/// Not exposed as an LLM tool — use via CLI (<c>netclaw reminder delete</c>) or HTTP API.
+/// </summary>
+public sealed record DeleteReminderCommand(ReminderId Id);
 public sealed record DisableReminderCommand(ReminderId Id);
 public sealed record EnableReminderCommand(ReminderId Id);
 public sealed record ListRemindersCommand(bool IncludeDisabled = true);
@@ -283,6 +290,7 @@ public sealed record ReminderSavedResponse(
     string? ErrorMessage = null);
 
 public sealed record ReminderCancelledResponse(ReminderId Id, bool Found);
+public sealed record ReminderDeletedResponse(ReminderId Id, bool Found);
 
 public sealed record ReminderStateResponse(
     ReminderId Id,

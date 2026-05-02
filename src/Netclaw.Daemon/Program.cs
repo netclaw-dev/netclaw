@@ -1391,16 +1391,30 @@ static void MapReminderEndpoints(WebApplication app)
 
     reminders.MapDelete("/{id}", async (
         string id,
+        bool? permanent,
         Akka.Hosting.IRequiredActor<Netclaw.Actors.Hosting.ReminderManagerActorKey> actor,
         CancellationToken ct) =>
     {
         var manager = await actor.GetAsync(ct);
+        var reminderId = new Netclaw.Actors.Reminders.ReminderId(id);
+
+        if (permanent == true)
+        {
+            var deleted = await manager.Ask<Netclaw.Actors.Reminders.ReminderDeletedResponse>(
+                new Netclaw.Actors.Reminders.DeleteReminderCommand(reminderId),
+                TimeSpan.FromSeconds(10), ct);
+
+            return deleted.Found
+                ? Results.Ok(new { message = $"Reminder '{id}' permanently deleted." })
+                : Results.NotFound(new { error = $"Reminder '{id}' not found." });
+        }
+
         var response = await manager.Ask<Netclaw.Actors.Reminders.ReminderCancelledResponse>(
-            new Netclaw.Actors.Reminders.CancelReminderCommand(new Netclaw.Actors.Reminders.ReminderId(id)),
+            new Netclaw.Actors.Reminders.CancelReminderCommand(reminderId),
             TimeSpan.FromSeconds(10), ct);
 
         return response.Found
-            ? Results.Ok(new { message = $"Reminder '{id}' cancelled." })
+            ? Results.Ok(new { message = $"Reminder '{id}' cancelled (disabled)." })
             : Results.NotFound(new { error = $"Reminder '{id}' not found." });
     });
 

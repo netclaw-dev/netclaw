@@ -71,6 +71,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         ReceiveAsync<SaveReminderCommand>(HandleSaveAsync);
         ReceiveAsync<CancelReminderCommand>(HandleCancelAsync);
+        ReceiveAsync<DeleteReminderCommand>(HandlePermanentDeleteAsync);
         ReceiveAsync<DisableReminderCommand>(HandleDisableAsync);
         ReceiveAsync<EnableReminderCommand>(HandleEnableAsync);
         ReceiveAsync<ListRemindersCommand>(HandleListAsync);
@@ -313,27 +314,20 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private async Task HandleCancelAsync(CancelReminderCommand cmd)
     {
         var replyTo = Sender;
-        var deleted = _definitionStore.Delete(cmd.Id);
-        var scheduleCancelled = await CancelScheduleOnlyAsync(cmd.Id);
+        var response = await DisableReminderInternalAsync(cmd.Id);
 
-        _failureCounts.Remove(cmd.Id);
-        RemoveFromDeferredQueue(cmd.Id);
+        _log.Info("Cancel reminder '{0}': {1}", cmd.Id.Value, response.Found ? "disabled" : "not found");
+        replyTo.Tell(new ReminderCancelledResponse(cmd.Id, response.Found));
+    }
 
-        if (deleted)
-        {
-            try
-            {
-                _historyStore.DeleteHistory(cmd.Id);
-            }
-            catch (Exception ex)
-            {
-                _log.Warning(ex, "Failed to delete history file for reminder '{0}'", cmd.Id.Value);
-            }
-        }
+    private async Task HandlePermanentDeleteAsync(DeleteReminderCommand cmd)
+    {
+        var replyTo = Sender;
+        var found = _definitionStore.Exists(cmd.Id);
+        await DeleteReminderInternalAsync(cmd.Id);
 
-        var found = deleted || scheduleCancelled;
-        _log.Info("Delete reminder '{0}': {1}", cmd.Id.Value, found ? "deleted" : "not found");
-        replyTo.Tell(new ReminderCancelledResponse(cmd.Id, found));
+        _log.Info("Permanently delete reminder '{0}': {1}", cmd.Id.Value, found ? "deleted" : "not found");
+        replyTo.Tell(new ReminderDeletedResponse(cmd.Id, found));
     }
 
     private async Task HandleDisableAsync(DisableReminderCommand cmd)

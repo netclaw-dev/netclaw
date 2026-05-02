@@ -133,11 +133,12 @@ public sealed class DaemonApi
         return await client.PostAsJsonAsync($"{_endpoint}/api/reminders", request, cts.Token);
     }
 
-    public async Task<HttpResponseMessage> DeleteReminderAsync(string id, CancellationToken ct = default)
+    public async Task<HttpResponseMessage> DeleteReminderAsync(string id, bool permanent = false, CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = CreateHttpClient();
-        return await client.DeleteAsync($"{_endpoint}/api/reminders/{id}", cts.Token);
+        var query = permanent ? "?permanent=true" : "";
+        return await client.DeleteAsync($"{_endpoint}/api/reminders/{id}{query}", cts.Token);
     }
 
     public async Task<HttpResponseMessage> GetReminderAsync(string id, CancellationToken ct = default)

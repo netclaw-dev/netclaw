@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.20.0"
+  version: "1.21.0"
 ---
 
 # Netclaw Operations
@@ -99,6 +99,25 @@ Rules:
 - For recurring reminders that are permanently complete (PR merged, deploy done,
   incident resolved), call `cancel_reminder` with that reminder's ID so it does
   not keep firing indefinitely.
+
+`cancel_reminder` **disables** the reminder — it stops future executions but
+preserves the definition file on disk for diagnosis and re-enablement. To
+permanently delete a reminder and its history, use the CLI:
+
+```
+netclaw reminder delete <id>
+```
+
+The `cancel` CLI subcommand mirrors the tool behavior (disable only):
+
+```
+netclaw reminder cancel <id>     # disable, keep definition
+netclaw reminder delete <id>     # permanent delete + history
+```
+
+Reminders that hit 5 consecutive execution failures are auto-disabled with a
+`ReminderAutoDisabled` critical alert. The definition stays on disk so the
+operator can diagnose and re-enable after fixing the root cause.
 
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be
@@ -464,6 +483,7 @@ file. If it should be recalled when relevant → SQLite memory.
 | List/manage skills | `netclaw skill list` |
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
+| Permanently delete a reminder | `netclaw reminder delete <id>` |
 
 ## Device Pairing
 

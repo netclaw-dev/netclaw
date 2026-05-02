@@ -105,7 +105,7 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Cancel_existing_reminder_returns_found()
+    public async Task Cancel_existing_reminder_disables_and_preserves_definition()
     {
         var manager = await GetManagerAsync();
 
@@ -119,6 +119,10 @@ public class ReminderManagerActorTests : TestKit
             new CancelReminderCommand(new ReminderId(definition.Id)), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(cancelled.Found);
+
+        var preserved = _definitionStore.Get(new ReminderId(definition.Id));
+        Assert.NotNull(preserved);
+        Assert.False(preserved!.Enabled);
     }
 
     [Fact]

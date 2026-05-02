@@ -52,7 +52,8 @@ internal static class ReminderCommand
         {
             "list" => await RunListAsync(daemonApi),
             "create" => await RunCreateAsync(daemonApi, args),
-            "cancel" or "delete" => await RunDeleteAsync(daemonApi, args),
+            "cancel" => await RunCancelAsync(daemonApi, args),
+            "delete" => await RunDeleteAsync(daemonApi, args),
             "disable" => await RunDisableAsync(daemonApi, args),
             "enable" => await RunEnableAsync(daemonApi, args),
             "import" => await RunImportAsync(daemonApi, args),
@@ -192,6 +193,17 @@ internal static class ReminderCommand
         }
     }
 
+    private static async Task<int> RunCancelAsync(DaemonApi api, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder cancel <id>");
+            return 1;
+        }
+
+        return await RunRemoveAsync(api, args[2], permanent: false);
+    }
+
     private static async Task<int> RunDeleteAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
@@ -200,10 +212,14 @@ internal static class ReminderCommand
             return 1;
         }
 
-        var id = args[2];
+        return await RunRemoveAsync(api, args[2], permanent: true);
+    }
+
+    private static async Task<int> RunRemoveAsync(DaemonApi api, string id, bool permanent)
+    {
         try
         {
-            using var response = await api.DeleteReminderAsync(id);
+            using var response = await api.DeleteReminderAsync(id, permanent);
             var json = await response.Content.ReadAsStringAsync();
             var result = JsonSerializer.Deserialize<JsonElement>(json);
 
@@ -543,7 +559,8 @@ internal static class ReminderCommand
         Console.WriteLine("Subcommands:");
         Console.WriteLine("  list                                          List all active reminders");
         Console.WriteLine("  create <id> <type> <schedule> \"<prompt>\"      Create or update a reminder");
-        Console.WriteLine("  delete <id>                                   Delete a reminder");
+        Console.WriteLine("  cancel <id>                                   Cancel a reminder (disables, keeps definition)");
+        Console.WriteLine("  delete <id>                                   Permanently delete a reminder and its history");
         Console.WriteLine("  disable <id>                                  Disable a reminder");
         Console.WriteLine("  enable <id>                                   Enable a reminder");
         Console.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
