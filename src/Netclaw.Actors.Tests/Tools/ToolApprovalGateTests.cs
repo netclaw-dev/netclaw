@@ -113,6 +113,8 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(supportsApproval: false), args);
 
+        // Non-interactive channels no longer auto-deny — they fall through to
+        // RequiresApproval so the executor can check the persistent approval store.
         Assert.True(decision.NeedsApproval);
         Assert.NotNull(decision.ApprovalContext);
         Assert.Contains("git push", decision.ApprovalContext!.UnapprovedPatterns);
@@ -536,6 +538,8 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(tool, subagentCtx);
 
+        // Non-interactive channels now fall through to RequiresApproval so the
+        // executor can check the persistent approval store before denying.
         Assert.True(decision.NeedsApproval);
         Assert.NotNull(decision.ApprovalContext);
         Assert.Equal("store_memory", decision.ApprovalContext!.ToolName);
