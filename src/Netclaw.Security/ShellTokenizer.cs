@@ -332,7 +332,7 @@ public static class ShellTokenizer
 
             // sed/tr expression: s/pattern/replacement/ or y/abc/xyz/
             if ((token.StartsWith("s/", StringComparison.Ordinal) || token.StartsWith("y/", StringComparison.Ordinal))
-                && token.Count(c => c == '/') >= 3)
+                && CountChar(token, '/') >= 3)
                 return false;
 
             // Path traversal component is always a path signal
@@ -360,6 +360,18 @@ public static class ShellTokenizer
     internal static string TrimShellPunctuation(string token)
     {
         return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
+    }
+
+    private static int CountChar(string value, char target)
+    {
+        var count = 0;
+        foreach (var c in value)
+        {
+            if (c == target)
+                count++;
+        }
+
+        return count;
     }
 
     private static void FlushSegment(StringBuilder current, List<string> segments)

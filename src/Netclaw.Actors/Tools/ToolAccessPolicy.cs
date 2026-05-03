@@ -209,10 +209,10 @@ public sealed class ToolAccessPolicy
     private static string? ExpandShellPath(string token, string? workingDirectory)
     {
         var expanded = token;
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
         if (expanded.StartsWith('~'))
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             if (string.IsNullOrWhiteSpace(home))
                 return null;
             expanded = expanded.Length == 1
@@ -220,11 +220,10 @@ public sealed class ToolAccessPolicy
                 : Path.Combine(home, expanded[1..].TrimStart('/', '\\'));
         }
 
-        var homeEnv = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(homeEnv))
+        if (!string.IsNullOrWhiteSpace(home))
         {
-            expanded = expanded.Replace("$HOME", homeEnv, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("${HOME}", homeEnv, StringComparison.OrdinalIgnoreCase);
+            expanded = expanded.Replace("$HOME", home, StringComparison.OrdinalIgnoreCase);
+            expanded = expanded.Replace("${HOME}", home, StringComparison.OrdinalIgnoreCase);
         }
 
         try
