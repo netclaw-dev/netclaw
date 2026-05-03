@@ -175,6 +175,73 @@ public sealed class ToolApprovalActorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task SubAgent_inherits_parent_session_approval()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
+        var service = CreateService(actor);
+
+        // Parent session approves "git push"
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+
+        // Sub-agent queries with hierarchical scope ID — should inherit parent approval
+        var subAgentScope = "session-a/subagent/researcher/abc123";
+        var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+
+        Assert.Empty(unapproved);
+    }
+
+    [Fact]
+    public async Task SubAgent_approval_does_not_leak_upward()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
+        var service = CreateService(actor);
+
+        // Sub-agent records its own approval
+        var subAgentScope = "session-a/subagent/researcher/abc123";
+        await service.RecordApprovalAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], persistent: false, ct);
+
+        // Parent session should NOT see sub-agent's approval
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], ct);
+        Assert.Equal(["curl"], unapproved);
+    }
+
+    [Fact]
+    public async Task Nested_subagent_inherits_through_chain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
+        var service = CreateService(actor);
+
+        // Parent session approves "git status"
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], persistent: false, ct);
+
+        // Nested sub-agent (sub-agent spawned by sub-agent) should still inherit
+        var nestedScope = "session-a/subagent/orchestrator/def456/subagent/worker/ghi789";
+        var unapproved = await service.GetUnapprovedPatternsAsync(nestedScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], ct);
+
+        Assert.Empty(unapproved);
+    }
+
+    [Fact]
+    public async Task SubAgent_does_not_inherit_from_unrelated_session()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
+        var service = CreateService(actor);
+
+        // Session B approves "git push"
+        await service.RecordApprovalAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+
+        // Sub-agent of session A should NOT inherit session B's approval
+        var subAgentScope = "session-a/subagent/researcher/abc123";
+        var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+
+        Assert.Equal(["git push"], unapproved);
+    }
+
     private static AkkaToolApprovalService CreateService(IActorRef actor)
         => new(new StubRequiredActor(actor));
 

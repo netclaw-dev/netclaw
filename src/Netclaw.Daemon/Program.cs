@@ -637,13 +637,15 @@ static void ConfigureDaemonServices(
         SubAgentsEnabled: subAgentConfig.Enabled,
         SchedulingEnabled: schedulingConfig.Enabled);
     var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
+    var shellTrustZonePolicy = new ShellTrustZonePolicy(toolConfig, paths);
     var toolAccessPolicy = new ToolAccessPolicy(
         toolConfig,
         effectivePolicyDefaults,
         shellCommandPolicy,
         fileApprovalMatcher,
         toolPathPolicy,
-        featureGates);
+        featureGates,
+        shellTrustZonePolicy);
     services.AddSingleton(toolAccessPolicy);
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);

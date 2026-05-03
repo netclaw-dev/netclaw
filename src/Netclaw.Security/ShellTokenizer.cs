@@ -278,6 +278,85 @@ public static class ShellTokenizer
             || token.Contains('*', StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Returns true if a token is identifiable as a local filesystem path.
+    /// Uses positive identification (anchored prefixes + extension heuristic)
+    /// rather than broad "contains a slash" matching to avoid false positives
+    /// on URIs, git refs, docker images, sed expressions, and MIME types.
+    /// </summary>
+    public static bool LooksLikePath(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            return false;
+
+        if (token.StartsWith('-'))
+            return false;
+
+        // URIs
+        if (token.Contains("://", StringComparison.Ordinal))
+            return false;
+
+        // Anchored paths — definitively filesystem references
+        if (token.StartsWith('/'))
+            return true;
+        if (token.StartsWith("./", StringComparison.Ordinal) || token.StartsWith("../", StringComparison.Ordinal))
+            return true;
+        if (token.StartsWith('~'))
+            return true;
+        if (token.StartsWith("$HOME", StringComparison.Ordinal) || token.StartsWith("${HOME}", StringComparison.Ordinal))
+            return true;
+        // Windows drive letter: C:\ or C:/ (case-insensitive)
+        if (token.Length >= 3 && char.IsAsciiLetter(token[0]) && token[1] == ':'
+            && (token[2] == '/' || token[2] == '\\'))
+            return true;
+        // UNC path: \\server\share
+        if (token.StartsWith("\\\\", StringComparison.Ordinal))
+            return true;
+
+        // Backslash always indicates a Windows-style path
+        if (token.Contains('\\', StringComparison.Ordinal))
+            return true;
+
+        // Unanchored tokens with forward slashes — disambiguate using exclusions
+        // and the file-extension heuristic
+        if (token.Contains('/', StringComparison.Ordinal))
+        {
+            // Colon before first slash = docker image, port, or key:value
+            var firstSlash = token.IndexOf('/', StringComparison.Ordinal);
+            if (token.IndexOf(':', StringComparison.Ordinal) is var colonIdx && colonIdx >= 0 && colonIdx < firstSlash)
+                return false;
+
+            // npm scoped package: @scope/name
+            if (token.StartsWith('@') && token.IndexOf('/', 1) == token.LastIndexOf('/'))
+                return false;
+
+            // sed/tr expression: s/pattern/replacement/ or y/abc/xyz/
+            if ((token.StartsWith("s/", StringComparison.Ordinal) || token.StartsWith("y/", StringComparison.Ordinal))
+                && token.Count(c => c == '/') >= 3)
+                return false;
+
+            // Path traversal component is always a path signal
+            if (token.Contains("/../", StringComparison.Ordinal) || token.EndsWith("/..", StringComparison.Ordinal))
+                return true;
+
+            // File extension in the last component → treat as relative path
+            // (src/main.rs, config/app.json). Git refs and docker images don't
+            // have extensions.
+            var lastSlash = token.LastIndexOf('/');
+            if (lastSlash >= 0 && lastSlash < token.Length - 1)
+            {
+                var lastComponent = token.AsSpan(lastSlash + 1);
+                var dotIdx = lastComponent.LastIndexOf('.');
+                if (dotIdx > 0 && dotIdx < lastComponent.Length - 1)
+                    return true;
+            }
+
+            return false;
+        }
+
+        return false;
+    }
+
     internal static string TrimShellPunctuation(string token)
     {
         return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');

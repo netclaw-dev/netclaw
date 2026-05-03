@@ -544,4 +544,109 @@ public sealed class ToolApprovalGateTests
         Assert.NotNull(decision.ApprovalContext);
         Assert.Equal("store_memory", decision.ApprovalContext!.ToolName);
     }
+
+    [Fact]
+    public void Non_interactive_shell_with_path_outside_trust_zone_is_denied()
+    {
+        var trustZone = new FakeShellTrustZonePolicy(["/home/user/.netclaw/workspaces"]);
+        var policy = CreatePolicyWithTrustZone(trustZone);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = "cat /etc/shadow" });
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+    }
+
+    [Fact]
+    public void Non_interactive_shell_with_path_inside_trust_zone_proceeds_to_approval()
+    {
+        var trustZone = new FakeShellTrustZonePolicy(["/home/user/.netclaw/workspaces"]);
+        var policy = CreatePolicyWithTrustZone(trustZone);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = "cat /home/user/.netclaw/workspaces/project/README.md" });
+
+        // Path is within trust zone — proceeds to the approval gate (RequiresApproval)
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void Non_interactive_shell_without_path_args_proceeds_to_approval()
+    {
+        var trustZone = new FakeShellTrustZonePolicy(["/home/user/.netclaw/workspaces"]);
+        var policy = CreatePolicyWithTrustZone(trustZone);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: false);
+
+        // "git status" has no path-like arguments
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = "git status" });
+
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void Interactive_shell_skips_trust_zone_check()
+    {
+        var trustZone = new FakeShellTrustZonePolicy(["/home/user/.netclaw/workspaces"]);
+        var policy = CreatePolicyWithTrustZone(trustZone);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: true);
+
+        // Interactive channels don't enforce trust zones — the human approves
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
+
+        Assert.True(decision.NeedsApproval);
+    }
+
+    [Fact]
+    public void Non_interactive_shell_with_path_denied_when_no_trust_zone_configured()
+    {
+        // No trust zone policy = fail-closed for non-interactive path commands
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("shell_trust_zone_policy_not_configured", decision.DenyReason);
+    }
+
+    private static ToolAccessPolicy CreatePolicyWithTrustZone(IShellTrustZonePolicy trustZone)
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        return new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            shellTrustZonePolicy: trustZone);
+    }
+
+    private sealed class FakeShellTrustZonePolicy : IShellTrustZonePolicy
+    {
+        private readonly IReadOnlyList<string> _roots;
+
+        public FakeShellTrustZonePolicy(IReadOnlyList<string> roots) => _roots = roots;
+
+        public IReadOnlyList<string> GetTrustZoneRoots(ToolExecutionContext context) => _roots;
+    }
 }

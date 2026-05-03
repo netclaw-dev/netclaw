@@ -20,6 +20,7 @@ public sealed class ToolAccessPolicy
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly ShellCommandPolicy? _shellCommandPolicy;
     private readonly ToolPathPolicy? _toolPathPolicy;
+    private readonly IShellTrustZonePolicy? _shellTrustZonePolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
     private readonly FeatureGates _featureGates;
 
@@ -29,13 +30,15 @@ public sealed class ToolAccessPolicy
         ShellCommandPolicy? shellCommandPolicy = null,
         IToolApprovalMatcher? fileApprovalMatcher = null,
         ToolPathPolicy? toolPathPolicy = null,
-        FeatureGates? featureGates = null)
+        FeatureGates? featureGates = null,
+        IShellTrustZonePolicy? shellTrustZonePolicy = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
         _profileResolver = new ToolAudienceProfileResolver(toolConfig);
         _shellCommandPolicy = shellCommandPolicy;
         _toolPathPolicy = toolPathPolicy;
+        _shellTrustZonePolicy = shellTrustZonePolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
         _featureGates = featureGates ?? FeatureGates.AllEnabled;
     }
@@ -142,7 +145,132 @@ public sealed class ToolAccessPolicy
             && _toolPathPolicy?.CommandReferencesDeniedPath(shellCommand, workingDirectory) == true)
             return ToolAccessDecision.Deny("shell_references_protected_path");
 
+        // Non-interactive channels: sandbox shell commands to trust zone paths.
+        // Even if the verb-chain is pre-approved, path arguments must fall within
+        // the channel's allowed filesystem roots. Fail-closed: if no trust zone
+        // policy is configured, deny any shell command with path arguments.
+        if (context?.SupportsInteractiveApproval == false && shellCommand is not null)
+        {
+            if (_shellTrustZonePolicy is null)
+            {
+                if (ShellCommandHasPathArguments(shellCommand))
+                    return ToolAccessDecision.Deny("shell_trust_zone_policy_not_configured");
+            }
+            else
+            {
+                var trustZoneDeny = EnforceShellTrustZones(shellCommand, workingDirectory, context);
+                if (trustZoneDeny is not null)
+                    return trustZoneDeny;
+            }
+        }
+
         return CheckApprovalGate(toolName, context, arguments, ShellApprovalMatcher.Instance);
+    }
+
+    /// <summary>
+    /// For non-interactive channels, validates that all path-like arguments in a shell
+    /// command fall within the trust zone roots for the channel's audience. Returns a
+    /// deny decision if any path escapes, or null if all paths are within bounds.
+    /// </summary>
+    private ToolAccessDecision? EnforceShellTrustZones(
+        string shellCommand,
+        string? workingDirectory,
+        ToolExecutionContext context)
+    {
+        var tokens = ShellTokenizer.Tokenize(shellCommand);
+        var pathTokens = new List<string>();
+
+        foreach (var token in tokens)
+        {
+            if (ShellTokenizer.LooksLikePath(token))
+                pathTokens.Add(token);
+        }
+
+        if (pathTokens.Count == 0)
+            return null;
+
+        var roots = _shellTrustZonePolicy!.GetTrustZoneRoots(context);
+        if (roots.Count == 0)
+            return ToolAccessDecision.Deny("shell_no_trust_zone_roots");
+
+        foreach (var pathToken in pathTokens)
+        {
+            var expanded = ExpandShellPath(pathToken, workingDirectory);
+            if (expanded is null)
+                continue;
+
+            if (!IsPathWithinAnyRoot(expanded, roots))
+                return ToolAccessDecision.Deny("shell_path_outside_trust_zone");
+        }
+
+        return null;
+    }
+
+    private static string? ExpandShellPath(string token, string? workingDirectory)
+    {
+        var expanded = token;
+
+        if (expanded.StartsWith('~'))
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            if (string.IsNullOrWhiteSpace(home))
+                return null;
+            expanded = expanded.Length == 1
+                ? home
+                : Path.Combine(home, expanded[1..].TrimStart('/', '\\'));
+        }
+
+        var homeEnv = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrWhiteSpace(homeEnv))
+        {
+            expanded = expanded.Replace("$HOME", homeEnv, StringComparison.OrdinalIgnoreCase);
+            expanded = expanded.Replace("${HOME}", homeEnv, StringComparison.OrdinalIgnoreCase);
+        }
+
+        try
+        {
+            var baseDir = !string.IsNullOrWhiteSpace(workingDirectory)
+                ? workingDirectory
+                : Environment.CurrentDirectory;
+
+            return Path.IsPathRooted(expanded)
+                ? Path.GetFullPath(expanded)
+                : Path.GetFullPath(Path.Combine(baseDir, expanded));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsPathWithinAnyRoot(string fullPath, IReadOnlyList<string> roots)
+    {
+        var normalized = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        foreach (var root in roots)
+        {
+            var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!normalized.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (normalized.Length == normalizedRoot.Length)
+                return true;
+            var boundary = normalized[normalizedRoot.Length];
+            if (boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ShellCommandHasPathArguments(string shellCommand)
+    {
+        foreach (var token in ShellTokenizer.Tokenize(shellCommand))
+        {
+            if (ShellTokenizer.LooksLikePath(token))
+                return true;
+        }
+
+        return false;
     }
 
     private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)

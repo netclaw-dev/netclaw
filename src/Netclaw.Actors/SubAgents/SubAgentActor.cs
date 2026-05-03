@@ -425,11 +425,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         or ParentApprovalDecision.ApprovedSession
                         or ParentApprovalDecision.ApprovedAlways)
                     {
-                        if (decision == ParentApprovalDecision.ApprovedOnce)
-                        {
-                            executionContext.OneTimeApprovedToolName = tc.Name;
-                            executionContext.SetOneTimeApprovedPatterns(ctx.UnapprovedPatterns);
-                        }
+                        // Always set one-time bypass for the immediate retry — the
+                        // sub-agent's scope ID differs from the parent session ID, so
+                        // session/always grants recorded by the parent won't be visible
+                        // to the sub-agent's executor until the approval service propagates.
+                        executionContext.OneTimeApprovedToolName = tc.Name;
+                        executionContext.SetOneTimeApprovedPatterns(ctx.UnapprovedPatterns);
 
                         var result = await executor.ExecuteAsync(tc, executionContext, ct);
                         return new SerializableChatMessage

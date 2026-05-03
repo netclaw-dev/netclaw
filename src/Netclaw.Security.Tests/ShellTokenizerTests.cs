@@ -193,4 +193,81 @@ public sealed class ShellTokenizerTests
         Assert.Single(segments);
         Assert.Equal("git status", segments[0]);
     }
+
+    // ── LooksLikePath ──
+
+    // Anchored paths — always true
+    [Theory]
+    [InlineData("/etc/passwd")]
+    [InlineData("/home/user/.netclaw/workspaces/project/file.txt")]
+    [InlineData("./script.sh")]
+    [InlineData("../parent/config.json")]
+    [InlineData("~/Documents/notes.md")]
+    [InlineData("~")]
+    [InlineData("$HOME/.config/app.toml")]
+    [InlineData("${HOME}/workspace")]
+    [InlineData("C:\\Users\\file.txt")]
+    [InlineData("c:\\users\\documents")]
+    [InlineData("D:/Projects/src")]
+    [InlineData("C:/Windows/System32")]
+    [InlineData("\\\\server\\share\\file.txt")]
+    [InlineData("\\\\nas\\backups")]
+    public void LooksLikePath_anchored_paths(string token)
+    {
+        Assert.True(ShellTokenizer.LooksLikePath(token));
+    }
+
+    // Non-paths — always false
+    [Theory]
+    [InlineData("https://api.github.com/repos/foo")]
+    [InlineData("ftp://mirror.example.com/file")]
+    [InlineData("--output=/tmp/foo")]
+    [InlineData("-v")]
+    [InlineData("origin/main")]
+    [InlineData("feature/fix-bug")]
+    [InlineData("nginx:latest")]
+    [InlineData("ghcr.io/org/image:tag")]
+    [InlineData("redis:6379")]
+    [InlineData("@scope/package")]
+    [InlineData("s/foo/bar/g")]
+    [InlineData("y/abc/xyz/")]
+    [InlineData("application/json")]
+    [InlineData("git")]
+    [InlineData("status")]
+    [InlineData("TODO")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void LooksLikePath_non_paths(string token)
+    {
+        Assert.False(ShellTokenizer.LooksLikePath(token));
+    }
+
+    // Bare relative with file extension — treated as path
+    [Theory]
+    [InlineData("src/main.rs")]
+    [InlineData("config/app.json")]
+    [InlineData("logs/output.log")]
+    [InlineData("scripts/deploy.sh")]
+    public void LooksLikePath_relative_with_extension(string token)
+    {
+        Assert.True(ShellTokenizer.LooksLikePath(token));
+    }
+
+    // Path traversal in unanchored token — treated as path
+    [Theory]
+    [InlineData("foo/../bar")]
+    [InlineData("workspace/project/../other/file.txt")]
+    public void LooksLikePath_traversal_component(string token)
+    {
+        Assert.True(ShellTokenizer.LooksLikePath(token));
+    }
+
+    // Backslash always indicates Windows path
+    [Theory]
+    [InlineData("src\\main.cs")]
+    [InlineData("folder\\subfolder")]
+    public void LooksLikePath_backslash(string token)
+    {
+        Assert.True(ShellTokenizer.LooksLikePath(token));
+    }
 }

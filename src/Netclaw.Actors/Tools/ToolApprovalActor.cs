@@ -52,18 +52,38 @@ internal sealed class ToolApprovalActor : ReceiveActor
 
     private bool IsApproved(SessionId? sessionId, TrustAudience audience, ToolName toolName, string pattern)
     {
-        if (sessionId.HasValue
-            && _sessionApprovals.TryGetValue(BuildSessionKey(sessionId.Value, audience), out var toolMap)
-            && toolMap.TryGetValue(toolName.Value, out var patterns)
-            && ApprovalPatternMatching.MatchesAny(pattern, patterns))
-        {
+        if (sessionId.HasValue && IsSessionApproved(sessionId.Value, audience, toolName, pattern))
             return true;
-        }
 
         if (_persistentStore is null)
             return false;
 
         return ApprovalPatternMatching.MatchesAny(pattern, _persistentStore.GetApprovedPatterns(audience, toolName.Value));
+    }
+
+    private bool IsSessionApproved(SessionId sessionId, TrustAudience audience, ToolName toolName, string pattern)
+    {
+        // Walk up the scope chain: sub-agent scopes inherit parent session approvals.
+        // Scope format: "{parentSessionId}/subagent/{name}/{runId}" — parent is the prefix before "/subagent/".
+        var scopeId = sessionId.Value;
+        while (true)
+        {
+            var sessionKey = BuildSessionKey((SessionId)scopeId, audience);
+            if (_sessionApprovals.TryGetValue(sessionKey, out var toolMap)
+                && toolMap.TryGetValue(toolName.Value, out var patterns)
+                && ApprovalPatternMatching.MatchesAny(pattern, patterns))
+            {
+                return true;
+            }
+
+            var subagentMarker = scopeId.IndexOf("/subagent/", StringComparison.Ordinal);
+            if (subagentMarker <= 0)
+                break;
+
+            scopeId = scopeId[..subagentMarker];
+        }
+
+        return false;
     }
 
     private void AddSessionApproval(SessionId sessionId, TrustAudience audience, ToolName toolName, string pattern)
