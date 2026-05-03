@@ -111,13 +111,38 @@ public sealed class ShellTokenizerTests
 
     [Theory]
     [InlineData("git push origin main", "git push")]
-    [InlineData("ls -la /tmp", "ls")]
+    [InlineData("ls -la /tmp", "ls /tmp")]
     [InlineData("docker compose up -d", "docker compose")]
-    [InlineData("cat /etc/hosts", "cat")]
-    [InlineData("cat .gitignore", "cat")]
+    [InlineData("cat /etc/hosts", "cat /etc/hosts")]
+    [InlineData("cat .gitignore", "cat .gitignore")]
     [InlineData("kubectl delete pod my-pod", "kubectl delete")]
     [InlineData("", "")]
     public void ExtractVerbChain_extracts_expected_chain(string input, string expected)
+    {
+        Assert.Equal(expected, ShellTokenizer.ExtractVerbChain(input));
+    }
+
+    [Theory]
+    // Path-aware verbs include first non-flag argument
+    [InlineData("cat /etc/passwd", "cat /etc/passwd")]
+    [InlineData("grep secret /var/log/syslog", "grep secret")]
+    [InlineData("bash /home/user/.netclaw/scripts/monitor.sh", "bash /home/user/.netclaw/scripts/monitor.sh")]
+    [InlineData("python3 /opt/scripts/report.py --verbose", "python3 /opt/scripts/report.py")]
+    [InlineData("curl https://example.com/api", "curl https://example.com/api")]
+    [InlineData("find /var/log -name '*.log'", "find /var/log")]
+    [InlineData("sed -i 's/foo/bar/' /etc/config.txt", "sed s/foo/bar/")]
+    // Structured CLIs unchanged
+    [InlineData("git push origin main", "git push")]
+    [InlineData("docker compose up -d", "docker compose")]
+    [InlineData("kubectl delete pod my-pod", "kubectl delete")]
+    [InlineData("dotnet build --configuration Release", "dotnet build")]
+    // Edge: flag-only invocations of path-aware verbs
+    [InlineData("grep --version", "grep")]
+    [InlineData("cat --help", "cat")]
+    // Edge: home-relative and env-var paths
+    [InlineData("cat ~/.bashrc", "cat ~/.bashrc")]
+    [InlineData("bash ~/scripts/deploy.sh", "bash ~/scripts/deploy.sh")]
+    public void ExtractVerbChain_path_aware_verbs(string input, string expected)
     {
         Assert.Equal(expected, ShellTokenizer.ExtractVerbChain(input));
     }

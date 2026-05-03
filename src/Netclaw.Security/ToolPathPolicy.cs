@@ -22,12 +22,6 @@ public sealed class ToolPathPolicy
     private readonly HashSet<string> _readDeniedPaths;
     private readonly HashSet<string> _shellDeniedPaths;
     private readonly HashSet<string> _commandIndicators;
-    private static readonly HashSet<string> HighRiskVerbs = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "cat", "less", "more", "head", "tail", "grep", "rg", "find", "jq", "awk", "sed", "strings", "xxd", "hexdump",
-        "cp", "mv", "tar", "zip", "unzip", "scp", "rsync", "curl", "wget", "nc", "ncat",
-        "python", "python3", "node", "ruby", "perl", "php"
-    };
 
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
     {
@@ -161,7 +155,7 @@ public sealed class ToolPathPolicy
         foreach (var token in tokens)
         {
             var verb = ShellTokenizer.TrimShellPunctuation(token);
-            if (HighRiskVerbs.Contains(verb))
+            if (ShellTokenizer.HighRiskVerbs.Contains(verb))
                 return true;
         }
 

@@ -17,6 +17,28 @@ public static class ShellTokenizer
     private static readonly string[] CompoundOperators = ["&&", "||"];
 
     /// <summary>
+    /// Verbs that can exfiltrate or mutate file contents when targeting protected paths.
+    /// Used by <see cref="ToolPathPolicy"/> for the protected-path heuristic.
+    /// </summary>
+    internal static readonly HashSet<string> HighRiskVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "cat", "less", "more", "head", "tail", "grep", "rg", "find", "jq", "awk", "sed", "strings", "xxd", "hexdump",
+        "cp", "mv", "tar", "zip", "unzip", "scp", "rsync", "curl", "wget", "nc", "ncat",
+        "python", "python3", "node", "ruby", "perl", "php",
+        "bash", "sh", "zsh"
+    };
+
+    /// <summary>
+    /// Verbs whose first positional argument is security-relevant for approval
+    /// pattern extraction. Superset of <see cref="HighRiskVerbs"/> — includes
+    /// benign-but-path-consuming verbs like <c>ls</c>.
+    /// </summary>
+    internal static readonly HashSet<string> PathAwareVerbs = new(HighRiskVerbs, StringComparer.OrdinalIgnoreCase)
+    {
+        "ls"
+    };
+
+    /// <summary>
     /// Tokenizes a shell command string, respecting single and double quotes.
     /// Strips quote delimiters from tokens.
     /// </summary>
@@ -129,6 +151,8 @@ public static class ShellTokenizer
     /// command. Stops at the first token that looks like a flag (starts with -)
     /// or an argument (path, URL, etc.), and caps at <paramref name="maxDepth"/>
     /// tokens (default: 2) to avoid capturing positional arguments as subcommands.
+    /// For path-aware verbs (cat, grep, bash, etc.), appends the first non-flag
+    /// argument so the approval pattern captures what the command operates on.
     /// </summary>
     public static string ExtractVerbChain(string command, int maxDepth = 2)
     {
@@ -153,6 +177,22 @@ public static class ShellTokenizer
                 break;
 
             verbParts.Add(trimmed);
+        }
+
+        if (verbParts.Count == 1 && PathAwareVerbs.Contains(verbParts[0]))
+        {
+            for (var i = 1; i < tokens.Count; i++)
+            {
+                var trimmed = TrimShellPunctuation(tokens[i]);
+                if (trimmed.Length == 0)
+                    continue;
+
+                if (trimmed.StartsWith('-'))
+                    continue;
+
+                verbParts.Add(trimmed);
+                break;
+            }
         }
 
         return string.Join(' ', verbParts);

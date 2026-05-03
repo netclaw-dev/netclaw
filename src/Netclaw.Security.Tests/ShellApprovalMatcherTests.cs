@@ -93,6 +93,13 @@ public sealed class ShellApprovalMatcherTests
     [InlineData("git pu", "git push", false)]    // Partial token no match (word boundary)
     [InlineData("gh pr", "gh pr create", true)]  // Multi-token prefix match
     [InlineData("gh pr", "gh issue list", false)] // Multi-token no match
+    // Path-aware patterns — exact path matches
+    [InlineData("cat /etc/passwd", "cat /etc/passwd", true)]
+    [InlineData("cat /etc/passwd", "cat /etc/shadow", false)]
+    [InlineData("bash /home/.netclaw/scripts/monitor.sh", "bash /home/.netclaw/scripts/monitor.sh", true)]
+    [InlineData("bash /home/.netclaw/scripts/monitor.sh", "bash /tmp/evil.sh", false)]
+    // Stale single-token approval no longer matches path-aware extractions
+    [InlineData("cat", "cat /etc/passwd", false)]
     public void IsApproved_pattern_matching(string pattern, string command, bool expected)
     {
         var approved = new[] { pattern };
@@ -106,6 +113,28 @@ public sealed class ShellApprovalMatcherTests
 
         Assert.True(_matcher.IsApproved(new ToolName("shell_execute"),
             Args("bash -c \"git push --force\""), approved));
+    }
+
+    [Fact]
+    public void ExtractPatterns_path_aware_verb_includes_path()
+    {
+        var patterns = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("cat /etc/hosts && git push origin main"));
+        Assert.Equal(2, patterns.Count);
+        Assert.Contains("cat /etc/hosts", patterns);
+        Assert.Contains("git push", patterns);
+    }
+
+    [Fact]
+    public void ExtractPatterns_pipe_with_path_aware_verbs()
+    {
+        var patterns = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("cat /var/log/syslog | grep error"));
+        Assert.Equal(2, patterns.Count);
+        Assert.Contains("cat /var/log/syslog", patterns);
+        Assert.Contains("grep error", patterns);
     }
 
     [Fact]
