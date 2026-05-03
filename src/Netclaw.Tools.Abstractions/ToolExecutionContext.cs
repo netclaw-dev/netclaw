@@ -102,18 +102,10 @@ public sealed class ToolExecutionContext
     public Func<object, string, CancellationToken, Task<object>>? SpawnChildActor { get; set; }
 
     /// <summary>
-    /// Opaque reference to the parent session's approval channel. Typed as <c>object</c>
-    /// to avoid coupling the tools abstraction layer to the actor-level approval types.
-    /// Cast to <c>IApprovalChannel</c> in <c>Netclaw.Actors</c>.
+    /// Parent session's approval bridge for sub-agent approval chaining. When set,
+    /// the sub-agent can route approval requests back to the interactive user.
     /// </summary>
-    public object? ParentApprovalChannel { get; set; }
-
-    /// <summary>
-    /// Opaque callback for emitting approval requests to the parent session. Typed as
-    /// <c>object</c> to avoid coupling. Cast to <c>Action&lt;ToolInteractionRequest&gt;</c>
-    /// in <c>Netclaw.Actors</c>.
-    /// </summary>
-    public object? EmitApprovalRequestCallback { get; set; }
+    public IParentApprovalBridge? ApprovalBridge { get; set; }
 
     /// <summary>
     /// Tool name granted a one-shot approval for the current execution retry.

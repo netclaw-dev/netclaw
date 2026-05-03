@@ -47,8 +47,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private int _toolIterationCount;
     private IActorRef _replyTo = ActorRefs.Nobody;
     private CancellationTokenSource? _executionCts;
-    private IApprovalChannel? _parentApprovalChannel;
-    private Action<Protocol.ToolInteractionRequest>? _emitApprovalRequest;
+    private IParentApprovalBridge? _approvalBridge;
 
     public ITimerScheduler Timers { get; set; } = null!;
     private CancellationTokenRegistration _externalCancellationRegistration;
@@ -100,8 +99,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             _replyTo = Sender;
 
-            _parentApprovalChannel = msg.ParentApprovalChannel;
-            _emitApprovalRequest = msg.EmitApprovalRequest;
+            _approvalBridge = msg.ApprovalBridge;
 
             var scopeId = !string.IsNullOrWhiteSpace(msg.SessionScopeId)
                 ? msg.SessionScopeId!
@@ -110,8 +108,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionContext.Audience = msg.Audience ?? TrustAudience.Personal.ToWireValue();
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
-            _toolExecutionContext.SupportsInteractiveApproval =
-                _parentApprovalChannel is not null && _emitApprovalRequest is not null;
+            _toolExecutionContext.SupportsInteractiveApproval = _approvalBridge is not null;
             _executionCts = new CancellationTokenSource();
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
@@ -238,8 +235,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionContext,
             _executionCts?.Token ?? CancellationToken.None,
             self,
-            _parentApprovalChannel,
-            _emitApprovalRequest);
+            _approvalBridge);
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -397,8 +393,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ToolExecutionContext executionContext,
         CancellationToken ct,
         IActorRef self,
-        IApprovalChannel? parentApprovalChannel = null,
-        Action<Protocol.ToolInteractionRequest>? emitApprovalRequest = null)
+        IParentApprovalBridge? approvalBridge = null)
     {
         try
         {
@@ -416,32 +411,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     };
                 }
                 catch (ToolApprovalRequiredException approvalEx)
-                    when (parentApprovalChannel is not null && emitApprovalRequest is not null)
+                    when (approvalBridge is not null)
                 {
                     var ctx = approvalEx.ApprovalContext;
-                    var waitTask = parentApprovalChannel.WaitForApprovalAsync(
+                    var decision = await approvalBridge.RequestApprovalAsync(
                         new ToolCallId(tc.CallId),
-                        TimeSpan.FromMinutes(5),
+                        ctx.ToolName,
+                        ctx.DisplayText,
+                        ctx.UnapprovedPatterns,
                         ct);
 
-                    emitApprovalRequest(new Protocol.ToolInteractionRequest
+                    if (decision is ParentApprovalDecision.ApprovedOnce
+                        or ParentApprovalDecision.ApprovedSession
+                        or ParentApprovalDecision.ApprovedAlways)
                     {
-                        SessionId = new Protocol.SessionId(executionContext.SessionId ?? "subagent"),
-                        Kind = "approval",
-                        CallId = tc.CallId,
-                        ToolName = ctx.ToolName,
-                        DisplayText = ctx.DisplayText,
-                        Patterns = ctx.UnapprovedPatterns,
-                        Options = ctx.Options
-                            .Select(o => new Protocol.ToolInteractionOption(o.Key, o.Label))
-                            .ToList()
-                    });
-
-                    var decision = await waitTask;
-
-                    if (decision is ApprovalDecision.ApprovedOnce or ApprovalDecision.ApprovedSession or ApprovalDecision.ApprovedAlways)
-                    {
-                        if (decision == ApprovalDecision.ApprovedOnce)
+                        if (decision == ParentApprovalDecision.ApprovedOnce)
                         {
                             executionContext.OneTimeApprovedToolName = tc.Name;
                             executionContext.SetOneTimeApprovedPatterns(ctx.UnapprovedPatterns);
@@ -457,7 +441,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         };
                     }
 
-                    var reason = decision == ApprovalDecision.TimedOut
+                    var reason = decision == ParentApprovalDecision.TimedOut
                         ? "Tool access denied: approval_timed_out"
                         : "Tool access denied: approval_denied_by_user";
                     return new SerializableChatMessage
