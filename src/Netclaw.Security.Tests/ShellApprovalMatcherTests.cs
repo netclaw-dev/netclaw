@@ -98,8 +98,14 @@ public sealed class ShellApprovalMatcherTests
     [InlineData("cat /etc/passwd", "cat /etc/shadow", false)]
     [InlineData("bash /home/.netclaw/scripts/monitor.sh", "bash /home/.netclaw/scripts/monitor.sh", true)]
     [InlineData("bash /home/.netclaw/scripts/monitor.sh", "bash /tmp/evil.sh", false)]
-    // Stale single-token approval no longer matches path-aware extractions
-    [InlineData("cat", "cat /etc/passwd", false)]
+    // Single-token path-aware verbs wildcard-match (Claude Code model)
+    [InlineData("cat", "cat /etc/passwd", true)]
+    [InlineData("grep", "grep TODO", true)]
+    [InlineData("bash", "bash /tmp/script.sh", true)]
+    [InlineData("find", "find /var/log", true)]
+    // Non-path-aware single tokens still require exact match
+    [InlineData("echo", "echo hello", false)]
+    [InlineData("docker", "docker compose", false)]
     public void IsApproved_pattern_matching(string pattern, string command, bool expected)
     {
         var approved = new[] { pattern };

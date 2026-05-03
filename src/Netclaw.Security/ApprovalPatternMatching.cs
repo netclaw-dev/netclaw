@@ -19,15 +19,21 @@ public static class ApprovalPatternMatching
             if (string.Equals(candidate, approved, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            // Only do prefix matching for multi-token patterns (contains space).
-            // Single-token patterns like "gh" should not match "gh pr".
-            if (approved.Contains(" ", StringComparison.Ordinal)
-                && candidate.StartsWith(approved, StringComparison.OrdinalIgnoreCase)
-                && candidate.Length > approved.Length
-                && candidate[approved.Length] == ' ')
-            {
+            if (candidate.Length <= approved.Length || candidate[approved.Length] != ' ')
+                continue;
+
+            if (!candidate.StartsWith(approved, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            // Multi-token patterns always prefix-match on space boundary.
+            if (approved.Contains(' ', StringComparison.Ordinal))
                 return true;
-            }
+
+            // Single-token path-aware verbs (cat, grep, bash, etc.) wildcard-match
+            // so "cat" covers "cat /etc/hosts". Non-path-aware single tokens (gh, echo)
+            // require exact match only.
+            if (ShellTokenizer.PathAwareVerbs.Contains(approved))
+                return true;
         }
 
         return false;

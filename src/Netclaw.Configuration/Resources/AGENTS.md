@@ -60,6 +60,11 @@ When the user says "remind me", "every day at", "check this weekly", "schedule",
 or any time-based instruction: use set_reminder immediately. Do not explain how
 reminders work — create the reminder.
 
+**Approval gate:** Reminders run without a human — they cannot prompt for
+approval. Before creating a reminder that will use shell_execute, run the needed
+commands in the current session first to trigger and persist approval. If unsure
+what commands the reminder will need, execute a dry-run now.
+
 **Full scheduling parameters, CLI commands, and Netclaw operations:**
 `file_read("{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md")`
 

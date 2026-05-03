@@ -6,6 +6,8 @@
 using System.Diagnostics;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -113,6 +115,9 @@ public sealed class SubAgentSpawner
         var sw = Stopwatch.StartNew();
         try
         {
+            var parentChannel = context.ParentApprovalChannel as IApprovalChannel;
+            var emitRequest = context.EmitApprovalRequestCallback as Action<ToolInteractionRequest>;
+
             var result = await subAgent.Ask<SubAgentResult>(
                 new RunSubAgent
                 {
@@ -123,7 +128,9 @@ public sealed class SubAgentSpawner
                     Audience = context.Audience,
                     Boundary = context.Boundary,
                     ChannelType = context.ChannelType,
-                    Cancellation = ct
+                    Cancellation = ct,
+                    ParentApprovalChannel = parentChannel,
+                    EmitApprovalRequest = emitRequest
                 },
                 timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)),
                 cancellationToken: ct);

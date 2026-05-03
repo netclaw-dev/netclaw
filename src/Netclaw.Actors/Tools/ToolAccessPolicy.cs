@@ -191,13 +191,14 @@ public sealed class ToolAccessPolicy
         if (mode == ToolApprovalMode.Auto)
             return ToolAccessDecision.Allow();
 
-        // Subagents can't prompt for approval. Tools on the SubAgentToolPolicy
-        // safe list are auto-granted; everything else is denied.
-        if (context?.SupportsInteractiveApproval == false)
+        // Non-interactive channels (reminders, webhooks, sub-agents without parent
+        // approval channel): tools on the safe list are auto-granted. Everything else
+        // falls through to the normal approval extraction path — the executor will
+        // check the persistent approval store and allow if all patterns are pre-approved.
+        if (context?.SupportsInteractiveApproval == false
+            && SubAgentToolPolicy.IsAllowedForUserFacing(toolName.Value))
         {
-            return SubAgentToolPolicy.IsAllowedForUserFacing(toolName.Value)
-                ? ToolAccessDecision.Allow()
-                : ToolAccessDecision.Deny("channel_does_not_support_approval");
+            return ToolAccessDecision.Allow();
         }
 
         var allPatterns = matcher.ExtractPatterns(toolName, arguments);

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Sessions;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.SubAgents;
@@ -70,6 +71,18 @@ public sealed record RunSubAgent
     public string? Boundary { get; init; }
 
     public string? ChannelType { get; init; }
+
+    /// <summary>
+    /// Parent session's approval channel. When provided, the sub-agent can route
+    /// approval requests back to the interactive user instead of auto-denying.
+    /// </summary>
+    internal IApprovalChannel? ParentApprovalChannel { get; init; }
+
+    /// <summary>
+    /// Callback to emit <see cref="Protocol.ToolInteractionRequest"/> to the parent session.
+    /// Required alongside <see cref="ParentApprovalChannel"/> for approval chaining to work.
+    /// </summary>
+    internal Action<Protocol.ToolInteractionRequest>? EmitApprovalRequest { get; init; }
 }
 
 /// <summary>
