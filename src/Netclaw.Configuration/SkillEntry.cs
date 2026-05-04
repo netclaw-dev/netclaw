@@ -91,4 +91,5 @@ public sealed record SkillEntry(
     /// Dispatch-time validation remains authoritative.
     /// </summary>
     public string? SubagentMetadataError { get; init; }
+
 }

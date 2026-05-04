@@ -26,7 +26,8 @@ public sealed record ContextAssemblyInput(
     string SessionsBasePath,
     bool FileReadGranted,
     AutomaticRecallResult? ActiveRecall,
-    TrustAudience Audience = TrustAudience.Personal);
+    TrustAudience Audience = TrustAudience.Personal,
+    string? SkillHint = null);
 
 /// <summary>
 /// Pure-function assembly of the <see cref="AiChatMessage"/> list sent to
@@ -171,6 +172,9 @@ public static class SessionMessageAssembler
         {
             parts.Add("[memory-recall]\nstatus: degraded\nreason: automatic recall unavailable for this turn");
         }
+
+        if (input.SkillHint is not null)
+            parts.Add(input.SkillHint);
 
         foreach (var layer in input.ContextLayers)
         {

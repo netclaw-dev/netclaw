@@ -67,7 +67,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("Search Decision Rules", prompt);
         Assert.Contains("Identity Files", prompt);
         Assert.Contains("Scheduling", prompt);
-        Assert.Contains("Skill Reference", prompt);
+        Assert.Contains("Skill Loading", prompt);
     }
 
     [Fact]

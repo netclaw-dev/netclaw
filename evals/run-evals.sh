@@ -564,9 +564,10 @@ finalize_db() {
     local score
     score=$(awk "BEGIN {printf \"%.4f\", $PASSED_CASES / ($TOTAL_CASES > 0 ? $TOTAL_CASES : 1)}")
     local esc_ver="${NETCLAW_VER//\'/\'\'}"
+    local esc_model="${EVAL_MODEL_ID//\'/\'\'}"
     sqlite3 "$RESULTS_DB" \
         "INSERT INTO eval_runs (run_id, started_at, netclaw_ver, model_id, runs_per_case, threshold, total_cases, passed_cases, overall_score)
-         VALUES ('$RUN_ID', '$STARTED_AT', '$esc_ver', NULL, $RUNS, $THRESHOLD, $TOTAL_CASES, $PASSED_CASES, $score);"
+         VALUES ('$RUN_ID', '$STARTED_AT', '$esc_ver', '$esc_model', $RUNS, $THRESHOLD, $TOTAL_CASES, $PASSED_CASES, $score);"
 }
 
 # ─── Utility Functions ────────────────────────────────────────────────────────
@@ -747,6 +748,11 @@ daemon_log_contains() {
     daemon_log_tail | grep -qE "$1" 2>/dev/null
 }
 
+daemon_log_skill_loaded() {
+    local skill_name="$1"
+    daemon_log_tail | grep -qE "turn_skill_loaded skill=$skill_name" 2>/dev/null
+}
+
 # ─── Case Assertion Functions ─────────────────────────────────────────────────
 
 # Category 1: Identity & Self-Awareness
@@ -767,18 +773,13 @@ assert_identity_session() {
 }
 
 # Category 2: Skill Discovery — tests that the model retrieves procedural
-# knowledge from skills when needed, measured by outcome correctness rather
-# than checking for a specific file_read call.
+# knowledge from skills when needed AND actually loaded the skill to get it.
 assert_skill_scheduling_knowledge() {
-    # Scheduling types (once, interval, cron) are only documented in
-    # netclaw-operations/SKILL.md — the model must load the skill to answer.
-    stdout_contains 'cron'
+    stdout_contains 'cron' && daemon_log_skill_loaded 'netclaw-operations'
 }
 
 assert_skill_memory_knowledge() {
-    # Memory classes (durable_fact, evidence, trace) are only documented in
-    # netclaw-memory/SKILL.md — the model must load the skill to answer.
-    stdout_contains 'durable' && stdout_contains 'evidence'
+    stdout_contains 'durable' && stdout_contains 'evidence' && daemon_log_skill_loaded 'netclaw-memory'
 }
 
 assert_skill_operations_diagnostics() {
@@ -792,9 +793,21 @@ assert_skill_citation_search() {
 }
 
 assert_skill_web_content_knowledge() {
-    # The web-content-retrieval skill explains that browser automation is needed
-    # for JS-heavy sites like Twitter. This info is only in the skill file.
-    stdout_contains 'browser'
+    stdout_contains 'browser' && daemon_log_skill_loaded 'web-content-retrieval'
+}
+
+# Category 2b: Skill Activation — measures ONLY whether the model loaded
+# the skill, using prompts where pretraining cannot shortcut the answer.
+assert_skill_activation_scheduling() {
+    daemon_log_skill_loaded 'netclaw-operations'
+}
+
+assert_skill_activation_memory() {
+    daemon_log_skill_loaded 'netclaw-memory'
+}
+
+assert_skill_activation_search() {
+    daemon_log_skill_loaded 'search-citation'
 }
 
 # Category 3: Memory Pipeline
@@ -1090,6 +1103,28 @@ run_all() {
     run_case skill_web_content_knowledge "knows browser needed for JS-heavy sites" \
         "What tool should I use to fetch content from a JavaScript-heavy website like Twitter?" \
         "How do you handle fetching content from social media sites like X.com?"
+
+    end_category
+
+    # ── Category 2b: Skill Activation ──
+    # Measures whether the model loads the skill at all, using prompts where
+    # pretraining knowledge cannot shortcut the answer.
+    print_category "Skill Activation"
+
+    run_case skill_activation_scheduling "skill loaded" \
+        "How do I set up a cron job that only fires on weekdays in Netclaw?" \
+        "What are the exact Netclaw reminder delivery_kind options?" \
+        "What schedule type and format does Netclaw use for recurring reminders every 6 hours?"
+
+    run_case skill_activation_memory "skill loaded" \
+        "What are the exact memory class names Netclaw uses and their expiration rules?" \
+        "What is the memory confidence threshold for automatic recall injection?" \
+        "How does Netclaw decide which memories to inject into each turn?"
+
+    run_case skill_activation_search "skill loaded" \
+        "What is Netclaw's exact citation format policy for web search results?" \
+        "What are the rules for when to include inline citations vs not?" \
+        "When should I use web_search versus web_fetch according to Netclaw's policy?"
 
     end_category
 

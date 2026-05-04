@@ -196,4 +196,5 @@ public sealed class SkillRegistry
             .Select(s => ($"/{s.Name}", s.ArgumentHint))
             .ToList();
     }
+
 }

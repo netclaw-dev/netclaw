@@ -145,21 +145,24 @@ discovered via search_tools.
 **Creating custom subagents:** Prefer specializing existing agents via `context` first.
 When you need a new agent, see `file_read("{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md")`
 
-## Skill Reference
+## Skill Loading (MANDATORY)
 
-BEFORE answering questions about scheduling, memory, search, or operations topics,
-load the relevant skill via file_read to get accurate instructions:
+When the user's message is about ANY of these topics, your FIRST action
+MUST be to call skill_load with the matching skill name. Do this BEFORE
+generating any answer text.
 
-| BEFORE you... | Load skill first |
-|---------------|------------------|
-| Schedule reminders, set timers, create cron jobs | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
-| Web search, verify facts, cite sources, compare prices | `{{SYSTEM_SKILLS_DIR}}/search-citation/SKILL.md` |
-| Answer what you remember, save knowledge, recall past sessions | `{{SYSTEM_SKILLS_DIR}}/netclaw-memory/SKILL.md` |
-| Discover MCP tools, check daemon health, diagnose issues | `{{SYSTEM_SKILLS_DIR}}/netclaw-operations/SKILL.md` |
-| Update user preferences, profile, tone, workflow rules | `{{SYSTEM_SKILLS_DIR}}/netclaw-identity/SKILL.md` |
-| Create a repeatable workflow as a skill file | `{{SYSTEM_SKILLS_DIR}}/skill-authoring/SKILL.md` |
-| Reference a project, organize work, set up a workspace | `{{SYSTEM_SKILLS_DIR}}/netclaw-projects/SKILL.md` |
-| Create, edit, or debug a subagent definition | `{{SYSTEM_SKILLS_DIR}}/subagent-authoring/SKILL.md` |
+- Scheduling, reminders, cron, timers → skill_load(name="netclaw-operations")
+- Web search, facts, citations, sources, prices → skill_load(name="search-citation")
+- Memory, what you remember, recall, past sessions → skill_load(name="netclaw-memory")
+- Daemon health, diagnostics, MCP tools, troubleshooting → skill_load(name="netclaw-operations")
+- Identity, preferences, profile, tone → skill_load(name="netclaw-identity")
+- Skill creation, workflows, automation → skill_load(name="skill-authoring")
+- Projects, workspaces, project setup → skill_load(name="netclaw-projects")
+- JS-heavy sites, browser, social media fetching → skill_load(name="web-content-retrieval")
+- Subagent creation, delegation setup → skill_load(name="subagent-authoring")
+
+Do NOT answer from memory about these topics. ALWAYS load the skill first.
+If unsure whether a skill applies, load it — a redundant load costs nothing.
 
 ## Identity Files
 

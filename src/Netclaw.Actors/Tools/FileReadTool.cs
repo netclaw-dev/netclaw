@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
@@ -28,6 +29,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
     private readonly SkillRegistry? _skillRegistry;
     private readonly ISessionMetrics? _sessionMetrics;
+    private readonly ILogger? _logger;
 
     public record Params(
         [property: Description("Absolute path to the file to read")] string Path,
@@ -39,13 +41,15 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         ToolPathPolicy? pathPolicy = null,
         NetclawPaths? paths = null,
         SkillRegistry? skillRegistry = null,
-        ISessionMetrics? sessionMetrics = null)
+        ISessionMetrics? sessionMetrics = null,
+        ILogger<FileReadTool>? logger = null)
     {
         _config = config;
         _pathPolicy = pathPolicy;
         _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
         _skillRegistry = skillRegistry;
         _sessionMetrics = sessionMetrics;
+        _logger = logger;
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -130,5 +134,6 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             return;
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.FileRead);
+        _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=file_read", skill.Name);
     }
 }

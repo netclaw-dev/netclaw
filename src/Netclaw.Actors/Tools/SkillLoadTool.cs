@@ -6,6 +6,7 @@
 using System.ComponentModel;
 using Netclaw.Actors.SubAgents;
 using System.Text;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
@@ -29,6 +30,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
     private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
     private readonly SubAgentSpawner? _subAgentSpawner;
     private readonly SkillSyncConfig _skillSyncConfig;
+    private readonly ILogger? _logger;
 
     public record Params(
         [property: Description("Name of the skill to load (e.g., 'search-citation', 'netclaw-memory')")]
@@ -44,7 +46,8 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
         SubAgentSpawner? subAgentSpawner = null,
-        SkillSyncConfig? skillSyncConfig = null)
+        SkillSyncConfig? skillSyncConfig = null,
+        ILogger<SkillLoadTool>? logger = null)
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
@@ -52,6 +55,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         _subAgentRegistry = subAgentRegistry;
         _subAgentSpawner = subAgentSpawner;
         _skillSyncConfig = skillSyncConfig ?? new SkillSyncConfig();
+        _logger = logger;
     }
 
     protected override async Task<string> ExecuteAsync(Params args, CancellationToken ct)
@@ -115,6 +119,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
                 return $"Skill '{name}' blocked by content scan: {routedScanResult.Reason}";
 
             _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
+            _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
 
             var routedResult = await _subAgentSpawner.SpawnAsync(
                 profile,
@@ -146,6 +151,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             return $"Skill '{name}' blocked by content scan: {scanResult.Reason}";
 
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
+        _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
 
         var sb = new StringBuilder();
         if (scanResult.Verdict == ScanVerdict.Warning)
