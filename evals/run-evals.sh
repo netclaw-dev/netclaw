@@ -817,6 +817,10 @@ daemon_log_no_skill_loaded() {
     ! daemon_log_tail | grep -qE "turn_skill_loaded" 2>/dev/null
 }
 
+stdout_tool_called() {
+    grep -qE "\\[tool:call\\] $1\\(" "$STDOUT_FILE" 2>/dev/null
+}
+
 # ─── Case Assertion Functions ─────────────────────────────────────────────────
 
 # Category 1: Identity & Self-Awareness
@@ -874,13 +878,13 @@ assert_skill_activation_search() {
     daemon_log_skill_loaded 'search-citation'
 }
 
-# Soft phrasing — natural language without mentioning "Netclaw"
+# Soft phrasing — model may load the skill OR use the tool directly from AGENTS.md
 assert_skill_activation_soft_scheduling() {
-    daemon_log_skill_loaded 'netclaw-operations'
+    daemon_log_skill_loaded 'netclaw-operations' || stdout_tool_called 'set_reminder'
 }
 
 assert_skill_activation_soft_memory() {
-    daemon_log_skill_loaded 'netclaw-memory'
+    daemon_log_skill_loaded 'netclaw-memory' || stdout_tool_called 'find_memories'
 }
 
 # User skills (non-system, from eval fixtures)
