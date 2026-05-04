@@ -228,8 +228,6 @@ jobs:
   publish-docker:
     name: Publish Docker Image (multi-arch)
     needs: publish-binaries
-    # Disabled until GHCR image path is updated for the new org
-    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
