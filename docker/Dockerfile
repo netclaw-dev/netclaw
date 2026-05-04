@@ -66,6 +66,7 @@ WORKDIR /opt/netclaw
 # Self-contained single-file binaries. TARGETARCH selects the right
 # platform directory (amd64 or arm64).
 COPY publish/cli-${TARGETARCH}/netclaw /opt/netclaw/cli/netclaw
+COPY publish/cli-${TARGETARCH}/Schemas/ /opt/netclaw/cli/Schemas/
 COPY publish/daemon-${TARGETARCH}/netclawd /opt/netclaw/daemon/netclawd
 COPY docker/entrypoint.sh /opt/netclaw/entrypoint.sh
 
