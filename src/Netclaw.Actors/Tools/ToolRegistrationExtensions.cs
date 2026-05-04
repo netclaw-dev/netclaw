@@ -72,9 +72,10 @@ public static class ToolRegistrationExtensions
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
         SubAgentSpawner? subAgentSpawner = null,
-        SkillSyncConfig? skillSyncConfig = null)
+        SkillSyncConfig? skillSyncConfig = null,
+        ILogger<SkillLoadTool>? skillLoadLogger = null)
     {
-        registry.Register(new SkillLoadTool(skillRegistry, scanner, sessionMetrics, subAgentRegistry, subAgentSpawner, skillSyncConfig));
+        registry.Register(new SkillLoadTool(skillRegistry, scanner, sessionMetrics, subAgentRegistry, subAgentSpawner, skillSyncConfig, skillLoadLogger));
         registry.Register(new SkillReadResourceTool(skillRegistry, scanner, skillSyncConfig));
         registry.Register(new SkillManageTool(skillRegistry, skillIndexLayer, paths, scanner, externalSources));
         return registry;

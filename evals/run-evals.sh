@@ -188,6 +188,9 @@ resolve_eval_target() {
 }
 
 cleanup_eval_env() {
+    # Archive logs and results to a persistent location before teardown.
+    archive_eval_run
+
     # Container is launched with --rm, so `docker stop` also removes it.
     if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
         docker stop "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -202,6 +205,58 @@ cleanup_eval_env() {
     if [[ -n "${EVAL_HOME:-}" && -d "$EVAL_HOME" ]]; then
         force_rmrf "$EVAL_HOME"
     fi
+}
+
+# Archive daemon logs, results DB, and stdout captures to evals/runs/<run-id>/
+# so they survive the temp-dir teardown and can be inspected after the run.
+archive_eval_run() {
+    # Skip if no run ID (early failure before init completed)
+    if [[ -z "${RUN_ID:-}" ]]; then return 0; fi
+
+    local archive_dir="$REPO_ROOT/evals/runs/$RUN_ID"
+    mkdir -p "$archive_dir"
+
+    # Copy daemon log
+    if [[ -f "${DAEMON_LOG:-}" ]]; then
+        cp "$DAEMON_LOG" "$archive_dir/daemon.log" 2>/dev/null || true
+    fi
+
+    # Copy all container logs (crash logs, session logs)
+    if [[ -d "$EVAL_HOME/data/logs" ]]; then
+        cp -r "$EVAL_HOME/data/logs" "$archive_dir/container-logs" 2>/dev/null || true
+    fi
+    # Also check the direct logs dir (bind-mount layout varies)
+    if [[ -d "$EVAL_HOME/logs" && ! -d "$archive_dir/container-logs" ]]; then
+        cp -r "$EVAL_HOME/logs" "$archive_dir/container-logs" 2>/dev/null || true
+    fi
+
+    # Copy results DB
+    if [[ -f "${RESULTS_DB:-}" ]]; then
+        cp "$RESULTS_DB" "$archive_dir/results.db" 2>/dev/null || true
+    fi
+
+    # Copy stdout captures
+    if [[ -n "${TMPDIR_EVAL:-}" && -d "$TMPDIR_EVAL" ]]; then
+        mkdir -p "$archive_dir/stdout"
+        cp "$TMPDIR_EVAL"/stdout_*.txt "$archive_dir/stdout/" 2>/dev/null || true
+    fi
+
+    # Write run metadata
+    cat > "$archive_dir/run-info.txt" <<RUNEOF
+run_id:    $RUN_ID
+started:   ${STARTED_AT:-unknown}
+model:     ${EVAL_MODEL_ID:-unknown}
+provider:  ${EVAL_PROVIDER_TYPE:-unknown} @ ${EVAL_PROVIDER_ENDPOINT:-unknown}
+version:   ${NETCLAW_VER:-unknown}
+category:  ${FILTER_CATEGORY:-all}
+case:      ${FILTER_CASE:-all}
+timeout:   ${PROMPT_TIMEOUT:-60}s
+runs:      ${RUNS:-5}
+threshold: ${THRESHOLD:-0.80}
+passed:    ${PASSED_CASES:-0}/${TOTAL_CASES:-0}
+RUNEOF
+
+    echo "Archived: $archive_dir"
 }
 
 # Remove a directory even if it contains files owned by a different user

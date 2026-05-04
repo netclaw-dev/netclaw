@@ -431,3 +431,6 @@ FodyWeavers.xsd
 feeds/skills/.system/upload-list.txt
 feeds/skills/.system/existing-manifest.json
 feeds/skills/.system/manifest.json
+
+# Eval run archives (persistent logs and results per run)
+evals/runs/

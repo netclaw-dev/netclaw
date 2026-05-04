@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Telemetry;
@@ -36,8 +37,10 @@ internal static class SkillToolRegistration
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
         var subAgentSpawner = services.GetService<SubAgentSpawner>();
         var skillSyncConfig = services.GetService<SkillSyncConfig>();
+        var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
-        registry.Replace(new FileReadTool(toolConfig, pathPolicy, paths, skillRegistry, metrics));
+        registry.Replace(new FileReadTool(toolConfig, pathPolicy, paths, skillRegistry, metrics,
+            loggerFactory.CreateLogger<FileReadTool>()));
 
         registry.WithSkillTools(
             skillRegistry,
@@ -48,6 +51,7 @@ internal static class SkillToolRegistration
             metrics,
             subAgentRegistry,
             subAgentSpawner,
-            skillSyncConfig);
+            skillSyncConfig,
+            loggerFactory.CreateLogger<SkillLoadTool>());
     }
 }
