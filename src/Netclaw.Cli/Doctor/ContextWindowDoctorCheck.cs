@@ -55,6 +55,7 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
     private async Task<DoctorCheckResult> ResolveEffectiveContextWindowAsync(
         string modelId, string providerName, CancellationToken ct)
     {
+        string? daemonError = null;
         try
         {
             var status = await daemonApi.GetStatusAsync(ct);
@@ -65,21 +66,37 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
                     $"Auto-detected {daemonCw:N0} tokens for {modelId} (from running daemon).");
             }
         }
-        catch
+        catch (Exception ex)
         {
+            daemonError = ex.GetType().Name;
         }
 
-        var probed = await ContextWindowDoctorProbe.ProbeAsync(paths, modelId, providerName, ct);
-        if (probed is > 0 and var probedCw)
+        string? probeError = null;
+        try
         {
-            return DoctorCheckResult.Pass(
-                "Context Window",
-                $"Auto-detected {probedCw:N0} tokens for {modelId} (from provider).");
+            var probed = await ContextWindowDoctorProbe.ProbeAsync(paths, modelId, providerName, ct);
+            if (probed is > 0 and var probedCw)
+            {
+                return DoctorCheckResult.Pass(
+                    "Context Window",
+                    $"Auto-detected {probedCw:N0} tokens for {modelId} (from provider).");
+            }
+
+            probeError = "provider returned no context window";
+        }
+        catch (Exception ex)
+        {
+            probeError = $"provider probe failed: {ex.GetType().Name}";
         }
 
-        return DoctorCheckResult.Pass(
+        var reasons = new List<string>(2);
+        if (daemonError is not null) reasons.Add($"daemon: {daemonError}");
+        if (probeError is not null) reasons.Add(probeError);
+
+        return DoctorCheckResult.Warning(
             "Context Window",
-            $"No explicit context window configured for {modelId}. " +
-            "At runtime, the daemon auto-detects from the provider (fallback if detection fails: 32,768 tokens).");
+            $"Could not detect context window for {modelId} ({string.Join("; ", reasons)}). " +
+            "At runtime, the daemon will attempt auto-detection from the provider.",
+            "Set Models.Main.ContextWindow in netclaw.json to pin a specific value.");
     }
 }

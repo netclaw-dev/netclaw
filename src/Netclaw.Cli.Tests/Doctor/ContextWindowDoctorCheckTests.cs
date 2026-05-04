@@ -102,7 +102,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task NoExplicitContextWindow_DaemonOffline_ProviderUnreachable_PassesWithInfoMessage()
+    public async Task NoExplicitContextWindow_DaemonOffline_ProviderUnreachable_ReturnsWarning()
     {
         WriteConfig(new
         {
@@ -113,8 +113,9 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         var check = new ContextWindowDoctorCheck(_paths, CreateOfflineDaemonApi());
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("auto-detects from the provider", result.Message);
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Could not detect context window", result.Message);
+        Assert.Contains("daemon:", result.Message);
     }
 
     private void WriteConfig(object config)

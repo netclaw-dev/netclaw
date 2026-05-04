@@ -40,14 +40,7 @@ internal static class ContextWindowDoctorProbe
         if (resolver is null)
             return null;
 
-        try
-        {
-            var result = await resolver.ResolveAsync(modelId, ct);
-            return result?.ContextWindowTokens;
-        }
-        catch
-        {
-            return null;
-        }
+        var result = await resolver.ResolveAsync(modelId, ct);
+        return result?.ContextWindowTokens;
     }
 }

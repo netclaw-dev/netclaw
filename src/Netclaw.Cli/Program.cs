@@ -1741,22 +1741,22 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
         var contextWindow = models.Main.ContextWindow;
         if (contextWindow is null)
         {
-            try
-            {
-                var daemon = sp.GetRequiredService<DaemonApi>();
-                var status = daemon.GetStatusAsync().GetAwaiter().GetResult();
-                if (status?.Model?.ContextWindow is > 0 and var daemonCw)
-                    contextWindow = daemonCw;
-            }
-            catch
-            {
-            }
+            var daemon = sp.GetRequiredService<DaemonApi>();
+            var status = daemon.GetStatusAsync().GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException(
+                    "Daemon returned empty status. Cannot resolve effective context window. " +
+                    "Set Models.Main.ContextWindow in netclaw.json or ensure the daemon is healthy.");
+            contextWindow = status.Model?.ContextWindow is > 0 and var daemonCw
+                ? daemonCw
+                : throw new InvalidOperationException(
+                    $"Daemon reported no context window for model '{models.Main.ModelId}'. " +
+                    "Set Models.Main.ContextWindow in netclaw.json.");
         }
 
         return new ModelCapabilities
         {
             ModelId = models.Main.ModelId,
-            ContextWindowTokens = contextWindow ?? 32_768,
+            ContextWindowTokens = contextWindow.Value,
             CompactionModelId = models.Compaction?.ModelId,
         };
     });
