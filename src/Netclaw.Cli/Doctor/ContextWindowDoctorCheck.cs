@@ -1,55 +1,89 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ContextWindowDoctorCheck.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Nodes;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
 
-public sealed class ContextWindowDoctorCheck(NetclawPaths paths) : IDoctorCheck
+public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemonApi) : IDoctorCheck
 {
-    public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
+    public async Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
         var (root, error) = DoctorJsonConfigReader.TryReadConfig(paths);
         if (error is not null)
-            return Task.FromResult(error);
+            return error;
 
         if (root is null)
-            return Task.FromResult(DoctorCheckResult.Pass("Context Window", "No config file to check."));
+            return DoctorCheckResult.Pass("Context Window", "No config file to check.");
 
         var models = root["Models"] as JsonObject;
         var main = models?["Main"] as JsonObject;
 
         if (main is null)
         {
-            return Task.FromResult(DoctorCheckResult.Warning(
+            return DoctorCheckResult.Warning(
                 "Context Window",
                 "No Models.Main section in config. Using default context window (32,768 tokens).",
-                "Add a Models.Main section with ContextWindow to netclaw.json."));
+                "Add a Models.Main section with ContextWindow to netclaw.json.");
         }
 
         var contextWindow = main["ContextWindow"];
         if (contextWindow is null)
         {
             var modelId = main["ModelId"]?.GetValue<string>() ?? "unknown";
-            return Task.FromResult(DoctorCheckResult.Warning(
-                "Context Window",
-                $"No explicit context window configured for {modelId}. Using default 32,768 tokens.",
-                "Set Models.Main.ContextWindow in netclaw.json to clamp the effective runtime context window if needed."));
+            var providerName = main["Provider"]?.GetValue<string>() ?? "local-ollama";
+            return await ResolveEffectiveContextWindowAsync(modelId, providerName, cancellationToken);
         }
 
         if (contextWindow.GetValue<int>() is var cw and > 0)
         {
-            return Task.FromResult(DoctorCheckResult.Pass(
+            return DoctorCheckResult.Pass(
                 "Context Window",
-                $"Context window explicitly set to {cw:N0} tokens."));
+                $"Context window explicitly set to {cw:N0} tokens.");
         }
 
-        return Task.FromResult(DoctorCheckResult.Error(
+        return DoctorCheckResult.Error(
             "Context Window",
             "Models.Main.ContextWindow must be a positive integer.",
-            "Set Models.Main.ContextWindow to the effective runtime context window size in tokens."));
+            "Set Models.Main.ContextWindow to the effective runtime context window size in tokens.");
+    }
+
+    private async Task<DoctorCheckResult> ResolveEffectiveContextWindowAsync(
+        string modelId, string providerName, CancellationToken ct)
+    {
+        // Tier 1: query running daemon for authoritative resolved value
+        try
+        {
+            var status = await daemonApi.GetStatusAsync(ct);
+            if (status?.Model?.ContextWindow is > 0 and var daemonCw)
+            {
+                return DoctorCheckResult.Pass(
+                    "Context Window",
+                    $"Auto-detected {daemonCw:N0} tokens for {modelId} (from running daemon).");
+            }
+        }
+        catch
+        {
+            // Daemon unreachable — fall through to provider probe
+        }
+
+        // Tier 2: probe provider directly
+        var probed = await ContextWindowDoctorProbe.ProbeAsync(paths, modelId, providerName, ct);
+        if (probed is > 0 and var probedCw)
+        {
+            return DoctorCheckResult.Pass(
+                "Context Window",
+                $"Auto-detected {probedCw:N0} tokens for {modelId} (from provider).");
+        }
+
+        // Tier 3: neither available — informational pass with accurate messaging
+        return DoctorCheckResult.Pass(
+            "Context Window",
+            $"No explicit context window configured for {modelId}. " +
+            "At runtime, the daemon auto-detects from the provider (fallback if detection fails: 32,768 tokens).");
     }
 }

@@ -1736,11 +1736,31 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
     // Session config: bind operator-facing settings
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
     services.AddSingleton(sessionConfig);
-    services.AddSingleton(new ModelCapabilities
+    services.AddSingleton(sp =>
     {
-        ModelId = models.Main.ModelId,
-        ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
-        CompactionModelId = models.Compaction?.ModelId,
+        var contextWindow = models.Main.ContextWindow;
+        if (contextWindow is null)
+        {
+            // Query the running daemon for its resolved context window
+            try
+            {
+                var daemon = sp.GetRequiredService<DaemonApi>();
+                var status = daemon.GetStatusAsync().GetAwaiter().GetResult();
+                if (status?.Model?.ContextWindow is > 0 and var daemonCw)
+                    contextWindow = daemonCw;
+            }
+            catch
+            {
+                // Daemon unreachable — fall through to default
+            }
+        }
+
+        return new ModelCapabilities
+        {
+            ModelId = models.Main.ModelId,
+            ContextWindowTokens = contextWindow ?? 32_768,
+            CompactionModelId = models.Compaction?.ModelId,
+        };
     });
 
     // DaemonClient uses the endpoint from DaemonApi. For non-loopback (remote) endpoints,
