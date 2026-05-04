@@ -1741,7 +1741,6 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
         var contextWindow = models.Main.ContextWindow;
         if (contextWindow is null)
         {
-            // Query the running daemon for its resolved context window
             try
             {
                 var daemon = sp.GetRequiredService<DaemonApi>();
@@ -1751,7 +1750,6 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
             }
             catch
             {
-                // Daemon unreachable — fall through to default
             }
         }
 

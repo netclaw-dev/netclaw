@@ -10,10 +10,6 @@ using Netclaw.Providers.SelfHosted;
 
 namespace Netclaw.Cli.Doctor;
 
-/// <summary>
-/// Probes the configured provider to detect the effective context window
-/// without requiring a running daemon.
-/// </summary>
 internal static class ContextWindowDoctorProbe
 {
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(5);

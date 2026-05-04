@@ -55,7 +55,6 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
     private async Task<DoctorCheckResult> ResolveEffectiveContextWindowAsync(
         string modelId, string providerName, CancellationToken ct)
     {
-        // Tier 1: query running daemon for authoritative resolved value
         try
         {
             var status = await daemonApi.GetStatusAsync(ct);
@@ -68,10 +67,8 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
         }
         catch
         {
-            // Daemon unreachable — fall through to provider probe
         }
 
-        // Tier 2: probe provider directly
         var probed = await ContextWindowDoctorProbe.ProbeAsync(paths, modelId, providerName, ct);
         if (probed is > 0 and var probedCw)
         {
@@ -80,7 +77,6 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
                 $"Auto-detected {probedCw:N0} tokens for {modelId} (from provider).");
         }
 
-        // Tier 3: neither available — informational pass with accurate messaging
         return DoctorCheckResult.Pass(
             "Context Window",
             $"No explicit context window configured for {modelId}. " +
