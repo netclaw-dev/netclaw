@@ -31,10 +31,9 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     [Fact]
     public async Task NoConfigFile_ReturnsWarning()
     {
-        var check = new ContextWindowDoctorCheck(_paths, CreateOfflineDaemonApi());
+        var check = CreateCheck(CreateOfflineDaemonApi());
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        // TryReadConfig returns a Warning when the config file doesn't exist
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Config file not found", result.Message);
     }
@@ -43,7 +42,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     public async Task NoModelsMainSection_ReturnsWarning()
     {
         WriteConfig(new { configVersion = 1 });
-        var check = new ContextWindowDoctorCheck(_paths, CreateOfflineDaemonApi());
+        var check = CreateCheck(CreateOfflineDaemonApi());
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
@@ -59,7 +58,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
             configVersion = 1,
             Models = new { Main = new { ModelId = "test-model", Provider = "local-ollama", ContextWindow = 131072 } }
         });
-        var check = new ContextWindowDoctorCheck(_paths, CreateOfflineDaemonApi());
+        var check = CreateCheck(CreateOfflineDaemonApi());
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
@@ -75,7 +74,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
             configVersion = 1,
             Models = new { Main = new { ModelId = "test-model", Provider = "local-ollama", ContextWindow = -1 } }
         });
-        var check = new ContextWindowDoctorCheck(_paths, CreateOfflineDaemonApi());
+        var check = CreateCheck(CreateOfflineDaemonApi());
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
@@ -92,8 +91,8 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         });
 
         var daemonApi = CreateDaemonApi(_ => JsonResponse(BuildStatusResponse(262144)));
+        var check = CreateCheck(daemonApi);
 
-        var check = new ContextWindowDoctorCheck(_paths, daemonApi);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
@@ -102,7 +101,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task NoExplicitContextWindow_DaemonOffline_ProviderUnreachable_ReturnsWarning()
+    public async Task NoExplicitContextWindow_DaemonOffline_ProviderProbeSucceeds_Passes()
     {
         WriteConfig(new
         {
@@ -110,12 +109,72 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
             Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
         });
 
-        var check = new ContextWindowDoctorCheck(_paths, CreateOfflineDaemonApi());
+        var check = CreateCheck(
+            CreateOfflineDaemonApi(),
+            probeResult: 131072);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("131,072", result.Message);
+        Assert.Contains("from provider", result.Message);
+    }
+
+    [Fact]
+    public async Task NoExplicitContextWindow_DaemonOffline_ProviderProbeThrows_ReturnsWarning()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
+        });
+
+        var check = CreateCheck(
+            CreateOfflineDaemonApi(),
+            probeException: new HttpRequestException("connection refused"));
+
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("Could not detect context window", result.Message);
         Assert.Contains("daemon:", result.Message);
+        Assert.Contains("provider probe failed: HttpRequestException", result.Message);
+    }
+
+    [Fact]
+    public async Task NoExplicitContextWindow_DaemonOffline_ProviderReturnsNull_ReturnsWarning()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama" } }
+        });
+
+        var check = CreateCheck(
+            CreateOfflineDaemonApi(),
+            probeResult: null);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Could not detect context window", result.Message);
+        Assert.Contains("provider returned no context window", result.Message);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+
+    private ContextWindowDoctorCheck CreateCheck(
+        DaemonApi daemonApi,
+        int? probeResult = null,
+        Exception? probeException = null)
+    {
+        Task<int?> FakeProbe(NetclawPaths _, string __, string ___, CancellationToken ____)
+        {
+            if (probeException is not null) throw probeException;
+            return Task.FromResult(probeResult);
+        }
+
+        return new ContextWindowDoctorCheck(_paths, daemonApi, FakeProbe);
     }
 
     private void WriteConfig(object config)

@@ -9,11 +9,30 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
 
-public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemonApi) : IDoctorCheck
+public sealed class ContextWindowDoctorCheck : IDoctorCheck
 {
+    private readonly NetclawPaths _paths;
+    private readonly DaemonApi _daemonApi;
+    private readonly Func<NetclawPaths, string, string, CancellationToken, Task<int?>> _probeProvider;
+
+    public ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemonApi)
+        : this(paths, daemonApi, ContextWindowDoctorProbe.ProbeAsync)
+    {
+    }
+
+    internal ContextWindowDoctorCheck(
+        NetclawPaths paths,
+        DaemonApi daemonApi,
+        Func<NetclawPaths, string, string, CancellationToken, Task<int?>> probeProvider)
+    {
+        _paths = paths;
+        _daemonApi = daemonApi;
+        _probeProvider = probeProvider;
+    }
+
     public async Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
-        var (root, error) = DoctorJsonConfigReader.TryReadConfig(paths);
+        var (root, error) = DoctorJsonConfigReader.TryReadConfig(_paths);
         if (error is not null)
             return error;
 
@@ -58,7 +77,7 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
         string? daemonError = null;
         try
         {
-            var status = await daemonApi.GetStatusAsync(ct);
+            var status = await _daemonApi.GetStatusAsync(ct);
             if (status?.Model?.ContextWindow is > 0 and var daemonCw)
             {
                 return DoctorCheckResult.Pass(
@@ -74,7 +93,7 @@ public sealed class ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemo
         string? probeError = null;
         try
         {
-            var probed = await ContextWindowDoctorProbe.ProbeAsync(paths, modelId, providerName, ct);
+            var probed = await _probeProvider(_paths, modelId, providerName, ct);
             if (probed is > 0 and var probedCw)
             {
                 return DoctorCheckResult.Pass(

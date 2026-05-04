@@ -237,16 +237,50 @@ if [[ "$cleared_list" == *"$ALT_MODEL"* ]]; then
   exit 1
 fi
 
-# ── Session browsing smoke tests ──
-# These tests verify the session catalog API and help text for session
-# resume functionality. Requires daemon + provider + model to be configured
-# (done by the provider/model tests above).
+# ── Context window auto-detection smoke test ──
+# Verifies that netclaw doctor and netclaw status report the provider-detected
+# context window (not the 32k hardcoded default) when no explicit ContextWindow
+# is configured. Requires daemon + provider + model configured (done above).
 
-echo "Restarting daemon for session tests..."
+echo "Restarting daemon for context window and session tests..."
 start_daemon_with_timeout
 
 echo "Waiting for daemon health endpoint..."
 wait_for_health
+
+echo "Verifying context window auto-detection via status API..."
+ctx_json="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" curl -fsS http://127.0.0.1:5199/api/health/status)"
+ctx_window="$(echo "$ctx_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('model',{}).get('contextWindow',0))")"
+echo "Daemon reports context window: $ctx_window tokens"
+if [[ "$ctx_window" -le 32768 ]]; then
+  # qwen2:0.5b has a context window > 32k that Ollama reports via /api/show.
+  # If we get exactly 32768 or less, auto-detection failed and we hit the
+  # hardcoded default — which is the bug this test guards against.
+  echo "WARNING: Context window is $ctx_window (≤ 32768). Auto-detection may not have worked."
+  echo "This is acceptable for models with native 32k context, but unexpected for most models."
+fi
+
+echo "Verifying netclaw doctor reports auto-detected context window..."
+doctor_output="$(run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw doctor 2>&1 || true)"
+echo "$doctor_output"
+if [[ "$doctor_output" == *"Using default 32,768 tokens"* ]]; then
+  echo "FAIL: netclaw doctor still reports the hardcoded 32k default."
+  echo "Expected 'Auto-detected' message from running daemon."
+  exit 1
+fi
+if [[ "$doctor_output" == *"Auto-detected"* ]]; then
+  echo "PASS: netclaw doctor shows auto-detected context window."
+elif [[ "$doctor_output" == *"Context window explicitly set"* ]]; then
+  echo "PASS: context window explicitly configured (no auto-detection needed)."
+else
+  echo "FAIL: unexpected doctor output for context window check."
+  exit 1
+fi
+
+# ── Session browsing smoke tests ──
+# These tests verify the session catalog API and help text for session
+# resume functionality. Requires daemon + provider + model to be configured
+# (done by the provider/model tests above).
 
 echo "Sending a headless prompt to create a session..."
 run_sandbox_timed "$STEP_TIMEOUT_SECONDS" netclaw chat -p "Say hello in one word" || true
