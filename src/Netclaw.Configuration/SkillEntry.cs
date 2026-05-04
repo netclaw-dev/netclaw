@@ -57,7 +57,7 @@ public sealed record SkillEntry(
     /// <summary>
     /// When <c>false</c>, the user cannot invoke this skill via <c>/name</c>.
     /// The LLM can still auto-load it from the compressed index.
-    /// From frontmatter <c>user-invocable</c>. Default: <c>true</c>.
+    /// From frontmatter <c>invocable</c>. Default: <c>true</c>.
     /// </summary>
     public bool UserInvocable { get; init; } = true;
 

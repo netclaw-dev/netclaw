@@ -794,7 +794,7 @@ public sealed class SkillFrontmatter
     [YamlMember(Alias = "disable-model-invocation")]
     public bool DisableModelInvocation { get; set; }
 
-    [YamlMember(Alias = "user-invocable")]
+    [YamlMember(Alias = "invocable")]
     public bool UserInvocable { get; set; } = true;
 
     [YamlMember(Alias = "argument-hint")]

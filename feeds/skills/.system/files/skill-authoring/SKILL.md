@@ -94,7 +94,7 @@ license: MIT
 compatibility: "Requires Python 3.10+"
 allowed-tools: shell_execute web_search
 disable-model-invocation: true
-user-invocable: false
+invocable: false
 argument-hint: "[target environment]"
 metadata:
   author: your-name
@@ -109,7 +109,7 @@ metadata:
 | `compatibility` | Environment requirements (max 500 chars) |
 | `allowed-tools` | Space-delimited tool names this skill needs. Used for audience filtering — if the session lacks these tools, the skill is hidden from the index |
 | `disable-model-invocation` | When `true`, the LLM cannot auto-load this skill. Only the user can invoke it via `/name`. Use for side-effect workflows where timing matters (deploys, diagnostics) |
-| `user-invocable` | When `false`, the user cannot invoke via `/name`. Only the LLM auto-loads it. Use for background guidance (reference material, policies) |
+| `invocable` | When `false`, the user cannot invoke via `/name`. Only the LLM auto-loads it. Use for background guidance (reference material, policies) |
 | `argument-hint` | Shown after the slash command name for discoverability (e.g., `/deploy [env]`) |
 | `metadata.subagent` | Optional declarative route target. When set, first-party activation uses the named user-facing subagent instead of inline skill injection |
 | `metadata.version` | Semantic version for cache invalidation and feed tracking |
@@ -155,7 +155,7 @@ Authoring guidance:
 |---------|-------------|----------------|
 | (defaults) | Yes | Yes |
 | `disable-model-invocation: true` | Yes | No |
-| `user-invocable: false` | No | Yes |
+| `invocable: false` | No | Yes |
 
 ### Markdown Body
 

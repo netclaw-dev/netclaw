@@ -346,6 +346,11 @@ start_eval_daemon() {
         echo "WARN: no system skills at $REPO_ROOT/feeds/skills/.system/files/ — Skill Discovery evals will fail." >&2
     fi
 
+    # Copy user skills from eval fixtures (non-system skills for activation testing).
+    if [[ -d "$REPO_ROOT/evals/fixtures/skills" ]]; then
+        cp -r "$REPO_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
+    fi
+
     local -a docker_args=(
         run -d --rm
         --name "$EVAL_CONTAINER_NAME"
@@ -808,6 +813,10 @@ daemon_log_skill_loaded() {
     daemon_log_tail | grep -qE "turn_skill_loaded skill=$skill_name" 2>/dev/null
 }
 
+daemon_log_no_skill_loaded() {
+    ! daemon_log_tail | grep -qE "turn_skill_loaded" 2>/dev/null
+}
+
 # ─── Case Assertion Functions ─────────────────────────────────────────────────
 
 # Category 1: Identity & Self-Awareness
@@ -863,6 +872,33 @@ assert_skill_activation_memory() {
 
 assert_skill_activation_search() {
     daemon_log_skill_loaded 'search-citation'
+}
+
+# Soft phrasing — natural language without mentioning "Netclaw"
+assert_skill_activation_soft_scheduling() {
+    daemon_log_skill_loaded 'netclaw-operations'
+}
+
+assert_skill_activation_soft_memory() {
+    daemon_log_skill_loaded 'netclaw-memory'
+}
+
+# User skills (non-system, from eval fixtures)
+assert_skill_activation_user_coding() {
+    daemon_log_skill_loaded 'modern-csharp-coding-standards'
+}
+
+assert_skill_activation_user_serialization() {
+    daemon_log_skill_loaded 'serialization'
+}
+
+# Negative cases — model should NOT load a skill for unrelated prompts
+assert_skill_no_activation_unrelated() {
+    daemon_log_no_skill_loaded
+}
+
+assert_skill_no_activation_general_code() {
+    daemon_log_no_skill_loaded
 }
 
 # Category 3: Memory Pipeline
@@ -1180,6 +1216,39 @@ run_all() {
         "What is Netclaw's exact citation format policy for web search results?" \
         "What are the rules for when to include inline citations vs not?" \
         "When should I use web_search versus web_fetch according to Netclaw's policy?"
+
+    # Soft phrasing — natural language, no "Netclaw" mention
+    run_case skill_activation_soft_scheduling "skill loaded" \
+        "Remind me to check the deploy in 2 hours" \
+        "Set up a recurring check every morning at 9am on weekdays" \
+        "Can you ping me about the PR review tomorrow afternoon?"
+
+    run_case skill_activation_soft_memory "skill loaded" \
+        "What did we discuss last time about the API redesign?" \
+        "Do you remember what database we decided to use?" \
+        "What do you know about my project preferences?"
+
+    # User skills (non-system, loaded from eval fixtures)
+    run_case skill_activation_user_coding "skill loaded" \
+        "Should I use a record or a class for this DTO?" \
+        "What's the best way to model a value object in C#?" \
+        "Is it better to use pattern matching or if-else chains here?"
+
+    run_case skill_activation_user_serialization "skill loaded" \
+        "What serializer should I use for our new event format?" \
+        "Should I stick with Newtonsoft.Json or migrate to something else?" \
+        "How should I handle serialization for messages between services?"
+
+    # Negative cases — model should NOT load a skill
+    run_case skill_no_activation_unrelated "no skill loaded" \
+        "What's 2 + 2?" \
+        "Tell me a joke" \
+        "What year did World War 2 end?"
+
+    run_case skill_no_activation_general_code "no skill loaded" \
+        "Write a Python hello world script" \
+        "How do I reverse a string in JavaScript?" \
+        "Explain what a linked list is"
 
     end_category
 

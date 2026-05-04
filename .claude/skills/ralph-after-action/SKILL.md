@@ -1,7 +1,7 @@
 /---
 name: ralph-after-action
 description: Orchestrates post-run evaluation: system diagnostics + adversarial output review. Writes postmortem, updates IMPLEMENTATION_PLAN.md with NOW fix-its, parks non-urgent items, and proposes skill/tooling evolutions.
-user-invocable: true
+invocable: true
 ---
 
 # RALPH After-Action Review (Orchestrator)
