@@ -98,11 +98,11 @@ public sealed class ShellApprovalMatcherTests
     [InlineData("cat /etc/passwd", "cat /etc/shadow", false)]
     [InlineData("bash /home/.netclaw/scripts/monitor.sh", "bash /home/.netclaw/scripts/monitor.sh", true)]
     [InlineData("bash /home/.netclaw/scripts/monitor.sh", "bash /tmp/evil.sh", false)]
-    // Single-token path-aware verbs wildcard-match (Claude Code model)
-    [InlineData("cat", "cat /etc/passwd", true)]
-    [InlineData("grep", "grep TODO", true)]
-    [InlineData("bash", "bash /tmp/script.sh", true)]
-    [InlineData("find", "find /var/log", true)]
+    // Single-token path-aware verbs stay exact-only
+    [InlineData("cat", "cat /etc/passwd", false)]
+    [InlineData("grep", "grep TODO", false)]
+    [InlineData("bash", "bash /tmp/script.sh", false)]
+    [InlineData("find", "find /var/log", false)]
     // Non-path-aware single tokens still require exact match
     [InlineData("echo", "echo hello", false)]
     [InlineData("docker", "docker compose", false)]

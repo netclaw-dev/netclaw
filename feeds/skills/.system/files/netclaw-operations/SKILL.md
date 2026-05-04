@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.22.0"
+  version: "1.23.0"
 ---
 
 # Netclaw Operations
@@ -144,11 +144,11 @@ the reminder fires.
 If the user has already approved the patterns in a previous session, no action is
 needed — grants persist across sessions.
 
-**Path restrictions:** Even with an approved verb, reminders are sandboxed to
+**Path restrictions:** Even with an approved command pattern, reminders are sandboxed to
 trust zone paths (session dir, workspaces, project directory, skills, identity).
-A reminder approved for `cat` can read files in workspaces but NOT arbitrary
-system paths like `/etc/shadow`. If a reminder needs access outside trust zones,
-the user must configure additional trusted roots.
+A reminder approved for `cat /srv/app/log.txt` can read that file inside trust
+zones but NOT arbitrary system paths like `/etc/shadow`. If a reminder needs
+access outside trust zones, the user must configure additional trusted roots.
 
 **If a reminder fails with `command_not_pre_approved`:** The command pattern was
 not in the approval store. Run the command interactively to trigger approval,
@@ -300,6 +300,23 @@ file edit, and approval should be scoped to the target.
 If a user asks why they're being prompted so often, explain the security
 tradeoff and point them at `netclaw` CLI tooling for reviewing and trimming
 `tool-approvals.json` if the grant list grows unmanageable.
+
+If approval matching seems stale after an upgrade, delete the approval file and
+rebuild grants interactively:
+
+macOS/Linux:
+
+```bash
+rm ~/.netclaw/config/tool-approvals.json
+```
+
+PowerShell:
+
+```powershell
+Remove-Item "$HOME/.netclaw/config/tool-approvals.json" -Force
+```
+
+Then restart the daemon so in-memory session approvals are cleared too.
 
 ## Skill Management
 

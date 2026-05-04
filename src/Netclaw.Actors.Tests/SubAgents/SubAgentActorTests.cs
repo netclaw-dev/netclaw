@@ -124,6 +124,56 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task Approve_once_does_not_leak_between_subagent_tool_calls()
+    {
+        var fakeTool = new FakeNetclawTool("shell_execute", "ok");
+        var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            toolConfig,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+        var fakeClient = new SequencedToolCallChatClient(
+            [
+                new FunctionCallContent(
+                    "call-approval-1",
+                    "shell_execute",
+                    new Dictionary<string, object?> { ["Command"] = "git push origin main" }),
+                new FunctionCallContent(
+                    "call-approval-2",
+                    "shell_execute",
+                    new Dictionary<string, object?> { ["Command"] = "git push origin main" })
+            ]);
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Run the same approval-gated tool twice",
+                Timeout = TimeSpan.FromSeconds(5),
+                ApprovalBridge = approvalBridge
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(2, approvalBridge.RequestCount);
+        Assert.Equal(["git push", "git push"], approvalBridge.RequestedPatterns);
+    }
+
+    [Fact]
     public async Task Max_iterations_forces_text_response()
     {
         var fakeTool = new FakeNetclawTool("looper", "loop result");
@@ -472,4 +522,69 @@ internal sealed class RecordingMcpToolInvoker(string result) : IMcpToolInvoker
         Audience = context?.Audience;
         return Task.FromResult(result);
     }
+}
+
+internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decisionToReturn) : IParentApprovalBridge
+{
+    public int RequestCount { get; private set; }
+    public List<string> RequestedPatterns { get; } = [];
+
+    public Task<ParentApprovalDecision> RequestApprovalAsync(
+        ToolCallId callId,
+        string toolName,
+        string displayText,
+        IReadOnlyList<string> unapprovedPatterns,
+        CancellationToken ct)
+    {
+        RequestCount++;
+        RequestedPatterns.AddRange(unapprovedPatterns);
+        return Task.FromResult(decisionToReturn);
+    }
+}
+
+internal sealed class SequencedToolCallChatClient(IReadOnlyList<FunctionCallContent> toolCalls) : IChatClient
+{
+    private int _callCount;
+
+    public Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("Streaming path is used in subagent tests.");
+    }
+
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => CreateStreamingUpdatesAsync(cancellationToken);
+
+    private async IAsyncEnumerable<ChatResponseUpdate> CreateStreamingUpdatesAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        _callCount++;
+
+        ChatResponse response;
+        if (_callCount <= toolCalls.Count)
+        {
+            response = new ChatResponse(
+                new ChatMessage(ChatRole.Assistant, [toolCalls[_callCount - 1]]));
+        }
+        else
+        {
+            response = new ChatResponse(
+                new ChatMessage(ChatRole.Assistant, [new TextContent("[fake] finished") ]));
+        }
+
+        foreach (var update in response.ToChatResponseUpdates())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return update;
+            await Task.Yield();
+        }
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
 }

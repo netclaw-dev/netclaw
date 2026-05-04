@@ -153,7 +153,7 @@ public sealed class ToolAccessPolicy
         {
             if (_shellTrustZonePolicy is null)
             {
-                if (ShellCommandHasPathArguments(shellCommand))
+                if (ShellCommandHasTrustZoneSensitiveInputs(shellCommand, workingDirectory))
                     return ToolAccessDecision.Deny("shell_trust_zone_policy_not_configured");
             }
             else
@@ -177,21 +177,23 @@ public sealed class ToolAccessPolicy
         string? workingDirectory,
         ToolExecutionContext context)
     {
-        var tokens = ShellTokenizer.Tokenize(shellCommand);
-        var pathTokens = new List<string>();
-
-        foreach (var token in tokens)
-        {
-            if (ShellTokenizer.LooksLikePath(token))
-                pathTokens.Add(token);
-        }
-
-        if (pathTokens.Count == 0)
-            return null;
-
         var roots = _shellTrustZonePolicy!.GetTrustZoneRoots(context);
         if (roots.Count == 0)
             return ToolAccessDecision.Deny("shell_no_trust_zone_roots");
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            var expandedWorkingDirectory = ExpandShellPath(workingDirectory, workingDirectory: null);
+            if (expandedWorkingDirectory is null)
+                return ToolAccessDecision.Deny("shell_invalid_working_directory");
+
+            if (!IsPathWithinAnyRoot(expandedWorkingDirectory, roots))
+                return ToolAccessDecision.Deny("shell_working_directory_outside_trust_zone");
+        }
+
+        var pathTokens = ExtractShellPathTokens(shellCommand);
+        if (pathTokens.Count == 0)
+            return null;
 
         foreach (var pathToken in pathTokens)
         {
@@ -204,6 +206,22 @@ public sealed class ToolAccessPolicy
         }
 
         return null;
+    }
+
+    private static IReadOnlyList<string> ExtractShellPathTokens(string shellCommand)
+    {
+        var pathTokens = new List<string>();
+        foreach (var segment in ShellTokenizer.GetAllCommandSegments(shellCommand))
+        {
+            foreach (var token in ShellTokenizer.Tokenize(segment))
+            {
+                var trimmed = TrimShellTokenPunctuation(token);
+                if (ShellTokenizer.LooksLikePath(trimmed))
+                    pathTokens.Add(trimmed);
+            }
+        }
+
+        return pathTokens;
     }
 
     private static string? ExpandShellPath(string token, string? workingDirectory)
@@ -244,12 +262,15 @@ public sealed class ToolAccessPolicy
 
     private static bool IsPathWithinAnyRoot(string fullPath, IReadOnlyList<string> roots)
     {
-        var normalized = fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var normalized = NormalizeDirectoryComparisonPath(fullPath);
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
         foreach (var root in roots)
         {
-            var normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (!normalized.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
+            var normalizedRoot = NormalizeDirectoryComparisonPath(root);
+            if (!normalized.StartsWith(normalizedRoot, comparison))
                 continue;
             if (normalized.Length == normalizedRoot.Length)
                 return true;
@@ -261,11 +282,20 @@ public sealed class ToolAccessPolicy
         return false;
     }
 
+    private static string NormalizeDirectoryComparisonPath(string path)
+        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+    private static bool ShellCommandHasTrustZoneSensitiveInputs(string shellCommand, string? workingDirectory)
+        => !string.IsNullOrWhiteSpace(workingDirectory) || ShellCommandHasPathArguments(shellCommand);
+
+    private static string TrimShellTokenPunctuation(string token)
+        => token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
+
     private static bool ShellCommandHasPathArguments(string shellCommand)
     {
-        foreach (var token in ShellTokenizer.Tokenize(shellCommand))
+        foreach (var token in ExtractShellPathTokens(shellCommand))
         {
-            if (ShellTokenizer.LooksLikePath(token))
+            if (!string.IsNullOrWhiteSpace(token))
                 return true;
         }
 

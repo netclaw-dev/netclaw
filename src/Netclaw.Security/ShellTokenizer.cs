@@ -357,6 +357,24 @@ public static class ShellTokenizer
         return false;
     }
 
+    /// <summary>
+    /// Returns true when the pattern is a single-token shell approval for a
+    /// path-aware verb such as <c>cat</c> or <c>bash</c>.
+    /// </summary>
+    public static bool IsSingleTokenPathAwarePattern(string pattern)
+    {
+        var trimmed = TrimShellPunctuation(pattern).Trim();
+        if (trimmed.Length == 0)
+            return false;
+
+        if (trimmed.IndexOfAny([' ', '\t', '\n', '\r']) >= 0)
+        {
+            return false;
+        }
+
+        return PathAwareVerbs.Contains(trimmed);
+    }
+
     internal static string TrimShellPunctuation(string token)
     {
         return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');

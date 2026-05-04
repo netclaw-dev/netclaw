@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
@@ -18,15 +19,27 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
     private readonly IApprovalChannel _channel;
     private readonly Action<ToolInteractionRequest> _emitRequest;
     private readonly SessionId _sessionId;
+    private readonly string? _requesterSenderId;
+    private readonly PrincipalClassification? _requesterPrincipal;
+    private readonly bool _hasAdoptedContext;
+    private readonly IReadOnlyList<string> _adoptedSpeakerIds;
 
     public ParentSessionApprovalBridge(
         IApprovalChannel channel,
         Action<ToolInteractionRequest> emitRequest,
-        SessionId sessionId)
+        SessionId sessionId,
+        string? requesterSenderId,
+        PrincipalClassification? requesterPrincipal,
+        bool hasAdoptedContext,
+        IReadOnlyList<string> adoptedSpeakerIds)
     {
         _channel = channel;
         _emitRequest = emitRequest;
         _sessionId = sessionId;
+        _requesterSenderId = requesterSenderId;
+        _requesterPrincipal = requesterPrincipal;
+        _hasAdoptedContext = hasAdoptedContext;
+        _adoptedSpeakerIds = adoptedSpeakerIds;
     }
 
     public async Task<ParentApprovalDecision> RequestApprovalAsync(
@@ -45,7 +58,12 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             CallId = callId.Value,
             ToolName = toolName,
             DisplayText = displayText,
+            RequesterSenderId = _requesterSenderId,
+            RequesterPrincipal = _requesterPrincipal,
             Patterns = unapprovedPatterns,
+            HasAdoptedContext = _hasAdoptedContext,
+            AdoptedSpeakerIds = _adoptedSpeakerIds,
+            PersistedAdoptedContext = _hasAdoptedContext,
             Options =
             [
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),

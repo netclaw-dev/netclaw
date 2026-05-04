@@ -446,6 +446,53 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.Contains("approval default on Personal", result.Message);
     }
 
+    [Fact]
+    public async Task StalePathAwareShellApprovals_WarnWithResetInstructions()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "ShellMode": "HostAllowed",
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "ApprovalPolicy": {
+                      "ToolOverrides": { "shell_execute": "Approval" }
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              }
+            }
+            """);
+
+        File.WriteAllText(
+            _paths.ToolApprovalsPath,
+            """
+            {
+              "audiences": {
+                "personal": {
+                  "shell_execute": ["cat", "git push"]
+                }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("bare path-aware command patterns", result.Message);
+        Assert.Contains("cat", result.Message);
+        Assert.Contains("Delete", result.Message);
+        Assert.Contains(_paths.ToolApprovalsPath, result.Message);
+    }
+
     private void WriteConfig(object config)
     {
         File.WriteAllText(

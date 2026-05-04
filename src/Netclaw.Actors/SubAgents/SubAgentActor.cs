@@ -399,9 +399,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             var tasks = toolCalls.Select(async tc =>
             {
+                var toolContext = CreatePerToolExecutionContext(executionContext);
                 try
                 {
-                    var result = await executor.ExecuteAsync(tc, executionContext, ct);
+                    var result = await executor.ExecuteAsync(tc, toolContext, ct);
                     return new SerializableChatMessage
                     {
                         Role = Protocol.ChatRole.Tool,
@@ -425,14 +426,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         or ParentApprovalDecision.ApprovedSession
                         or ParentApprovalDecision.ApprovedAlways)
                     {
-                        // Always set one-time bypass for the immediate retry — the
-                        // sub-agent's scope ID differs from the parent session ID, so
-                        // session/always grants recorded by the parent won't be visible
-                        // to the sub-agent's executor until the approval service propagates.
-                        executionContext.OneTimeApprovedToolName = tc.Name;
-                        executionContext.SetOneTimeApprovedPatterns(ctx.UnapprovedPatterns);
+                        // The immediate retry needs a transient grant even for session/always
+                        // approvals because the sub-agent's scope ID differs from the parent
+                        // session's scope. Keep that retry-local so approve-once cannot bleed
+                        // across parallel tool calls or later iterations.
+                        var retryContext = CreatePerToolExecutionContext(executionContext);
+                        retryContext.OneTimeApprovedToolName = tc.Name;
+                        retryContext.SetOneTimeApprovedPatterns(ctx.UnapprovedPatterns);
 
-                        var result = await executor.ExecuteAsync(tc, executionContext, ct);
+                        var result = await executor.ExecuteAsync(tc, retryContext, ct);
                         return new SerializableChatMessage
                         {
                             Role = Protocol.ChatRole.Tool,
@@ -476,6 +478,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             self.Tell(new ToolExecutionFailed { Cause = ex });
         }
     }
+
+    private static ToolExecutionContext CreatePerToolExecutionContext(ToolExecutionContext source)
+        => new(source.SessionId, source.SessionDirectory)
+        {
+            Audience = source.Audience,
+            Boundary = source.Boundary,
+            RequestedTimeoutSeconds = source.RequestedTimeoutSeconds,
+            ChannelType = source.ChannelType,
+            SupportsInteractiveApproval = source.SupportsInteractiveApproval,
+            OnSubAgentActivity = source.OnSubAgentActivity,
+            SpawnChildActor = source.SpawnChildActor,
+            ApprovalBridge = source.ApprovalBridge
+        };
 
     /// <summary>Singleton timeout marker message.</summary>
     private sealed class SubAgentTimeout

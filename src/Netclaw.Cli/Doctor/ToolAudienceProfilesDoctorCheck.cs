@@ -9,6 +9,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Cli.Doctor;
 
@@ -307,9 +308,6 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         if (!File.Exists(approvalsPath))
             return;
 
-        if (toolConfig.ShellMode != ShellExecutionMode.Off)
-            return;
-
         try
         {
             var store = new ToolApprovalStore(approvalsPath);
@@ -317,12 +315,29 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
             foreach (var (audienceKey, tools) in data.Audiences)
             {
-                if (tools.ContainsKey(ShellTool.ToolName))
+                if (!tools.TryGetValue(ShellTool.ToolName, out var patterns))
+                    continue;
+
+                if (toolConfig.ShellMode == ShellExecutionMode.Off)
                 {
                     warnings.Add(
                         $"Persistent approvals exist for {audienceKey}.{ShellTool.ToolName} " +
                         "but shell is disabled.");
                 }
+
+                var stalePathAwarePatterns = patterns
+                    .Where(ShellTokenizer.IsSingleTokenPathAwarePattern)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Order(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+
+                if (stalePathAwarePatterns.Length == 0)
+                    continue;
+
+                warnings.Add(
+                    $"Persistent shell approvals for audience '{audienceKey}' contain bare path-aware command patterns " +
+                    $"({string.Join(", ", stalePathAwarePatterns)}). These no longer pre-approve path-targeting shell commands. " +
+                    $"Delete '{approvalsPath}' and restart the daemon to rebuild approvals under the stricter matcher.");
             }
         }
         catch (Exception ex)
