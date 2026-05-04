@@ -2438,7 +2438,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
 
     private static readonly string SkillHintText =
-        "[skill-hint] If this topic is covered by a skill in [available-skills], call skill_load(name=\"...\") before answering.";
+        "[skill-hint] Before answering any technical or knowledge question, scan [available-skills] for a relevant skill and call skill_load(name=\"...\"). " +
+        "Skills contain user-specific preferences and project conventions that override your general knowledge — even if you already know a topic, the user may have standards defined in a skill. " +
+        "When in doubt, load — a redundant load is cheap, a missed skill is not.";
 
     /// <summary>
     /// Returns a generic per-turn skill reminder when skills are available,

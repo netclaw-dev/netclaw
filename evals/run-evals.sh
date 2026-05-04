@@ -1230,9 +1230,9 @@ run_all() {
 
     # User skills (non-system, loaded from eval fixtures)
     run_case skill_activation_user_coding "skill loaded" \
-        "Should I use a record or a class for this DTO?" \
+        "In C#, should I use a record or a class for this DTO?" \
         "What's the best way to model a value object in C#?" \
-        "Is it better to use pattern matching or if-else chains here?"
+        "Should I use pattern matching or if-else chains in my C# code?"
 
     run_case skill_activation_user_serialization "skill loaded" \
         "What serializer should I use for our new event format?" \
