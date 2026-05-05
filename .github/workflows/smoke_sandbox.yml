@@ -41,9 +41,15 @@ jobs:
         with:
           global-json-file: ./global.json
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build smoke sandbox image
-        timeout-minutes: 10
+        timeout-minutes: 15
         shell: bash
+        env:
+          DOCKER_CACHE_FROM: type=gha
+          DOCKER_CACHE_TO: type=gha,mode=max
         run: |
           chmod +x scripts/docker/build-image.sh
           IMAGE_REPO=netclaw-smoke \
