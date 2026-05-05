@@ -16,7 +16,8 @@ public static class DaemonControlPlaneEndpointResolver
     public static string ResolveFallbackEndpoint(DaemonConfig daemonConfig)
     {
         var host = NormalizeConnectHost(daemonConfig.Host);
-        return $"http://{host}:{daemonConfig.Port}";
+        var formattedHost = host.Contains(':', StringComparison.Ordinal) ? $"[{host}]" : host;
+        return $"http://{formattedHost}:{daemonConfig.Port}";
     }
 
     public static string NormalizeConnectHost(string? host)

@@ -154,6 +154,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         _bootstrapDevice = new PairedDevice
         {
             Name = Environment.MachineName,
+            IsBootstrapDevice = true,
             TokenHash = tokenHash,
             Salt = saltHex,
             CreatedAt = now,

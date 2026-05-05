@@ -331,6 +331,7 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
         Assert.NotNull(devices);
         Assert.Single(devices);
         Assert.Equal(Environment.MachineName, devices[0].Name);
+        Assert.True(devices[0].IsBootstrapDevice);
     }
 
     [Fact]

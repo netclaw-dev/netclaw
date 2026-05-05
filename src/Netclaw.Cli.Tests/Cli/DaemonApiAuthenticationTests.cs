@@ -120,6 +120,16 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     }
 
     [Fact]
+    public void ResolveEndpoint_FormatsIpv6BindAddress()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Host\":\"::1\",\"Port\":5199}}");
+
+        var endpoint = DaemonApi.ResolveEndpoint(_paths);
+
+        Assert.Equal("http://[::1]:5199", endpoint);
+    }
+
+    [Fact]
     public void ResolveEndpoint_EnvironmentOverride_WinsOverClientConfig()
     {
         ClientConfigFile.WriteEndpoint(_paths, "http://192.168.1.50:5199");

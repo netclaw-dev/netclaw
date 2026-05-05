@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -90,15 +91,24 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     /// <exception cref="HubException">Thrown when the caller is not a daemon-host operator.</exception>
     public Task<PairingCodeResultDto> GeneratePairingCode()
     {
+        var remoteIp = Context.GetHttpContext()?.Connection.RemoteIpAddress;
         var transport = Context.User?.FindFirst(NetclawClaimTypes.TransportAuthenticity)?.Value;
         var isBootstrapDevice = bool.TryParse(
             Context.User?.FindFirst(NetclawClaimTypes.BootstrapDevice)?.Value,
             out var bootstrapDevice)
             && bootstrapDevice;
+
+        var bootstrapOnLoopback = isBootstrapDevice && remoteIp is not null && IPAddress.IsLoopback(remoteIp);
         if (transport != nameof(TransportAuthenticity.LocalProcess) && !isBootstrapDevice)
         {
             throw new HubException(
                 "GeneratePairingCode requires a daemon-host local operator connection or the local bootstrap device token.");
+        }
+
+        if (transport != nameof(TransportAuthenticity.LocalProcess) && !bootstrapOnLoopback)
+        {
+            throw new HubException(
+                "GeneratePairingCode requires the bootstrap device token to be used from the daemon host loopback endpoint.");
         }
 
         var (formattedCode, expiresAt) = _pairingCodeService.GenerateCode();
