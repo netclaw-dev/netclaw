@@ -49,6 +49,10 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
 
         var host = daemonNode?["Host"]?.GetValue<string>() ?? "127.0.0.1";
         var modeStr = daemonNode?["ExposureMode"]?.GetValue<string>() ?? "local";
+        var trustedProxies = daemonNode?["TrustedProxies"] is JsonArray trustedProxyArray
+            ? trustedProxyArray.Select(static node => node?.GetValue<string>() ?? string.Empty).ToArray()
+            : [];
+        var skipTunnelProcessCheck = daemonNode?["SkipTunnelProcessCheck"]?.GetValue<bool>() ?? false;
 
         ExposureMode mode;
         try
@@ -60,11 +64,27 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
             return Task.FromResult(DoctorCheckResult.Error(
                 CheckName,
                 $"Unknown ExposureMode value '{modeStr}' in Daemon section.",
-                "Valid values: local, tailscale-serve, tailscale-funnel, cloudflare-tunnel."));
+                "Valid values: local, reverse-proxy, tailscale-serve, tailscale-funnel, cloudflare-tunnel."));
+        }
+
+        var config = new DaemonConfig
+        {
+            Host = host,
+            ExposureMode = mode,
+            TrustedProxies = trustedProxies,
+            SkipTunnelProcessCheck = skipTunnelProcessCheck
+        };
+
+        if (DaemonExposureValidator.TryGetInvalidTrustedProxy(config.TrustedProxies, out var invalidTrustedProxyError))
+        {
+            return Task.FromResult(DoctorCheckResult.Error(
+                CheckName,
+                invalidTrustedProxyError!,
+                "Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'."));
         }
 
         // Warning: local mode with non-loopback bind address — daemon exposed without tunnel.
-        if (mode == ExposureMode.Local && !IsLoopback(host))
+        if (mode == ExposureMode.Local && !DaemonExposureValidator.IsLoopbackHost(host))
         {
             return Task.FromResult(DoctorCheckResult.Warning(
                 CheckName,
@@ -74,20 +94,25 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
                 "cloudflare-tunnel) or bind to 127.0.0.1 in netclaw.json."));
         }
 
-        // Error: non-local mode but required tunnel process is not running.
-        if (mode != ExposureMode.Local)
+        if (DaemonExposureValidator.GetMissingRequiredProcessIssue(config, _processDetector) is { } processIssue)
         {
-            var requiredProcess = mode.GetRequiredProcessName();
+            return Task.FromResult(DoctorCheckResult.Error(
+                CheckName,
+                processIssue.Message,
+                processIssue.Remediation));
+        }
 
-            if (requiredProcess is not null && !_processDetector(requiredProcess))
-            {
-                var modeDisplay = mode.ToWireValue();
-                return Task.FromResult(DoctorCheckResult.Error(
-                    CheckName,
-                    $"ExposureMode is '{modeDisplay}' but '{requiredProcess}' is not running.",
-                    $"Start '{requiredProcess}' before starting Netclaw, " +
-                    "or set ExposureMode to 'local' in netclaw.json."));
-            }
+        var hasRemoteAuthenticationPath = DeviceRegistryInspector.CountPairedDevices(_paths) > 0;
+        var validationIssues = DaemonExposureValidator.Validate(config, hasRemoteAuthenticationPath)
+            .Where(static issue => !issue.Message.Contains("trusted proxy", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        if (validationIssues.Length > 0)
+        {
+            var issue = validationIssues[0];
+            return Task.FromResult(DoctorCheckResult.Error(
+                CheckName,
+                issue.Message,
+                issue.Remediation));
         }
 
         var modeDescription = mode == ExposureMode.Local
@@ -98,8 +123,5 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
             CheckName,
             $"ExposureMode: {modeDescription}."));
     }
-
-    private static bool IsLoopback(string host)
-        => host is "127.0.0.1" or "::1" or "localhost";
 
 }

@@ -11,6 +11,7 @@ using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -127,7 +128,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddSingleton<PairingCodeService>();
     builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
-    builder.Services.AddNetclawAuthSchemes();
+    builder.Services.AddNetclawAuthSchemes(daemonConfig);
     builder.Services.AddAuthorization();
 
     // Rate limiting for the unauthenticated pairing exchange endpoint.
@@ -165,6 +166,30 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     var app = builder.Build();
     crashMonitor.AttachServices(app.Services);
+
+    if (daemonConfig.ExposureMode == ExposureMode.ReverseProxy)
+    {
+        var forwardedHeadersOptions = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+            ForwardLimit = 1
+        };
+
+        foreach (var trustedProxy in DaemonExposureValidator.ParseTrustedProxies(daemonConfig.TrustedProxies))
+        {
+            if (trustedProxy.PrefixLength is null)
+            {
+                forwardedHeadersOptions.KnownProxies.Add(trustedProxy.Address);
+            }
+            else
+            {
+                forwardedHeadersOptions.KnownIPNetworks.Add(new System.Net.IPNetwork(trustedProxy.Address, trustedProxy.PrefixLength.Value));
+            }
+        }
+
+        // Forwarded headers are only meaningful after the direct peer is verified as a trusted proxy.
+        app.UseForwardedHeaders(forwardedHeadersOptions);
+    }
 
     // Eagerly resolve so StartedAt reflects daemon startup, not first request.
     app.Services.GetRequiredService<DaemonStartClock>();

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Linq;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
@@ -65,29 +66,31 @@ internal sealed class ExposureModeValidationService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        if (DaemonExposureValidator.TryGetInvalidTrustedProxy(_config.TrustedProxies, out var invalidTrustedProxyError))
+        {
+            _logger.LogCritical(
+                "Daemon startup aborted: {Message} Remediation: {Remediation}",
+                invalidTrustedProxyError!,
+                "Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'.");
+
+            throw new InvalidOperationException(
+                $"{invalidTrustedProxyError!} Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'.");
+        }
+
         if (_config.ExposureMode == ExposureMode.Local)
             return;
 
-        var requiredProcess = _config.ExposureMode.GetRequiredProcessName()
-            ?? throw new InvalidOperationException(
-                $"Unknown ExposureMode: {_config.ExposureMode}. " +
-                "Cannot determine tunnel prerequisite.");
-
-        if (!_processDetector(requiredProcess))
+        if (DaemonExposureValidator.GetMissingRequiredProcessIssue(_config, _processDetector) is { } processIssue)
         {
-            var modeWireValue = _config.ExposureMode.ToWireValue();
-
             _logger.LogCritical(
-                "Daemon startup aborted: ExposureMode is '{Mode}' but the required tunnel process " +
-                "'{Process}' is not running. Start '{Process}' before starting Netclaw, or set " +
-                "ExposureMode to 'local' in netclaw.json.",
-                modeWireValue, requiredProcess, requiredProcess);
+                "Daemon startup aborted: {Message} Remediation: {Remediation}",
+                processIssue.Message,
+                processIssue.Remediation);
 
-            throw new InvalidOperationException(
-                $"Tunnel prerequisite not met: ExposureMode='{modeWireValue}' requires " +
-                $"'{requiredProcess}' to be running. Start '{requiredProcess}' or set ExposureMode " +
-                "to 'local' in netclaw.json.");
+            throw new InvalidOperationException($"{processIssue.Message} {processIssue.Remediation}");
         }
+
+        var hasRemoteAuthenticationPath = false;
 
         // Remote auth guard: only applies when scheme registrations are explicitly provided
         // (i.e., the production DI path). Tests that don't inject this skip the check.
@@ -103,22 +106,18 @@ internal sealed class ExposureModeValidationService : IHostedService
                 ? await _deviceCounter(cancellationToken)
                 : 0;
 
-            if (!hasAlternativeRemoteAuthScheme && deviceCount == 0)
-            {
-                var modeWireValue = _config.ExposureMode.ToWireValue();
+            hasRemoteAuthenticationPath = hasAlternativeRemoteAuthScheme || deviceCount > 0;
+        }
 
-                _logger.LogCritical(
-                    "Daemon startup aborted: ExposureMode is '{Mode}' but no paired devices exist " +
-                    "and no alternative remote authentication scheme is configured. Pair a device " +
-                    "with 'netclaw daemon pair' or configure another remote auth scheme before " +
-                    "starting Netclaw.",
-                    modeWireValue);
+        foreach (var issue in DaemonExposureValidator.Validate(_config, hasRemoteAuthenticationPath)
+                     .Where(static issue => !issue.Message.Contains("trusted proxy", StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger.LogCritical(
+                "Daemon startup aborted: {Message} Remediation: {Remediation}",
+                issue.Message,
+                issue.Remediation);
 
-                throw new InvalidOperationException(
-                    $"No remote authentication available: ExposureMode='{modeWireValue}' requires " +
-                    "either at least one paired device or an alternative remote auth scheme. " +
-                    "Run 'netclaw daemon pair' to pair a device, or check your auth configuration.");
-            }
+            throw new InvalidOperationException($"{issue.Message} {issue.Remediation}");
         }
     }
 

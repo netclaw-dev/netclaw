@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Configuration;
+using System.Net;
 
 namespace Netclaw.Configuration;
 
@@ -39,6 +40,18 @@ public sealed record DaemonConfig
     public bool DisableSelfUpdate { get; init; }
 
     /// <summary>
+    /// Explicitly trusted reverse-proxy source addresses or CIDR ranges. Only used when
+    /// <see cref="ExposureMode"/> is <see cref="Netclaw.Configuration.ExposureMode.ReverseProxy"/>.
+    /// </summary>
+    public IReadOnlyList<string> TrustedProxies { get; init; } = [];
+
+    /// <summary>
+    /// When true, skips the default local tunnel-process prerequisite check for tunnel-backed
+    /// exposure modes. Intended only for sidecar or host-managed tunnel topologies.
+    /// </summary>
+    public bool SkipTunnelProcessCheck { get; init; }
+
+    /// <summary>
     /// Bind <see cref="DaemonConfig"/> from an <see cref="IConfigurationSection"/>.
     /// Handles kebab-case <c>ExposureMode</c> values (e.g., <c>tailscale-serve</c>).
     /// Returns defaults when the section is missing or empty.
@@ -53,8 +66,18 @@ public sealed record DaemonConfig
         var modeStr = section["ExposureMode"];
         var mode = ParseExposureMode(modeStr);
         var disableSelfUpdate = section.GetValue<bool?>("DisableSelfUpdate") ?? false;
+        var trustedProxies = section.GetSection("TrustedProxies").Get<string[]>() ?? [];
+        var skipTunnelProcessCheck = section.GetValue<bool?>("SkipTunnelProcessCheck") ?? false;
 
-        return new DaemonConfig { Host = host, Port = port, ExposureMode = mode, DisableSelfUpdate = disableSelfUpdate };
+        return new DaemonConfig
+        {
+            Host = host,
+            Port = port,
+            ExposureMode = mode,
+            DisableSelfUpdate = disableSelfUpdate,
+            TrustedProxies = trustedProxies,
+            SkipTunnelProcessCheck = skipTunnelProcessCheck
+        };
     }
 
     /// <summary>
@@ -70,12 +93,168 @@ public sealed record DaemonConfig
         return value.Trim().ToLowerInvariant() switch
         {
             "local" => ExposureMode.Local,
+            "reverse-proxy" or "reverseproxy" => ExposureMode.ReverseProxy,
             "tailscale-serve" or "tailscaleserve" => ExposureMode.TailscaleServe,
             "tailscale-funnel" or "tailscalefunnel" => ExposureMode.TailscaleFunnel,
             "cloudflare-tunnel" or "cloudflaretunnel" => ExposureMode.CloudflareTunnel,
             _ => throw new InvalidOperationException(
                 $"Unknown ExposureMode value: '{value.Trim()}'. " +
-                "Valid values: local, tailscale-serve, tailscale-funnel, cloudflare-tunnel.")
+                "Valid values: local, reverse-proxy, tailscale-serve, tailscale-funnel, cloudflare-tunnel.")
         };
     }
 }
+
+/// <summary>
+/// Shared daemon exposure validation and trusted-proxy parsing helpers used by startup,
+/// doctor, and reverse-proxy request handling.
+/// </summary>
+public static class DaemonExposureValidator
+{
+    public static IReadOnlyList<DaemonExposureValidationIssue> Validate(
+        DaemonConfig config,
+        bool hasRemoteAuthenticationPath)
+    {
+        var issues = new List<DaemonExposureValidationIssue>();
+
+        if (TryGetInvalidTrustedProxy(config.TrustedProxies, out var invalidTrustedProxyError))
+        {
+            issues.Add(new DaemonExposureValidationIssue(
+                invalidTrustedProxyError!,
+                "Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'."));
+        }
+
+        if (!config.ExposureMode.RequiresRemoteAuthentication())
+            return issues;
+
+        if (!hasRemoteAuthenticationPath)
+        {
+            issues.Add(new DaemonExposureValidationIssue(
+                $"No remote authentication available: ExposureMode='{config.ExposureMode.ToWireValue()}' requires either at least one paired device or an alternative remote auth scheme.",
+                "Run 'netclaw daemon pair' to pair a device, or check your auth configuration before exposing the daemon remotely."));
+        }
+
+        if (config.ExposureMode == ExposureMode.ReverseProxy)
+        {
+            if (IsLoopbackHost(config.Host))
+            {
+                issues.Add(new DaemonExposureValidationIssue(
+                    $"Invalid reverse-proxy topology: Daemon.Host '{config.Host}' is loopback. Loopback auto-auth is reserved for true local operator traffic and cannot be inherited through a reverse proxy.",
+                    "Bind the daemon to a non-loopback internal IP, such as 10.x.x.x or 192.168.x.x, and have the proxy forward to that address instead of 127.0.0.1, ::1, or localhost."));
+            }
+
+            if (config.TrustedProxies.Count == 0)
+            {
+                issues.Add(new DaemonExposureValidationIssue(
+                    "Invalid reverse-proxy topology: Daemon.TrustedProxies must contain at least one explicitly trusted proxy address or CIDR.",
+                    "Add the reverse proxy's source IP or subnet to Daemon.TrustedProxies so forwarded headers are only honored from known peers."));
+            }
+        }
+
+        return issues;
+    }
+
+    public static bool IsLoopbackHost(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host))
+            return false;
+
+        var trimmed = host.Trim();
+        if (string.Equals(trimmed, "localhost", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return IPAddress.TryParse(trimmed, out var address) && IPAddress.IsLoopback(address);
+    }
+
+    public static bool TryParseTrustedProxy(string rawValue, out ParsedTrustedProxy? parsedProxy, out string? error)
+    {
+        parsedProxy = null;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            error = "Invalid trusted proxy entry ''. Value cannot be empty.";
+            return false;
+        }
+
+        var trimmed = rawValue.Trim();
+        var slashIndex = trimmed.IndexOf('/', StringComparison.Ordinal);
+        if (slashIndex < 0)
+        {
+            if (!IPAddress.TryParse(trimmed, out var address))
+            {
+                error = $"Invalid trusted proxy entry '{trimmed}'. Value is not a valid IP address or CIDR.";
+                return false;
+            }
+
+            parsedProxy = new ParsedTrustedProxy(trimmed, address, PrefixLength: null);
+            return true;
+        }
+
+        var addressPart = trimmed[..slashIndex];
+        var prefixPart = trimmed[(slashIndex + 1)..];
+        if (!IPAddress.TryParse(addressPart, out var networkAddress))
+        {
+            error = $"Invalid trusted proxy entry '{trimmed}'. '{addressPart}' is not a valid IP address.";
+            return false;
+        }
+
+        if (!int.TryParse(prefixPart, out var prefixLength))
+        {
+            error = $"Invalid trusted proxy entry '{trimmed}'. '{prefixPart}' is not a valid CIDR prefix length.";
+            return false;
+        }
+
+        var maxPrefix = networkAddress.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128;
+        if (prefixLength < 0 || prefixLength > maxPrefix)
+        {
+            error = $"Invalid trusted proxy entry '{trimmed}'. CIDR prefix length must be between 0 and {maxPrefix}.";
+            return false;
+        }
+
+        parsedProxy = new ParsedTrustedProxy(trimmed, networkAddress, prefixLength);
+        return true;
+    }
+
+    public static IReadOnlyList<ParsedTrustedProxy> ParseTrustedProxies(IEnumerable<string> trustedProxies)
+    {
+        var parsed = new List<ParsedTrustedProxy>();
+        foreach (var trustedProxy in trustedProxies)
+        {
+            if (TryParseTrustedProxy(trustedProxy, out var entry, out _))
+                parsed.Add(entry!);
+        }
+
+        return parsed;
+    }
+
+    public static bool TryGetInvalidTrustedProxy(IEnumerable<string> trustedProxies, out string? error)
+    {
+        foreach (var trustedProxy in trustedProxies)
+        {
+            if (!TryParseTrustedProxy(trustedProxy, out _, out error))
+                return true;
+        }
+
+        error = null;
+        return false;
+    }
+
+    public static DaemonExposureValidationIssue? GetMissingRequiredProcessIssue(
+        DaemonConfig config,
+        Func<string, bool> processDetector)
+    {
+        ArgumentNullException.ThrowIfNull(processDetector);
+
+        var requiredProcess = config.ExposureMode.GetRequiredProcessName();
+        if (requiredProcess is null || config.SkipTunnelProcessCheck || processDetector(requiredProcess))
+            return null;
+
+        return new DaemonExposureValidationIssue(
+            $"Tunnel prerequisite not met: ExposureMode='{config.ExposureMode.ToWireValue()}' requires '{requiredProcess}' to be running unless Daemon.SkipTunnelProcessCheck=true is explicitly set for a sidecar or host-managed tunnel topology.",
+            $"Start '{requiredProcess}' locally, or set Daemon.SkipTunnelProcessCheck=true only when the tunnel is intentionally managed outside the Netclaw process namespace.");
+    }
+}
+
+public sealed record DaemonExposureValidationIssue(string Message, string Remediation);
+
+public sealed record ParsedTrustedProxy(string RawValue, IPAddress Address, int? PrefixLength);

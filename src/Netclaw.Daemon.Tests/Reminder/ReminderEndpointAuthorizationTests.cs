@@ -58,7 +58,7 @@ public sealed class ReminderEndpointAuthorizationTests : IDisposable
             ShellExecutionMode.Off,
             UsedStrictFallback: false));
         builder.Services.AddSingleton<ClaimsPrincipalMapper>();
-        builder.Services.AddNetclawAuthSchemes();
+        builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
         builder.Services.AddAuthorization();
 
         var app = builder.Build();

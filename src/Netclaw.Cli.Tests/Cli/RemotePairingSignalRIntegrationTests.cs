@@ -101,7 +101,7 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         builder.Services.AddSingleton(_deviceRegistry);
         builder.Services.AddSingleton(_pairingCodeService);
         builder.Services.AddSingleton(_exchangeGuard);
-        builder.Services.AddNetclawAuthSchemes();
+        builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
         builder.Services.AddAuthorization();
         builder.Services.AddSignalR();
 

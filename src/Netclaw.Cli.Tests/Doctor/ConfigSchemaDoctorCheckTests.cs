@@ -52,6 +52,105 @@ public sealed class ConfigSchemaDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsPass_WhenReverseProxyTrustedProxiesLookValid()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "Host": "10.0.0.10",
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["10.0.0.5", "10.0.0.0/24"]
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsPass_WhenSkipTunnelProcessCheck_IsBoolean()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "ExposureMode": "tailscale-serve",
+                "SkipTunnelProcessCheck": true
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenTrustedProxyMalformed()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["not-an-ip"]
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("TrustedProxies", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenTrustedProxyCidrMalformed()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["127.0.0.1/999"]
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("TrustedProxies", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ReturnsPass_WhenMemoryAndSubAgentsSectionsValid()
     {
         var basePath = CreateTempBasePath();

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.23.0"
+  version: "1.24.0"
 ---
 
 # Netclaw Operations
@@ -472,6 +472,17 @@ Doctor checks include `exposure-mode`, which validates that the `Daemon`
 config section (if present) specifies a supported exposure mode and that
 the corresponding tunnel integration is reachable.
 
+Exposure diagnostics are fail-closed:
+- `reverse-proxy` requires at least one remote authentication path and rejects
+  loopback final hops (`127.0.0.1`, `::1`, `localhost`) because loopback
+  auto-auth is reserved for true local operator traffic.
+- `Daemon.TrustedProxies` entries must be literal IPs or CIDR strings; malformed
+  values fail loudly in schema validation, `netclaw doctor`, and daemon startup.
+- Tunnel-backed modes (`tailscale-serve`, `tailscale-funnel`,
+  `cloudflare-tunnel`) require their local tunnel process by default.
+  `Daemon.SkipTunnelProcessCheck=true` is an explicit opt-in only for sidecar or
+  host-managed tunnel topologies; all other exposure requirements still apply.
+
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),
 `~/.netclaw/client/config.json` (local CLI endpoint state),
@@ -552,6 +563,10 @@ shell_execute: netclaw daemon pair
 
 This generates a single-use pairing code (8 chars, 5-minute TTL). The code
 generation endpoint is loopback-only.
+
+If `netclaw daemon pair` fails immediately after an exposure-mode change, run
+`netclaw doctor` and inspect `~/.netclaw/logs/crash-*.log` for the specific
+startup validation failure instead of assuming a generic readiness timeout.
 
 **Client side** (remote device):
 

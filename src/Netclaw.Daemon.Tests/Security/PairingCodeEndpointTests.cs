@@ -51,7 +51,7 @@ public sealed class PairingCodeEndpointTests : IDisposable
         builder.WebHost.UseTestServer();
 
         builder.Services.AddSingleton(_registry);
-        builder.Services.AddNetclawAuthSchemes();
+        builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
         builder.Services.AddAuthorization();
 
         var app = builder.Build();

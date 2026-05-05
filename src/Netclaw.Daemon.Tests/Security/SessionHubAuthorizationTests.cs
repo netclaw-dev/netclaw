@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,8 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class SessionHubAuthorizationTests : IDisposable
 {
+    private const string ObservedRemoteIpHeader = "X-Test-Observed-Remote-IP";
+
     private readonly DisposableTempDir _dir = new();
     private readonly FakeTimeProvider _time;
     private readonly DeviceRegistry _deviceRegistry;
@@ -62,13 +65,17 @@ public sealed class SessionHubAuthorizationTests : IDisposable
     /// simulating a connection from that IP. When null, the TestServer default of
     /// no remote IP is used, which the loopback handler treats as non-loopback.
     /// </summary>
-    private async Task<WebApplication> CreateAppAsync(IPAddress? spoofedRemoteIp = null)
+    private async Task<WebApplication> CreateAppAsync(
+        IPAddress? spoofedRemoteIp = null,
+        DaemonConfig? daemonConfig = null)
     {
+        daemonConfig ??= new DaemonConfig();
+
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
 
         builder.Services.AddSingleton(_deviceRegistry);
-        builder.Services.AddNetclawAuthSchemes();
+        builder.Services.AddNetclawAuthSchemes(daemonConfig);
         builder.Services.AddAuthorization();
         builder.Services.AddSignalR();
 
@@ -84,6 +91,44 @@ public sealed class SessionHubAuthorizationTests : IDisposable
                 await next(ctx);
             });
         }
+
+        if (daemonConfig.ExposureMode == ExposureMode.ReverseProxy)
+        {
+            var forwardedHeadersOptions = new ForwardedHeadersOptions
+            {
+                ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+                ForwardLimit = 1
+            };
+
+            foreach (var trustedProxy in DaemonExposureValidator.ParseTrustedProxies(daemonConfig.TrustedProxies))
+            {
+                if (trustedProxy.PrefixLength is null)
+                {
+                    forwardedHeadersOptions.KnownProxies.Add(trustedProxy.Address);
+                }
+                else
+                {
+                    forwardedHeadersOptions.KnownIPNetworks.Add(
+                        new System.Net.IPNetwork(trustedProxy.Address, trustedProxy.PrefixLength.Value));
+                }
+            }
+
+            app.UseForwardedHeaders(forwardedHeadersOptions);
+        }
+
+        app.Use(async (ctx, next) =>
+        {
+            var observedRemoteIp = ctx.Connection.RemoteIpAddress?.ToString();
+            ctx.Response.OnStarting(() =>
+            {
+                if (!string.IsNullOrWhiteSpace(observedRemoteIp))
+                    ctx.Response.Headers[ObservedRemoteIpHeader] = observedRemoteIp;
+
+                return Task.CompletedTask;
+            });
+
+            await next(ctx);
+        });
 
         app.UseAuthentication();
         app.UseAuthorization();
@@ -170,5 +215,96 @@ public sealed class SessionHubAuthorizationTests : IDisposable
             ct);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Reverse_proxy_trusted_forwarded_client_ip_is_seen_before_auth_evaluation()
+    {
+        var daemonConfig = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "10.0.0.10",
+            TrustedProxies = ["10.0.0.5"]
+        };
+
+        await using var app = await CreateAppAsync(
+            spoofedRemoteIp: IPAddress.Parse("10.0.0.5"),
+            daemonConfig: daemonConfig);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "198.51.100.25");
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("198.51.100.25", GetObservedRemoteIp(response));
+    }
+
+    [Fact]
+    public async Task Reverse_proxy_trusted_forwarded_client_ip_allows_valid_bearer_auth()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = MakeDevice("proxy-laptop", _time.GetUtcNow());
+        await _deviceRegistry.AddAsync(device, ct);
+
+        var daemonConfig = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "10.0.0.10",
+            TrustedProxies = ["10.0.0.5"]
+        };
+
+        await using var app = await CreateAppAsync(
+            spoofedRemoteIp: IPAddress.Parse("10.0.0.5"),
+            daemonConfig: daemonConfig);
+        var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", rawToken);
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "198.51.100.26");
+
+        var response = await client.SendAsync(request, ct);
+
+        Assert.NotEqual(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal("198.51.100.26", GetObservedRemoteIp(response));
+    }
+
+    [Fact]
+    public async Task Reverse_proxy_ignores_forwarded_headers_from_untrusted_proxy_peer()
+    {
+        var daemonConfig = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "10.0.0.10",
+            TrustedProxies = ["10.0.0.5"]
+        };
+
+        await using var app = await CreateAppAsync(
+            spoofedRemoteIp: IPAddress.Parse("203.0.113.10"),
+            daemonConfig: daemonConfig);
+        var client = app.GetTestClient();
+
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            "/hub/session/negotiate?negotiateVersion=1");
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "127.0.0.1");
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Equal("203.0.113.10", GetObservedRemoteIp(response));
+    }
+
+    private static string GetObservedRemoteIp(HttpResponseMessage response)
+    {
+        Assert.True(response.Headers.TryGetValues(ObservedRemoteIpHeader, out var values));
+        return Assert.Single(values);
     }
 }

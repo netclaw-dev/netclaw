@@ -18,6 +18,9 @@ public enum ExposureMode
     /// <summary>Daemon binds loopback only. No tunnel required.</summary>
     Local,
 
+    /// <summary>Daemon is reachable behind a trusted reverse proxy.</summary>
+    ReverseProxy,
+
     /// <summary>Daemon is reachable via Tailscale Serve (same tailnet only).</summary>
     TailscaleServe,
 
@@ -37,6 +40,7 @@ public static class ExposureModeExtensions
     public static string ToWireValue(this ExposureMode mode) => mode switch
     {
         ExposureMode.Local => "local",
+        ExposureMode.ReverseProxy => "reverse-proxy",
         ExposureMode.TailscaleServe => "tailscale-serve",
         ExposureMode.TailscaleFunnel => "tailscale-funnel",
         ExposureMode.CloudflareTunnel => "cloudflare-tunnel",
@@ -50,8 +54,20 @@ public static class ExposureModeExtensions
     public static string? GetRequiredProcessName(this ExposureMode mode) => mode switch
     {
         ExposureMode.Local => null,
+        ExposureMode.ReverseProxy => null,
         ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel => "tailscaled",
         ExposureMode.CloudflareTunnel => "cloudflared",
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
+    };
+
+    /// <summary>
+    /// Returns <c>true</c> when the mode accepts remote traffic and therefore requires
+    /// an explicit remote authentication path.
+    /// </summary>
+    public static bool RequiresRemoteAuthentication(this ExposureMode mode) => mode switch
+    {
+        ExposureMode.Local => false,
+        ExposureMode.ReverseProxy or ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel or ExposureMode.CloudflareTunnel => true,
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
     };
 }

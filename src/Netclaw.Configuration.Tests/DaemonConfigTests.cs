@@ -27,6 +27,7 @@ public sealed class DaemonConfigTests
         Assert.Equal(5199, result.Port);
         Assert.Equal(ExposureMode.Local, result.ExposureMode);
         Assert.False(result.DisableSelfUpdate);
+        Assert.False(result.SkipTunnelProcessCheck);
     }
 
     [Fact]
@@ -38,10 +39,12 @@ public sealed class DaemonConfigTests
         Assert.Equal(5199, result.Port);
         Assert.Equal(ExposureMode.Local, result.ExposureMode);
         Assert.False(result.DisableSelfUpdate);
+        Assert.False(result.SkipTunnelProcessCheck);
     }
 
     [Theory]
     [InlineData("local", ExposureMode.Local)]
+    [InlineData("reverse-proxy", ExposureMode.ReverseProxy)]
     [InlineData("tailscale-serve", ExposureMode.TailscaleServe)]
     [InlineData("tailscale-funnel", ExposureMode.TailscaleFunnel)]
     [InlineData("cloudflare-tunnel", ExposureMode.CloudflareTunnel)]
@@ -108,10 +111,26 @@ public sealed class DaemonConfigTests
         Assert.True(result.DisableSelfUpdate);
     }
 
+    [Fact]
+    public void BindFromConfiguration_reads_SkipTunnelProcessCheck_true()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Daemon:SkipTunnelProcessCheck"] = "true"
+            })
+            .Build();
+
+        var result = DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
+
+        Assert.True(result.SkipTunnelProcessCheck);
+    }
+
     // ── System.Text.Json serialization path ──────────────────────────────────
 
     [Theory]
     [InlineData("local", ExposureMode.Local)]
+    [InlineData("reverse-proxy", ExposureMode.ReverseProxy)]
     [InlineData("tailscale-serve", ExposureMode.TailscaleServe)]
     [InlineData("tailscale-funnel", ExposureMode.TailscaleFunnel)]
     [InlineData("cloudflare-tunnel", ExposureMode.CloudflareTunnel)]
@@ -127,6 +146,7 @@ public sealed class DaemonConfigTests
 
     [Theory]
     [InlineData(ExposureMode.Local, "local")]
+    [InlineData(ExposureMode.ReverseProxy, "reverse-proxy")]
     [InlineData(ExposureMode.TailscaleServe, "tailscale-serve")]
     [InlineData(ExposureMode.TailscaleFunnel, "tailscale-funnel")]
     [InlineData(ExposureMode.CloudflareTunnel, "cloudflare-tunnel")]
@@ -137,5 +157,51 @@ public sealed class DaemonConfigTests
         var json = JsonSerializer.Serialize(config);
 
         Assert.Contains($"\"ExposureMode\":\"{expectedWire}\"", json);
+    }
+
+    [Fact]
+    public void BindFromConfiguration_reads_trusted_proxies()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Daemon:TrustedProxies:0"] = "10.0.0.5",
+                ["Daemon:TrustedProxies:1"] = "10.0.0.0/24"
+            })
+            .Build();
+
+        var result = DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
+
+        Assert.Equal(["10.0.0.5", "10.0.0.0/24"], result.TrustedProxies);
+    }
+
+    [Fact]
+    public void Validator_rejects_loopback_reverse_proxy_topology()
+    {
+        var issues = DaemonExposureValidator.Validate(
+            new DaemonConfig
+            {
+                ExposureMode = ExposureMode.ReverseProxy,
+                Host = "127.0.0.1",
+                TrustedProxies = ["10.0.0.5"]
+            },
+            hasRemoteAuthenticationPath: true);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("loopback", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void Validator_rejects_invalid_trusted_proxy_entry()
+    {
+        var issues = DaemonExposureValidator.Validate(
+            new DaemonConfig
+            {
+                ExposureMode = ExposureMode.ReverseProxy,
+                Host = "10.0.0.10",
+                TrustedProxies = ["not-an-ip"]
+            },
+            hasRemoteAuthenticationPath: true);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("not-an-ip", StringComparison.OrdinalIgnoreCase));
     }
 }

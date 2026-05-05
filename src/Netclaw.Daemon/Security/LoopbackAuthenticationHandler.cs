@@ -25,17 +25,23 @@ namespace Netclaw.Daemon.Security;
 public sealed class LoopbackAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
     public const string SchemeName = "Loopback";
+    private readonly DaemonConfig _daemonConfig;
 
     public LoopbackAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
-        UrlEncoder encoder)
+        UrlEncoder encoder,
+        DaemonConfig daemonConfig)
         : base(options, logger, encoder)
     {
+        _daemonConfig = daemonConfig;
     }
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        if (_daemonConfig.ExposureMode == ExposureMode.ReverseProxy)
+            return Task.FromResult(AuthenticateResult.NoResult());
+
         var remoteIp = Context.Connection.RemoteIpAddress;
 
         if (remoteIp is null || !IsLoopback(remoteIp))

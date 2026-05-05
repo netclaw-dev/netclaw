@@ -31,7 +31,11 @@ public sealed class ExposureModeValidationServiceTests
     public async Task TailscaleServe_WithTailscaledRunning_StartSucceeds()
     {
         var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
-        var sut = BuildService(config, name => name == "tailscaled");
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
 
         await sut.StartAsync(TestContext.Current.CancellationToken);
     }
@@ -47,6 +51,7 @@ public sealed class ExposureModeValidationServiceTests
 
         Assert.Contains("tailscale-serve", ex.Message);
         Assert.Contains("tailscaled", ex.Message);
+        Assert.Contains("SkipTunnelProcessCheck", ex.Message);
     }
 
     // ── TailscaleFunnel ──────────────────────────────────────────────────────
@@ -55,7 +60,11 @@ public sealed class ExposureModeValidationServiceTests
     public async Task TailscaleFunnel_WithTailscaledRunning_StartSucceeds()
     {
         var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleFunnel };
-        var sut = BuildService(config, name => name == "tailscaled");
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
 
         await sut.StartAsync(TestContext.Current.CancellationToken);
     }
@@ -71,6 +80,7 @@ public sealed class ExposureModeValidationServiceTests
 
         Assert.Contains("tailscale-funnel", ex.Message);
         Assert.Contains("tailscaled", ex.Message);
+        Assert.Contains("SkipTunnelProcessCheck", ex.Message);
     }
 
     // ── CloudflareTunnel ─────────────────────────────────────────────────────
@@ -79,7 +89,11 @@ public sealed class ExposureModeValidationServiceTests
     public async Task CloudflareTunnel_WithCloudflaredRunning_StartSucceeds()
     {
         var config = new DaemonConfig { ExposureMode = ExposureMode.CloudflareTunnel };
-        var sut = BuildService(config, name => name == "cloudflared");
+        var sut = BuildService(
+            config,
+            name => name == "cloudflared",
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
 
         await sut.StartAsync(TestContext.Current.CancellationToken);
     }
@@ -95,6 +109,50 @@ public sealed class ExposureModeValidationServiceTests
 
         Assert.Contains("cloudflare-tunnel", ex.Message);
         Assert.Contains("cloudflared", ex.Message);
+        Assert.Contains("SkipTunnelProcessCheck", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task TunnelModes_WithSkipTunnelProcessCheck_AndRemoteAuth_StartSucceeds(ExposureMode mode)
+    {
+        var config = new DaemonConfig
+        {
+            ExposureMode = mode,
+            SkipTunnelProcessCheck = true
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
+
+        await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task TunnelModes_WithSkipTunnelProcessCheck_StillRequireRemoteAuth(ExposureMode mode)
+    {
+        var config = new DaemonConfig
+        {
+            ExposureMode = mode,
+            SkipTunnelProcessCheck = true
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("No remote authentication available", ex.Message);
     }
 
     // ── Cross-mode: wrong process running ────────────────────────────────────
@@ -170,6 +228,66 @@ public sealed class ExposureModeValidationServiceTests
             () => sut.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.Contains("No remote authentication available", ex.Message);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithLoopbackHost_Throws()
+    {
+        var config = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "127.0.0.1",
+            TrustedProxies = ["10.0.0.5"]
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("loopback", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithInvalidTrustedProxy_Throws()
+    {
+        var config = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "10.0.0.10",
+            TrustedProxies = ["127.0.0.1/999"]
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("127.0.0.1/999", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithNonLoopbackHostAndTrustedProxy_StartSucceeds()
+    {
+        var config = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "10.0.0.10",
+            TrustedProxies = ["10.0.0.5"]
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("TestScheme")],
+            deviceCount: 0);
+
+        await sut.StartAsync(TestContext.Current.CancellationToken);
     }
 
     // ── StopAsync is always a no-op ──────────────────────────────────────────

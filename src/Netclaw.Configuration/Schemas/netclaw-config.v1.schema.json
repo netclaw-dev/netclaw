@@ -593,9 +593,23 @@
         },
         "ExposureMode": {
           "type": "string",
-          "enum": ["local", "tailscale-serve", "tailscale-funnel", "cloudflare-tunnel"],
+          "enum": ["local", "reverse-proxy", "tailscale-serve", "tailscale-funnel", "cloudflare-tunnel"],
           "default": "local",
           "description": "Tunnel infrastructure in front of the daemon. Defaults to local (loopback only, no tunnel)."
+        },
+        "TrustedProxies": {
+          "type": "array",
+          "default": [],
+          "description": "Explicitly trusted reverse-proxy source IPs or CIDR ranges. Required for reverse-proxy mode.",
+          "items": {
+            "type": "string",
+            "pattern": "^(?:(?:\\d{1,3}\\.){3}\\d{1,3}(?:\\/(?:[0-9]|[12][0-9]|3[0-2]))?|(?:[0-9A-Fa-f:]+:+)+[0-9A-Fa-f]+(?:\\/(?:[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8]))?)$"
+          }
+        },
+        "SkipTunnelProcessCheck": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true, skips the local tunnel-process prerequisite check for tunnel-backed exposure modes. Use only for sidecar or host-managed tunnel topologies."
         },
         "DisableSelfUpdate": {
           "type": "boolean",

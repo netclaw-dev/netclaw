@@ -168,9 +168,14 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         {
             runner.Add(new HealthCheckItem("Starting daemon", null));
             var daemonOk = await StartAndPollDaemonAsync(ct);
-            runner.UpdateLast(daemonOk
-                ? new HealthCheckItem("Daemon ready", true)
-                : new HealthCheckItem("Daemon did not become ready (personality setup skipped)", false));
+            if (daemonOk)
+            {
+                runner.UpdateLast(new HealthCheckItem("Daemon ready", true));
+            }
+            else if (Results.Count > 0 && Results[^1].Passed is null)
+            {
+                runner.UpdateLast(new HealthCheckItem("Daemon did not become ready (personality setup skipped)", false));
+            }
         }
 
         IsRunning.Value = false;
@@ -195,7 +200,14 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
 
         var result = _daemonManager.Start();
         if (!result.Success && !result.Message.Contains("already running", StringComparison.OrdinalIgnoreCase))
+        {
+            var failureText = result.CrashLogPath is null
+                ? result.Message
+                : $"{result.Message} See crash log: {result.CrashLogPath}";
+            Results[^1] = new HealthCheckItem(failureText, false);
+            NotifyChanged();
             return false;
+        }
 
         for (var i = 0; i < 30; i++)
         {

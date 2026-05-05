@@ -993,6 +993,8 @@ static void WriteCrashLog(Exception ex)
 static void WriteDaemonResult(DaemonResult result)
 {
     Console.WriteLine(result.Message);
+    if (!string.IsNullOrWhiteSpace(result.CrashLogPath))
+        Console.WriteLine($"Crash log: {result.CrashLogPath}");
     if (!result.Success)
         Environment.ExitCode = 1;
 }
