@@ -89,10 +89,12 @@ case "$RID" in
     *) echo "ERROR: unsupported RID '$RID' for Docker build" >&2; exit 1 ;;
 esac
 
-# Symlink the single-arch publish output to the arch-suffixed paths the
-# Dockerfile expects (publish/cli-{arch}/, publish/daemon-{arch}/).
-ln -sfn cli "publish/cli-${DOCKER_ARCH}"
-ln -sfn daemon "publish/daemon-${DOCKER_ARCH}"
+# Hard-link copy the single-arch publish output to the arch-suffixed paths
+# the Dockerfile expects (publish/cli-{arch}/, publish/daemon-{arch}/).
+# Symlinks don't survive Docker Buildx context transfer reliably.
+rm -rf "publish/cli-${DOCKER_ARCH}" "publish/daemon-${DOCKER_ARCH}" 2>/dev/null || true
+cp -rl publish/cli "publish/cli-${DOCKER_ARCH}"
+cp -rl publish/daemon "publish/daemon-${DOCKER_ARCH}"
 
 echo "→ Building image $IMAGE_TAG..."
 docker build \
