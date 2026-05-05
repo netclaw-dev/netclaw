@@ -63,7 +63,7 @@ implementation changes.
 - `netclaw-diagnostics` → `disable-model-invocation: true` (same reasoning)
 - `netclaw-memory` → keep model-invocable (agent should auto-load for memory queries)
 - `search-citation` → keep model-invocable (agent should auto-load for web searches)
-- `netclaw-manual` → `user-invocable: false` (reference material, not a workflow)
+- `netclaw-manual` → `invocable: false` (reference material, not a workflow)
 
 **Why:** Operations and diagnostics are side-effect workflows where timing
 matters. The user should explicitly request them. Memory and search-citation

@@ -52,7 +52,7 @@ hidden directories are scanned.
   - AgentSkills.io directory layout (`skill-name/SKILL.md`)
   - Required frontmatter: `name`, `description`
   - Optional frontmatter: `license`, `compatibility`, `allowed-tools`,
-    `metadata`, `disable-model-invocation`, `user-invocable`, `argument-hint`
+    `metadata`, `disable-model-invocation`, `invocable`, `argument-hint`
   - Progressive disclosure: `references/`, `scripts/`, `assets/`
   - Invocation model: name = slash command, control flags explained
   - When to create a skill vs memory vs identity file

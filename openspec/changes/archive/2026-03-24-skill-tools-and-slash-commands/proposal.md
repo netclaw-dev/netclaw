@@ -25,8 +25,8 @@ Ref: PRD-001 FR-006 (Layered System Prompt), PRD-002 (Gateway Security).
   frontmatter validation and atomic writes
 - Add slash-command dispatch — adopt Claude Code invocation model where every
   skill `name` becomes `/name`. Two flags control invocation:
-  `disable-model-invocation` and `user-invocable`
-- Extend `SkillFrontmatter` with `disable-model-invocation`, `user-invocable`,
+  `disable-model-invocation` and `invocable`
+- Extend `SkillFrontmatter` with `disable-model-invocation`, `invocable`,
   and `argument-hint` fields
 - Add deterministic error response for unrecognized slash commands
 
