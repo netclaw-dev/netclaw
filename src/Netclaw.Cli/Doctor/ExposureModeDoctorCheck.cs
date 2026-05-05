@@ -104,7 +104,7 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
 
         var hasRemoteAuthenticationPath = DeviceRegistryInspector.CountPairedDevices(_paths) > 0;
         var validationIssues = DaemonExposureValidator.Validate(config, hasRemoteAuthenticationPath)
-            .Where(static issue => !issue.Message.Contains("trusted proxy", StringComparison.OrdinalIgnoreCase))
+            .Where(static issue => !issue.IsTrustedProxyIssue)
             .ToArray();
         if (validationIssues.Length > 0)
         {

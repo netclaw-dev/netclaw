@@ -110,7 +110,7 @@ internal sealed class ExposureModeValidationService : IHostedService
         }
 
         foreach (var issue in DaemonExposureValidator.Validate(_config, hasRemoteAuthenticationPath)
-                     .Where(static issue => !issue.Message.Contains("trusted proxy", StringComparison.OrdinalIgnoreCase)))
+                     .Where(static issue => !issue.IsTrustedProxyIssue))
         {
             _logger.LogCritical(
                 "Daemon startup aborted: {Message} Remediation: {Remediation}",

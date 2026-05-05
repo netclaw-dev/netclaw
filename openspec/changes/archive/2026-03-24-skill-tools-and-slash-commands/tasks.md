@@ -2,7 +2,7 @@
 
 ### 1. Extend SkillFrontmatter and SkillEntry with invocation fields
 
-- [x] Add `disable-model-invocation`, `user-invocable`, `argument-hint` to
+- [x] Add `disable-model-invocation`, `invocable`, `argument-hint` to
       `SkillFrontmatter` in `SkillScanner.cs` with `[YamlMember]` aliases
 - [x] Add `bool DisableModelInvocation` (default false), `bool UserInvocable`
       (default true), `string? ArgumentHint` to `SkillEntry.cs`

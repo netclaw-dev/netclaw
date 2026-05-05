@@ -120,7 +120,8 @@ public static class DaemonExposureValidator
         {
             issues.Add(new DaemonExposureValidationIssue(
                 invalidTrustedProxyError!,
-                "Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'."));
+                "Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'.",
+                IsTrustedProxyIssue: true));
         }
 
         if (!config.ExposureMode.RequiresRemoteAuthentication())
@@ -215,13 +216,19 @@ public static class DaemonExposureValidator
         return true;
     }
 
+    /// <summary>
+    /// Parses all trusted proxy entries. Throws on invalid entries — callers must validate
+    /// with <see cref="TryGetInvalidTrustedProxy"/> before calling this method.
+    /// </summary>
     public static IReadOnlyList<ParsedTrustedProxy> ParseTrustedProxies(IEnumerable<string> trustedProxies)
     {
         var parsed = new List<ParsedTrustedProxy>();
         foreach (var trustedProxy in trustedProxies)
         {
-            if (TryParseTrustedProxy(trustedProxy, out var entry, out _))
-                parsed.Add(entry!);
+            if (!TryParseTrustedProxy(trustedProxy, out var entry, out var error))
+                throw new InvalidOperationException(error);
+
+            parsed.Add(entry!);
         }
 
         return parsed;
@@ -255,6 +262,6 @@ public static class DaemonExposureValidator
     }
 }
 
-public sealed record DaemonExposureValidationIssue(string Message, string Remediation);
+public sealed record DaemonExposureValidationIssue(string Message, string Remediation, bool IsTrustedProxyIssue = false);
 
 public sealed record ParsedTrustedProxy(string RawValue, IPAddress Address, int? PrefixLength);

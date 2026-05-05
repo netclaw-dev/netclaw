@@ -54,7 +54,7 @@ session prompt stack for that turn.
 
 ### Requirement: Frontmatter invocation control fields
 
-The system SHALL parse `disable-model-invocation`, `user-invocable`,
+The system SHALL parse `disable-model-invocation`, `invocable`,
 `argument-hint`, and `metadata.subagent` from YAML frontmatter.
 
 `metadata.subagent` SHALL be treated as an optional string field naming a
@@ -69,9 +69,9 @@ deterministic configuration errors.
 - **AND** the skill is excluded from the compressed index
 - **AND** the skill remains in the slash-command registry
 
-#### Scenario: user-invocable false parsed
+#### Scenario: invocable false parsed
 
-- **GIVEN** a skill with `user-invocable: false` in frontmatter
+- **GIVEN** a skill with `invocable: false` in frontmatter
 - **WHEN** the skill is scanned
 - **THEN** `SkillEntry.UserInvocable` is `false`
 - **AND** the skill is excluded from the slash-command registry

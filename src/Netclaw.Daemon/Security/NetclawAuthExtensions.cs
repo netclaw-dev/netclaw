@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Security;
@@ -18,7 +19,7 @@ internal static class NetclawAuthExtensions
 {
     internal static IServiceCollection AddNetclawAuthSchemes(this IServiceCollection services, DaemonConfig daemonConfig)
     {
-        services.AddSingleton(daemonConfig);
+        services.TryAddSingleton(daemonConfig);
         services
             .AddAuthentication("AuthSelector")
             .AddPolicyScheme("AuthSelector", "Bearer or Loopback selector", options =>
