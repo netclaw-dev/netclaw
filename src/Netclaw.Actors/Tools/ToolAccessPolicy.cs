@@ -183,11 +183,11 @@ public sealed class ToolAccessPolicy
 
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
-            var expandedWorkingDirectory = ExpandShellPath(workingDirectory, workingDirectory: null);
+            var expandedWorkingDirectory = PathUtility.ExpandAndNormalize(workingDirectory, workingDirectory: null);
             if (expandedWorkingDirectory is null)
                 return ToolAccessDecision.Deny("shell_invalid_working_directory");
 
-            if (!IsPathWithinAnyRoot(expandedWorkingDirectory, roots))
+            if (!PathUtility.IsWithinAnyRoot(expandedWorkingDirectory, roots))
                 return ToolAccessDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
@@ -197,11 +197,11 @@ public sealed class ToolAccessPolicy
 
         foreach (var pathToken in pathTokens)
         {
-            var expanded = ExpandShellPath(pathToken, workingDirectory);
+            var expanded = PathUtility.ExpandAndNormalize(pathToken, workingDirectory);
             if (expanded is null)
                 continue;
 
-            if (!IsPathWithinAnyRoot(expanded, roots))
+            if (!PathUtility.IsWithinAnyRoot(expanded, roots))
                 return ToolAccessDecision.Deny("shell_path_outside_trust_zone");
         }
 
@@ -223,67 +223,6 @@ public sealed class ToolAccessPolicy
 
         return pathTokens;
     }
-
-    private static string? ExpandShellPath(string token, string? workingDirectory)
-    {
-        var expanded = token;
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-        if (expanded.StartsWith('~'))
-        {
-            if (string.IsNullOrWhiteSpace(home))
-                return null;
-            expanded = expanded.Length == 1
-                ? home
-                : Path.Combine(home, expanded[1..].TrimStart('/', '\\'));
-        }
-
-        if (!string.IsNullOrWhiteSpace(home))
-        {
-            expanded = expanded.Replace("$HOME", home, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("${HOME}", home, StringComparison.OrdinalIgnoreCase);
-        }
-
-        try
-        {
-            var baseDir = !string.IsNullOrWhiteSpace(workingDirectory)
-                ? workingDirectory
-                : Environment.CurrentDirectory;
-
-            return Path.IsPathRooted(expanded)
-                ? Path.GetFullPath(expanded)
-                : Path.GetFullPath(Path.Combine(baseDir, expanded));
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static bool IsPathWithinAnyRoot(string fullPath, IReadOnlyList<string> roots)
-    {
-        var normalized = NormalizeDirectoryComparisonPath(fullPath);
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-
-        foreach (var root in roots)
-        {
-            var normalizedRoot = NormalizeDirectoryComparisonPath(root);
-            if (!normalized.StartsWith(normalizedRoot, comparison))
-                continue;
-            if (normalized.Length == normalizedRoot.Length)
-                return true;
-            var boundary = normalized[normalizedRoot.Length];
-            if (boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar)
-                return true;
-        }
-
-        return false;
-    }
-
-    private static string NormalizeDirectoryComparisonPath(string path)
-        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
 
     private static bool ShellCommandHasTrustZoneSensitiveInputs(string shellCommand, string? workingDirectory)
         => !string.IsNullOrWhiteSpace(workingDirectory) || ShellCommandHasPathArguments(shellCommand);

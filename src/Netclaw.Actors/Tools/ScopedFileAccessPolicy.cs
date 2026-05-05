@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -18,7 +19,7 @@ internal sealed class ScopedFileAccessPolicy
         _profileResolver = new ToolAudienceProfileResolver(toolConfig, paths);
         _cachedGlobalReadRoots = new Lazy<IReadOnlyList<string>>(() =>
             _profileResolver.ResolveGlobalReadRoots()
-                .Select(NormalizeDirectoryPath)
+                .Select(PathUtility.Normalize)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray());
     }
@@ -85,7 +86,7 @@ internal sealed class ScopedFileAccessPolicy
 
         foreach (var root in roots)
         {
-            if (!IsPathWithinDirectory(fullPath, root))
+            if (!PathUtility.IsWithinRoot(fullPath, root))
                 continue;
 
             if (ContainsSymlinkSegment(root, fullPath))
@@ -127,7 +128,7 @@ internal sealed class ScopedFileAccessPolicy
         AccessKind accessKind)
     {
         var roots = _profileResolver.ResolveRoots(access, context)
-            .Select(NormalizeDirectoryPath)
+            .Select(PathUtility.Normalize)
             .ToList();
 
         if (accessKind == AccessKind.Read && audience != TrustAudience.Public)
@@ -151,27 +152,6 @@ internal sealed class ScopedFileAccessPolicy
         TrustAudience.Personal => "Personal",
         _ => "Public"
     };
-
-    private static string NormalizeDirectoryPath(string directoryPath)
-    {
-        return Path.GetFullPath(directoryPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
-
-    private static bool IsPathWithinDirectory(string path, string directory)
-    {
-        var fullPath = Path.GetFullPath(path)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (!fullPath.StartsWith(directory, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (fullPath.Length == directory.Length)
-            return true;
-
-        var boundary = fullPath[directory.Length];
-        return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
-    }
 
     private static bool ContainsSymlinkSegment(string allowedRoot, string fullPath)
     {

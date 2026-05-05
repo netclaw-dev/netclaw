@@ -6,6 +6,7 @@
 using System.ComponentModel;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 
@@ -84,7 +85,7 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, resourcePath));
         var skillDirFull = Path.GetFullPath(skill.SkillDirectory);
 
-        if (!fullPath.StartsWith(skillDirFull, StringComparison.Ordinal))
+        if (!PathUtility.IsWithinRoot(fullPath, skillDirFull))
             return "Resolved path is outside the skill directory.";
 
         // Check for symlinks in the path

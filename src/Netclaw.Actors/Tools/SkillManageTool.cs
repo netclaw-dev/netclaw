@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 
@@ -334,7 +335,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (fileError is not null) return fileError;
 
         var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, args.FilePath));
-        if (!fullPath.StartsWith(Path.GetFullPath(skill.SkillDirectory), StringComparison.Ordinal))
+        if (!PathUtility.IsWithinRoot(fullPath, skill.SkillDirectory))
             return "Resolved path is outside the skill directory.";
 
         var scanResult = await _scanner.ScanAsync(
@@ -379,7 +380,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         if (fileError is not null) return fileError;
 
         var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, args.FilePath));
-        if (!fullPath.StartsWith(Path.GetFullPath(skill.SkillDirectory), StringComparison.Ordinal))
+        if (!PathUtility.IsWithinRoot(fullPath, skill.SkillDirectory))
             return "Resolved path is outside the skill directory.";
 
         if (!File.Exists(fullPath))
@@ -479,9 +480,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private bool IsExternalSkill(SkillEntry skill)
     {
-        var nativeRoot = SkillScanner.NormalizeDirectoryPath(_paths.SkillsDirectory);
-        var skillPath = SkillScanner.NormalizeDirectoryPath(Path.GetDirectoryName(skill.FilePath)!);
-        return !SkillScanner.IsUnderRoot(skillPath, nativeRoot);
+        var nativeRoot = PathUtility.Normalize(_paths.SkillsDirectory);
+        var skillPath = PathUtility.Normalize(Path.GetDirectoryName(skill.FilePath)!);
+        return !PathUtility.IsWithinRoot(skillPath, nativeRoot);
     }
 
     private static void AtomicWrite(string path, string content)

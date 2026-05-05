@@ -51,11 +51,11 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         if (!_fileAccessPolicy.TryResolveAttachPath(args.Path, context, out var requestedPath, out var accessError))
             return Task.FromResult(accessError);
 
-        var sessionDir = NormalizeDirectoryPath(context.SessionDirectory);
+        var sessionDir = PathUtility.Normalize(context.SessionDirectory);
         var sessionRoot = TryGetSessionRootDirectory(sessionDir);
 
-        var requestedInCurrentSession = IsPathWithinDirectory(requestedPath, sessionDir);
-        var requestedInSessionRoot = sessionRoot is not null && IsPathWithinDirectory(requestedPath, sessionRoot);
+        var requestedInCurrentSession = PathUtility.IsWithinRoot(requestedPath, sessionDir);
+        var requestedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(requestedPath, sessionRoot);
 
         if (!requestedInCurrentSession && !requestedInSessionRoot)
         {
@@ -67,8 +67,8 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             return Task.FromResult($"Error: File not found: {requestedPath}");
 
         var resolvedPath = ResolveFinalPath(requestedPath);
-        var resolvedInCurrentSession = IsPathWithinDirectory(resolvedPath, sessionDir);
-        var resolvedInSessionRoot = sessionRoot is not null && IsPathWithinDirectory(resolvedPath, sessionRoot);
+        var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
+        var resolvedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(resolvedPath, sessionRoot);
 
         if (!resolvedInCurrentSession && !resolvedInSessionRoot)
         {
@@ -80,7 +80,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             ? resolvedPath
             : CopyIntoCurrentSession(resolvedPath, sessionDir);
 
-        if (!IsPathWithinDirectory(attachPath, sessionDir))
+        if (!PathUtility.IsWithinRoot(attachPath, sessionDir))
             return Task.FromResult($"Error: Attach path escaped the session directory ({sessionDir}).");
 
         var rawFilename = args.DisplayName ?? Path.GetFileName(attachPath);
@@ -93,27 +93,6 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             : " (copied into current session)";
 
         return Task.FromResult($"File attached: {sanitizedFilename} ({mimeType}) at {attachPath}{copiedText}");
-    }
-
-    private static string NormalizeDirectoryPath(string directoryPath)
-    {
-        return Path.GetFullPath(directoryPath)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
-
-    private static bool IsPathWithinDirectory(string path, string directory)
-    {
-        var fullPath = Path.GetFullPath(path)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (!fullPath.StartsWith(directory, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (fullPath.Length == directory.Length)
-            return true;
-
-        var boundary = fullPath[directory.Length];
-        return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
     }
 
     private static string ResolveFinalPath(string path)
@@ -133,7 +112,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         if (name.Equals("sessions", StringComparison.OrdinalIgnoreCase)
             || name.Equals("netclaw-sessions", StringComparison.OrdinalIgnoreCase))
         {
-            return NormalizeDirectoryPath(parent.FullName);
+            return PathUtility.Normalize(parent.FullName);
         }
 
         return null;

@@ -46,14 +46,14 @@ public sealed class ToolPathPolicy
 
     private static HashSet<string> BuildNormalizedSet(IEnumerable<string> paths)
     {
-        var normalized = paths.Select(NormalizePath);
+        var normalized = paths.Select(PathUtility.Normalize);
         return new HashSet<string>(normalized, StringComparer.OrdinalIgnoreCase);
     }
 
     private static HashSet<string> BuildCommandIndicators(IEnumerable<string> paths)
     {
         var materialized = paths.ToList();
-        var normalizedPaths = materialized.Select(NormalizePath).ToList();
+        var normalizedPaths = materialized.Select(PathUtility.Normalize).ToList();
         var indicators = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var path in materialized.Concat(normalizedPaths))
@@ -92,7 +92,7 @@ public sealed class ToolPathPolicy
         if (string.IsNullOrWhiteSpace(path))
             return false;
 
-        if (TryNormalizePath(path, null, out var normalized) && IsDeniedNormalized(normalized, deniedSet))
+        if (PathUtility.TryNormalize(path, null, out var normalized) && IsDeniedNormalized(normalized, deniedSet))
             return true;
 
         return TryResolveSymlinkTarget(path, out var resolvedTarget)
@@ -122,8 +122,8 @@ public sealed class ToolPathPolicy
             if (!LooksLikePath(token))
                 continue;
 
-            var expanded = ExpandHomeAndEnv(token);
-            if (TryNormalizePath(expanded, workingDirectory, out var normalized)
+            var expanded = PathUtility.ExpandHome(token);
+            if (PathUtility.TryNormalize(expanded, workingDirectory, out var normalized)
                 && IsDeniedNormalized(normalized, _shellDeniedPaths))
             {
                 return true;
@@ -185,28 +185,6 @@ public sealed class ToolPathPolicy
         return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
     }
 
-    private static bool TryNormalizePath(string rawPath, string? workingDirectory, out string normalized)
-    {
-        normalized = string.Empty;
-
-        try
-        {
-            var baseDir = !string.IsNullOrWhiteSpace(workingDirectory)
-                ? workingDirectory
-                : Environment.CurrentDirectory;
-
-            normalized = Path.IsPathRooted(rawPath)
-                ? NormalizePath(rawPath)
-                : NormalizePath(Path.Combine(baseDir, rawPath));
-
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
     private static bool TryResolveSymlinkTarget(string path, out string normalizedTarget)
     {
         normalizedTarget = string.Empty;
@@ -219,7 +197,7 @@ public sealed class ToolPathPolicy
                 if (target is null)
                     return false;
 
-                normalizedTarget = NormalizePath(target.FullName);
+                normalizedTarget = PathUtility.Normalize(target.FullName);
                 return true;
             }
 
@@ -229,7 +207,7 @@ public sealed class ToolPathPolicy
                 if (target is null)
                     return false;
 
-                normalizedTarget = NormalizePath(target.FullName);
+                normalizedTarget = PathUtility.Normalize(target.FullName);
                 return true;
             }
 
@@ -257,34 +235,4 @@ public sealed class ToolPathPolicy
             || token.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static string ExpandHomeAndEnv(string token)
-    {
-        var expanded = token;
-
-        if (expanded.StartsWith("~", StringComparison.Ordinal))
-        {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            if (!string.IsNullOrWhiteSpace(home))
-            {
-                expanded = expanded.Length == 1
-                    ? home
-                    : Path.Combine(home, expanded[1..].TrimStart('/', '\\'));
-            }
-        }
-
-        var homeEnv = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(homeEnv))
-        {
-            expanded = expanded.Replace("$HOME", homeEnv, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("${HOME}", homeEnv, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("%USERPROFILE%", homeEnv, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return expanded;
-    }
-
-    private static string NormalizePath(string path)
-    {
-        return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    }
 }
