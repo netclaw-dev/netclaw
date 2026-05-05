@@ -46,6 +46,9 @@ public sealed partial class DaemonManager
             FileName = binaryPath,
             UseShellExecute = false,
             CreateNoWindow = true,
+            // Don't redirect stdio — holding pipe handles prevents clean CLI exit
+            // and can cause the daemon to get SIGPIPE. The daemon handles its own
+            // logging via the ASP.NET Core logging infrastructure.
             RedirectStandardOutput = false,
             RedirectStandardError = false,
             RedirectStandardInput = false,
