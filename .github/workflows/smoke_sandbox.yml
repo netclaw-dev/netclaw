@@ -2,11 +2,12 @@ name: smoke_sandbox
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - dev
   pull_request:
     branches:
-      - master
       - dev
-      - main
     types:
       - opened
       - synchronize
@@ -44,16 +45,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build smoke sandbox image
-        timeout-minutes: 15
+      - name: Publish binaries for Docker image
+        timeout-minutes: 10
         shell: bash
-        env:
-          DOCKER_CACHE_FROM: type=gha
-          DOCKER_CACHE_TO: type=gha,mode=max
         run: |
           chmod +x scripts/docker/build-image.sh
           IMAGE_REPO=netclaw-smoke \
-            scripts/docker/build-image.sh local
+            scripts/docker/build-image.sh local --publish-only
+
+      - name: Build smoke sandbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          load: true
+          tags: netclaw-smoke:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            NETCLAW_VERSION=local
 
       - name: Start smoke sandbox
         run: bash scripts/smoke/up.sh

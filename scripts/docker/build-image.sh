@@ -23,6 +23,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 VERSION="${1:-dev}"
+PUBLISH_ONLY=false
+if [[ "${2:-}" == "--publish-only" ]]; then
+    PUBLISH_ONLY=true
+fi
 IMAGE_REPO="${IMAGE_REPO:-ghcr.io/netclaw-dev/netclaw}"
 IMAGE_TAG="${IMAGE_REPO}:${VERSION}"
 RID="${RID:-linux-x64}"
@@ -96,32 +100,16 @@ rm -rf "publish/cli-${DOCKER_ARCH}" "publish/daemon-${DOCKER_ARCH}" 2>/dev/null 
 cp -rl publish/cli "publish/cli-${DOCKER_ARCH}"
 cp -rl publish/daemon "publish/daemon-${DOCKER_ARCH}"
 
-echo "→ Building image $IMAGE_TAG..."
-# When DOCKER_CACHE_FROM/DOCKER_CACHE_TO are set (e.g. in CI via GHA cache backend),
-# use `docker buildx build --load` so the image lands in the local daemon.
-# Without cache env vars, fall back to plain `docker build` which works without buildx.
-CACHE_ARGS=()
-if [[ -n "${DOCKER_CACHE_FROM:-}" ]]; then
-    CACHE_ARGS+=(--cache-from "$DOCKER_CACHE_FROM")
-fi
-if [[ -n "${DOCKER_CACHE_TO:-}" ]]; then
-    CACHE_ARGS+=(--cache-to "$DOCKER_CACHE_TO")
+if [[ "$PUBLISH_ONLY" == "true" ]]; then
+    echo "✓ Publish complete (--publish-only). Skipping Docker build."
+    exit 0
 fi
 
-if [[ ${#CACHE_ARGS[@]} -gt 0 ]]; then
-    docker buildx build \
-        -f docker/Dockerfile \
-        -t "$IMAGE_TAG" \
-        --build-arg "NETCLAW_VERSION=$VERSION" \
-        --load \
-        "${CACHE_ARGS[@]}" \
-        .
-else
-    docker build \
-        -f docker/Dockerfile \
-        -t "$IMAGE_TAG" \
-        --build-arg "NETCLAW_VERSION=$VERSION" \
-        .
-fi
+echo "→ Building image $IMAGE_TAG..."
+docker build \
+    -f docker/Dockerfile \
+    -t "$IMAGE_TAG" \
+    --build-arg "NETCLAW_VERSION=$VERSION" \
+    .
 
 echo "✓ Built $IMAGE_TAG"
