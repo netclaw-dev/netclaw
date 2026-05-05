@@ -55,9 +55,21 @@ public sealed class DaemonClientFactoryTests : IDisposable
         WriteDeviceToken("test-token-value");
 
         var provider = DaemonClientFactory.CreateAccessTokenProvider(
-            "http://127.0.0.1:5199", _paths);
+            "http://127.0.0.1:5199", _paths, ExposureMode.Local);
 
         Assert.Null(provider);
+    }
+
+    [Fact]
+    public async Task CreateAccessTokenProvider_ReturnsProvider_ForReverseProxyLoopbackEndpoint()
+    {
+        WriteDeviceToken("reverse-proxy-loopback-token");
+
+        var provider = DaemonClientFactory.CreateAccessTokenProvider(
+            "http://127.0.0.1:5199", _paths, ExposureMode.ReverseProxy);
+
+        Assert.NotNull(provider);
+        Assert.Equal("reverse-proxy-loopback-token", await provider!());
     }
 
     // ── Token provider: non-loopback ──────────────────────────────────────────
@@ -68,7 +80,7 @@ public sealed class DaemonClientFactoryTests : IDisposable
         WriteDeviceToken("my-secret-device-token");
 
         var provider = DaemonClientFactory.CreateAccessTokenProvider(
-            "http://192.168.1.100:5199", _paths);
+            "http://192.168.1.100:5199", _paths, ExposureMode.TailscaleServe);
 
         Assert.NotNull(provider);
         var token = await provider();
@@ -80,7 +92,7 @@ public sealed class DaemonClientFactoryTests : IDisposable
     {
         // No secrets.json → no token → null provider
         var provider = DaemonClientFactory.CreateAccessTokenProvider(
-            "http://192.168.1.100:5199", _paths);
+            "http://192.168.1.100:5199", _paths, ExposureMode.TailscaleServe);
 
         Assert.Null(provider);
     }

@@ -347,6 +347,21 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void WriteBootstrapDevice_DoesNotOverwriteExistingDevicesFile()
+    {
+        File.WriteAllText(Context.Paths.DevicesPath, "[]");
+
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleServe;
+
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        step.ContributeSecrets(builder);
+        step.WriteBootstrapDevice(Context.Paths);
+
+        Assert.Equal("[]", File.ReadAllText(Context.Paths.DevicesPath));
+    }
+
+    [Fact]
     public void WriteBootstrapDevice_TokenVerifiesAgainstDevice()
     {
         using var step = new ExposureModeStepViewModel();

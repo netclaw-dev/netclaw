@@ -36,16 +36,19 @@ internal sealed class ExposureModeValidationService : IHostedService
     private readonly Func<string, bool> _processDetector;
     private readonly IEnumerable<IRemoteAuthSchemeRegistration>? _remoteAuthSchemes;
     private readonly Func<CancellationToken, Task<int>>? _deviceCounter;
+    private readonly BootstrapDeviceSeeder? _bootstrapDeviceSeeder;
 
     public ExposureModeValidationService(
         DaemonConfig config,
         ILogger<ExposureModeValidationService> logger,
         IEnumerable<IRemoteAuthSchemeRegistration> remoteAuthSchemes,
-        DeviceRegistry deviceRegistry)
+        DeviceRegistry deviceRegistry,
+        BootstrapDeviceSeeder bootstrapDeviceSeeder)
         : this(config, logger,
                processName => Process.GetProcessesByName(processName).Length > 0,
                remoteAuthSchemes,
-               async ct => (await deviceRegistry.ListAsync(ct)).Count)
+               async ct => (await deviceRegistry.ListAsync(ct)).Count,
+               bootstrapDeviceSeeder)
     {
     }
 
@@ -55,13 +58,15 @@ internal sealed class ExposureModeValidationService : IHostedService
         ILogger<ExposureModeValidationService> logger,
         Func<string, bool> processDetector,
         IEnumerable<IRemoteAuthSchemeRegistration>? remoteAuthSchemes = null,
-        Func<CancellationToken, Task<int>>? deviceCounter = null)
+        Func<CancellationToken, Task<int>>? deviceCounter = null,
+        BootstrapDeviceSeeder? bootstrapDeviceSeeder = null)
     {
         _config = config;
         _logger = logger;
         _processDetector = processDetector;
         _remoteAuthSchemes = remoteAuthSchemes;
         _deviceCounter = deviceCounter;
+        _bootstrapDeviceSeeder = bootstrapDeviceSeeder;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -89,6 +94,9 @@ internal sealed class ExposureModeValidationService : IHostedService
 
             throw new InvalidOperationException($"{processIssue.Message} {processIssue.Remediation}");
         }
+
+        if (_bootstrapDeviceSeeder is not null)
+            await _bootstrapDeviceSeeder.EnsureSeededAsync(_config, cancellationToken);
 
         var hasRemoteAuthenticationPath = false;
 

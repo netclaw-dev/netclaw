@@ -19,6 +19,12 @@ public sealed record PairedDevice
     public string Name { get; init; } = string.Empty;
 
     /// <summary>
+    /// True only for the daemon-owned one-shot bootstrap device seeded before the
+    /// first successful non-local daemon start.
+    /// </summary>
+    public bool IsBootstrapDevice { get; init; }
+
+    /// <summary>
     /// Lowercase hex-encoded SHA-256 digest of the concatenation
     /// <c>token_bytes || salt_bytes</c>. Never the raw token.
     /// </summary>

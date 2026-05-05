@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Security;
 using Netclaw.Daemon.Services;
@@ -187,6 +188,21 @@ public sealed class ExposureModeValidationServiceTests
     }
 
     [Fact]
+    public async Task NonLocal_NoRemoteAuthScheme_NoPairedDevices_WithBootstrapSeeder_StartSucceeds()
+    {
+        var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
+        var (bootstrapSeeder, deviceCounter) = BuildBootstrapSeeder();
+        var sut = BuildService(
+            config,
+            name => name == "tailscaled",
+            remoteAuthSchemes: [],
+            deviceCounter: deviceCounter,
+            bootstrapDeviceSeeder: bootstrapSeeder);
+
+        await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task NonLocal_NoRemoteAuthScheme_WithPairedDevices_StartSucceeds()
     {
         // Devices exist → remote clients CAN authenticate, even without a registered scheme.
@@ -307,14 +323,34 @@ public sealed class ExposureModeValidationServiceTests
         DaemonConfig config,
         Func<string, bool> processDetector,
         IEnumerable<IRemoteAuthSchemeRegistration>? remoteAuthSchemes = null,
-        int deviceCount = 0)
+        int deviceCount = 0,
+        Func<CancellationToken, Task<int>>? deviceCounter = null,
+        BootstrapDeviceSeeder? bootstrapDeviceSeeder = null)
     {
         return new ExposureModeValidationService(
             config,
             NullLogger<ExposureModeValidationService>.Instance,
             processDetector,
             remoteAuthSchemes,
-            _ => Task.FromResult(deviceCount));
+            deviceCounter ?? (_ => Task.FromResult(deviceCount)),
+            bootstrapDeviceSeeder);
+    }
+
+    private static (BootstrapDeviceSeeder Seeder, Func<CancellationToken, Task<int>> DeviceCounter) BuildBootstrapSeeder()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+        var timeProvider = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 0, 0, 0, TimeSpan.Zero));
+        var registry = new DeviceRegistry(paths, timeProvider, NullLogger<DeviceRegistry>.Instance);
+        return (
+            new BootstrapDeviceSeeder(
+                paths,
+                registry,
+                new BootstrapStateStore(paths),
+                timeProvider,
+                NullLogger<BootstrapDeviceSeeder>.Instance),
+            async ct => (await registry.ListAsync(ct)).Count);
     }
 
     private sealed class FakeRemoteAuthScheme(string schemeName) : IRemoteAuthSchemeRegistration

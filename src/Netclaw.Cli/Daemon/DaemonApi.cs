@@ -38,7 +38,7 @@ public sealed class DaemonApi
     {
         _factory = factory;
         _endpoint = ResolveEndpoint(paths);
-        _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths);
+        _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths, DaemonClientFactory.ResolveExposureMode(paths));
     }
 
     internal DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
@@ -56,7 +56,19 @@ public sealed class DaemonApi
 
         return (Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
             ?? ClientConfigFile.ReadEndpoint(paths)
+            ?? ResolveDaemonConfigEndpoint(paths)
             ?? DefaultEndpoint).TrimEnd('/');
+    }
+
+    private static string? ResolveDaemonConfigEndpoint(NetclawPaths paths)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
+            .AddEnvironmentVariables("NETCLAW_")
+            .Build();
+        var daemonConfig = DaemonConfig.BindFromConfiguration(configuration.GetSection("Daemon"));
+        return DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(daemonConfig);
     }
 
     /// <summary>

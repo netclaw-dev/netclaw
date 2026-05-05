@@ -79,19 +79,27 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     /// Generates a device pairing code so a remote device can authenticate via
     /// <c>POST /api/pair/exchange</c>.
     ///
-    /// <para>Restricted to loopback (<c>LocalProcess</c>) connections only — a remote
-    /// device that already has a token cannot generate new codes. This enforces the
-    /// trust chain: local operator approves pairing → remote device gets a token.</para>
+    /// <para>Restricted to daemon-host operator trust: either a loopback-authenticated local
+    /// process, or the daemon-owned bootstrap paired device credential that only exists on
+    /// the daemon host after first-launch bootstrap seeding. Ordinary paired devices cannot
+    /// mint new codes.</para>
     ///
     /// <para>The daemon logs the code at <c>Information</c> level so Docker operators
     /// can retrieve it from container logs without needing a CLI inside the container.</para>
     /// </summary>
-    /// <exception cref="HubException">Thrown when the caller is not a loopback connection.</exception>
+    /// <exception cref="HubException">Thrown when the caller is not a daemon-host operator.</exception>
     public Task<PairingCodeResultDto> GeneratePairingCode()
     {
         var transport = Context.User?.FindFirst(NetclawClaimTypes.TransportAuthenticity)?.Value;
-        if (transport != nameof(TransportAuthenticity.LocalProcess))
-            throw new HubException("GeneratePairingCode requires a local loopback connection. Use `netclaw daemon pair` from the daemon host.");
+        var isBootstrapDevice = bool.TryParse(
+            Context.User?.FindFirst(NetclawClaimTypes.BootstrapDevice)?.Value,
+            out var bootstrapDevice)
+            && bootstrapDevice;
+        if (transport != nameof(TransportAuthenticity.LocalProcess) && !isBootstrapDevice)
+        {
+            throw new HubException(
+                "GeneratePairingCode requires a daemon-host local operator connection or the local bootstrap device token.");
+        }
 
         var (formattedCode, expiresAt) = _pairingCodeService.GenerateCode();
 

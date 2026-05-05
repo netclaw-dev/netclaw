@@ -125,6 +125,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     // otherwise to Loopback (local operator).  This ensures [Authorize] endpoints
     // are reachable by both loopback clients and paired remote devices.
     builder.Services.AddSingleton<DeviceRegistry>();
+    builder.Services.AddSingleton<BootstrapStateStore>();
+    builder.Services.AddSingleton<BootstrapDeviceSeeder>();
     builder.Services.AddSingleton<PairingCodeService>();
     builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
@@ -500,6 +502,7 @@ static void ConfigureDaemonServices(
     // Validate tunnel prerequisites before the rest of the daemon starts.
     // Throws from StartAsync to abort startup if the required process is missing.
     services.AddHostedService<ExposureModeValidationService>();
+    services.AddHostedService<BootstrapCompletionMarkerService>();
 
     services
         .AddOptions<ModelSelection>()

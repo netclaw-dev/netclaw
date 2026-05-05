@@ -326,6 +326,30 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task ReverseProxy_WithoutRemoteAuth_ButWithBootstrapTokenAndDevice_Passes()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "Host": "10.0.0.10",
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["10.0.0.5"]
+              }
+            }
+            """);
+        WritePairedDevice("daemon-bootstrap");
+        File.WriteAllText(_paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"bootstrap-token\"}");
+
+        var check = BuildCheck(_ => false);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
     public async Task ReverseProxy_WithLoopbackHost_IsError()
     {
         WriteConfig(

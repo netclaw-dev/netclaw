@@ -177,6 +177,9 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         if (_bootstrapDevice is null)
             return;
 
+        if (File.Exists(paths.DevicesPath))
+            return;
+
         var json = JsonSerializer.Serialize(new[] { _bootstrapDevice }, DevicesJsonOptions);
         File.WriteAllText(paths.DevicesPath, json);
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))

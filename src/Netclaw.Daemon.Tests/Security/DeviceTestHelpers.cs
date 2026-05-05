@@ -18,7 +18,7 @@ namespace Netclaw.Daemon.Tests.Security;
 internal static class DeviceTestHelpers
 {
     internal static (string RawToken, PairedDevice Device) MakeDevice(
-        string name, DateTimeOffset createdAt)
+        string name, DateTimeOffset createdAt, bool isBootstrapDevice = false)
     {
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
         var saltBytes = RandomNumberGenerator.GetBytes(16);
@@ -29,6 +29,7 @@ internal static class DeviceTestHelpers
         var device = new PairedDevice
         {
             Name = name,
+            IsBootstrapDevice = isBootstrapDevice,
             TokenHash = tokenHash,
             Salt = saltHex,
             CreatedAt = createdAt,
