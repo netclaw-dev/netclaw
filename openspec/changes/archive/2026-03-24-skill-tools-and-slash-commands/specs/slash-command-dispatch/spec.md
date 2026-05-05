@@ -16,13 +16,13 @@ SHALL be rebuilt when the skill registry is re-populated.
 
 #### Scenario: Skill registered as slash command
 
-- **GIVEN** a skill with `name: netclaw-operations` and `user-invocable` not set (default true)
+- **GIVEN** a skill with `name: netclaw-operations` and `invocable` not set (default true)
 - **WHEN** the slash-command registry is built
 - **THEN** `/netclaw-operations` maps to that skill entry
 
 #### Scenario: Non-user-invocable skill excluded
 
-- **GIVEN** a skill with `user-invocable: false`
+- **GIVEN** a skill with `invocable: false`
 - **WHEN** the slash-command registry is built
 - **THEN** the skill does not appear in the slash-command registry
 
@@ -55,7 +55,7 @@ as a transient system message and the remainder passed as user content.
 
 ### Requirement: Frontmatter invocation control fields
 
-The system SHALL parse `disable-model-invocation`, `user-invocable`, and
+The system SHALL parse `disable-model-invocation`, `invocable`, and
 `argument-hint` from YAML frontmatter.
 
 #### Scenario: disable-model-invocation parsed
@@ -68,7 +68,7 @@ The system SHALL parse `disable-model-invocation`, `user-invocable`, and
 
 #### Scenario: user-invocable false parsed
 
-- **GIVEN** a skill with `user-invocable: false` in frontmatter
+- **GIVEN** a skill with `invocable: false` in frontmatter
 - **WHEN** the skill is scanned
 - **THEN** `SkillEntry.UserInvocable` is `false`
 - **AND** the skill is excluded from the slash-command registry

@@ -18,7 +18,7 @@ load the right skill.
 - `SkillEntry.ResourcePaths` — already enumerates resource files
 - `SkillRegistry.Search()` — basic name/description search
 - `LlmSessionActor.FireLlmCall()` — turn assembly with context layers
-- Claude Code frontmatter spec: `disable-model-invocation`, `user-invocable`,
+- Claude Code frontmatter spec: `disable-model-invocation`, `invocable`,
   `argument-hint` fields
 
 ## Goals / Non-Goals
@@ -65,7 +65,7 @@ command (`/name`). No separate `invoke` or `command` field needed. Two flags
 control visibility:
 - `disable-model-invocation: true` — LLM cannot auto-trigger (excluded from
   index), but users can type `/name`
-- `user-invocable: false` — Users cannot type `/name`, but LLM can auto-load
+- `invocable: false` — Users cannot type `/name`, but LLM can auto-load
 
 **Why:** This matches the Claude Code ecosystem standard. It's simpler than
 a separate invocation field and provides fine-grained control over who can
