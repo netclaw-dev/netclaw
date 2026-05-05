@@ -20,10 +20,11 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class LoopbackAuthenticationHandlerTests
 {
-    private static (IServiceProvider Sp, IAuthenticationService Auth) BuildAuthService()
+    private static (IServiceProvider Sp, IAuthenticationService Auth) BuildAuthService(DaemonConfig? daemonConfig = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton(daemonConfig ?? new DaemonConfig());
         services
             .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
             .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
@@ -86,6 +87,19 @@ public sealed class LoopbackAuthenticationHandlerTests
         var (sp, authService) = BuildAuthService();
         var ctx = BuildContext(IPAddress.None, sp);
         ctx.Connection.RemoteIpAddress = null;
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(result.Failure);
+        Assert.Null(result.Principal);
+    }
+
+    [Fact]
+    public async Task Reverse_proxy_mode_returns_no_result_for_loopback_ip()
+    {
+        var (sp, authService) = BuildAuthService(new DaemonConfig { ExposureMode = ExposureMode.ReverseProxy });
+        var ctx = BuildContext(IPAddress.Loopback, sp);
 
         var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
 

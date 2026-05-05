@@ -39,6 +39,9 @@ public sealed class LoopbackAuthenticationHandler : AuthenticationHandler<Authen
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
+        // Reverse-proxy mode must never inherit loopback operator trust from the
+        // final hop. Even a same-host proxy forwarding over 127.0.0.1/::1 has to
+        // flow through a remote-authenticated scheme instead.
         if (_daemonConfig.ExposureMode == ExposureMode.ReverseProxy)
             return Task.FromResult(AuthenticateResult.NoResult());
 
