@@ -17,7 +17,10 @@ internal static class DeviceRegistryInspector
 
         try
         {
-            return JsonSerializer.Deserialize<List<PairedDevice>>(File.ReadAllText(paths.DevicesPath))?.Count ?? 0;
+            using var doc = JsonDocument.Parse(File.ReadAllText(paths.DevicesPath));
+            return doc.RootElement.ValueKind == JsonValueKind.Array
+                ? doc.RootElement.GetArrayLength()
+                : 0;
         }
         catch (JsonException)
         {

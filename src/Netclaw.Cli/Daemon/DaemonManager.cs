@@ -605,17 +605,14 @@ public sealed partial class DaemonManager
             if (!Directory.Exists(logsDirectory))
                 return null;
 
-            var latestCrashLog = new DirectoryInfo(logsDirectory)
-                .GetFiles("crash-*.log")
-                .Where(file => file.LastWriteTimeUtc >= startedAt.UtcDateTime.AddSeconds(-1))
-                .OrderByDescending(file => file.LastWriteTimeUtc)
+            var latestCrashLog = Doctor.CrashLogHelper
+                .FindCrashLogsSince(logsDirectory, startedAt.UtcDateTime.AddSeconds(-1))
                 .FirstOrDefault();
 
             if (latestCrashLog is null)
                 return null;
 
-            var crashLogText = File.ReadAllText(latestCrashLog.FullName);
-            foreach (var line in crashLogText.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var line in File.ReadLines(latestCrashLog.FullName))
             {
                 if (line.Contains("Daemon startup aborted:", StringComparison.OrdinalIgnoreCase))
                 {
@@ -627,7 +624,7 @@ public sealed partial class DaemonManager
             crashLogPath = latestCrashLog.FullName;
             return null;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return null;
         }

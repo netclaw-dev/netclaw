@@ -20,10 +20,12 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class LoopbackAuthenticationHandlerTests
 {
-    private static (IServiceProvider Sp, IAuthenticationService Auth) BuildAuthService()
+    private static (IServiceProvider Sp, IAuthenticationService Auth) BuildAuthService(
+        DaemonConfig? config = null)
     {
         var services = new ServiceCollection();
         services.AddLogging();
+        services.AddSingleton(config ?? new DaemonConfig());
         services
             .AddAuthentication(LoopbackAuthenticationHandler.SchemeName)
             .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(

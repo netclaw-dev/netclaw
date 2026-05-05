@@ -24,6 +24,20 @@ internal static class CrashLogHelper
     }
 
     /// <summary>
+    /// Returns crash log files written at or after the given cutoff, ordered by most recent first.
+    /// </summary>
+    public static IEnumerable<FileInfo> FindCrashLogsSince(string logsDirectory, DateTime cutoffUtc)
+    {
+        if (!Directory.Exists(logsDirectory))
+            return [];
+
+        return new DirectoryInfo(logsDirectory)
+            .GetFiles("crash-*.log", SearchOption.TopDirectoryOnly)
+            .Where(f => f.LastWriteTimeUtc >= cutoffUtc)
+            .OrderByDescending(f => f.LastWriteTimeUtc);
+    }
+
+    /// <summary>
     /// Attempts to extract a UTC timestamp from a crash log filename with the format
     /// <c>crash-YYYYMMDD-HHMMSS.log</c> (with optional suffixes after the timestamp).
     /// Returns <c>null</c> if the filename does not match.
