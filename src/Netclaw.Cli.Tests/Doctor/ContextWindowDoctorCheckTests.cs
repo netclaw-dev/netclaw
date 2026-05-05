@@ -168,7 +168,7 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         int? probeResult = null,
         Exception? probeException = null)
     {
-        Task<int?> FakeProbe(NetclawPaths _, string __, string ___, CancellationToken ____)
+        Task<int?> FakeProbe(string _, string __, CancellationToken ___)
         {
             if (probeException is not null) throw probeException;
             return Task.FromResult(probeResult);

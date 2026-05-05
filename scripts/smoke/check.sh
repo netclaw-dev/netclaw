@@ -267,8 +267,7 @@ if [[ "$doctor_output" == *"Using default 32,768 tokens"* ]]; then
   echo "FAIL: netclaw doctor still reports the hardcoded 32k default."
   echo "Expected 'Auto-detected' message from running daemon."
   exit 1
-fi
-if [[ "$doctor_output" == *"Auto-detected"* ]]; then
+elif [[ "$doctor_output" == *"Auto-detected"* ]]; then
   echo "PASS: netclaw doctor shows auto-detected context window."
 elif [[ "$doctor_output" == *"Context window explicitly set"* ]]; then
   echo "PASS: context window explicitly configured (no auto-detection needed)."

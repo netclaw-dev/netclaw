@@ -13,17 +13,17 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
 {
     private readonly NetclawPaths _paths;
     private readonly DaemonApi _daemonApi;
-    private readonly Func<NetclawPaths, string, string, CancellationToken, Task<int?>> _probeProvider;
+    private readonly Func<string, string, CancellationToken, Task<int?>> _probeProvider;
 
     public ContextWindowDoctorCheck(NetclawPaths paths, DaemonApi daemonApi)
-        : this(paths, daemonApi, ContextWindowDoctorProbe.ProbeAsync)
+        : this(paths, daemonApi, (modelId, provider, ct) => ContextWindowDoctorProbe.ProbeAsync(paths, modelId, provider, ct))
     {
     }
 
     internal ContextWindowDoctorCheck(
         NetclawPaths paths,
         DaemonApi daemonApi,
-        Func<NetclawPaths, string, string, CancellationToken, Task<int?>> probeProvider)
+        Func<string, string, CancellationToken, Task<int?>> probeProvider)
     {
         _paths = paths;
         _daemonApi = daemonApi;
@@ -93,7 +93,7 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
         string? probeError = null;
         try
         {
-            var probed = await _probeProvider(_paths, modelId, providerName, ct);
+            var probed = await _probeProvider(modelId, providerName, ct);
             if (probed is > 0 and var probedCw)
             {
                 return DoctorCheckResult.Pass(
