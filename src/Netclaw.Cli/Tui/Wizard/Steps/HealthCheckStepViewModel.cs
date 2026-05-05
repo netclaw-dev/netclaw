@@ -66,6 +66,14 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+
+        if (direction == NavigationDirection.Forward)
+        {
+            IsRunning.Value = false;
+            IsComplete.Value = false;
+            Results.Clear();
+            NotifyChanged();
+        }
     }
 
     public void OnLeave() { }

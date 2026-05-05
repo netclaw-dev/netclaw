@@ -91,4 +91,45 @@ public sealed class HealthCheckStepViewModelTests : IDisposable
         Assert.Contains(crashLogPath, failure.Label, StringComparison.Ordinal);
         Assert.Equal("Setup complete with warnings. Run `netclaw daemon start` to begin.", context.StatusMessage.Value);
     }
+
+    [Fact]
+    public async Task OnEnter_Forward_AfterFailedRun_ResetsStateForRetry()
+    {
+        using var step = new HealthCheckStepViewModel(
+            daemonManager: null,
+            daemonApi: null,
+            navigationState: new ChatNavigationState());
+        using var exposureStep = new ExposureModeStepViewModel
+        {
+            SelectedMode = ExposureMode.Local
+        };
+
+        using var context = new WizardContext
+        {
+            Paths = _paths,
+            Registry = new ProviderDescriptorRegistry([]),
+            RequestRedraw = () => { }
+        };
+
+        step.OnEnter(context, NavigationDirection.Forward);
+        exposureStep.OnEnter(context, NavigationDirection.Forward);
+
+        using var orchestrator = new WizardOrchestrator([exposureStep, step], context);
+
+        // First run — daemon start fails because DaemonManager is null
+        await step.RunWithOrchestrator(orchestrator);
+        Assert.True(step.IsComplete.Value);
+        Assert.False(step.IsRunning.Value);
+
+        // Simulate going back and re-entering
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        Assert.False(step.IsComplete.Value);
+        Assert.False(step.IsRunning.Value);
+        Assert.Empty(step.Results);
+
+        // Second run should execute (not blocked by stale IsComplete)
+        await step.RunWithOrchestrator(orchestrator);
+        Assert.True(step.IsComplete.Value);
+    }
 }
