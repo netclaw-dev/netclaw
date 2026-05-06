@@ -24,7 +24,7 @@ internal static class DeviceTestHelpers
         var saltBytes = RandomNumberGenerator.GetBytes(16);
         var rawToken = Base64Url.EncodeToString(tokenBytes);
         var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
+        var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
         var device = new PairedDevice
         {

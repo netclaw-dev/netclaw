@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Buffers.Text;
-using System.Security.Cryptography;
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
@@ -59,29 +57,11 @@ internal static class DeviceRegistryInspector
 
         foreach (var device in devices)
         {
-            if (VerifyToken(token, device))
+            if (PairedDevice.VerifyToken(token, device))
                 return true;
         }
 
         return false;
-    }
-
-    private static bool VerifyToken(string rawToken, PairedDevice device)
-    {
-        try
-        {
-            var tokenBytes = Base64Url.DecodeFromChars(rawToken);
-            var saltBytes = Convert.FromHexString(device.Salt);
-            Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
-            tokenBytes.CopyTo(combined);
-            saltBytes.CopyTo(combined[tokenBytes.Length..]);
-            var computed = Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
-            return string.Equals(computed, device.TokenHash, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
     }
 }
 

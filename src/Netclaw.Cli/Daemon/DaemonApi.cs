@@ -7,7 +7,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
@@ -62,12 +61,7 @@ public sealed class DaemonApi
 
     private static string? ResolveDaemonConfigEndpoint(NetclawPaths paths)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
-            .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
-            .AddEnvironmentVariables("NETCLAW_")
-            .Build();
-        var daemonConfig = DaemonConfig.BindFromConfiguration(configuration.GetSection("Daemon"));
+        var daemonConfig = DaemonClientFactory.LoadDaemonConfig(paths);
         return DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(daemonConfig);
     }
 

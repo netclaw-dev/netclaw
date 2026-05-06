@@ -50,14 +50,18 @@ internal sealed class BootstrapDeviceSeeder
             return false;
 
         var devices = await _deviceRegistry.ListAsync(cancellationToken);
-        if (devices.Count > 0 || HasLocalDeviceToken())
+        if (devices.Count > 0)
+            return false;
+
+        var existingSecrets = LoadSecrets();
+        if (HasDeviceToken(existingSecrets))
             return false;
 
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
         var rawToken = Base64Url.EncodeToString(tokenBytes);
         var saltBytes = RandomNumberGenerator.GetBytes(16);
         var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
+        var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
         var now = _timeProvider.GetUtcNow();
 
         var device = new PairedDevice
@@ -71,7 +75,8 @@ internal sealed class BootstrapDeviceSeeder
         };
 
         await _deviceRegistry.AddAsync(device, cancellationToken);
-        WriteLocalDeviceToken(rawToken);
+        existingSecrets["DeviceToken"] = rawToken;
+        SecretsFileWriter.Write(_paths.SecretsPath, existingSecrets, protector: _protector);
         _logger.LogInformation(
             "Seeded bootstrap paired device '{DeviceName}' for first non-local daemon start.",
             device.Name);
@@ -81,48 +86,29 @@ internal sealed class BootstrapDeviceSeeder
     public void MarkCompleted()
         => _bootstrapStateStore.MarkCompleted(_timeProvider);
 
-    private bool HasLocalDeviceToken()
+    private Dictionary<string, object> LoadSecrets()
     {
         if (!File.Exists(_paths.SecretsPath))
-            return false;
+            return new Dictionary<string, object> { ["configVersion"] = 1 };
 
         try
-        {
-            using var doc = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
-            return doc.RootElement.TryGetProperty("DeviceToken", out var tokenElement)
-                   && tokenElement.ValueKind == JsonValueKind.String
-                   && !string.IsNullOrWhiteSpace(tokenElement.GetString());
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-    }
-
-    private void WriteLocalDeviceToken(string rawToken)
-    {
-        Dictionary<string, object> secrets;
-        if (File.Exists(_paths.SecretsPath))
         {
             var text = File.ReadAllText(_paths.SecretsPath);
             var decrypted = _protector is not null
                 ? SecretsFileWriter.DecryptJsonLeaves(text, _protector)
                 : text;
-            secrets = JsonSerializer.Deserialize<Dictionary<string, object>>(decrypted)
+            return JsonSerializer.Deserialize<Dictionary<string, object>>(decrypted)
                 ?? new Dictionary<string, object> { ["configVersion"] = 1 };
         }
-        else
+        catch (JsonException)
         {
-            secrets = new Dictionary<string, object> { ["configVersion"] = 1 };
+            return new Dictionary<string, object> { ["configVersion"] = 1 };
         }
+    }
 
-        if (secrets.TryGetValue("DeviceToken", out var existing)
-            && existing?.ToString() is { Length: > 0 })
-        {
-            return;
-        }
-
-        secrets["DeviceToken"] = rawToken;
-        SecretsFileWriter.Write(_paths.SecretsPath, secrets, protector: _protector);
+    private static bool HasDeviceToken(Dictionary<string, object> secrets)
+    {
+        return secrets.TryGetValue("DeviceToken", out var existing)
+            && existing?.ToString() is { Length: > 0 };
     }
 }

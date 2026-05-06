@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers.Text;
+using System.Security.Cryptography;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -46,4 +49,37 @@ public sealed record PairedDevice
     /// Updated on every successful authentication.
     /// </summary>
     public DateTimeOffset LastUsedAt { get; init; }
+
+    /// <summary>
+    /// Computes <c>SHA256(token_bytes || salt_bytes)</c>.
+    /// </summary>
+    /// <param name="rawToken">Base64url-encoded raw token.</param>
+    /// <param name="saltHex">Lowercase hex-encoded salt.</param>
+    /// <returns>Lowercase hex-encoded SHA-256 digest.</returns>
+    public static string ComputeTokenHash(string rawToken, string saltHex)
+    {
+        var tokenBytes = Base64Url.DecodeFromChars(rawToken);
+        var saltBytes = Convert.FromHexString(saltHex);
+        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
+        tokenBytes.CopyTo(combined);
+        saltBytes.CopyTo(combined[tokenBytes.Length..]);
+        return Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// Verifies a raw token against this device's stored hash and salt.
+    /// Returns <c>false</c> for malformed tokens instead of throwing.
+    /// </summary>
+    public static bool VerifyToken(string rawToken, PairedDevice device)
+    {
+        try
+        {
+            var computed = ComputeTokenHash(rawToken, device.Salt);
+            return string.Equals(computed, device.TokenHash, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 }

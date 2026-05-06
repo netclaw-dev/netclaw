@@ -34,11 +34,6 @@ public static class DaemonControlPlaneEndpointResolver
         };
     }
 
-    public static bool RequiresBearerToken(string endpoint, ExposureMode exposureMode)
-    {
-        if (!exposureMode.RequiresRemoteAuthentication())
-            return false;
-
-        return true;
-    }
+    public static bool RequiresBearerToken(ExposureMode exposureMode)
+        => exposureMode.RequiresRemoteAuthentication();
 }

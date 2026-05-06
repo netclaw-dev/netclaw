@@ -148,19 +148,12 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
             return;
         }
 
-        // Generate a bootstrap device token so the daemon can start with at least
-        // one paired device — satisfies ExposureModeValidationService's requirement.
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
         var rawToken = Base64Url.EncodeToString(tokenBytes);
 
         var saltBytes = RandomNumberGenerator.GetBytes(16);
         var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-
-        // SHA256(token_bytes || salt_bytes) — matches DeviceRegistry.ComputeTokenHash
-        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
-        tokenBytes.CopyTo(combined);
-        saltBytes.CopyTo(combined[tokenBytes.Length..]);
-        var tokenHash = Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
+        var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
         var now = DateTimeOffset.UtcNow;
         _bootstrapDevice = new PairedDevice

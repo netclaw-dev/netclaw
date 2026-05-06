@@ -55,14 +55,16 @@ internal static class DaemonClientFactory
     /// </summary>
     internal static string? ResolveDeviceToken(string endpoint, NetclawPaths paths, ExposureMode exposureMode)
     {
-        if (!DaemonControlPlaneEndpointResolver.RequiresBearerToken(endpoint, exposureMode)
-            && IsLoopback(endpoint))
+        if (IsLoopback(endpoint) && !DaemonControlPlaneEndpointResolver.RequiresBearerToken(exposureMode))
             return null;
 
         return ReadDeviceToken(paths);
     }
 
     internal static ExposureMode ResolveExposureMode(NetclawPaths paths)
+        => LoadDaemonConfig(paths).ExposureMode;
+
+    internal static DaemonConfig LoadDaemonConfig(NetclawPaths paths)
     {
         var config = new ConfigurationBuilder()
             .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
@@ -70,7 +72,7 @@ internal static class DaemonClientFactory
             .AddEnvironmentVariables("NETCLAW_")
             .Build();
 
-        return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon")).ExposureMode;
+        return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
     }
 
     /// <summary>

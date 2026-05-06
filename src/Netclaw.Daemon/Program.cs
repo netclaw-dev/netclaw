@@ -256,7 +256,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
         var saltBytes = RandomNumberGenerator.GetBytes(16);
         var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-        var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
+        var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
         var now = timeProvider.GetUtcNow();
         var device = new PairedDevice
