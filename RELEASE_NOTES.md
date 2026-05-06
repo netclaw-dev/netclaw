@@ -1,3 +1,51 @@
+#### 0.17.0 2026-05-06 ####
+
+Netclaw v0.17.0 — First public release with Docker support, non-interactive approval, and open-source infrastructure
+
+This is the first release of Netclaw published as an open-source project under [netclaw-dev/netclaw](https://github.com/netclaw-dev/netclaw). It includes the first official Docker image for `netclawd`, new agent autonomy features, and the infrastructure changes needed to support public distribution.
+
+**Docker**
+
+* Official multi-arch Docker image for `netclawd` is now published to GHCR (`ghcr.io/netclaw-dev/netclaw`) on every release, supporting both `linux/amd64` and `linux/arm64`. ([#858](https://github.com/netclaw-dev/netclaw/pull/858))
+
+* The `netclawd` Docker container now runs as a non-root user (`netclaw`, UID 1654) instead of root — the entrypoint creates the data directory with correct ownership and `su-exec`s into the unprivileged user. ([#874](https://github.com/netclaw-dev/netclaw/pull/874))
+
+* Schema files are now included in the Docker image so `netclaw doctor` works correctly inside containers. ([#863](https://github.com/netclaw-dev/netclaw/pull/863))
+
+* Exposure mode validation now accepts container and reverse-proxy deployments — the daemon no longer rejects `https` exposure mode when bound to a loopback address, since TLS termination is handled externally in these topologies. ([#862](https://github.com/netclaw-dev/netclaw/pull/862), [#864](https://github.com/netclaw-dev/netclaw/pull/864))
+
+**Features**
+
+* Non-interactive approval, sub-agent approval chaining, and shell trust zone enforcement — operators can now pre-approve tool categories in `netclaw.yaml` so the daemon can execute tools without interactive confirmation. Sub-agents inherit their parent's approval grants. A new shell trust zone restricts which directories and commands the agent can use in autonomous mode. ([#851](https://github.com/netclaw-dev/netclaw/pull/851))
+
+* Improved ambient skill activation for small models — skill keyword matching now uses normalized scoring so smaller-context models (Haiku, Gemini Flash) trigger the right skills without requiring exact phrasing. ([#856](https://github.com/netclaw-dev/netclaw/pull/856))
+
+**Bug Fixes**
+
+* Fixed `cancel_reminder` deleting config files instead of disabling them — reminder cancellation now sets a disabled flag rather than removing the underlying file, so reminder metadata is preserved for audit and re-enable. ([#848](https://github.com/netclaw-dev/netclaw/pull/848))
+
+* Fixed provider-reported context window being ignored — the LLM session now uses the context window size reported by the provider instead of falling back to a hardcoded 32k default. ([#865](https://github.com/netclaw-dev/netclaw/pull/865))
+
+* Fixed health check state not resetting on re-entry — the `netclaw init` wizard's go-back-and-retry flow now resets health check state so a previously-failed check can succeed on retry without restarting the wizard. Closes [#859](https://github.com/netclaw-dev/netclaw/issues/859). ([#871](https://github.com/netclaw-dev/netclaw/pull/871))
+
+* Fixed daemon bootstrap pairing in non-local modes — the daemon now preserves the bootstrap pairing token when running in container or remote exposure modes, fixing a regression where pairing failed after switching away from local mode. ([#872](https://github.com/netclaw-dev/netclaw/pull/872))
+
+* Consolidated duplicated path utilities into a single `PathUtility` class, eliminating three independent copies of home-directory and config-path resolution logic. Closes [#852](https://github.com/netclaw-dev/netclaw/issues/852). ([#873](https://github.com/netclaw-dev/netclaw/pull/873))
+
+**Open-Source Infrastructure**
+
+* Migrated all repository references from `Aaronontheweb/netclaw` to `netclaw-dev/netclaw`. ([#838](https://github.com/netclaw-dev/netclaw/pull/838))
+
+* Migrated CI from self-hosted ARC runners to GitHub-hosted runners. ([#837](https://github.com/netclaw-dev/netclaw/pull/837))
+
+* Prepared README and documentation for open-source launch — added CONTRIBUTING.md with build instructions and smoke sandbox docs, clarified secrets encryption, and added netclaw.dev website links. ([#843](https://github.com/netclaw-dev/netclaw/pull/843), [#846](https://github.com/netclaw-dev/netclaw/pull/846), [#847](https://github.com/netclaw-dev/netclaw/pull/847), [#878](https://github.com/netclaw-dev/netclaw/pull/878))
+
+**Dependencies**
+
+* Bumped `Netclaw.SkillClient` from 0.2.0 to 0.2.1. ([#836](https://github.com/netclaw-dev/netclaw/pull/836))
+
+* Bumped `NSec.Cryptography` from 24.4.0 to 26.4.0. ([#840](https://github.com/netclaw-dev/netclaw/pull/840))
+
 #### 0.16.2 2026-04-30 ####
 
 Netclaw v0.16.2 — Apache 2.0 license, security hardening, and stability fixes

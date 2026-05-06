@@ -8,32 +8,52 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.16.2</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.16.2 — Apache 2.0 license, security hardening, and stability fixes
+    <VersionPrefix>0.17.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.17.0 — First public release with Docker support, non-interactive approval, and open-source infrastructure
 
-**License**
+This is the first release of Netclaw published as an open-source project under [netclaw-dev/netclaw](https://github.com/netclaw-dev/netclaw). It includes the first official Docker image for `netclawd`, new agent autonomy features, and the infrastructure changes needed to support public distribution.
 
-* Migrated from AGPL v3.0 + Commons Clause to Apache License 2.0 — all source files now carry Petabridge LLC copyright headers, a new `scripts/Add-FileHeaders.ps1` script manages header enforcement with a `-Verify` mode for CI, and the PR validation workflow includes a `copyright-headers` job that fails builds missing headers. ([#790](https://github.com/netclaw-dev/netclaw/pull/790))
+**Docker**
 
-**Security**
+* Official multi-arch Docker image for `netclawd` is now published to GHCR (`ghcr.io/netclaw-dev/netclaw`) on every release, supporting both `linux/amd64` and `linux/arm64`. ([#858](https://github.com/netclaw-dev/netclaw/pull/858))
 
-* Fixed privilege escalation bypass in `ShellCommandPolicy` — `sudo`, `su`, and `doas` commands now receive a categorical deny regardless of what follows, closing a bypass where prepending `sudo` to any denied command evaded all deny patterns because matching only operated on the first token. Closes finding S4-20 from the 2026-04-29 audit. ([#830](https://github.com/netclaw-dev/netclaw/pull/830))
+* The `netclawd` Docker container now runs as a non-root user (`netclaw`, UID 1654) instead of root — the entrypoint creates the data directory with correct ownership and `su-exec`s into the unprivileged user. ([#874](https://github.com/netclaw-dev/netclaw/pull/874))
 
-* Moved `SecretOutputRedactor` to `DispatchingToolExecutor` so all tool outputs are redacted before reaching the LLM — previously only shell and background job outputs were covered. Extended redaction patterns now cover AWS access keys (`AKIA...`), JWT tokens, and other structured secrets. Closes finding S5-01. ([#830](https://github.com/netclaw-dev/netclaw/pull/830))
+* Schema files are now included in the Docker image so `netclaw doctor` works correctly inside containers. ([#863](https://github.com/netclaw-dev/netclaw/pull/863))
 
-* Gated raw OAuth token values in the provider status endpoint to loopback connections only — remote paired devices now receive boolean flags instead of raw access and refresh token values. Closes finding S7-5.5. ([#830](https://github.com/netclaw-dev/netclaw/pull/830))
+* Exposure mode validation now accepts container and reverse-proxy deployments — the daemon no longer rejects `https` exposure mode when bound to a loopback address, since TLS termination is handled externally in these topologies. ([#862](https://github.com/netclaw-dev/netclaw/pull/862), [#864](https://github.com/netclaw-dev/netclaw/pull/864))
 
-* Enforced `SubAgentToolPolicy` at spawn time and auto-granted safe-list tools — user-facing subagents are now restricted to the safe-list (`attach_file`, `file_read`, `web_fetch`, `web_search`) at tool resolution time. Safe-list tools are auto-granted in non-interactive contexts instead of being denied by the approval gate, fixing subagents that had zero usable tools. Closes [#831](https://github.com/netclaw-dev/netclaw/issues/831). ([#830](https://github.com/netclaw-dev/netclaw/pull/830))
+**Features**
+
+* Non-interactive approval, sub-agent approval chaining, and shell trust zone enforcement — operators can now pre-approve tool categories in `netclaw.yaml` so the daemon can execute tools without interactive confirmation. Sub-agents inherit their parent's approval grants. A new shell trust zone restricts which directories and commands the agent can use in autonomous mode. ([#851](https://github.com/netclaw-dev/netclaw/pull/851))
+
+* Improved ambient skill activation for small models — skill keyword matching now uses normalized scoring so smaller-context models (Haiku, Gemini Flash) trigger the right skills without requiring exact phrasing. ([#856](https://github.com/netclaw-dev/netclaw/pull/856))
 
 **Bug Fixes**
 
-* Fixed daemon crash logs from unobserved `AbruptTerminationException` on actor shutdown — `SessionPipelineHandle.Dispose()` was disposing the materializer in `PostStop` while stream stage actors (children of the materializer's actor context) had already been killed by Akka's child-first shutdown, producing `AbruptTerminationException` as unobserved tasks that triggered `DaemonCrashMonitor`. Output streams now use `WatchTermination`, and `ReminderExecutionActor` / `WebhookExecutionActor` call a new `DrainAsync()` before stopping so all stream stages complete gracefully while the parent actor is still alive. ([#802](https://github.com/netclaw-dev/netclaw/pull/802))
+* Fixed `cancel_reminder` deleting config files instead of disabling them — reminder cancellation now sets a disabled flag rather than removing the underlying file, so reminder metadata is preserved for audit and re-enable. ([#848](https://github.com/netclaw-dev/netclaw/pull/848))
 
-* Fixed erratic navigation during `netclaw init` caused by duplicated channel picker subscriptions — `ChannelPickerStepView.BuildContent()` was adding new `Submitted` subscriptions on every re-render without disposing old ones, causing multiple `AdvanceStep()` calls per Enter key and erratic step navigation. Subscriptions are now cleared at the top of `BuildContent()` and focus state is reset before sub-step delegation. Closes [#792](https://github.com/netclaw-dev/netclaw/issues/792). ([#797](https://github.com/netclaw-dev/netclaw/pull/797))
+* Fixed provider-reported context window being ignored — the LLM session now uses the context window size reported by the provider instead of falling back to a hardcoded 32k default. ([#865](https://github.com/netclaw-dev/netclaw/pull/865))
+
+* Fixed health check state not resetting on re-entry — the `netclaw init` wizard's go-back-and-retry flow now resets health check state so a previously-failed check can succeed on retry without restarting the wizard. Closes [#859](https://github.com/netclaw-dev/netclaw/issues/859). ([#871](https://github.com/netclaw-dev/netclaw/pull/871))
+
+* Fixed daemon bootstrap pairing in non-local modes — the daemon now preserves the bootstrap pairing token when running in container or remote exposure modes, fixing a regression where pairing failed after switching away from local mode. ([#872](https://github.com/netclaw-dev/netclaw/pull/872))
+
+* Consolidated duplicated path utilities into a single `PathUtility` class, eliminating three independent copies of home-directory and config-path resolution logic. Closes [#852](https://github.com/netclaw-dev/netclaw/issues/852). ([#873](https://github.com/netclaw-dev/netclaw/pull/873))
+
+**Open-Source Infrastructure**
+
+* Migrated all repository references from `Aaronontheweb/netclaw` to `netclaw-dev/netclaw`. ([#838](https://github.com/netclaw-dev/netclaw/pull/838))
+
+* Migrated CI from self-hosted ARC runners to GitHub-hosted runners. ([#837](https://github.com/netclaw-dev/netclaw/pull/837))
+
+* Prepared README and documentation for open-source launch — added CONTRIBUTING.md with build instructions and smoke sandbox docs, clarified secrets encryption, and added netclaw.dev website links. ([#843](https://github.com/netclaw-dev/netclaw/pull/843), [#846](https://github.com/netclaw-dev/netclaw/pull/846), [#847](https://github.com/netclaw-dev/netclaw/pull/847), [#878](https://github.com/netclaw-dev/netclaw/pull/878))
 
 **Dependencies**
 
-* Bumped `Akka.Persistence.Sql.Hosting` from 1.5.62 to 1.5.67 (patch update). ([#799](https://github.com/netclaw-dev/netclaw/pull/799))</PackageReleaseNotes>
+* Bumped `Netclaw.SkillClient` from 0.2.0 to 0.2.1. ([#836](https://github.com/netclaw-dev/netclaw/pull/836))
+
+* Bumped `NSec.Cryptography` from 24.4.0 to 26.4.0. ([#840](https://github.com/netclaw-dev/netclaw/pull/840))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
