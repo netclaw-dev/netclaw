@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Microsoft.Extensions.Time.Testing;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
@@ -27,7 +28,8 @@ public class SetReminderToolTests : TestKit
     {
         builder
             .WithInMemoryJournal()
-            .WithInMemorySnapshotStore();
+            .WithInMemorySnapshotStore()
+            .WithNetclawSerialization();
     }
 
     [Fact]

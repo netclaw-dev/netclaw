@@ -99,6 +99,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
+            .WithNetclawSerialization()
             .WithNetclawActors();
     }
 

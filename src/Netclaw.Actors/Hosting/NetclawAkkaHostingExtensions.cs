@@ -184,6 +184,7 @@ public static class NetclawAkkaHostingExtensions
             typeof(ReminderSchedule),
             typeof(ReminderPayload),
             typeof(AdoptedContextRecorded),
+            typeof(Channels.CursorAdvanced),
         };
 
         return builder

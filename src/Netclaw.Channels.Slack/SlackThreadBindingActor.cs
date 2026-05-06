@@ -843,7 +843,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private void ApplyCursorAdvanced(CursorAdvanced advanced)
     {
-        _cursorTs = new SlackEventTs(advanced.CursorTs);
+        _cursorTs = new SlackEventTs(advanced.Cursor);
 
         // Skip journal truncation during recovery replay — we only need to run
         // it when new events are being persisted.
@@ -852,8 +852,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     }
 
     private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
-
-    private readonly record struct CursorAdvanced(string CursorTs);
 
     private static AdoptedContextMergeResult MergeGapWithLiveContents(
         IReadOnlyList<AdoptedContextMessage> gap,

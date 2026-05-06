@@ -1148,12 +1148,18 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
         }
 
-        Persist(new CursorAdvanced(candidateSnowflake), ApplyCursorAdvanced);
+        Persist(new CursorAdvanced(candidateSnowflake.ToString()), ApplyCursorAdvanced);
     }
 
     private void ApplyCursorAdvanced(CursorAdvanced advanced)
     {
-        _cursorSnowflake = advanced.CursorSnowflake;
+        if (!ulong.TryParse(advanced.Cursor, out var snowflake))
+        {
+            _log.Warning("Corrupt cursor value during recovery, skipping: {Cursor}", advanced.Cursor);
+            return;
+        }
+
+        _cursorSnowflake = snowflake;
 
         if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
             DeleteMessages(LastSequenceNr - 1);
@@ -1161,8 +1167,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
     private static ulong? TryParseSnowflake(string value)
         => ulong.TryParse(value, out var id) ? id : null;
-
-    private readonly record struct CursorAdvanced(ulong CursorSnowflake);
 
     private sealed record InitializePipeline
     {

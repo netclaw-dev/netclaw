@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -28,7 +29,8 @@ public sealed class SessionMemoryObserverActorTests : TestKit
     {
         builder
             .WithInMemoryJournal()
-            .WithInMemorySnapshotStore();
+            .WithInMemorySnapshotStore()
+            .WithNetclawSerialization();
     }
 
     /// <summary>

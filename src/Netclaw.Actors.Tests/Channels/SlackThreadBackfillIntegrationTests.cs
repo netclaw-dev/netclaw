@@ -93,6 +93,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
+            .WithNetclawSerialization()
             .WithNetclawActors();
     }
 

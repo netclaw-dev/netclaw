@@ -8,6 +8,7 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
@@ -26,7 +27,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        builder.WithInMemoryJournal().WithInMemorySnapshotStore();
+        builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization();
     }
 
     protected override IActorRef CreateBindingActor(

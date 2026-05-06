@@ -103,6 +103,7 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
+            .WithNetclawSerialization()
             .WithNetclawActors();
     }
 

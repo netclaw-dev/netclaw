@@ -30,7 +30,8 @@ public class ReminderManagerActorTests : TestKit
     {
         builder
             .WithInMemoryJournal()
-            .WithInMemorySnapshotStore();
+            .WithInMemorySnapshotStore()
+            .WithNetclawSerialization();
 
         var paths = new NetclawPaths(_basePath);
         paths.EnsureDirectoriesExist();

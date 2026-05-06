@@ -6,6 +6,7 @@
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Serialization;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
@@ -431,6 +432,15 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Null(result.LowerBound);
         Assert.Null(result.UpperBound);
         Assert.Empty(result.Messages);
+    }
+
+    [Fact]
+    public void CursorAdvanced_round_trips()
+    {
+        var original = new CursorAdvanced("1778082564.879599");
+        var result = RoundTrip(original);
+        Assert.Equal(original, result);
+        Assert.Equal("1778082564.879599", result.Cursor);
     }
 
     [Fact]

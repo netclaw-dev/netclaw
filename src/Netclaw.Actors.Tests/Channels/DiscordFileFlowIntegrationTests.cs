@@ -90,6 +90,7 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
+            .WithNetclawSerialization()
             .WithNetclawActors();
     }
 

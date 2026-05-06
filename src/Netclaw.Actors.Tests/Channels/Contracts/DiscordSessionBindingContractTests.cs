@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Persistence.Hosting;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
@@ -23,7 +24,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        builder.WithInMemoryJournal().WithInMemorySnapshotStore();
+        builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization();
     }
 
     protected override IActorRef CreateBindingActor(

@@ -35,6 +35,7 @@ internal static class NetclawProtoMapper
         ReminderSchedule v => ToProto(v),
         ReminderPayload v => ToProto(v),
         AdoptedContextRecorded v => ToProto(v),
+        CursorAdvanced v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
 
@@ -480,6 +481,11 @@ internal static class NetclawProtoMapper
         TimestampMs = proto.TimestampMs,
         AuthorityAtInclusion = proto.AuthorityAtInclusion
     };
+
+    // ── CursorAdvanced ──
+
+    internal static Proto.CursorAdvancedProto ToProto(CursorAdvanced ca) => new() { Cursor = ca.Cursor };
+    internal static CursorAdvanced FromProto(Proto.CursorAdvancedProto proto) => new(proto.Cursor);
 
     // ── ActiveJobInfo ──
 

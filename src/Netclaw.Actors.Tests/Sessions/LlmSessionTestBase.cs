@@ -22,6 +22,7 @@ public abstract class LlmSessionTestBase : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
+            .WithNetclawSerialization()
             .WithNetclawActors();
     }
 

@@ -210,3 +210,9 @@ message ReminderScheduleProto {
 message ReminderPayloadProto {
   ReminderIdProto id = 1;
 }
+
+// ── Channel cursor ──
+
+message CursorAdvancedProto {
+  string cursor = 1;
+}
