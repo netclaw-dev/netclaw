@@ -16,10 +16,9 @@
 # Netclaw
 
 Netclaw is an open-source, self-hosted autonomous operations agent that runs
-anywhere — from a Raspberry Pi to a cloud VM. Built on top of a minimal
-actor-driven session framework called Akka.Agents, Netclaw is designed for
-hobbyists, small teams, and businesses who want an AI operations agent with
-strong safety defaults and as few moving parts as possible.
+anywhere — from a Raspberry Pi to a cloud VM. Designed for hobbyists, small
+teams, and businesses who want an AI operations agent with strong safety
+defaults and as few moving parts as possible.
 
 Where other agents compete on ecosystem breadth and feature velocity, Netclaw
 takes the opposite approach: **simplicity** (a readable codebase with a small
@@ -29,37 +28,15 @@ feeds managed by your organization, not an unaudited public marketplace).
 
 Learn more at **[netclaw.dev](https://netclaw.dev)**.
 
-## Architecture
-
-Netclaw uses a **daemon + thin client** architecture:
-
-- **`netclawd`** (`src/Netclaw.Daemon/`) — always-on daemon process hosting
-  the Akka actor system, LLM sessions, tool execution, and persistence.
-  Exposes a SignalR hub at `/hub/session` plus authenticated management
-  endpoints for remote clients.
-
-- **`netclaw`** (`src/Netclaw.Cli/`) — thin CLI client for interactive chat,
-  daemon management, and configuration. Connects to the daemon via SignalR and
-  authenticated HTTP.
-
 ## Quick Start
 
-### Prerequisites
+### Install
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned at `10.0.203`
-  via `global.json`, `rollForward: major`)
-- A local [Ollama](https://ollama.com/) instance (default provider), or an
-  OpenRouter API key
-
-### 1. Install prebuilt binaries (release feed)
-
-Linux (installs CLI + daemon to `~/.netclaw/bin` by default):
+**Linux** (installs CLI + daemon to `~/.netclaw/bin`):
 
 ```bash
 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
-
-Common Linux variants:
 
 ```bash
 # Install only the CLI
@@ -69,10 +46,10 @@ curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli
 curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon
 
 # Pin a specific version
-NETCLAW_VERSION=0.1.0 curl -sSL https://releases.netclaw.dev/install.sh | bash
+NETCLAW_VERSION=0.17.1 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
-Windows (installs to `%LOCALAPPDATA%\Programs\netclaw` by default):
+**Windows** (installs to `%LOCALAPPDATA%\Programs\netclaw`):
 
 ```powershell
 iwr -useb https://releases.netclaw.dev/install.ps1 | iex
@@ -84,36 +61,30 @@ the script locally:
 ```powershell
 $script = Join-Path $env:TEMP "netclaw-install.ps1"
 iwr -useb https://releases.netclaw.dev/install.ps1 -OutFile $script
-& $script -Component all -Version 0.1.0
+& $script -Component all -Version 0.17.1
 ```
 
-### 2. Build and publish (from source)
+**Docker** (multi-arch: amd64/arm64):
 
 ```bash
-# Build everything
-dotnet build Netclaw.slnx
-
-# Publish both binaries to a shared output folder
-dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o ./out
-dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o ./out
+docker run -d --name netclawd \
+  -p 5199:5199 \
+  -v ~/.netclaw:/home/netclaw/.netclaw \
+  -e NETCLAW_Daemon__Host=0.0.0.0 \
+  ghcr.io/netclaw-dev/netclaw:latest
 ```
 
-### 3. Make the CLI available
-
-Either add the output folder to your PATH:
+The container runs as a non-root user (`netclaw`, UID 1654). The data
+directory must be writable by that user:
 
 ```bash
-export PATH="$PWD/out:$PATH"
+mkdir -p ~/.netclaw && chmod 777 ~/.netclaw
 ```
 
-Or point the CLI at the daemon binary explicitly:
+> **Note:** The daemon binds to `127.0.0.1` by default. Docker deployments
+> require `NETCLAW_Daemon__Host=0.0.0.0` for port forwarding to work.
 
-```bash
-export NETCLAW_DAEMON_PATH="$PWD/out/netclawd"
-alias netclaw="$PWD/out/netclaw"
-```
-
-### 4. Configure an LLM provider
+### Configure
 
 Run the guided setup wizard:
 
@@ -162,24 +133,6 @@ netclaw secrets set Slack.BotToken xoxb-...
 netclaw secrets set Slack.AppToken xapp-...
 ```
 
-The resulting file structure looks like this (values are encrypted, shown here
-as placeholders):
-
-```json
-{
-  "Providers": {
-    "openrouter": { "ApiKey": "ENC:CfDJ8..." }
-  },
-  "Slack": {
-    "BotToken": "ENC:CfDJ8...",
-    "AppToken": "ENC:CfDJ8..."
-  }
-}
-```
-
-`DeviceToken` is added automatically by `netclaw pair` when pairing with a
-remote daemon. Do not edit it manually.
-
 All settings can also be overridden via environment variables using the
 `NETCLAW_` prefix with double-underscore separators for nested keys:
 
@@ -188,16 +141,90 @@ export NETCLAW_Providers__local-ollama__Endpoint=http://localhost:11434
 export NETCLAW_Models__Main__ModelId=qwen3:8b
 ```
 
-### 5. Validate configuration
+### Validate
 
 ```bash
 netclaw doctor          # Check config schema, provider connectivity, secrets
 netclaw doctor --fix    # Auto-apply safe fixes
 ```
 
-### Inbound webhooks (optional)
+### Run
 
-Inbound webhook configuration is split across two locations:
+```bash
+# Start the daemon (background process)
+netclaw daemon start
+
+# Check daemon status
+netclaw daemon status
+
+# Interactive chat (connects to running daemon)
+netclaw chat
+
+# Single-prompt mode (non-interactive)
+netclaw chat -p "What's on my calendar today?"
+
+# Stop the daemon
+netclaw daemon stop
+```
+
+## Configuration
+
+Configuration is layered — later sources override earlier ones:
+
+1. `~/.netclaw/config/netclaw.json` — base settings
+2. `~/.netclaw/config/secrets.json` — encrypted credential overlay (`chmod 600`)
+3. `NETCLAW_*` environment variables — highest priority
+
+Directories are created automatically on first run.
+
+### Defaults (No Config Files)
+
+When no config files exist, the daemon defaults to:
+
+- **Provider:** `local-ollama` at `http://localhost:11434`
+- **Main model:** `qwen3:30b` (32K context)
+- **Persistence:** SQLite at `~/.netclaw/netclaw.db`
+- **Search:** DuckDuckGo (no API key required)
+- **Slack:** disabled
+
+### Directory Layout
+
+```
+~/.netclaw/
+├── netclaw.pid                # daemon PID file
+├── netclaw.db                 # SQLite persistence (default)
+├── config/
+│   ├── netclaw.json           # base settings
+│   ├── secrets.json           # encrypted credentials (chmod 600)
+│   └── devices.json           # paired device registry
+├── identity/                  # system prompt layers
+│   ├── SOUL.md
+│   ├── AGENTS.md
+│   └── TOOLING.md
+├── skills/                    # system and user skills
+├── sessions/
+└── logs/
+    ├── daemon.log
+    └── sessions/
+```
+
+### Persistence
+
+```json
+{
+  "Persistence": {
+    "Provider": "Sqlite",
+    "Sqlite": {
+      "Path": "/home/your-user/.netclaw/netclaw.db",
+      "AutoMigrate": true
+    }
+  }
+}
+```
+
+### Inbound Webhooks
+
+Webhook configuration is split across two locations:
 
 - `~/.netclaw/config/netclaw.json` enables the feature with `Webhooks.Enabled`
 - `~/.netclaw/config/webhooks/*.json` stores one route per file; the filename
@@ -242,26 +269,7 @@ file is fixed.
 > The `Secret` field in verification config is not encrypted at rest. Protect
 > these files with appropriate filesystem permissions (`chmod 600`).
 
-`netclaw doctor` now validates route files under `~/.netclaw/config/webhooks/`
-and reports malformed or invalid routes directly.
-
-### 6. Run
-
-```bash
-# Start the daemon (background process)
-netclaw daemon start
-
-# Check daemon status
-netclaw daemon status
-
-# Interactive chat (connects to running daemon)
-netclaw chat
-
-# Stop the daemon
-netclaw daemon stop
-```
-
-### 7. Remote Access and Device Pairing
+## Remote Access and Device Pairing
 
 If the daemon is exposed over the network (via Tailscale or Cloudflare Tunnel),
 remote devices can authenticate using a two-sided pairing protocol.
@@ -326,76 +334,15 @@ netclaw daemon devices                  # List all paired devices
 netclaw daemon devices revoke myphone   # Revoke a specific device
 ```
 
-## Operations Runbooks
+### systemd Service
 
-- Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
-- Behavior debugging and telemetry triage: `docs/runbooks/behavior-debugging.md`
-- Tool approval gates and permission configuration: `docs/runbooks/tool-approval-gates.md`
+On Linux, `netclaw daemon install` creates a user-level systemd service:
 
-## Integrations
-
-- Integration docs index: `docs/integrations/README.md`
-- Slack Socket Mode setup: `docs/integrations/slack-socket-mode.md`
-- Slack ACL policy model: `docs/integrations/slack-acl-policy.md`
-
-## Configuration
-
-Configuration is layered — later sources override earlier ones:
-
-1. `~/.netclaw/config/netclaw.json` — base settings
-2. `~/.netclaw/config/secrets.json` — encrypted credential overlay (`chmod 600`)
-3. `NETCLAW_*` environment variables — highest priority
-
-Directories are created automatically on first run.
-
-### `~/.netclaw/` Directory Layout
-
+```bash
+netclaw daemon install        # Creates ~/.config/systemd/user/netclaw.service
+systemctl --user start netclaw
+systemctl --user status netclaw
 ```
-~/.netclaw/
-├── netclaw.pid                # daemon PID file
-├── netclaw.db                 # SQLite persistence (default)
-├── config/
-│   ├── netclaw.json           # base settings
-│   ├── secrets.json           # encrypted credentials (chmod 600)
-│   └── devices.json           # paired device registry
-├── identity/                  # system prompt layers
-│   ├── SOUL.md
-│   ├── AGENTS.md
-│   └── TOOLING.md
-├── skills/                    # system and user skills
-├── memories/                  # file-backed cross-session memory
-├── sessions/
-└── logs/
-    ├── daemon.log
-    └── sessions/
-```
-
-### Persistence
-
-Persistence config belongs in `netclaw.json` (not `secrets.json`). SQLite path
-is local file state, not a secret.
-
-```json
-{
-  "Persistence": {
-    "Provider": "Sqlite",
-    "Sqlite": {
-      "Path": "/home/your-user/.netclaw/netclaw.db",
-      "AutoMigrate": true
-    }
-  }
-}
-```
-
-### Defaults (No Config Files)
-
-When no config files exist, the daemon defaults to:
-
-- **Provider:** `local-ollama` at `http://localhost:11434`
-- **Main model:** `qwen3:30b` (32K context)
-- **Persistence:** SQLite at `~/.netclaw/netclaw.db`
-- **Search:** DuckDuckGo (no API key required)
-- **Slack:** disabled
 
 ## CLI Reference
 
@@ -437,53 +384,19 @@ The `daemon start` command locates `netclawd` by:
 1. `NETCLAW_DAEMON_PATH` environment variable (explicit path)
 2. Same directory as the `netclaw` CLI binary
 
-### systemd Service
+## Runbooks and Integrations
 
-On Linux, `netclaw daemon install` creates a user-level systemd service:
-
-```bash
-netclaw daemon install        # Creates ~/.config/systemd/user/netclaw.service
-systemctl --user start netclaw
-systemctl --user status netclaw
-```
-
-## Design Goals
-
-- **Gall's Law:** build the simplest working system first — single-process
-  runtime, actor-driven, persistence-backed
-- **Default-deny security:** explicit ACL and policy checks everywhere
-- **.NET 10 runtime baseline** with Google Protobuf for persistence serialization
-- **Session identity is Slack thread:** `{channelId}/{threadTs}`
-- **MCP server integration** included from the start
-
-## Project Structure
-
-- Solution: `Netclaw.slnx`
-- Daemon: `src/Netclaw.Daemon/` (Web API host, `netclawd`)
-- CLI: `src/Netclaw.Cli/` (thin client, `netclaw`)
-- Actors: `src/Netclaw.Actors/` (session management, persistence, tools)
-- Configuration: `src/Netclaw.Configuration/` (paths, providers, models)
-- Channels: `src/Netclaw.Channels/` (channel abstractions)
-- Slack: `src/Netclaw.Channels.Slack/` (Slack Socket Mode gateway)
-- Discord: `src/Netclaw.Channels.Discord/` (Discord gateway)
-- Providers: `src/Netclaw.Providers/` (LLM provider implementations)
-- OpenAI Compatible: `src/Netclaw.OpenAICompatible/` (OpenAI-compatible API layer)
-- Search: `src/Netclaw.Search/` (web search backends)
-- Security: `src/Netclaw.Security/` (ACL, device pairing, token management)
-- Tools: `src/Netclaw.Tools.Abstractions/` and `src/Netclaw.Tools.Generators/`
-
-Build and test:
-
-```bash
-dotnet build Netclaw.slnx
-dotnet test Netclaw.slnx
-dotnet slopwatch analyze
-```
+- Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
+- Behavior debugging and telemetry triage: `docs/runbooks/behavior-debugging.md`
+- Tool approval gates and permission configuration: `docs/runbooks/tool-approval-gates.md`
+- Integration docs index: `docs/integrations/README.md`
+- Slack Socket Mode setup: `docs/integrations/slack-socket-mode.md`
+- Slack ACL policy model: `docs/integrations/slack-acl-policy.md`
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflows, planning
-artifacts, and contributor tooling (OpenSpec, RALPH, agent skills).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflows, build
+instructions, project structure, and contributor tooling.
 
 ## License
 

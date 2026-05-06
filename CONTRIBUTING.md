@@ -126,3 +126,49 @@ STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
 - Search: `src/Netclaw.Search/` (web search backends)
 - Security: `src/Netclaw.Security/` (ACL, device pairing, token management)
 - Tools: `src/Netclaw.Tools.Abstractions/` and `src/Netclaw.Tools.Generators/`
+
+## Architecture
+
+Netclaw uses a **daemon + thin client** architecture:
+
+- **`netclawd`** (`src/Netclaw.Daemon/`) — always-on daemon process hosting
+  the Akka actor system, LLM sessions, tool execution, and persistence.
+  Exposes a SignalR hub at `/hub/session` plus authenticated management
+  endpoints for remote clients.
+
+- **`netclaw`** (`src/Netclaw.Cli/`) — thin CLI client for interactive chat,
+  daemon management, and configuration. Connects to the daemon via SignalR and
+  authenticated HTTP.
+
+## Design Goals
+
+- **Gall's Law:** build the simplest working system first — single-process
+  runtime, actor-driven, persistence-backed
+- **Default-deny security:** explicit ACL and policy checks everywhere
+- **.NET 10 runtime baseline** with Google Protobuf for persistence serialization
+- **Session identity is Slack thread:** `{channelId}/{threadTs}`
+- **MCP server integration** included from the start
+
+## Building from Source
+
+```bash
+# Build everything
+dotnet build Netclaw.slnx
+
+# Publish both binaries to a shared output folder
+dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o ./out
+dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o ./out
+```
+
+Add the output folder to your PATH:
+
+```bash
+export PATH="$PWD/out:$PATH"
+```
+
+Or point the CLI at the daemon binary explicitly:
+
+```bash
+export NETCLAW_DAEMON_PATH="$PWD/out/netclawd"
+alias netclaw="$PWD/out/netclaw"
+```
