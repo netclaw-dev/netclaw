@@ -461,6 +461,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // Guard: empty response (no text, no thinking, no tool calls) — delegate decision to tracker
             var hasContent = lastMessage.Contents.Any(c =>
                 (c is TextContent tc && !string.IsNullOrWhiteSpace(tc.Text)) ||
                 (c is TextReasoningContent rc && !string.IsNullOrWhiteSpace(rc.Text)));
