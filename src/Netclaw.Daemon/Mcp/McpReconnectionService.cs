@@ -22,8 +22,7 @@ internal sealed class McpReconnectionService : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<McpReconnectionService> _logger;
 
-    private readonly ConcurrentDictionary<McpServerName, int> _failureCounts = new();
-    private readonly ConcurrentDictionary<McpServerName, long> _lastAttemptTimestamps = new();
+    private readonly ConcurrentDictionary<McpServerName, BackoffState> _backoff = new();
 
     public McpReconnectionService(
         IMcpReconnectable mcpReconnectable,
@@ -58,19 +57,18 @@ internal sealed class McpReconnectionService : BackgroundService
         {
             if (status.State is not McpConnectionState.Unreachable)
             {
-                _failureCounts.TryRemove(serverName, out _);
-                _lastAttemptTimestamps.TryRemove(serverName, out _);
+                _backoff.TryRemove(serverName, out _);
                 continue;
             }
 
-            var failureCount = _failureCounts.GetValueOrDefault(serverName, 0);
+            var state = _backoff.GetValueOrDefault(serverName);
+            var failureCount = state.FailureCount;
             var backoffMs = ComputeBackoffMs(failureCount);
-            var lastAttemptMs = _lastAttemptTimestamps.GetValueOrDefault(serverName, 0L);
 
-            if (nowMs - lastAttemptMs < backoffMs)
+            if (nowMs - state.LastAttemptMs < backoffMs)
                 continue;
 
-            _lastAttemptTimestamps[serverName] = nowMs;
+            _backoff[serverName] = state with { LastAttemptMs = nowMs };
 
             _logger.LogDebug(
                 "Attempting reconnection to MCP server '{Name}' (attempt {Attempt})",
@@ -81,8 +79,7 @@ internal sealed class McpReconnectionService : BackgroundService
                 var success = await _mcpReconnectable.TryReconnectAsync(serverName, ct);
                 if (success)
                 {
-                    _failureCounts.TryRemove(serverName, out _);
-                    _lastAttemptTimestamps.TryRemove(serverName, out _);
+                    _backoff.TryRemove(serverName, out _);
 
                     _logger.LogInformation(
                         "MCP server '{Name}' reconnected successfully after {Attempts} attempt(s)",
@@ -92,7 +89,7 @@ internal sealed class McpReconnectionService : BackgroundService
                 }
                 else
                 {
-                    _failureCounts[serverName] = failureCount + 1;
+                    _backoff[serverName] = new BackoffState(failureCount + 1, nowMs);
                     _logger.LogDebug(
                         "MCP server '{Name}' reconnection failed (next retry in ~{BackoffSeconds}s)",
                         serverName.Value, ComputeBackoffMs(failureCount + 1) / 1000);
@@ -104,7 +101,7 @@ internal sealed class McpReconnectionService : BackgroundService
             }
             catch (Exception ex)
             {
-                _failureCounts[serverName] = failureCount + 1;
+                _backoff[serverName] = new BackoffState(failureCount + 1, nowMs);
                 _logger.LogDebug(ex,
                     "MCP server '{Name}' reconnection threw an exception",
                     serverName.Value);
@@ -137,4 +134,6 @@ internal sealed class McpReconnectionService : BackgroundService
                 ["serverName"] = serverName.Value,
             }));
     }
+
+    internal readonly record struct BackoffState(int FailureCount, long LastAttemptMs);
 }
