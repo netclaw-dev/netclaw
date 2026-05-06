@@ -196,7 +196,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             }
 
             _log.Info("Discord session idle for 1 hour, passivating");
-            Context.Stop(Self);
+            RunTask(async () =>
+            {
+                await _handle.DrainAsync();
+                Context.Stop(Self);
+            });
         });
 
         Context.SetReceiveTimeout(IdlePassivationTimeout);

@@ -148,7 +148,11 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
 
             _log.Info("Slack thread idle for 1 hour, passivating");
-            Context.Stop(Self);
+            RunTask(async () =>
+            {
+                await _handle.DrainAsync();
+                Context.Stop(Self);
+            });
         });
     }
 

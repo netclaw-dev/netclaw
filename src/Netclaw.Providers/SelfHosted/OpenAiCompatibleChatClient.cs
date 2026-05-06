@@ -556,7 +556,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         }
 
         var finishReason = ParseFinishReason(choice);
-        if (finishReason == ChatFinishReason.ToolCalls && pendingToolCalls.Count > 0)
+        if (pendingToolCalls.Count > 0 && (finishReason == ChatFinishReason.ToolCalls || finishReason == ChatFinishReason.Stop))
         {
             foreach (var pending in pendingToolCalls.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
             {

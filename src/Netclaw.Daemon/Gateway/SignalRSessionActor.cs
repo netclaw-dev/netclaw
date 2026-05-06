@@ -171,7 +171,11 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         Receive<ShutdownSignalRSession>(_ =>
         {
             _log.Debug("Shutdown requested for session {SessionId}", _sessionId.Value);
-            Context.Stop(Self);
+            RunTask(async () =>
+            {
+                await _handle.DrainAsync();
+                Context.Stop(Self);
+            });
         });
 
         ReceiveAsync<DeliverTrustedSessionTurn>(async msg =>
