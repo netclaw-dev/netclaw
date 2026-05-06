@@ -556,6 +556,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         }
 
         var finishReason = ParseFinishReason(choice);
+        // llama.cpp and other local servers often emit finish_reason:"stop" even when tool calls are present
         if (pendingToolCalls.Count > 0 && (finishReason == ChatFinishReason.ToolCalls || finishReason == ChatFinishReason.Stop))
         {
             foreach (var pending in pendingToolCalls.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value))
