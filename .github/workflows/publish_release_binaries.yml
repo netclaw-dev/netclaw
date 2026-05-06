@@ -78,7 +78,7 @@ jobs:
           - os: ubuntu-latest
             rid: linux-x64
             archive_ext: tar.gz
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-latest
             rid: linux-arm64
             archive_ext: tar.gz
           - os: windows-latest
