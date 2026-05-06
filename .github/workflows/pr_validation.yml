@@ -12,6 +12,9 @@ on:
       - dev
       - main
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test-${{matrix.os}}
