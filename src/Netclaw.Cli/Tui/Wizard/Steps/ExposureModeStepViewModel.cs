@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -133,8 +134,19 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     public void ContributeSecrets(WizardSecretsBuilder builder)
     {
+        _bootstrapRawToken = null;
+        _bootstrapDevice = null;
+
         if (SelectedMode == ExposureMode.Local)
             return;
+
+        var bootstrapStateStore = new BootstrapStateStore(builder.Paths);
+        if (bootstrapStateStore.HasCompletedNonLocalBootstrap()
+            || File.Exists(builder.Paths.DevicesPath)
+            || HasExistingLocalDeviceToken(builder.Paths))
+        {
+            return;
+        }
 
         // Generate a bootstrap device token so the daemon can start with at least
         // one paired device — satisfies ExposureModeValidationService's requirement.
@@ -192,6 +204,19 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     /// <summary>The bootstrap device, exposed for testing.</summary>
     internal PairedDevice? BootstrapDevice => _bootstrapDevice;
+
+    private static bool HasExistingLocalDeviceToken(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.SecretsPath))
+            return false;
+
+        var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
+        if (!secrets.TryGetValue("DeviceToken", out var rawValue))
+            return false;
+
+        var rawToken = rawValue is JsonElement jsonElement ? jsonElement.GetString() : rawValue?.ToString();
+        return !string.IsNullOrWhiteSpace(ConfigFileHelper.DecryptIfEncrypted(paths, rawToken));
+    }
 
     public void Dispose() { }
 }

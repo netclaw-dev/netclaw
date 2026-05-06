@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -81,9 +82,9 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     /// <c>POST /api/pair/exchange</c>.
     ///
     /// <para>Restricted to daemon-host operator trust: either a loopback-authenticated local
-    /// process, or the daemon-owned bootstrap paired device credential that only exists on
-    /// the daemon host after first-launch bootstrap seeding. Ordinary paired devices cannot
-    /// mint new codes.</para>
+    /// process or a direct authenticated control-plane connection from the daemon host.
+    /// Remote paired devices cannot mint new codes, even when their traffic arrives
+    /// through a trusted reverse proxy.</para>
     ///
     /// <para>The daemon logs the code at <c>Information</c> level so Docker operators
     /// can retrieve it from container logs without needing a CLI inside the container.</para>
@@ -91,24 +92,16 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     /// <exception cref="HubException">Thrown when the caller is not a daemon-host operator.</exception>
     public Task<PairingCodeResultDto> GeneratePairingCode()
     {
-        var remoteIp = Context.GetHttpContext()?.Connection.RemoteIpAddress;
+        var remoteIp = NormalizeIp(Context.GetHttpContext()?.Connection.RemoteIpAddress);
+        var localIp = NormalizeIp(Context.GetHttpContext()?.Connection.LocalIpAddress);
         var transport = Context.User?.FindFirst(NetclawClaimTypes.TransportAuthenticity)?.Value;
-        var isBootstrapDevice = bool.TryParse(
-            Context.User?.FindFirst(NetclawClaimTypes.BootstrapDevice)?.Value,
-            out var bootstrapDevice)
-            && bootstrapDevice;
+        var isDirectLocalControlPlaneConnection = IsDirectLocalControlPlaneConnection(remoteIp, localIp);
 
-        var bootstrapOnLoopback = isBootstrapDevice && remoteIp is not null && IPAddress.IsLoopback(remoteIp);
-        if (transport != nameof(TransportAuthenticity.LocalProcess) && !isBootstrapDevice)
+        if (transport != nameof(TransportAuthenticity.LocalProcess)
+            && (transport != nameof(TransportAuthenticity.Verified) || !isDirectLocalControlPlaneConnection))
         {
             throw new HubException(
-                "GeneratePairingCode requires a daemon-host local operator connection or the local bootstrap device token.");
-        }
-
-        if (transport != nameof(TransportAuthenticity.LocalProcess) && !bootstrapOnLoopback)
-        {
-            throw new HubException(
-                "GeneratePairingCode requires the bootstrap device token to be used from the daemon host loopback endpoint.");
+                "GeneratePairingCode requires a daemon-host local operator connection or direct authenticated local control-plane access.");
         }
 
         var (formattedCode, expiresAt) = _pairingCodeService.GenerateCode();
@@ -119,6 +112,24 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         _logger.LogInformation("Pairing code generated: {Code} (expires {ExpiresAt:o})", formattedCode, expiresAt);
 
         return Task.FromResult(new PairingCodeResultDto(formattedCode, expiresAt));
+    }
+
+    internal static bool IsDirectLocalControlPlaneConnection(IPAddress remoteIp, IPAddress localIp)
+    {
+        if (IPAddress.IsLoopback(remoteIp))
+            return true;
+
+        return localIp != IPAddress.None && remoteIp.Equals(localIp);
+    }
+
+    private static IPAddress NormalizeIp(IPAddress? address)
+    {
+        if (address is null)
+            return IPAddress.None;
+
+        return address.AddressFamily == AddressFamily.InterNetworkV6 && address.IsIPv4MappedToIPv6
+            ? address.MapToIPv4()
+            : address;
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

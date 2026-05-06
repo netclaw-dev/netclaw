@@ -102,7 +102,8 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
                 processIssue.Remediation));
         }
 
-        var hasRemoteAuthenticationPath = DeviceRegistryInspector.CountPairedDevices(_paths) > 0;
+        var deviceSnapshot = DeviceRegistryInspector.Read(_paths);
+        var hasRemoteAuthenticationPath = deviceSnapshot.DeviceCount > 0;
         var validationIssues = DaemonExposureValidator.Validate(config, hasRemoteAuthenticationPath)
             .Where(static issue => !issue.IsTrustedProxyIssue)
             .ToArray();
@@ -113,6 +114,23 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
                 CheckName,
                 issue.Message,
                 issue.Remediation));
+        }
+
+        if (mode.RequiresRemoteAuthentication() && deviceSnapshot.DeviceCount > 0 && !deviceSnapshot.LocalTokenMatchesDevice)
+        {
+            var remediation = deviceSnapshot.HasCompletedBootstrap
+                ? "Repair the local client credential by pairing this host again or updating secrets.json so DeviceToken matches a device in devices.json."
+                : "Repair the local bootstrap credential before first non-local startup completes so secrets.json and devices.json match.";
+
+            return Task.FromResult(deviceSnapshot.HasCompletedBootstrap
+                ? DoctorCheckResult.Warning(
+                    CheckName,
+                    "Local control-plane access is misconfigured: devices.json contains paired devices but the local DeviceToken does not match any registered device.",
+                    remediation)
+                : DoctorCheckResult.Error(
+                    CheckName,
+                    "Bootstrap pairing state is incomplete: devices.json exists but the local DeviceToken does not match any registered device.",
+                    remediation));
         }
 
         var modeDescription = mode == ExposureMode.Local

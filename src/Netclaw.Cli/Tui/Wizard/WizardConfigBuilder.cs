@@ -348,6 +348,8 @@ public sealed class WizardSecretsBuilder
         _paths = paths;
     }
 
+    internal NetclawPaths Paths => _paths;
+
     /// <summary>Add a section to the secrets file.</summary>
     public void AddSection(string key, Dictionary<string, object> section)
     {

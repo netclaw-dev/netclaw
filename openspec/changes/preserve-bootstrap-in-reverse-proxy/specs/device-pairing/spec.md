@@ -33,6 +33,35 @@ In exposure modes that require remote authentication, this scheme SHALL remain e
 - **THEN** authentication succeeds through the bearer-token path
 - **AND** the request does not depend on loopback auto-auth
 
+#### Scenario: Direct local control-plane endpoint accepts bearer token on the daemon host
+
+- **GIVEN** `Daemon.ExposureMode` is `reverse-proxy`
+- **AND** the daemon host CLI connects directly to the daemon's configured non-loopback bind address
+- **AND** the CLI provides a valid paired-device bearer token
+- **WHEN** the bearer token scheme evaluates the request
+- **THEN** authentication succeeds through the bearer-token path
+- **AND** the request does not depend on loopback auto-auth
+
+### Requirement: Pairing code generation stays daemon-host local
+
+The daemon SHALL generate a short-lived pairing code only for a daemon-host local operator connection via `netclaw daemon pair`. The code SHALL be a human-readable format, expire after 5 minutes, and be single-use.
+
+#### Scenario: Direct authenticated local control-plane request may generate a pairing code
+
+- **GIVEN** `Daemon.ExposureMode` requires remote authentication
+- **AND** the daemon host CLI authenticates with a valid paired-device bearer token
+- **AND** the request reaches the daemon over a direct local control-plane connection from the daemon host
+- **WHEN** `GeneratePairingCode()` runs
+- **THEN** the daemon accepts the request
+
+#### Scenario: Remote paired device cannot mint pairing codes through a reverse proxy
+
+- **GIVEN** `Daemon.ExposureMode` is `reverse-proxy`
+- **AND** a remote device authenticates with a valid paired-device bearer token
+- **AND** the request reaches the daemon through a trusted reverse proxy
+- **WHEN** `GeneratePairingCode()` runs
+- **THEN** the daemon rejects the request because the caller is not a daemon-host local operator
+
 ### Requirement: CLI attaches bearer token for remote connections
 
 The CLI's control-plane clients SHALL read a device token from `~/.netclaw/config/secrets.json` and attach it as a bearer token when connecting to any endpoint that requires remote authentication. Pure local-mode loopback endpoints MAY skip token attachment.
