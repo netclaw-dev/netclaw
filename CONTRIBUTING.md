@@ -1,7 +1,8 @@
 # Contributing to Netclaw
 
 This guide covers development workflows, planning tooling, and contributor
-conventions. For end-user setup and usage, see [`README.md`](README.md).
+conventions. For end-user setup and usage, see [`README.md`](README.md) or
+visit [netclaw.dev](https://netclaw.dev).
 
 ## Build and Test
 

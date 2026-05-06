@@ -1032,6 +1032,8 @@ static void WriteGeneralHelp()
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();
     Console.WriteLine("Run `netclaw <command> --help` for details on any command.");
+    Console.WriteLine();
+    Console.WriteLine("Docs & guides: https://netclaw.dev/docs");
 }
 
 static void WriteDaemonHelp()
