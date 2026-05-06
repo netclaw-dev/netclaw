@@ -808,6 +808,8 @@ static void ConfigureDaemonServices(
         sp.GetService<ISecretsProtector>()));
     services.AddSingleton<McpClientManager>();
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());
+    services.AddSingleton<IMcpReconnectable>(sp => sp.GetRequiredService<McpClientManager>());
+    services.AddHostedService<McpReconnectionService>();
 
     // Dynamic tool index context layer — NOT part of the persisted system prompt.
     // The prompt-facing layer is computed from the live registry with audience

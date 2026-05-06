@@ -15,7 +15,7 @@ using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
 
-internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolInvoker
+internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolInvoker, IMcpReconnectable
 {
     private const string PlaywrightServerName = "browser_playwright";
 

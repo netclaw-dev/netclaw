@@ -10,7 +10,8 @@
 <p align="center">
   <a href="https://netclaw.dev">Website</a> &middot;
   <a href="https://netclaw.dev/docs">Documentation</a> &middot;
-  <a href="https://github.com/netclaw-dev/netclaw/releases">Releases</a>
+  <a href="https://github.com/netclaw-dev/netclaw/releases">Releases</a> &middot;
+  <a href="https://discord.gg/ayqrChDtNs">Discord</a>
 </p>
 
 # Netclaw
@@ -21,6 +22,10 @@ actor-driven session framework called Akka.Agents, Netclaw is designed for
 hobbyists, small teams, and businesses who want an AI operations agent with
 strong safety defaults and as few moving parts as possible.
 
+Your data stays on your infrastructure. Your agent keeps running when a
+provider changes their pricing. You control what gets approved and what runs
+autonomously — small models welcome.
+
 Where other agents compete on ecosystem breadth and feature velocity, Netclaw
 takes the opposite approach: **simplicity** (a readable codebase with a small
 configuration footprint), **security** (audience dispositions and approval gates
@@ -29,91 +34,68 @@ feeds managed by your organization, not an unaudited public marketplace).
 
 Learn more at **[netclaw.dev](https://netclaw.dev)**.
 
-## Architecture
+## How It Works
 
 Netclaw uses a **daemon + thin client** architecture:
 
-- **`netclawd`** (`src/Netclaw.Daemon/`) — always-on daemon process hosting
-  the Akka actor system, LLM sessions, tool execution, and persistence.
-  Exposes a SignalR hub at `/hub/session` plus authenticated management
-  endpoints for remote clients.
+- **`netclawd`** — an always-on background daemon that hosts LLM sessions,
+  tool execution, and persistence. Start it once and it stays running.
+- **`netclaw`** — a lightweight CLI for interactive chat, daemon management,
+  and configuration. It connects to the running daemon over a local socket.
 
-- **`netclaw`** (`src/Netclaw.Cli/`) — thin CLI client for interactive chat,
-  daemon management, and configuration. Connects to the daemon via SignalR and
-  authenticated HTTP.
+You start the daemon, then use the CLI to talk to it. Remote devices can
+[pair with the daemon](https://netclaw.dev/guides/pairing-remote-devices/)
+over Tailscale or Cloudflare Tunnel for access from anywhere.
 
 ## Quick Start
 
 ### Prerequisites
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned at `10.0.203`
-  via `global.json`, `rollForward: major`)
-- A local [Ollama](https://ollama.com/) instance (default provider), or an
-  OpenRouter API key
+- An LLM provider — [Ollama](https://ollama.com/) (local, default),
+  [OpenRouter](https://openrouter.ai/), or any OpenAI-compatible endpoint.
+  See the full [provider documentation](https://netclaw.dev/configuration/managed-providers/)
+  for all supported options.
 
-### 1. Install prebuilt binaries (release feed)
+### Install
 
-Linux (installs CLI + daemon to `~/.netclaw/bin` by default):
+**Linux** (installs CLI + daemon to `~/.netclaw/bin`):
 
 ```bash
 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
-Common Linux variants:
-
 ```bash
-# Install only the CLI
+# Install only the CLI or only the daemon
 curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli
-
-# Install only the daemon
 curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon
 
 # Pin a specific version
-NETCLAW_VERSION=0.1.0 curl -sSL https://releases.netclaw.dev/install.sh | bash
+NETCLAW_VERSION=0.17.1 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
-Windows (installs to `%LOCALAPPDATA%\Programs\netclaw` by default):
+**Windows** (installs to `%LOCALAPPDATA%\Programs\netclaw`):
 
 ```powershell
 iwr -useb https://releases.netclaw.dev/install.ps1 | iex
 ```
 
-To pass `-Component`, `-InstallDir`, or `-Version` on Windows, save and run
-the script locally:
-
-```powershell
-$script = Join-Path $env:TEMP "netclaw-install.ps1"
-iwr -useb https://releases.netclaw.dev/install.ps1 -OutFile $script
-& $script -Component all -Version 0.1.0
-```
-
-### 2. Build and publish (from source)
+**Docker** (multi-arch: amd64/arm64):
 
 ```bash
-# Build everything
-dotnet build Netclaw.slnx
-
-# Publish both binaries to a shared output folder
-dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj -c Release -o ./out
-dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj -c Release -o ./out
+docker run -d --name netclawd \
+  -p 5199:5199 \
+  -v ~/.netclaw:/home/netclaw/.netclaw \
+  -e NETCLAW_Daemon__Host=0.0.0.0 \
+  ghcr.io/netclaw-dev/netclaw:latest
 ```
 
-### 3. Make the CLI available
+See the [Docker deployment guide](https://netclaw.dev/deployment/docker/) for
+volume setup, environment variables, and Docker Compose examples.
 
-Either add the output folder to your PATH:
+For the full installation reference (including building from source), see the
+[installation docs](https://netclaw.dev/getting-started/installation/).
 
-```bash
-export PATH="$PWD/out:$PATH"
-```
-
-Or point the CLI at the daemon binary explicitly:
-
-```bash
-export NETCLAW_DAEMON_PATH="$PWD/out/netclawd"
-alias netclaw="$PWD/out/netclaw"
-```
-
-### 4. Configure an LLM provider
+### Configure
 
 Run the guided setup wizard:
 
@@ -123,10 +105,6 @@ netclaw init
 
 Or create the config manually. The daemon reads layered config from
 `~/.netclaw/config/`:
-
-```bash
-mkdir -p ~/.netclaw/config
-```
 
 **`~/.netclaw/config/netclaw.json`** — base settings (minimal Ollama example):
 
@@ -145,40 +123,13 @@ mkdir -p ~/.netclaw/config
 }
 ```
 
-**`~/.netclaw/config/secrets.json`** — credentials (Slack tokens, API keys).
-
-> **Do not edit this file by hand.** All values are encrypted at rest using
-> ASP.NET Data Protection (encryption keys are stored separately in
-> `~/.netclaw/keys/`). Use `netclaw init` (which prompts for credentials
-> during setup) or `netclaw secrets set` to add or update credentials — both
-> encrypt values automatically and write the file with `chmod 600` permissions.
+Credentials are stored encrypted in `~/.netclaw/config/secrets.json`. Use the
+CLI to manage them — never edit that file by hand:
 
 ```bash
-# Add provider credentials
 netclaw secrets set Providers.openrouter.ApiKey sk-or-v1-...
-
-# Add Slack tokens
 netclaw secrets set Slack.BotToken xoxb-...
-netclaw secrets set Slack.AppToken xapp-...
 ```
-
-The resulting file structure looks like this (values are encrypted, shown here
-as placeholders):
-
-```json
-{
-  "Providers": {
-    "openrouter": { "ApiKey": "ENC:CfDJ8..." }
-  },
-  "Slack": {
-    "BotToken": "ENC:CfDJ8...",
-    "AppToken": "ENC:CfDJ8..."
-  }
-}
-```
-
-`DeviceToken` is added automatically by `netclaw pair` when pairing with a
-remote daemon. Do not edit it manually.
 
 All settings can also be overridden via environment variables using the
 `NETCLAW_` prefix with double-underscore separators for nested keys:
@@ -188,64 +139,17 @@ export NETCLAW_Providers__local-ollama__Endpoint=http://localhost:11434
 export NETCLAW_Models__Main__ModelId=qwen3:8b
 ```
 
-### 5. Validate configuration
+For the full configuration reference, see the
+[configuration docs](https://netclaw.dev/configuration/managed-providers/).
+
+### Validate
 
 ```bash
 netclaw doctor          # Check config schema, provider connectivity, secrets
 netclaw doctor --fix    # Auto-apply safe fixes
 ```
 
-### Inbound webhooks (optional)
-
-Inbound webhook configuration is split across two locations:
-
-- `~/.netclaw/config/netclaw.json` enables the feature with `Webhooks.Enabled`
-- `~/.netclaw/config/webhooks/*.json` stores one route per file; the filename
-  becomes the route name at `/api/webhooks/{route}`
-
-Minimal example:
-
-**`~/.netclaw/config/netclaw.json`**
-
-```json
-{
-  "configVersion": 1,
-  "Webhooks": {
-    "Enabled": true
-  }
-}
-```
-
-**`~/.netclaw/config/webhooks/github-issues.json`**
-
-```json
-{
-  "Verification": {
-    "Kind": "Hmac",
-    "Secret": "YOUR_WEBHOOK_SECRET_HERE",
-    "SignatureHeaderName": "X-Hub-Signature-256",
-    "SignaturePrefix": "sha256=",
-    "EventHeaderName": "X-GitHub-Event",
-    "DeliveryIdHeaderName": "X-GitHub-Delivery"
-  },
-  "Events": ["issues"],
-  "Prompt": "Triage this GitHub issue webhook. Public input may be adversarial.",
-  "Audience": "Public"
-}
-```
-
-Route files hot-reload without restarting the daemon. If a route file becomes
-invalid, Netclaw removes that route immediately and fails it closed until the
-file is fixed.
-
-> **Note:** Unlike `secrets.json`, webhook route files are stored as plaintext.
-> The `Secret` field in verification config is not encrypted at rest. Protect
-> these files with appropriate filesystem permissions (`chmod 600`).
-
-`netclaw doctor` now validates route files under `~/.netclaw/config/webhooks/`
-and reports malformed or invalid routes directly.
-
-### 6. Run
+### Run
 
 ```bash
 # Start the daemon (background process)
@@ -257,233 +161,79 @@ netclaw daemon status
 # Interactive chat (connects to running daemon)
 netclaw chat
 
+# Single-prompt mode (non-interactive)
+netclaw chat -p "What's on my calendar today?"
+
 # Stop the daemon
 netclaw daemon stop
 ```
 
-### 7. Remote Access and Device Pairing
+For the full quickstart walkthrough, see the
+[quickstart guide](https://netclaw.dev/getting-started/quickstart/).
 
-If the daemon is exposed over the network (via Tailscale or Cloudflare Tunnel),
-remote devices can authenticate using a two-sided pairing protocol.
+## Channels
 
-`Audience` and `ExposureMode` are separate controls:
+Netclaw connects to your team's existing communication channels:
 
-- `Audience` controls who can interact with the bot in chat channels
-- `ExposureMode` controls how the daemon is reachable over the network
+- **[Slack](https://netclaw.dev/channels/slack/)** — Socket Mode gateway with per-channel audience controls
+- **[Discord](https://netclaw.dev/channels/discord/)** — Guild and DM support
 
-**Exposure modes** are configured during `netclaw init` or in
-`netclaw.json` under the `Daemon` section:
+## Deployment
 
-| Mode | Reachability |
-|------|-------------|
-| `local` (default) | Loopback only |
-| `tailscale-serve` | Within your tailnet |
-| `tailscale-funnel` | Internet-reachable via Tailscale |
-| `cloudflare-tunnel` | Internet-reachable or private via Cloudflare |
+- **[Docker](https://netclaw.dev/deployment/docker/)** — multi-arch images on GHCR (`ghcr.io/netclaw-dev/netclaw`)
+- **[systemd](https://netclaw.dev/deployment/systemd/)** — `netclaw daemon install` creates a user-level service
+- **[Exposure Modes](https://netclaw.dev/deployment/exposure-modes/)** — local, Tailscale, or Cloudflare Tunnel
 
-Any host-network reachable daemon access must still require authenticated users.
-Selecting a `public` chat audience does not make the daemon anonymously
-accessible over the network.
+## Security
 
-**Pairing a remote device:**
+Netclaw is default-deny from the ground up. The daemon requires explicit
+configuration before it will execute tools, connect to channels, or accept
+remote connections.
 
-On the daemon host (requires local/SSH access to the machine):
-
-```bash
-netclaw daemon pair
-# Output: Pairing code: A7K3M2XP (expires in 5 minutes)
-```
-
-On the remote device:
-
-```bash
-netclaw pair https://my-daemon.tail1234.ts.net:5000
-# Prompted for the pairing code
-# On success: encrypted token saved to secrets.json, endpoint saved to ~/.netclaw/client/config.json
-```
-
-Choose a unique device name when prompted. Pairing a second device with the
-same name is rejected until the existing device is revoked.
-
-All subsequent CLI commands from the remote device authenticate automatically
-using the saved bearer token.
-
-**Security properties:**
-
-- Pairing codes are single-use, 8 characters from a 32-char alphabet, with a
-  5-minute TTL
-- Code generation requires local machine access (loopback-only endpoint)
-- The exchange endpoint is rate-limited (5 attempts/min/IP) with a lockout
-  guard (10 failures = 15-minute block)
-- When no code is pending, the exchange endpoint returns 404
-- Tokens are stored as salted SHA-256 hashes on the daemon (raw token is never
-  persisted server-side)
-
-**Managing paired devices:**
-
-```bash
-netclaw daemon devices                  # List all paired devices
-netclaw daemon devices revoke myphone   # Revoke a specific device
-```
-
-## Operations Runbooks
-
-- Daemon upgrade and rollback planning: `docs/runbooks/daemon-upgrade.md`
-- Behavior debugging and telemetry triage: `docs/runbooks/behavior-debugging.md`
-- Tool approval gates and permission configuration: `docs/runbooks/tool-approval-gates.md`
-
-## Integrations
-
-- Integration docs index: `docs/integrations/README.md`
-- Slack Socket Mode setup: `docs/integrations/slack-socket-mode.md`
-- Slack ACL policy model: `docs/integrations/slack-acl-policy.md`
-
-## Configuration
-
-Configuration is layered — later sources override earlier ones:
-
-1. `~/.netclaw/config/netclaw.json` — base settings
-2. `~/.netclaw/config/secrets.json` — encrypted credential overlay (`chmod 600`)
-3. `NETCLAW_*` environment variables — highest priority
-
-Directories are created automatically on first run.
-
-### `~/.netclaw/` Directory Layout
-
-```
-~/.netclaw/
-├── netclaw.pid                # daemon PID file
-├── netclaw.db                 # SQLite persistence (default)
-├── config/
-│   ├── netclaw.json           # base settings
-│   ├── secrets.json           # encrypted credentials (chmod 600)
-│   └── devices.json           # paired device registry
-├── identity/                  # system prompt layers
-│   ├── SOUL.md
-│   ├── AGENTS.md
-│   └── TOOLING.md
-├── skills/                    # system and user skills
-├── memories/                  # file-backed cross-session memory
-├── sessions/
-└── logs/
-    ├── daemon.log
-    └── sessions/
-```
-
-### Persistence
-
-Persistence config belongs in `netclaw.json` (not `secrets.json`). SQLite path
-is local file state, not a secret.
-
-```json
-{
-  "Persistence": {
-    "Provider": "Sqlite",
-    "Sqlite": {
-      "Path": "/home/your-user/.netclaw/netclaw.db",
-      "AutoMigrate": true
-    }
-  }
-}
-```
-
-### Defaults (No Config Files)
-
-When no config files exist, the daemon defaults to:
-
-- **Provider:** `local-ollama` at `http://localhost:11434`
-- **Main model:** `qwen3:30b` (32K context)
-- **Persistence:** SQLite at `~/.netclaw/netclaw.db`
-- **Search:** DuckDuckGo (no API key required)
-- **Slack:** disabled
+- **[Security Model](https://netclaw.dev/security/security-model/)** — audiences, approval gates, tool policies
+- **[Hardening Guide](https://netclaw.dev/security/hardening/)** — production lockdown checklist
+- **[Secrets Management](https://netclaw.dev/security/secrets/)** — encrypted-at-rest credential storage
+- **[Pairing Remote Devices](https://netclaw.dev/guides/pairing-remote-devices/)** — two-sided pairing protocol with rate-limited code exchange
 
 ## CLI Reference
 
+Full CLI documentation is available at [netclaw.dev/cli](https://netclaw.dev/cli/overview/).
+
 ```
-netclaw chat                     Interactive TUI chat
-netclaw chat --resume <id>       Resume an existing session by ID
-netclaw chat -p <text>           Headless single-prompt mode (supports --resume, --json)
-netclaw sessions                 Browse and resume recent sessions (TUI)
-netclaw sessions --once          List sessions and exit (no TUI, plain text or JSON)
-netclaw doctor                   Configuration diagnostics (offline)
-netclaw doctor --fix             Auto-apply safe configuration fixes
-netclaw status                   Runtime status from daemon health JSON endpoint
-netclaw stats                    Usage activity statistics from daemon
-netclaw daemon start             Start daemon as a background process
-netclaw daemon stop              Stop daemon gracefully
-netclaw daemon status            Show daemon process status
-netclaw daemon install           Install systemd user service (Linux)
-netclaw daemon uninstall         Remove systemd user service (Linux)
-netclaw daemon pair              Generate a pairing code for remote device access
-netclaw daemon devices           List paired devices
-netclaw daemon devices revoke    Revoke a paired device by name
-netclaw pair <endpoint>          Pair this device with a remote daemon
-netclaw mcp                      Manage MCP server profiles
-netclaw provider                 Manage LLM providers (TUI) or use subcommands
-netclaw model                    Manage model assignments (TUI) or use subcommands
-netclaw reminder                 Manage scheduled reminders (daemon-required)
-netclaw skill                    Manage skills and skill sources
-netclaw webhooks                 Manage inbound webhook routes
-netclaw secrets set <k> <v>      Manage encrypted secrets (set key/value pairs)
 netclaw init                     First-run setup wizard
+netclaw chat                     Interactive TUI chat
+netclaw chat -p <text>           Headless single-prompt mode
+netclaw doctor                   Configuration diagnostics
+netclaw daemon start|stop|status Manage the daemon process
+netclaw daemon install           Install systemd user service (Linux)
+netclaw daemon pair              Generate a pairing code for remote access
+netclaw provider                 Manage LLM providers
+netclaw model                    Manage model assignments
+netclaw mcp                      Manage MCP server profiles
+netclaw skill                    Manage skills and skill sources
+netclaw reminder                 Manage scheduled reminders
+netclaw webhooks                 Manage inbound webhook routes
+netclaw secrets set <k> <v>      Manage encrypted secrets
 netclaw update                   Check for and install updates
-netclaw version, --version       Show CLI version
+netclaw version                  Show CLI version
 ```
 
-### Daemon Binary Discovery
+## Documentation
 
-The `daemon start` command locates `netclawd` by:
+Visit **[netclaw.dev/docs](https://netclaw.dev/docs)** for the full
+documentation, including:
 
-1. `NETCLAW_DAEMON_PATH` environment variable (explicit path)
-2. Same directory as the `netclaw` CLI binary
-
-### systemd Service
-
-On Linux, `netclaw daemon install` creates a user-level systemd service:
-
-```bash
-netclaw daemon install        # Creates ~/.config/systemd/user/netclaw.service
-systemctl --user start netclaw
-systemctl --user status netclaw
-```
-
-## Design Goals
-
-- **Gall's Law:** build the simplest working system first — single-process
-  runtime, actor-driven, persistence-backed
-- **Default-deny security:** explicit ACL and policy checks everywhere
-- **.NET 10 runtime baseline** with Google Protobuf for persistence serialization
-- **Session identity is Slack thread:** `{channelId}/{threadTs}`
-- **MCP server integration** included from the start
-
-## Project Structure
-
-- Solution: `Netclaw.slnx`
-- Daemon: `src/Netclaw.Daemon/` (Web API host, `netclawd`)
-- CLI: `src/Netclaw.Cli/` (thin client, `netclaw`)
-- Actors: `src/Netclaw.Actors/` (session management, persistence, tools)
-- Configuration: `src/Netclaw.Configuration/` (paths, providers, models)
-- Channels: `src/Netclaw.Channels/` (channel abstractions)
-- Slack: `src/Netclaw.Channels.Slack/` (Slack Socket Mode gateway)
-- Discord: `src/Netclaw.Channels.Discord/` (Discord gateway)
-- Providers: `src/Netclaw.Providers/` (LLM provider implementations)
-- OpenAI Compatible: `src/Netclaw.OpenAICompatible/` (OpenAI-compatible API layer)
-- Search: `src/Netclaw.Search/` (web search backends)
-- Security: `src/Netclaw.Security/` (ACL, device pairing, token management)
-- Tools: `src/Netclaw.Tools.Abstractions/` and `src/Netclaw.Tools.Generators/`
-
-Build and test:
-
-```bash
-dotnet build Netclaw.slnx
-dotnet test Netclaw.slnx
-dotnet slopwatch analyze
-```
+- [Getting Started](https://netclaw.dev/getting-started/installation/) — installation, quickstart, first conversation
+- [Configuration](https://netclaw.dev/configuration/managed-providers/) — providers, models, MCP servers, webhooks, reminders
+- [Skills](https://netclaw.dev/skills/overview/) — skill system, skill feeds, authoring custom skills
+- [Guides](https://netclaw.dev/guides/connecting-slack/) — Slack setup, MCP permissions, remote pairing
+- [Architecture](https://netclaw.dev/architecture/overview/) — system design and security model
+- [Observability](https://netclaw.dev/observability/health-checks/) — health checks, alerts, OpenTelemetry
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflows, planning
-artifacts, and contributor tooling (OpenSpec, RALPH, agent skills).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development workflows, build
+instructions, project structure, and contributor tooling.
 
 ## License
 

@@ -22,6 +22,7 @@ public enum AlertType
 {
     McpAuthExpired,
     McpServerDisconnected,
+    McpServerReconnected,
     ChannelDisconnected,
     ProviderAuthExpired,
     ProviderFailover,
