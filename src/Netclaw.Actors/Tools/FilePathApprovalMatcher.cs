@@ -22,7 +22,7 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
 
     public FilePathApprovalMatcher(string controlPlaneRoot)
     {
-        _controlPlaneRoot = NormalizePath(controlPlaneRoot);
+        _controlPlaneRoot = PathUtility.Normalize(controlPlaneRoot);
     }
 
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
@@ -82,10 +82,10 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
         if (!TryGetPath(arguments, out var rawPath))
             return false;
 
-        if (!TryNormalizePath(rawPath, out var normalized))
+        if (!PathUtility.TryNormalize(rawPath, out var normalized))
             return false;
 
-        if (!IsUnderRoot(normalized, _controlPlaneRoot))
+        if (!PathUtility.IsWithinRoot(normalized, _controlPlaneRoot))
             return false;
 
         relativePath = Path.GetRelativePath(_controlPlaneRoot, normalized)
@@ -111,36 +111,4 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
         return false;
     }
 
-    private static bool TryNormalizePath(string rawPath, out string normalized)
-    {
-        normalized = string.Empty;
-        try
-        {
-            var baseDir = Environment.CurrentDirectory;
-            var combined = Path.IsPathRooted(rawPath)
-                ? rawPath
-                : Path.Combine(baseDir, rawPath);
-            normalized = NormalizePath(combined);
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static string NormalizePath(string path)
-        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-    private static bool IsUnderRoot(string candidate, string root)
-    {
-        if (!candidate.StartsWith(root, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (candidate.Length == root.Length)
-            return true;
-
-        var boundary = candidate[root.Length];
-        return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
-    }
 }

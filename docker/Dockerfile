@@ -17,11 +17,12 @@
 # netclawd process, restarting it on exit so the container survives
 # config-update restarts and `netclaw init` wizard flows.
 #
-# The daemon fails loudly when required
+# The daemon runs as a dedicated non-root user (netclaw, UID 1654) for
+# defense-in-depth. The daemon fails loudly when required
 # configuration is missing (no silent fallbacks). Operators supply
 # provider, model, and identity configuration via:
 #   * NETCLAW_*-prefixed environment variables at `docker run` time
-#   * A bind mount or volume at /root/.netclaw (identity, config, data)
+#   * A bind mount or volume at /home/netclaw/.netclaw (identity, config, data)
 #
 # The companion `netclaw` CLI binary is also installed so shell_execute
 # can invoke it from inside the container (e.g., `netclaw doctor`).
@@ -74,6 +75,14 @@ RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/
  && ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
  && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
 
+# Non-root runtime user — limits blast radius of tool execution and
+# satisfies CIS Docker Benchmark / K8s PodSecurityStandards.
+# Pre-create the data directory so VOLUME inherits correct ownership.
+RUN groupadd --gid 1654 netclaw \
+ && useradd --uid 1654 --gid netclaw --create-home netclaw \
+ && mkdir -p /home/netclaw/.netclaw \
+ && chown netclaw:netclaw /home/netclaw/.netclaw
+
 ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
 # Block in-place binary self-update — the image tag IS the version.
 # Update availability checks still run so operators see when a new version exists.
@@ -83,12 +92,14 @@ ENV NETCLAW_Daemon__DisableSelfUpdate=true
 # volume. Real operators must `netclaw init` (or bind-mount a pre-initialized
 # tree) before starting the container; the daemon will fail loudly if
 # required config is missing.
-VOLUME /root/.netclaw
+VOLUME /home/netclaw/.netclaw
 
 EXPOSE 5199
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -sf http://127.0.0.1:5199/api/health/ready || exit 1
+
+USER netclaw
 
 LABEL org.opencontainers.image.source="https://github.com/netclaw-dev/netclaw" \
       org.opencontainers.image.title="netclawd" \

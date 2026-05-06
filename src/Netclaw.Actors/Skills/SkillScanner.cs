@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.RegularExpressions;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -267,7 +268,7 @@ public static partial class SkillScanner
 
     private static SkillEntry? ParseSkillFile(string filePath, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false, bool strictNameMatch = true)
     {
-        var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
+        var canonicalRoot = PathUtility.Normalize(rootDirectory);
         var canonicalSkillFilePath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "skill file", allowSymlinks);
         if (canonicalSkillFilePath is null)
             return null;
@@ -321,7 +322,7 @@ public static partial class SkillScanner
         bool strictNameMatch = true,
         bool allowFrontmatterlessFlatFiles = false)
     {
-        var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
+        var canonicalRoot = PathUtility.Normalize(rootDirectory);
         var canonicalPath = ValidateCanonicalPath(filePath, canonicalRoot, issues, "flat skill file", allowSymlinks);
         if (canonicalPath is null)
             return null;
@@ -576,7 +577,7 @@ public static partial class SkillScanner
     private static IReadOnlyList<string>? EnumerateResources(string skillDirectory, string rootDirectory, List<SkillScanIssue> issues, bool allowSymlinks = false)
     {
         List<string>? resources = null;
-        var canonicalRoot = NormalizeDirectoryPath(rootDirectory);
+        var canonicalRoot = PathUtility.Normalize(rootDirectory);
 
         foreach (var subDirName in ResourceSubdirectories)
         {
@@ -702,7 +703,7 @@ public static partial class SkillScanner
 
     private static bool IsClaudeCommandsDirectory(string path)
     {
-        var normalized = NormalizeDirectoryPath(path);
+        var normalized = PathUtility.Normalize(path);
         var directoryName = Path.GetFileName(normalized);
         if (!string.Equals(directoryName, "commands", StringComparison.OrdinalIgnoreCase))
             return false;
@@ -717,9 +718,6 @@ public static partial class SkillScanner
     internal static string NormalizeSkillName(string value)
         => value.Trim().ToLowerInvariant();
 
-    internal static string NormalizeDirectoryPath(string path)
-        => Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
     private static string? ValidateCanonicalPath(
         string path,
         string canonicalRoot,
@@ -728,9 +726,8 @@ public static partial class SkillScanner
         bool allowSymlinks = false)
     {
         var normalizedPath = Path.GetFullPath(path);
-        var normalizedDirectoryPath = NormalizeDirectoryPath(normalizedPath);
 
-        if (!IsUnderRoot(normalizedDirectoryPath, canonicalRoot))
+        if (!PathUtility.IsWithinRoot(normalizedPath, canonicalRoot))
         {
             issues.Add(new SkillScanIssue(
                 Path: normalizedPath,
@@ -751,15 +748,10 @@ public static partial class SkillScanner
         return normalizedPath;
     }
 
-    internal static bool IsUnderRoot(string path, string canonicalRoot)
-        => path.Equals(canonicalRoot, StringComparison.Ordinal)
-            || path.StartsWith(canonicalRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            || path.StartsWith(canonicalRoot + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
-
     private static bool ContainsSymlink(string path, string canonicalRoot)
     {
         string? current = path;
-        while (!string.IsNullOrEmpty(current) && IsUnderRoot(NormalizeDirectoryPath(current), canonicalRoot))
+        while (!string.IsNullOrEmpty(current) && PathUtility.IsWithinRoot(current, canonicalRoot))
         {
             if (File.Exists(current) && new FileInfo(current).LinkTarget is not null)
                 return true;
