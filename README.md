@@ -16,9 +16,10 @@
 # Netclaw
 
 Netclaw is an open-source, self-hosted autonomous operations agent that runs
-anywhere — from a Raspberry Pi to a cloud VM. Designed for hobbyists, small
-teams, and businesses who want an AI operations agent with strong safety
-defaults and as few moving parts as possible.
+anywhere — from a Raspberry Pi to a cloud VM. Built on top of a minimal
+actor-driven session framework called Akka.Agents, Netclaw is designed for
+hobbyists, small teams, and businesses who want an AI operations agent with
+strong safety defaults and as few moving parts as possible.
 
 Where other agents compete on ecosystem breadth and feature velocity, Netclaw
 takes the opposite approach: **simplicity** (a readable codebase with a small
@@ -41,6 +42,11 @@ You start the daemon, then use the CLI to talk to it. Remote devices can pair
 with the daemon over Tailscale or Cloudflare Tunnel for access from anywhere.
 
 ## Quick Start
+
+### Prerequisites
+
+- A local [Ollama](https://ollama.com/) instance (default provider), or an
+  OpenRouter API key
 
 ### Install
 
@@ -144,6 +150,24 @@ netclaw secrets set Providers.openrouter.ApiKey sk-or-v1-...
 netclaw secrets set Slack.BotToken xoxb-...
 netclaw secrets set Slack.AppToken xapp-...
 ```
+
+The resulting file structure looks like this (values are encrypted, shown here
+as placeholders):
+
+```json
+{
+  "Providers": {
+    "openrouter": { "ApiKey": "ENC:CfDJ8..." }
+  },
+  "Slack": {
+    "BotToken": "ENC:CfDJ8...",
+    "AppToken": "ENC:CfDJ8..."
+  }
+}
+```
+
+`DeviceToken` is added automatically by `netclaw pair` when pairing with a
+remote daemon. Do not edit it manually.
 
 All settings can also be overridden via environment variables using the
 `NETCLAW_` prefix with double-underscore separators for nested keys:
