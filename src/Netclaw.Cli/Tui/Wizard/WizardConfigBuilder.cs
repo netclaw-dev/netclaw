@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
@@ -347,6 +348,8 @@ public sealed class WizardSecretsBuilder
         _paths = paths;
     }
 
+    internal NetclawPaths Paths => _paths;
+
     /// <summary>Add a section to the secrets file.</summary>
     public void AddSection(string key, Dictionary<string, object> section)
     {
@@ -361,6 +364,24 @@ public sealed class WizardSecretsBuilder
     {
         if (_secrets.Count == 0)
             return;
+
+        if (File.Exists(_paths.SecretsPath))
+        {
+            var existingText = File.ReadAllText(_paths.SecretsPath);
+            var existingNode = JsonNode.Parse(existingText)?.AsObject();
+            if (existingNode is not null)
+            {
+                foreach (var (key, value) in _secrets)
+                {
+                    if (!existingNode.ContainsKey(key))
+                        existingNode[key] = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+                }
+
+                SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
+                    protector: SensitiveStringTypeConverter.Protector);
+                return;
+            }
+        }
 
         SecretsFileWriter.Write(_paths.SecretsPath, _secrets,
             options: JsonDefaults.ConfigFile, protector: SensitiveStringTypeConverter.Protector);

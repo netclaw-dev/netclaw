@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
@@ -31,7 +32,7 @@ internal static class DaemonClientFactory
     /// </summary>
     internal static DaemonClient Create(string endpoint, NetclawPaths paths)
     {
-        var accessTokenProvider = CreateAccessTokenProvider(endpoint, paths);
+        var accessTokenProvider = CreateAccessTokenProvider(endpoint, paths, ResolveExposureMode(paths));
         return new DaemonClient(endpoint, accessTokenProvider: accessTokenProvider);
     }
 
@@ -40,9 +41,9 @@ internal static class DaemonClientFactory
     /// for loopback connections. Internal for unit testing.
     /// </summary>
     internal static Func<Task<string?>>? CreateAccessTokenProvider(
-        string endpoint, NetclawPaths paths)
+        string endpoint, NetclawPaths paths, ExposureMode exposureMode)
     {
-        var token = ResolveDeviceToken(endpoint, paths);
+        var token = ResolveDeviceToken(endpoint, paths, exposureMode);
         return token is not null
             ? () => Task.FromResult<string?>(token)
             : null;
@@ -52,12 +53,26 @@ internal static class DaemonClientFactory
     /// Resolves the device bearer token for a non-loopback endpoint, or <c>null</c>
     /// when the endpoint is loopback or no token is configured.
     /// </summary>
-    internal static string? ResolveDeviceToken(string endpoint, NetclawPaths paths)
+    internal static string? ResolveDeviceToken(string endpoint, NetclawPaths paths, ExposureMode exposureMode)
     {
-        if (IsLoopback(endpoint))
+        if (IsLoopback(endpoint) && !DaemonControlPlaneEndpointResolver.RequiresBearerToken(exposureMode))
             return null;
 
         return ReadDeviceToken(paths);
+    }
+
+    internal static ExposureMode ResolveExposureMode(NetclawPaths paths)
+        => LoadDaemonConfig(paths).ExposureMode;
+
+    internal static DaemonConfig LoadDaemonConfig(NetclawPaths paths)
+    {
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
+            .AddEnvironmentVariables("NETCLAW_")
+            .Build();
+
+        return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
     }
 
     /// <summary>

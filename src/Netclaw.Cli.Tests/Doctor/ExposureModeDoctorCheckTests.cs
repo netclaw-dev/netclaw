@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers.Text;
+using System.Security.Cryptography;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -66,7 +68,7 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
               "Daemon": { "ExposureMode": "tailscale-serve" }
             }
             """);
-        WritePairedDevice();
+        WriteMatchingLocalDevice();
 
         var check = BuildCheck(name => name == "tailscaled");
 
@@ -91,18 +93,7 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
             }
             """);
 
-        await File.WriteAllTextAsync(_paths.DevicesPath,
-            """
-            [
-              {
-                "Name": "laptop",
-                "TokenHash": "abc",
-                "Salt": "def",
-                "CreatedAt": "2026-01-01T00:00:00+00:00",
-                "LastUsedAt": "2026-01-01T00:00:00+00:00"
-              }
-            ]
-            """, TestContext.Current.CancellationToken);
+        WriteMatchingLocalDevice();
 
         var check = BuildCheck(_ => false);
 
@@ -121,7 +112,7 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
               "Daemon": { "ExposureMode": "tailscale-funnel" }
             }
             """);
-        WritePairedDevice();
+        WriteMatchingLocalDevice();
 
         var check = BuildCheck(name => name == "tailscaled");
 
@@ -140,7 +131,7 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
               "Daemon": { "ExposureMode": "cloudflare-tunnel" }
             }
             """);
-        WritePairedDevice();
+        WriteMatchingLocalDevice();
 
         var check = BuildCheck(name => name == "cloudflared");
 
@@ -268,7 +259,7 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
               }
             }
             """);
-        WritePairedDevice();
+        WriteMatchingLocalDevice();
 
         var check = BuildCheck(_ => false);
 
@@ -323,6 +314,80 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("remote authentication", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithoutRemoteAuth_ButWithBootstrapTokenAndDevice_Passes()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "Host": "10.0.0.10",
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["10.0.0.5"]
+              }
+            }
+            """);
+        WriteMatchingLocalDevice("daemon-bootstrap");
+
+        var check = BuildCheck(_ => false);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithMismatchedLocalBootstrapState_IsError()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "Host": "10.0.0.10",
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["10.0.0.5"]
+              }
+            }
+            """);
+        WritePairedDevice("daemon-bootstrap");
+        File.WriteAllText(_paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"bootstrap-token\"}");
+
+        var check = BuildCheck(_ => false);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("Bootstrap pairing state is incomplete", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithCompletedBootstrapAndMismatchedLocalToken_Warns()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "Host": "10.0.0.10",
+                "ExposureMode": "reverse-proxy",
+                "TrustedProxies": ["10.0.0.5"]
+              }
+            }
+            """);
+        WritePairedDevice("daemon-bootstrap");
+        File.WriteAllText(_paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"stale-token\"}");
+        new BootstrapStateStore(_paths).MarkCompleted(TimeProvider.System);
+
+        var check = BuildCheck(_ => false);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Local control-plane access is misconfigured", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -456,6 +521,37 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
               }
             ]
             """);
+
+    private void WriteMatchingLocalDevice(string name = "laptop")
+    {
+        var tokenBytes = RandomNumberGenerator.GetBytes(32);
+        var rawToken = Base64Url.EncodeToString(tokenBytes);
+        var saltBytes = RandomNumberGenerator.GetBytes(16);
+        var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
+        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
+        tokenBytes.CopyTo(combined);
+        saltBytes.CopyTo(combined[tokenBytes.Length..]);
+        var tokenHash = Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
+
+        File.WriteAllText(_paths.DevicesPath,
+            $$"""
+            [
+              {
+                "Name": "{{name}}",
+                "TokenHash": "{{tokenHash}}",
+                "Salt": "{{saltHex}}",
+                "CreatedAt": "2026-01-01T00:00:00+00:00",
+                "LastUsedAt": "2026-01-01T00:00:00+00:00"
+              }
+            ]
+            """);
+
+        File.WriteAllText(_paths.SecretsPath, System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["DeviceToken"] = rawToken
+        }));
+    }
 
     private void WriteConfig(string configText)
         => File.WriteAllText(_paths.NetclawConfigPath, configText);

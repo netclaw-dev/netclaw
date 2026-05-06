@@ -493,9 +493,12 @@ static async Task RunAsync(string[] args)
                 using var pairHost = pairBuilder.Build();
                 var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
                 var pairHubUrl = $"{pairApi.Endpoint}/hub/session";
+                var pairPaths = pairHost.Services.GetRequiredService<NetclawPaths>();
+                var pairExposureMode = DaemonClientFactory.ResolveExposureMode(pairPaths);
+                var pairTokenFactory = DaemonClientFactory.CreateAccessTokenProvider(pairApi.Endpoint, pairPaths, pairExposureMode);
 
                 await using var pairConn = new HubConnectionBuilder()
-                    .WithUrl(pairHubUrl)
+                    .ConfigureAccessToken(pairHubUrl, pairTokenFactory)
                     .Build();
 
                 try
@@ -1029,6 +1032,8 @@ static void WriteGeneralHelp()
     Console.WriteLine("  config                   Configuration management (planned)");
     Console.WriteLine();
     Console.WriteLine("Run `netclaw <command> --help` for details on any command.");
+    Console.WriteLine();
+    Console.WriteLine("Docs & guides: https://netclaw.dev/docs");
 }
 
 static void WriteDaemonHelp()

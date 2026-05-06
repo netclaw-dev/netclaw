@@ -3,6 +3,7 @@
     <Copyright>Copyright © 2026-$([System.DateTime]::Now.Year) Petabridge, LLC</Copyright>
     <Authors>Petabridge, LLC</Authors>
     <Company>Petabridge, LLC</Company>
+    <PackageProjectUrl>https://netclaw.dev</PackageProjectUrl>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

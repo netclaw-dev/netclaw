@@ -28,4 +28,10 @@ public static class NetclawClaimTypes
     /// device name for paired remote devices).
     /// </summary>
     public const string DeviceId = "netclaw:device-id";
+
+    /// <summary>
+    /// Claim carrying whether an authenticated bearer token belongs to the daemon-owned
+    /// one-shot bootstrap device.
+    /// </summary>
+    public const string BootstrapDevice = "netclaw:bootstrap-device";
 }

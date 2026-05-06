@@ -7,7 +7,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
@@ -38,7 +37,7 @@ public sealed class DaemonApi
     {
         _factory = factory;
         _endpoint = ResolveEndpoint(paths);
-        _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths);
+        _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths, DaemonClientFactory.ResolveExposureMode(paths));
     }
 
     internal DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
@@ -56,7 +55,14 @@ public sealed class DaemonApi
 
         return (Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
             ?? ClientConfigFile.ReadEndpoint(paths)
+            ?? ResolveDaemonConfigEndpoint(paths)
             ?? DefaultEndpoint).TrimEnd('/');
+    }
+
+    private static string? ResolveDaemonConfigEndpoint(NetclawPaths paths)
+    {
+        var daemonConfig = DaemonClientFactory.LoadDaemonConfig(paths);
+        return DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(daemonConfig);
     }
 
     /// <summary>

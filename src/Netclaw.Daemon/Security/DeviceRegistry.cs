@@ -3,9 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Buffers.Text;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -212,36 +210,11 @@ internal sealed class DeviceRegistry
         }
     }
 
-    /// <summary>
-    /// Computes the token hash for a given raw token and salt, using
-    /// <c>SHA256(token_bytes || salt_bytes)</c>.
-    /// </summary>
-    /// <param name="rawToken">Base64url-encoded raw token.</param>
-    /// <param name="saltHex">Lowercase hex-encoded salt.</param>
-    /// <returns>Lowercase hex-encoded SHA-256 digest.</returns>
     public static string ComputeTokenHash(string rawToken, string saltHex)
-    {
-        var tokenBytes = Base64Url.DecodeFromChars(rawToken);
-        var saltBytes = Convert.FromHexString(saltHex);
-        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
-        tokenBytes.CopyTo(combined);
-        saltBytes.CopyTo(combined[tokenBytes.Length..]);
-        return Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
-    }
+        => PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
     private static bool VerifyToken(string rawToken, PairedDevice device)
-    {
-        try
-        {
-            var computed = ComputeTokenHash(rawToken, device.Salt);
-            return string.Equals(computed, device.TokenHash, StringComparison.OrdinalIgnoreCase);
-        }
-        catch (FormatException)
-        {
-            // Malformed token bytes (bad base64url or hex) — treat as no-match
-            return false;
-        }
-    }
+        => PairedDevice.VerifyToken(rawToken, device);
 
     private async Task<List<PairedDevice>> ReadDevicesAsync(CancellationToken ct)
     {

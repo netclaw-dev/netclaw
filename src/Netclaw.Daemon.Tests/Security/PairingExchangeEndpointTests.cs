@@ -164,7 +164,7 @@ public sealed class PairingExchangeEndpointTests : IDisposable
 
             var saltBytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
             var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-            var tokenHash = DeviceRegistry.ComputeTokenHash(rawToken, saltHex);
+            var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
             var now = timeProvider.GetUtcNow();
             var device = new PairedDevice

@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
@@ -79,19 +81,28 @@ public sealed class SessionHub : Hub<ISessionHubClient>
     /// Generates a device pairing code so a remote device can authenticate via
     /// <c>POST /api/pair/exchange</c>.
     ///
-    /// <para>Restricted to loopback (<c>LocalProcess</c>) connections only — a remote
-    /// device that already has a token cannot generate new codes. This enforces the
-    /// trust chain: local operator approves pairing → remote device gets a token.</para>
+    /// <para>Restricted to daemon-host operator trust: either a loopback-authenticated local
+    /// process or a direct authenticated control-plane connection from the daemon host.
+    /// Remote paired devices cannot mint new codes, even when their traffic arrives
+    /// through a trusted reverse proxy.</para>
     ///
     /// <para>The daemon logs the code at <c>Information</c> level so Docker operators
     /// can retrieve it from container logs without needing a CLI inside the container.</para>
     /// </summary>
-    /// <exception cref="HubException">Thrown when the caller is not a loopback connection.</exception>
+    /// <exception cref="HubException">Thrown when the caller is not a daemon-host operator.</exception>
     public Task<PairingCodeResultDto> GeneratePairingCode()
     {
+        var remoteIp = NormalizeIp(Context.GetHttpContext()?.Connection.RemoteIpAddress);
+        var localIp = NormalizeIp(Context.GetHttpContext()?.Connection.LocalIpAddress);
         var transport = Context.User?.FindFirst(NetclawClaimTypes.TransportAuthenticity)?.Value;
-        if (transport != nameof(TransportAuthenticity.LocalProcess))
-            throw new HubException("GeneratePairingCode requires a local loopback connection. Use `netclaw daemon pair` from the daemon host.");
+        var isDirectLocalControlPlaneConnection = IsDirectLocalControlPlaneConnection(remoteIp, localIp);
+
+        if (transport != nameof(TransportAuthenticity.LocalProcess)
+            && (transport != nameof(TransportAuthenticity.Verified) || !isDirectLocalControlPlaneConnection))
+        {
+            throw new HubException(
+                "GeneratePairingCode requires a daemon-host local operator connection or direct authenticated local control-plane access.");
+        }
 
         var (formattedCode, expiresAt) = _pairingCodeService.GenerateCode();
 
@@ -101,6 +112,24 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         _logger.LogInformation("Pairing code generated: {Code} (expires {ExpiresAt:o})", formattedCode, expiresAt);
 
         return Task.FromResult(new PairingCodeResultDto(formattedCode, expiresAt));
+    }
+
+    internal static bool IsDirectLocalControlPlaneConnection(IPAddress remoteIp, IPAddress localIp)
+    {
+        if (IPAddress.IsLoopback(remoteIp))
+            return true;
+
+        return localIp != IPAddress.None && remoteIp.Equals(localIp);
+    }
+
+    private static IPAddress NormalizeIp(IPAddress? address)
+    {
+        if (address is null)
+            return IPAddress.None;
+
+        return address.AddressFamily == AddressFamily.InterNetworkV6 && address.IsIPv4MappedToIPv6
+            ? address.MapToIPv4()
+            : address;
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)

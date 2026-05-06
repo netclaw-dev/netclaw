@@ -2,10 +2,32 @@
   <img src="https://raw.githubusercontent.com/netclaw-dev/netclaw-brand/dev/logo/netclaw-horizontal-purple.png" alt="Netclaw" width="400" />
 </p>
 
+<p align="center">
+  <strong>Run your own agent.</strong><br />
+  Simple, secure, reliable agents.
+</p>
+
+<p align="center">
+  <a href="https://netclaw.dev">Website</a> &middot;
+  <a href="https://netclaw.dev/docs">Documentation</a> &middot;
+  <a href="https://github.com/netclaw-dev/netclaw/releases">Releases</a>
+</p>
+
 # Netclaw
 
-Netclaw is an open-source, self-hosted autonomous operations agent built on top
-of a minimal actor-driven session framework called Akka.Agents.
+Netclaw is an open-source, self-hosted autonomous operations agent that runs
+anywhere — from a Raspberry Pi to a cloud VM. Built on top of a minimal
+actor-driven session framework called Akka.Agents, Netclaw is designed for
+hobbyists, small teams, and businesses who want an AI operations agent with
+strong safety defaults and as few moving parts as possible.
+
+Where other agents compete on ecosystem breadth and feature velocity, Netclaw
+takes the opposite approach: **simplicity** (a readable codebase with a small
+configuration footprint), **security** (audience dispositions and approval gates
+from day one, not bolted on after incidents), and **reliability** (curated skill
+feeds managed by your organization, not an unaudited public marketplace).
+
+Learn more at **[netclaw.dev](https://netclaw.dev)**.
 
 ## Architecture
 
@@ -470,4 +492,6 @@ See `LICENSE` for the full text.
 
 ---
 
-Built with care by [Petabridge](https://petabridge.com).
+Built with care by [Petabridge](https://petabridge.com). Visit
+[netclaw.dev](https://netclaw.dev) for documentation, guides, and community
+resources.

@@ -83,6 +83,7 @@ public sealed class NetclawPaths
     public string ClientConfigPath => Path.Combine(ClientDirectory, "config.json");
     public string SecretsPath => Path.Combine(ConfigDirectory, "secrets.json");
     public string DevicesPath => Path.Combine(ConfigDirectory, "devices.json");
+    public string BootstrapStatePath => Path.Combine(ConfigDirectory, "bootstrap-state.json");
     public string LogsDirectory => Path.Combine(BasePath, "logs");
     /// <summary>
     /// Per-session log files live at <c>{SessionLogsDirectory}/{sanitized_id}/{timestamp}.log</c>.

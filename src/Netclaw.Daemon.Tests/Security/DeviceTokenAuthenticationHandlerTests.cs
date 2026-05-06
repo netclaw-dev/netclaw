@@ -93,6 +93,9 @@ public sealed class DeviceTokenAuthenticationHandlerTests : IDisposable
         Assert.Equal(
             "aaron-laptop",
             principal.FindFirst(NetclawClaimTypes.DeviceId)?.Value);
+        Assert.Equal(
+            bool.FalseString,
+            principal.FindFirst(NetclawClaimTypes.BootstrapDevice)?.Value);
     }
 
     [Fact]

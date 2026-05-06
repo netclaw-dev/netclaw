@@ -6,11 +6,14 @@
 using System.Buffers.Text;
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.Connections.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.TestHost;
@@ -18,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Gateway;
 using Netclaw.Daemon.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -306,5 +310,132 @@ public sealed class SessionHubAuthorizationTests : IDisposable
     {
         Assert.True(response.Headers.TryGetValues(ObservedRemoteIpHeader, out var values));
         return Assert.Single(values);
+    }
+
+    [Fact]
+    public async Task Reverse_proxy_remote_bootstrap_bearer_token_cannot_invoke_daemon_pair()
+    {
+        var hub = CreateSessionHub(
+            remoteIp: IPAddress.Parse("198.51.100.26"),
+            transport: nameof(TransportAuthenticity.Verified),
+            isBootstrapDevice: true);
+
+        var ex = await Assert.ThrowsAsync<HubException>(() => hub.GeneratePairingCode());
+
+        Assert.Equal(
+            "GeneratePairingCode requires a daemon-host local operator connection or direct authenticated local control-plane access.",
+            ex.Message);
+    }
+
+    [Fact]
+    public async Task Loopback_verified_bearer_token_can_invoke_daemon_pair()
+    {
+        var hub = CreateSessionHub(
+            remoteIp: IPAddress.Loopback,
+            transport: nameof(TransportAuthenticity.Verified),
+            isBootstrapDevice: false);
+
+        var result = await hub.GeneratePairingCode();
+
+        Assert.Matches("^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$", result.FormattedCode);
+        Assert.Equal(_time.GetUtcNow().AddMinutes(5), result.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task Same_host_reverse_proxy_verified_bearer_token_can_invoke_daemon_pair()
+    {
+        var hub = CreateSessionHub(
+            remoteIp: IPAddress.Parse("10.0.0.10"),
+            localIp: IPAddress.Parse("10.0.0.10"),
+            transport: nameof(TransportAuthenticity.Verified),
+            isBootstrapDevice: false);
+
+        var result = await hub.GeneratePairingCode();
+
+        Assert.Matches("^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}-[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$", result.FormattedCode);
+        Assert.Equal(_time.GetUtcNow().AddMinutes(5), result.ExpiresAt);
+    }
+
+    [Fact]
+    public void IsDirectLocalControlPlaneConnection_ReturnsTrue_WhenRemoteMatchesLocal()
+    {
+        Assert.True(SessionHub.IsDirectLocalControlPlaneConnection(
+            IPAddress.Parse("10.0.0.10"),
+            IPAddress.Parse("10.0.0.10")));
+    }
+
+    [Fact]
+    public void IsDirectLocalControlPlaneConnection_ReturnsFalse_WhenRemoteDiffersFromLocal()
+    {
+        Assert.False(SessionHub.IsDirectLocalControlPlaneConnection(
+            IPAddress.Parse("198.51.100.26"),
+            IPAddress.Parse("10.0.0.10")));
+    }
+
+    private SessionHub CreateSessionHub(IPAddress remoteIp, string transport, bool isBootstrapDevice, IPAddress? localIp = null)
+    {
+        var pairingCodeService = new PairingCodeService(_time);
+        var claims = new List<Claim>
+        {
+            new(NetclawClaimTypes.TransportAuthenticity, transport),
+            new(NetclawClaimTypes.BootstrapDevice, isBootstrapDevice.ToString())
+        };
+
+        var hub = new SessionHub(
+            registry: null!,
+            pairingCodeService,
+            NullLogger<SessionHub>.Instance)
+        {
+            Context = new TestHubCallerContext(new ClaimsPrincipal(new ClaimsIdentity(claims, "test")), remoteIp, localIp)
+        };
+
+        return hub;
+    }
+
+    private sealed class TestHubCallerContext : HubCallerContext
+    {
+        private readonly HttpContext _httpContext;
+
+        public TestHubCallerContext(ClaimsPrincipal user, IPAddress remoteIp, IPAddress? localIp)
+        {
+            User = user;
+            ConnectionId = Guid.NewGuid().ToString("N");
+            UserIdentifier = user.Identity?.Name;
+            Items = new Dictionary<object, object?>();
+            Features = new FeatureCollection();
+            _httpContext = new DefaultHttpContext
+            {
+                Connection =
+                {
+                    RemoteIpAddress = remoteIp,
+                    LocalIpAddress = localIp ?? IPAddress.Loopback
+                }
+            };
+            Features.Set<IHttpContextFeature>(new TestHttpContextFeature(_httpContext));
+        }
+
+        public override string ConnectionId { get; }
+
+        public override string? UserIdentifier { get; }
+
+        public override ClaimsPrincipal User { get; }
+
+        public override IDictionary<object, object?> Items { get; }
+
+        public override IFeatureCollection Features { get; }
+
+        public override CancellationToken ConnectionAborted => CancellationToken.None;
+
+        public override void Abort() { }
+    }
+
+    private sealed class TestHttpContextFeature : IHttpContextFeature
+    {
+        public TestHttpContextFeature(HttpContext httpContext)
+        {
+            HttpContext = httpContext;
+        }
+
+        public HttpContext? HttpContext { get; set; }
     }
 }

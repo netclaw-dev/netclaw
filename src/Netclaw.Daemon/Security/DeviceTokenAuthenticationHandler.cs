@@ -69,6 +69,7 @@ internal sealed class DeviceTokenAuthenticationHandler : AuthenticationHandler<A
             new Claim(NetclawClaimTypes.TransportAuthenticity,
                 nameof(TransportAuthenticity.Verified)),
             new Claim(NetclawClaimTypes.DeviceId, device.Name),
+            new Claim(NetclawClaimTypes.BootstrapDevice, device.IsBootstrapDevice.ToString()),
         };
 
         var identity = new ClaimsIdentity(claims, SchemeName);

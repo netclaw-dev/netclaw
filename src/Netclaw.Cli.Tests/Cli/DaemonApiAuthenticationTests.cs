@@ -58,6 +58,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     public async Task ListPairedDevices_LoopbackEndpoint_SkipsBearerToken()
     {
         WriteDeviceToken("loopback-device-token");
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"ExposureMode\":\"local\"}}");
         HttpRequestMessage? capturedRequest = null;
 
         var api = CreateDaemonApi(
@@ -73,6 +74,59 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         Assert.NotNull(capturedRequest);
         Assert.Null(capturedRequest!.Headers.Authorization);
         Assert.Empty(devices);
+    }
+
+    [Fact]
+    public async Task ListPairedDevices_ReverseProxyLoopbackEndpoint_AttachesBearerToken()
+    {
+        WriteDeviceToken("reverse-proxy-loopback-device-token");
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"ExposureMode\":\"reverse-proxy\"}}");
+        HttpRequestMessage? capturedRequest = null;
+
+        var api = CreateDaemonApi(
+            "http://127.0.0.1:5199",
+            request =>
+            {
+                capturedRequest = request;
+                return JsonResponse(Array.Empty<object>());
+            });
+
+        var devices = await api.ListPairedDevicesAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
+        Assert.Equal("reverse-proxy-loopback-device-token", capturedRequest.Headers.Authorization?.Parameter);
+        Assert.Empty(devices);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_FallsBackToDaemonBindConfig()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Host\":\"10.0.0.20\",\"Port\":6200}}");
+
+        var endpoint = DaemonApi.ResolveEndpoint(_paths);
+
+        Assert.Equal("http://10.0.0.20:6200", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_NormalizesWildcardBindToLoopback()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Host\":\"0.0.0.0\",\"Port\":5199}}");
+
+        var endpoint = DaemonApi.ResolveEndpoint(_paths);
+
+        Assert.Equal("http://127.0.0.1:5199", endpoint);
+    }
+
+    [Fact]
+    public void ResolveEndpoint_FormatsIpv6BindAddress()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Daemon\":{\"Host\":\"::1\",\"Port\":5199}}");
+
+        var endpoint = DaemonApi.ResolveEndpoint(_paths);
+
+        Assert.Equal("http://[::1]:5199", endpoint);
     }
 
     [Fact]

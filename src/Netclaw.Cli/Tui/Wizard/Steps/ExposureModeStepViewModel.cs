@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -133,27 +134,32 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     public void ContributeSecrets(WizardSecretsBuilder builder)
     {
+        _bootstrapRawToken = null;
+        _bootstrapDevice = null;
+
         if (SelectedMode == ExposureMode.Local)
             return;
 
-        // Generate a bootstrap device token so the daemon can start with at least
-        // one paired device — satisfies ExposureModeValidationService's requirement.
+        var bootstrapStateStore = new BootstrapStateStore(builder.Paths);
+        if (bootstrapStateStore.HasCompletedNonLocalBootstrap()
+            || File.Exists(builder.Paths.DevicesPath)
+            || HasExistingLocalDeviceToken(builder.Paths))
+        {
+            return;
+        }
+
         var tokenBytes = RandomNumberGenerator.GetBytes(32);
         var rawToken = Base64Url.EncodeToString(tokenBytes);
 
         var saltBytes = RandomNumberGenerator.GetBytes(16);
         var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-
-        // SHA256(token_bytes || salt_bytes) — matches DeviceRegistry.ComputeTokenHash
-        Span<byte> combined = stackalloc byte[tokenBytes.Length + saltBytes.Length];
-        tokenBytes.CopyTo(combined);
-        saltBytes.CopyTo(combined[tokenBytes.Length..]);
-        var tokenHash = Convert.ToHexString(SHA256.HashData(combined)).ToLowerInvariant();
+        var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
         var now = DateTimeOffset.UtcNow;
         _bootstrapDevice = new PairedDevice
         {
             Name = Environment.MachineName,
+            IsBootstrapDevice = true,
             TokenHash = tokenHash,
             Salt = saltHex,
             CreatedAt = now,
@@ -177,6 +183,9 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         if (_bootstrapDevice is null)
             return;
 
+        if (File.Exists(paths.DevicesPath))
+            return;
+
         var json = JsonSerializer.Serialize(new[] { _bootstrapDevice }, DevicesJsonOptions);
         File.WriteAllText(paths.DevicesPath, json);
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(paths.DevicesPath))
@@ -188,6 +197,19 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     /// <summary>The bootstrap device, exposed for testing.</summary>
     internal PairedDevice? BootstrapDevice => _bootstrapDevice;
+
+    private static bool HasExistingLocalDeviceToken(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.SecretsPath))
+            return false;
+
+        var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
+        if (!secrets.TryGetValue("DeviceToken", out var rawValue))
+            return false;
+
+        var rawToken = rawValue is JsonElement jsonElement ? jsonElement.GetString() : rawValue?.ToString();
+        return !string.IsNullOrWhiteSpace(ConfigFileHelper.DecryptIfEncrypted(paths, rawToken));
+    }
 
     public void Dispose() { }
 }

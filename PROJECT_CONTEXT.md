@@ -1,5 +1,9 @@
 # Project Context - Netclaw
 
+**Website:** [netclaw.dev](https://netclaw.dev)
+**Slogan:** "Run your own agent."
+**Positioning:** Simple, secure, reliable agents.
+
 ## What Netclaw Is
 
 Netclaw is an **always-on autonomous operations agent** that runs anywhere —
@@ -10,6 +14,24 @@ react, investigate, delegate work, and manage its own schedule.
 
 Netclaw is open source and designed for hobbyists, small teams, and businesses
 who want a self-hosted AI operations agent with strong safety defaults.
+
+## Competitive Positioning
+
+Netclaw's differentiator is **simplicity as a deliberate design choice, not a
+limitation.** Competitors compete on scale and velocity (ecosystem breadth,
+GitHub stars, feature count, PR volume). Netclaw counter-positions on three
+pillars:
+
+1. **Simplicity** — As few moving parts as possible. Readable codebase, small
+   configuration footprint, no feature bloat.
+2. **Security** — Audience disposition system and approval gates built in from
+   day one. Default-deny, fail-closed. The human stays in the loop.
+3. **Reliability** — Curated skill feeds managed by your organization (not an
+   unaudited public marketplace), persistent memory, background tasks, works
+   with small models (Qwen 3.5 9B and up).
+
+Key principle: when competitors' complexity is the source of their security
+vulnerabilities, our simplicity IS our security story.
 
 ## Primary Users
 

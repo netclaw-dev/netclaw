@@ -6,6 +6,7 @@
 using System.Buffers.Text;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -315,6 +316,40 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void ContributeSecrets_ExistingDeviceToken_DoesNotGenerateBootstrapState()
+    {
+        ConfigFileHelper.WriteSecretsFile(Context.Paths, new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["DeviceToken"] = "existing-token"
+        });
+
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleServe;
+
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        step.ContributeSecrets(builder);
+
+        Assert.Null(step.BootstrapRawToken);
+        Assert.Null(step.BootstrapDevice);
+    }
+
+    [Fact]
+    public void ContributeSecrets_CompletedBootstrap_DoesNotGenerateBootstrapState()
+    {
+        new BootstrapStateStore(Context.Paths).MarkCompleted(TimeProvider.System);
+
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleServe;
+
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        step.ContributeSecrets(builder);
+
+        Assert.Null(step.BootstrapRawToken);
+        Assert.Null(step.BootstrapDevice);
+    }
+
+    [Fact]
     public void WriteBootstrapDevice_NonLocal_WritesDevicesJson()
     {
         using var step = new ExposureModeStepViewModel();
@@ -331,6 +366,7 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
         Assert.NotNull(devices);
         Assert.Single(devices);
         Assert.Equal(Environment.MachineName, devices[0].Name);
+        Assert.True(devices[0].IsBootstrapDevice);
     }
 
     [Fact]
@@ -338,6 +374,40 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
     {
         using var step = new ExposureModeStepViewModel();
         step.SelectedMode = ExposureMode.Local;
+
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        step.ContributeSecrets(builder);
+        step.WriteBootstrapDevice(Context.Paths);
+
+        Assert.False(File.Exists(Context.Paths.DevicesPath));
+    }
+
+    [Fact]
+    public void WriteBootstrapDevice_DoesNotOverwriteExistingDevicesFile()
+    {
+        File.WriteAllText(Context.Paths.DevicesPath, "[]");
+
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleServe;
+
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        step.ContributeSecrets(builder);
+        step.WriteBootstrapDevice(Context.Paths);
+
+        Assert.Equal("[]", File.ReadAllText(Context.Paths.DevicesPath));
+    }
+
+    [Fact]
+    public void WriteBootstrapDevice_WithExistingDeviceToken_DoesNotWriteMismatchedBootstrapDevice()
+    {
+        ConfigFileHelper.WriteSecretsFile(Context.Paths, new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["DeviceToken"] = "existing-token"
+        });
+
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.TailscaleServe;
 
         var builder = new WizardSecretsBuilder(Context.Paths);
         step.ContributeSecrets(builder);
