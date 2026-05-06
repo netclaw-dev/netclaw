@@ -219,6 +219,7 @@ jobs:
         name: publish-output-${{ matrix.rid }}
         path: |
           ./publish/cli/netclaw
+          ./publish/cli/Schemas/
           ./publish/daemon/netclawd
         retention-days: 1
 
@@ -274,15 +275,17 @@ jobs:
         mkdir -p publish/cli-arm64 publish/daemon-arm64
 
         cp ./artifacts/linux-x64/publish/cli/netclaw    publish/cli-amd64/netclaw
+        cp -r ./artifacts/linux-x64/publish/cli/Schemas publish/cli-amd64/Schemas
         cp ./artifacts/linux-x64/publish/daemon/netclawd publish/daemon-amd64/netclawd
         cp ./artifacts/linux-arm64/publish/cli/netclaw    publish/cli-arm64/netclaw
+        cp -r ./artifacts/linux-arm64/publish/cli/Schemas publish/cli-arm64/Schemas
         cp ./artifacts/linux-arm64/publish/daemon/netclawd publish/daemon-arm64/netclawd
 
         chmod +x publish/cli-amd64/netclaw publish/daemon-amd64/netclawd
         chmod +x publish/cli-arm64/netclaw publish/daemon-arm64/netclawd
 
         echo "Layout:"
-        ls -la publish/cli-amd64/ publish/daemon-amd64/ publish/cli-arm64/ publish/daemon-arm64/
+        ls -laR publish/cli-amd64/ publish/daemon-amd64/ publish/cli-arm64/ publish/daemon-arm64/
 
     - name: Compute image tags
       id: tags
@@ -294,7 +297,7 @@ jobs:
         MAJOR_MINOR=$(echo "$STRIPPED" | awk -F. '{print $1"."$2}')
         REPO="ghcr.io/netclaw-dev/netclaw"
 
-        TAGS="${REPO}:${VERSION},${REPO}:latest,${REPO}:v${MAJOR_MINOR}"
+        TAGS="${REPO}:${VERSION},${REPO}:latest,${REPO}:${MAJOR_MINOR}"
         echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
         echo "Tags: $TAGS"
 
