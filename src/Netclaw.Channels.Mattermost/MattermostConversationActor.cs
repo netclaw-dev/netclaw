@@ -65,7 +65,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
     {
         var options = _dependencies.Options;
 
-        // --- ACL gate ---
         var aclDecision = MattermostAclPolicy.EvaluateInbound(
             message,
             options,
@@ -79,7 +78,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
             return;
         }
 
-        // --- Bot self-loop filter ---
         if (message.IsBotMessage)
         {
             _log.Info("mattermost_event_filtered event={0} reason=bot_message", message.EventId.Value);
@@ -87,7 +85,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
             return;
         }
 
-        // --- Ingress gate ---
         if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
         {
             _log.Info("mattermost_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
@@ -96,9 +93,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
             return;
         }
 
-        // --- Derive session key ---
-        // For threaded messages, session key is channelId/rootPostId.
-        // For top-level messages, use channelId/postId (the post becomes the thread root).
         var sessionRootId = message.RootPostId.IsEmpty
             ? new MattermostRootPostId(message.PostId.Value)
             : message.RootPostId;
@@ -107,7 +101,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
         var existingBinding = Context.Child(actorName);
         var threadExists = !existingBinding.IsNobody();
 
-        // --- Routing policy ---
         var decision = MattermostRoutingPolicy.Evaluate(
             message,
             options.MentionOnly,
@@ -135,7 +128,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
             return;
         }
 
-        // --- Empty text filter ---
         var normalizedText = NormalizeInboundText(message.Text);
         if (normalizedText.Length > MaxInboundTextLength)
         {
@@ -151,7 +143,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
             return;
         }
 
-        // --- Build session and forward ---
         var sessionId = new SessionId($"{_channelId.Value}/{sessionRootId.Value}");
         var sessionBinding = threadExists
             ? existingBinding
@@ -189,7 +180,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
 
     private void HandleGatewayInteraction(MattermostGatewayInteraction interaction)
     {
-        // ACL: verify the clicking user is allowed to interact
         if (!MattermostAclPolicy.IsAllowedUser(interaction.SenderId, _dependencies.Options))
         {
             _log.Info(
@@ -292,7 +282,10 @@ internal sealed class MattermostConversationActor : ReceiveActor
         if (_botMentionTag is null)
             return text.Trim();
 
-        return text.Replace(_botMentionTag, string.Empty, StringComparison.OrdinalIgnoreCase).Trim();
+        if (text.Contains(_botMentionTag, StringComparison.OrdinalIgnoreCase))
+            text = text.Replace(_botMentionTag, string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        return text.Trim();
     }
 
     private IActorRef GetOrCreateSessionBinding(

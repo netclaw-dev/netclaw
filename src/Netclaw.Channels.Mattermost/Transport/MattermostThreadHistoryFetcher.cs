@@ -75,7 +75,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             promptInjectionDetector,
             options,
             serverUrl,
-            botUserIdFactory(),
+            botUserIdFactory(), // safe: ConnectAsync resolves BotUserId before this constructor runs
             audienceProfiles,
             modelCapabilities,
             paths,
@@ -473,7 +473,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         }
 
         var results = new List<HistoricalMessage>(threadResponse.Order.Count);
-        var normalizedServerUrl = serverUrl.TrimEnd('/'); // serverUrl may not be pre-normalized when called from test delegates
+        var normalizedServerUrl = serverUrl.TrimEnd('/');
 
         // Order list is provided by the API in chronological order
         foreach (var postId in threadResponse.Order)
@@ -483,7 +483,6 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             if (!threadResponse.Posts.TryGetValue(postId, out var post))
                 continue;
 
-            // Skip deleted posts
             if (post.DeletedAt > 0)
                 continue;
 
@@ -577,8 +576,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         }
         catch
         {
-            if (IOFile.Exists(stagingPath))
-                IOFile.Delete(stagingPath);
+            IOFile.Delete(stagingPath);
             throw;
         }
 

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Mattermost;
 
 namespace Netclaw.Daemon.Configuration;
@@ -83,7 +84,6 @@ public static class MattermostActionEndpointExtensions
                 }
             }
 
-            // ACL: verify the clicking user is allowed to interact
             var options = sp.GetRequiredService<MattermostChannelOptions>();
             if (!MattermostAclPolicy.IsAllowedUser(new MattermostUserId(payload.UserId), options))
             {
@@ -117,10 +117,10 @@ public static class MattermostActionEndpointExtensions
 
             var decisionLabel = selectedKey switch
             {
-                "approve_once" => "Approve Once",
-                "approve_session" => "Approve for Session",
-                "approve_always" => "Always Approve",
-                "deny" => "Deny",
+                ApprovalOptionKeys.ApproveOnce => ApprovalOptionKeys.ApproveOnceLabel,
+                ApprovalOptionKeys.ApproveSession => ApprovalOptionKeys.ApproveSessionLabel,
+                ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
+                ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
                 _ => selectedKey
             };
 
@@ -149,6 +149,9 @@ public static class MattermostActionEndpointExtensions
     }
 
     private static bool IsValidApprovalKey(string key)
-        => key is "approve_once" or "approve_session" or "approve_always" or "deny";
+        => key is ApprovalOptionKeys.ApproveOnce
+            or ApprovalOptionKeys.ApproveSession
+            or ApprovalOptionKeys.ApproveAlways
+            or ApprovalOptionKeys.Deny;
 }
 

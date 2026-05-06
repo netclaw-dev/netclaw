@@ -62,26 +62,7 @@ internal sealed class MattermostNetReplyClient : IMattermostReplyClient
             return;
         }
 
-        var attachmentPayloads = attachments
-            .Select(a => new AttachmentPayload
-            {
-                Fallback = a.Fallback,
-                Color = a.Color,
-                Text = a.Text,
-                Actions = a.Actions?.Select(act => new ActionPayload
-                {
-                    Id = act.Id,
-                    Name = act.Name,
-                    Type = "button",
-                    Style = act.Style,
-                    Integration = new IntegrationPayload
-                    {
-                        Url = act.IntegrationUrl,
-                        Context = act.Context
-                    }
-                }).ToList()
-            })
-            .ToList();
+        var attachmentPayloads = MapAttachments(attachments);
 
         var payload = new UpdatePostPayload
         {
@@ -102,26 +83,7 @@ internal sealed class MattermostNetReplyClient : IMattermostReplyClient
         MattermostPostMessage message,
         CancellationToken cancellationToken)
     {
-        var attachments = message.Attachments!
-            .Select(a => new AttachmentPayload
-            {
-                Fallback = a.Fallback,
-                Color = a.Color,
-                Text = a.Text,
-                Actions = a.Actions?.Select(act => new ActionPayload
-                {
-                    Id = act.Id,
-                    Name = act.Name,
-                    Type = "button",
-                    Style = act.Style,
-                    Integration = new IntegrationPayload
-                    {
-                        Url = act.IntegrationUrl,
-                        Context = act.Context
-                    }
-                }).ToList()
-            })
-            .ToList();
+        var attachments = MapAttachments(message.Attachments!);
 
         var payload = new CreatePostPayload
         {
@@ -149,7 +111,28 @@ internal sealed class MattermostNetReplyClient : IMattermostReplyClient
         return new MattermostPostResult(PostId: new MattermostPostId(postId));
     }
 
-    // JSON payload types for Mattermost REST API
+    private static List<AttachmentPayload> MapAttachments(IReadOnlyList<MattermostAttachment> source)
+        => source
+            .Select(a => new AttachmentPayload
+            {
+                Fallback = a.Fallback,
+                Color = a.Color,
+                Text = a.Text,
+                Actions = a.Actions?.Select(act => new ActionPayload
+                {
+                    Id = act.Id,
+                    Name = act.Name,
+                    Type = "button",
+                    Style = act.Style,
+                    Integration = new IntegrationPayload
+                    {
+                        Url = act.IntegrationUrl,
+                        Context = act.Context
+                    }
+                }).ToList()
+            })
+            .ToList();
+
     private sealed class UpdatePostPayload
     {
         public string Id { get; init; } = string.Empty;
