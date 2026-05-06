@@ -266,20 +266,45 @@ jobs:
         name: publish-output-linux-arm64
         path: ./artifacts/linux-arm64
 
+    - name: Debug artifact layout
+      shell: bash
+      run: |
+        echo "=== linux-x64 artifact ==="
+        find ./artifacts/linux-x64 -type f
+        echo "=== linux-arm64 artifact ==="
+        find ./artifacts/linux-arm64 -type f
+
     - name: Prepare multi-arch publish layout
       shell: bash
       run: |
         set -euo pipefail
-        # The Dockerfile expects publish/cli-{arch}/ and publish/daemon-{arch}/
         mkdir -p publish/cli-amd64 publish/daemon-amd64
         mkdir -p publish/cli-arm64 publish/daemon-arm64
 
-        cp ./artifacts/linux-x64/publish/cli/netclaw    publish/cli-amd64/netclaw
-        cp -r ./artifacts/linux-x64/publish/cli/Schemas publish/cli-amd64/Schemas
-        cp ./artifacts/linux-x64/publish/daemon/netclawd publish/daemon-amd64/netclawd
-        cp ./artifacts/linux-arm64/publish/cli/netclaw    publish/cli-arm64/netclaw
-        cp -r ./artifacts/linux-arm64/publish/cli/Schemas publish/cli-arm64/Schemas
-        cp ./artifacts/linux-arm64/publish/daemon/netclawd publish/daemon-arm64/netclawd
+        # download-artifact may or may not preserve the publish/ prefix
+        find_binary() {
+          find "$1" -name "$2" -type f | head -1
+        }
+        find_dir() {
+          find "$1" -name "$2" -type d | head -1
+        }
+
+        for arch_pair in "linux-x64:amd64" "linux-arm64:arm64"; do
+          SRC="${arch_pair%%:*}"
+          DST="${arch_pair##*:}"
+
+          CLI=$(find_binary "./artifacts/${SRC}" "netclaw")
+          DAEMON=$(find_binary "./artifacts/${SRC}" "netclawd")
+          SCHEMAS=$(find_dir "./artifacts/${SRC}" "Schemas")
+
+          echo "[$DST] CLI=$CLI DAEMON=$DAEMON SCHEMAS=$SCHEMAS"
+
+          cp "$CLI" "publish/cli-${DST}/netclaw"
+          cp "$DAEMON" "publish/daemon-${DST}/netclawd"
+          if [[ -n "$SCHEMAS" ]]; then
+            cp -r "$SCHEMAS" "publish/cli-${DST}/Schemas"
+          fi
+        done
 
         chmod +x publish/cli-amd64/netclaw publish/daemon-amd64/netclawd
         chmod +x publish/cli-arm64/netclaw publish/daemon-arm64/netclawd
