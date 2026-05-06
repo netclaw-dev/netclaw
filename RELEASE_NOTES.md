@@ -1,6 +1,6 @@
-#### 0.17.0 2026-05-06 ####
+#### 0.17.1 2026-05-06 ####
 
-Netclaw v0.17.0 — First public release with Docker support, non-interactive approval, and open-source infrastructure
+Netclaw v0.17.1 — First public release with Docker support, non-interactive approval, and open-source infrastructure
 
 This is the first release of Netclaw published as an open-source project under [netclaw-dev/netclaw](https://github.com/netclaw-dev/netclaw). It includes the first official Docker image for `netclawd`, new agent autonomy features, and the infrastructure changes needed to support public distribution.
 
