@@ -28,6 +28,18 @@ feeds managed by your organization, not an unaudited public marketplace).
 
 Learn more at **[netclaw.dev](https://netclaw.dev)**.
 
+## How It Works
+
+Netclaw uses a **daemon + thin client** architecture:
+
+- **`netclawd`** — an always-on background daemon that hosts LLM sessions,
+  tool execution, and persistence. Start it once and it stays running.
+- **`netclaw`** — a lightweight CLI for interactive chat, daemon management,
+  and configuration. It connects to the running daemon over a local socket.
+
+You start the daemon, then use the CLI to talk to it. Remote devices can pair
+with the daemon over Tailscale or Cloudflare Tunnel for access from anywhere.
+
 ## Quick Start
 
 ### Install
