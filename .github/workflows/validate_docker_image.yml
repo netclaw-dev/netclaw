@@ -35,6 +35,9 @@ on:
       - 'Directory.Packages.props'
       - '.github/workflows/validate_docker_image.yml'
 
+permissions:
+  contents: read
+
 jobs:
   validate-docker-build:
     name: Validate Docker Build
