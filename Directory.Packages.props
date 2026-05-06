@@ -9,6 +9,7 @@
     <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.19.1</DiscordNetVersion>
+    <MattermostNetVersion>4.0.4</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.5.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.7</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
@@ -49,6 +50,7 @@
     <PackageVersion Include="OllamaSharp" Version="5.4.25" />
     <PackageVersion Include="SauceControl.Blake2Fast" Version="2.0.0" />
     <PackageVersion Include="Discord.Net" Version="$(DiscordNetVersion)" />
+    <PackageVersion Include="Mattermost.NET" Version="$(MattermostNetVersion)" />
     <PackageVersion Include="SlackNet" Version="$(SlackNetVersion)" />
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.12.0" />
@@ -67,6 +69,7 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.5.1" />
+    <PackageVersion Include="Testcontainers" Version="4.11.0" />
     <PackageVersion Include="Verify.XunitV3" Version="31.16.2" />
   </ItemGroup>
   <!-- Source generators -->
