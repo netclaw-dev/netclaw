@@ -10,6 +10,40 @@ namespace Netclaw.Channels.Mattermost;
 
 internal static class MattermostApprovalPromptBuilder
 {
+    public static (string Text, IReadOnlyList<MattermostAttachment> Attachments) BuildButtonPrompt(
+        ToolInteractionRequest request,
+        string callbackUrl,
+        string rootPostId)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(":lock: **Tool approval required**");
+        AppendToolSummary(sb, request);
+        sb.AppendLine();
+        sb.Append("You can also reply with `A`, `B`, `C`, or `D` in this thread.");
+
+        var actions = request.Options
+            .Select(option => new MattermostAttachmentAction(
+                Id: $"tool_approval_{option.Key}",
+                Name: option.Label,
+                IntegrationUrl: callbackUrl,
+                Context: new Dictionary<string, string>
+                {
+                    ["call_id"] = request.CallId,
+                    ["selected_key"] = option.Key,
+                    ["requester_sender_id"] = request.RequesterSenderId ?? string.Empty,
+                    ["root_post_id"] = rootPostId
+                },
+                Style: GetButtonStyle(option.Key)))
+            .ToList();
+
+        var attachment = new MattermostAttachment(
+            Fallback: "Tool approval required — reply with A, B, C, or D",
+            Color: "#3AA3E3",
+            Actions: actions);
+
+        return (sb.ToString().TrimEnd(), [attachment]);
+    }
+
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
@@ -48,6 +82,20 @@ internal static class MattermostApprovalPromptBuilder
         sb.Append("**Decision:** ").Append(decisionLabel);
         sb.Append(" (by @").Append(senderId).Append(')');
         return sb.ToString();
+    }
+
+    public static MattermostAttachment BuildResolvedAttachment(
+        ToolInteractionRequest request,
+        string selectedKey,
+        string senderId)
+    {
+        var resolvedText = BuildResolvedPromptText(request, selectedKey, senderId);
+        var color = selectedKey == ApprovalOptionKeys.Deny ? "#CC0000" : "#2EA44F";
+
+        return new MattermostAttachment(
+            Fallback: resolvedText,
+            Color: color,
+            Text: resolvedText);
     }
 
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
@@ -89,5 +137,13 @@ internal static class MattermostApprovalPromptBuilder
             ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
             ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
             _ => selectedKey
+        };
+
+    private static string GetButtonStyle(string optionKey)
+        => optionKey switch
+        {
+            ApprovalOptionKeys.Deny => "danger",
+            ApprovalOptionKeys.ApproveOnce => "primary",
+            _ => "default"
         };
 }

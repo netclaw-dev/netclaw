@@ -1,0 +1,127 @@
+// -----------------------------------------------------------------------
+// <copyright file="MattermostActionEndpointExtensions.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using System.Text.Json;
+using Netclaw.Channels.Mattermost;
+
+namespace Netclaw.Daemon.Configuration;
+
+public static class MattermostActionEndpointExtensions
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        PropertyNameCaseInsensitive = true
+    };
+
+    public static void MapMattermostActionEndpoint(this WebApplication app)
+    {
+        app.MapPost("/api/mattermost/actions", async (
+            HttpContext httpContext,
+            IServiceProvider sp,
+            TimeProvider timeProvider,
+            ILogger<MattermostChannel> logger,
+            CancellationToken ct) =>
+        {
+            var channel = sp.GetService<MattermostChannel>();
+            if (channel is null)
+                return Results.NotFound("Mattermost channel is not configured.");
+
+            ActionCallbackPayload? payload;
+            try
+            {
+                payload = await JsonSerializer.DeserializeAsync<ActionCallbackPayload>(
+                    httpContext.Request.Body,
+                    JsonOptions,
+                    ct);
+            }
+            catch (JsonException)
+            {
+                return Results.BadRequest("Invalid JSON payload.");
+            }
+
+            if (payload is null
+                || string.IsNullOrEmpty(payload.UserId)
+                || string.IsNullOrEmpty(payload.PostId)
+                || string.IsNullOrEmpty(payload.ChannelId))
+            {
+                return Results.BadRequest("Missing required fields: user_id, post_id, channel_id.");
+            }
+
+            if (payload.Context is null
+                || !payload.Context.TryGetValue("call_id", out var callId)
+                || !payload.Context.TryGetValue("selected_key", out var selectedKey)
+                || string.IsNullOrEmpty(callId)
+                || string.IsNullOrEmpty(selectedKey))
+            {
+                return Results.BadRequest("Missing required context fields: call_id, selected_key.");
+            }
+
+            if (!IsValidApprovalKey(selectedKey))
+                return Results.BadRequest("Invalid selected_key value.");
+
+            payload.Context.TryGetValue("requester_sender_id", out var requesterSenderId);
+            if (string.IsNullOrEmpty(requesterSenderId))
+                requesterSenderId = null;
+
+            payload.Context.TryGetValue("root_post_id", out var rootPostId);
+
+            var interaction = new MattermostGatewayInteraction(
+                ChannelId: new MattermostChannelId(payload.ChannelId),
+                RootPostId: new MattermostRootPostId(rootPostId ?? string.Empty),
+                CallId: callId,
+                SelectedKey: selectedKey,
+                SenderId: new MattermostUserId(payload.UserId),
+                RequesterSenderId: requesterSenderId is not null
+                    ? new MattermostUserId(requesterSenderId)
+                    : null,
+                ReceivedAt: timeProvider.GetUtcNow());
+
+            try
+            {
+                await channel.GatewayClient.HandleActionCallbackAsync(interaction);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed routing Mattermost action callback for call {CallId}", callId);
+                return Results.StatusCode(500);
+            }
+
+            var decisionLabel = selectedKey switch
+            {
+                "approve_once" => "Approve Once",
+                "approve_session" => "Approve for Session",
+                "approve_always" => "Always Approve",
+                "deny" => "Deny",
+                _ => selectedKey
+            };
+
+            var response = new ActionCallbackResponse
+            {
+                EphemeralText = $"You selected: **{decisionLabel}**"
+            };
+
+            return Results.Json(response, JsonOptions);
+        });
+    }
+
+    private sealed class ActionCallbackPayload
+    {
+        public string? UserId { get; set; }
+        public string? UserName { get; set; }
+        public string? ChannelId { get; set; }
+        public string? PostId { get; set; }
+        public string? TriggerId { get; set; }
+        public Dictionary<string, string>? Context { get; set; }
+    }
+
+    private sealed class ActionCallbackResponse
+    {
+        public string? EphemeralText { get; set; }
+    }
+
+    private static bool IsValidApprovalKey(string key)
+        => key is "approve_once" or "approve_session" or "approve_always" or "deny";
+}

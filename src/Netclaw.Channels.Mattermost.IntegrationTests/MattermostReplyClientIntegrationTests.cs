@@ -28,7 +28,8 @@ public sealed class MattermostReplyClientIntegrationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
-        var replyClient = new MattermostNetReplyClient(botClient);
+        using var apiClient = _fixture.CreateBotApiClient();
+        var replyClient = new MattermostNetReplyClient(botClient, apiClient);
 
         var result = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),
@@ -46,7 +47,8 @@ public sealed class MattermostReplyClientIntegrationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
-        var replyClient = new MattermostNetReplyClient(botClient);
+        using var apiClient = _fixture.CreateBotApiClient();
+        var replyClient = new MattermostNetReplyClient(botClient, apiClient);
 
         var root = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),
@@ -68,7 +70,8 @@ public sealed class MattermostReplyClientIntegrationTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
-        var replyClient = new MattermostNetReplyClient(botClient);
+        using var apiClient = _fixture.CreateBotApiClient();
+        var replyClient = new MattermostNetReplyClient(botClient, apiClient);
 
         var result = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),

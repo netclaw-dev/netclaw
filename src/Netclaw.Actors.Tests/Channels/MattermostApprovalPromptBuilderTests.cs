@@ -143,4 +143,108 @@ public sealed class MattermostApprovalPromptBuilderTests
 
         Assert.DoesNotContain("Pattern", text);
     }
+
+    [Fact]
+    public void BuildButtonPrompt_produces_attachment_with_four_buttons()
+    {
+        var request = CreateStandardRequest();
+
+        var (text, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost:5199/api/mattermost/actions", "root-post-1");
+
+        Assert.Contains("Tool approval required", text);
+        Assert.Contains("git_push", text);
+        Assert.Contains("reply with `A`, `B`, `C`, or `D`", text);
+
+        Assert.Single(attachments);
+        var attachment = attachments[0];
+        Assert.NotNull(attachment.Actions);
+        Assert.Equal(4, attachment.Actions!.Count);
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_buttons_encode_context_correctly()
+    {
+        var request = CreateStandardRequest();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://callback:5199/api/mattermost/actions", "root-post-1");
+
+        var approveOnce = attachments[0].Actions![0];
+        Assert.Equal("tool_approval_approve_once", approveOnce.Id);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnceLabel, approveOnce.Name);
+        Assert.Equal("http://callback:5199/api/mattermost/actions", approveOnce.IntegrationUrl);
+        Assert.Equal("call-btn-1", approveOnce.Context["call_id"]);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnce, approveOnce.Context["selected_key"]);
+        Assert.Equal("requester-1", approveOnce.Context["requester_sender_id"]);
+        Assert.Equal("root-post-1", approveOnce.Context["root_post_id"]);
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_deny_button_has_danger_style()
+    {
+        var request = CreateStandardRequest();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1");
+
+        var denyButton = attachments[0].Actions!.Single(a => a.Id == "tool_approval_deny");
+        Assert.Equal("danger", denyButton.Style);
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_approve_once_has_primary_style()
+    {
+        var request = CreateStandardRequest();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1");
+
+        var approveOnce = attachments[0].Actions!.Single(a => a.Id == "tool_approval_approve_once");
+        Assert.Equal("primary", approveOnce.Style);
+    }
+
+    [Fact]
+    public void BuildResolvedAttachment_approve_shows_green_color()
+    {
+        var request = CreateStandardRequest();
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachment(
+            request, ApprovalOptionKeys.ApproveOnce, "user-42");
+
+        Assert.Equal("#2EA44F", attachment.Color);
+        Assert.Contains(":white_check_mark:", attachment.Text!);
+        Assert.Contains("git_push", attachment.Text!);
+        Assert.Contains("@user-42", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
+    [Fact]
+    public void BuildResolvedAttachment_deny_shows_red_color()
+    {
+        var request = CreateStandardRequest();
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachment(
+            request, ApprovalOptionKeys.Deny, "user-99");
+
+        Assert.Equal("#CC0000", attachment.Color);
+        Assert.Contains(":no_entry:", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
+    private static ToolInteractionRequest CreateStandardRequest()
+        => new()
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = "call-btn-1",
+            ToolName = "git_push",
+            DisplayText = "push to origin/main",
+            RequesterSenderId = "requester-1",
+            Patterns = ["origin/main"],
+            Options = [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
 }

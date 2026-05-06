@@ -13,6 +13,11 @@ internal static class MattermostAttachmentUrlTrust
     /// </summary>
     public static bool IsAllowedAttachmentUrl(string url, string serverUrl)
     {
-        return url.StartsWith(serverUrl, StringComparison.OrdinalIgnoreCase);
+        // Append trailing slash to prevent subdomain bypass:
+        // "https://mm.example.com" must not match "https://mm.example.com.evil.com/..."
+        var normalized = serverUrl.EndsWith('/')
+            ? serverUrl
+            : serverUrl + '/';
+        return url.StartsWith(normalized, StringComparison.OrdinalIgnoreCase);
     }
 }

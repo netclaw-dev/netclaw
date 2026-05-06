@@ -10,8 +10,8 @@ namespace Netclaw.Channels.Mattermost;
 /// <summary>
 /// Resolves Mattermost reminder targets to canonical IDs.
 /// Supported inputs:
-/// - @username
 /// - raw user ID (26-char alphanumeric Mattermost ID)
+/// - @userId (same, with @ prefix stripped)
 /// - channel:channelId
 /// </summary>
 public sealed class MattermostReminderTargetResolver : IReminderTargetResolver

@@ -153,6 +153,7 @@ public sealed record MattermostGatewayDependencies(
     ModelCapabilities ModelCapabilities,
     NetclawPaths Paths,
     string? ServerUrl = null,
+    string? CallbackUrl = null,
     MattermostUserId? BotUserId = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
     IThreadHistoryFetcher? ThreadHistoryFetcher = null,

@@ -19,11 +19,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
     public event Func<MattermostGatewayMessage, Task>? MessageReceived;
 
-    // Interactive message actions will be wired in a follow-up when
-    // Mattermost attachment action support is implemented.
-#pragma warning disable CS0067
     public event Func<MattermostGatewayInteraction, Task>? InteractionReceived;
-#pragma warning restore CS0067
 
     public bool IsConnected => _client.IsConnected;
     public MattermostUserId? BotUserId { get; private set; }
@@ -137,6 +133,13 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
     private void OnLogMessage(object? sender, LogEventArgs e)
     {
         _logger.LogDebug("[Mattermost.NET] {Message}", e.Message);
+    }
+
+    public async Task HandleActionCallbackAsync(MattermostGatewayInteraction interaction)
+    {
+        var handler = InteractionReceived;
+        if (handler is not null)
+            await handler(interaction);
     }
 
     public void Dispose()

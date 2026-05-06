@@ -512,7 +512,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         try
         {
-            var resolvedText = MattermostApprovalPromptBuilder.BuildResolvedPromptText(
+            var resolvedAttachment = MattermostApprovalPromptBuilder.BuildResolvedAttachment(
                 pending.Request,
                 selectedKey,
                 senderId);
@@ -520,7 +520,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UpdatePostAsync(
                 promptPostId,
-                resolvedText,
+                resolvedAttachment.Text ?? string.Empty,
+                [resolvedAttachment],
                 cts.Token);
         }
         catch (Exception ex)
@@ -683,6 +684,42 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
     {
+        var callbackUrl = _dependencies.CallbackUrl;
+
+        if (!string.IsNullOrEmpty(callbackUrl))
+        {
+            return await TryPostButtonPromptAsync(request, callbackUrl);
+        }
+
+        return await TryPostTextPromptAsync(request);
+    }
+
+    private async Task<MattermostPostId?> TryPostButtonPromptAsync(
+        ToolInteractionRequest request,
+        string callbackUrl)
+    {
+        var (promptText, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, callbackUrl, _rootPostId.Value);
+        var startedAt = _dependencies.TimeProvider.GetTimestamp();
+        try
+        {
+            var postMessage = BuildPostMessage(promptText, attachments: attachments);
+            var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
+            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "button_prompt");
+            return result.PostId;
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex, "Failed posting Mattermost button prompt; falling back to text-only");
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "text_prompt");
+            return await TryPostTextPromptAsync(request);
+        }
+    }
+
+    private async Task<MattermostPostId?> TryPostTextPromptAsync(ToolInteractionRequest request)
+    {
         var promptText = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
@@ -721,11 +758,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private MattermostPostMessage BuildPostMessage(string text)
+    private MattermostPostMessage BuildPostMessage(
+        string text,
+        IReadOnlyList<MattermostAttachment>? attachments = null)
         => new(
             ChannelId: _channelId,
             Text: text,
-            RootPostId: _rootPostId.IsEmpty ? null : new MattermostPostId(_rootPostId.Value));
+            RootPostId: _rootPostId.IsEmpty ? null : new MattermostPostId(_rootPostId.Value),
+            Attachments: attachments);
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
     {

@@ -34,12 +34,24 @@ public static class MattermostChannelRegistrationExtensions
 
         services.AddSingleton(_ => new MattermostClient(serverUrl, mattermostOptions.BotToken!.Value));
 
-        services.AddHttpClient("mattermost-files");
+        services.AddHttpClient("mattermost-files", client =>
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", mattermostOptions.BotToken!.Value);
+        });
+        services.AddHttpClient("mattermost-api", client =>
+        {
+            client.BaseAddress = new Uri(serverUrl.TrimEnd('/'));
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", mattermostOptions.BotToken!.Value);
+        });
         services.AddSingleton<IMattermostGatewayClient, MattermostNetGatewayClient>();
         services.AddSingleton<IMattermostReplyClient>(sp =>
         {
             var client = sp.GetRequiredService<MattermostClient>();
-            return new MattermostNetReplyClient(client);
+            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var httpClient = httpClientFactory.CreateClient("mattermost-api");
+            return new MattermostNetReplyClient(client, httpClient);
         });
         services.AddSingleton<IThreadHistoryFetcher>(sp =>
         {

@@ -15,6 +15,14 @@ public sealed class MattermostChannelOptions
 
     public SensitiveString? BotToken { get; init; }
 
+    /// <summary>
+    /// URL that Mattermost can reach to deliver interactive button callbacks.
+    /// Required for button-based approval prompts. Falls back to text-only
+    /// prompts when not configured.
+    /// Example: <c>http://netclaw-host:5199/api/mattermost/actions</c>
+    /// </summary>
+    public string? CallbackUrl { get; init; }
+
     public string? DefaultChannelId { get; init; }
 
     public bool AllowDirectMessages { get; init; }

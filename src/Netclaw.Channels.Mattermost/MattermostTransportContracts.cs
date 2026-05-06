@@ -46,6 +46,8 @@ public interface IMattermostGatewayClient
     Task ConnectAsync(string serverUrl, string botToken, CancellationToken cancellationToken = default);
 
     Task DisconnectAsync(CancellationToken cancellationToken = default);
+
+    Task HandleActionCallbackAsync(MattermostGatewayInteraction interaction);
 }
 
 public interface IMattermostReplyClient
@@ -56,13 +58,33 @@ public interface IMattermostReplyClient
         MattermostPostId postId,
         string text,
         CancellationToken cancellationToken = default);
+
+    Task UpdatePostAsync(
+        MattermostPostId postId,
+        string text,
+        IReadOnlyList<MattermostAttachment>? attachments,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record MattermostPostMessage(
     MattermostChannelId ChannelId,
     string Text,
     MattermostPostId? RootPostId = null,
-    IReadOnlyList<string>? FileIds = null);
+    IReadOnlyList<string>? FileIds = null,
+    IReadOnlyList<MattermostAttachment>? Attachments = null);
+
+public sealed record MattermostAttachment(
+    string? Fallback = null,
+    string? Color = null,
+    string? Text = null,
+    IReadOnlyList<MattermostAttachmentAction>? Actions = null);
+
+public sealed record MattermostAttachmentAction(
+    string Id,
+    string Name,
+    string IntegrationUrl,
+    Dictionary<string, string> Context,
+    string Style = "default");
 
 public sealed record MattermostPostResult(
     MattermostPostId? PostId = null)
@@ -98,6 +120,10 @@ public sealed class UnconfiguredMattermostGatewayClient : IMattermostGatewayClie
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default)
         => Task.CompletedTask;
+
+    public Task HandleActionCallbackAsync(MattermostGatewayInteraction interaction)
+        => throw new InvalidOperationException(
+            "Mattermost channel is enabled, but no Mattermost gateway client is configured.");
 }
 
 /// <summary>
@@ -110,6 +136,10 @@ public sealed class UnconfiguredMattermostReplyClient : IMattermostReplyClient
             "Mattermost channel attempted outbound delivery, but no Mattermost reply client is configured.");
 
     public Task UpdatePostAsync(MattermostPostId postId, string text, CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Mattermost channel attempted to update a post, but no Mattermost reply client is configured.");
+
+    public Task UpdatePostAsync(MattermostPostId postId, string text, IReadOnlyList<MattermostAttachment>? attachments, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Mattermost channel attempted to update a post, but no Mattermost reply client is configured.");
 }

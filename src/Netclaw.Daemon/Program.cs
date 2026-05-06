@@ -210,6 +210,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.MapGet("/api/stats/skills", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
         Results.Ok(await statsService.GetSkillUsageStatsAsync(days, ct))).RequireAuthorization();
     app.MapWebhookEndpoints();
+    app.MapMattermostActionEndpoint();
 
     // Device pairing exchange — unauthenticated, rate-limited, with per-IP lockout guard.
     // Accepts a time-limited pairing code and a device name; returns a bearer token on success.

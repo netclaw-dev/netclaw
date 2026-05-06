@@ -36,6 +36,7 @@ public sealed class MattermostChannel : IChannel
     private IActorRef? _gateway;
 
     internal IActorRef? Gateway => _gateway;
+    internal IMattermostGatewayClient GatewayClient => _gatewayClient;
 
     internal MattermostChannelId? DefaultChannelId =>
         !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
@@ -126,6 +127,7 @@ public sealed class MattermostChannel : IChannel
                     ModelCapabilities: _modelCapabilities,
                     Paths: _paths,
                     ServerUrl: serverUrl,
+                    CallbackUrl: _options.CallbackUrl,
                     BotUserId: _gatewayClient.BotUserId,
                     PromptInjectionDetector: _promptInjectionDetector,
                     ThreadHistoryFetcher: _threadHistoryFetcher,

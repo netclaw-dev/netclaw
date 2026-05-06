@@ -105,6 +105,13 @@ public sealed class MattermostFixture : IAsyncLifetime
         return new HttpClient { BaseAddress = new Uri(ServerUrl) };
     }
 
+    public HttpClient CreateBotApiClient()
+    {
+        var http = CreateHttpClient();
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", BotToken);
+        return http;
+    }
+
     /// <summary>
     /// Creates an authenticated HttpClient that can act as the test user.
     /// </summary>
