@@ -77,8 +77,11 @@ RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/
 
 # Non-root runtime user — limits blast radius of tool execution and
 # satisfies CIS Docker Benchmark / K8s PodSecurityStandards.
+# Pre-create the data directory so VOLUME inherits correct ownership.
 RUN groupadd --gid 1654 netclaw \
- && useradd --uid 1654 --gid netclaw --create-home netclaw
+ && useradd --uid 1654 --gid netclaw --create-home netclaw \
+ && mkdir -p /home/netclaw/.netclaw \
+ && chown netclaw:netclaw /home/netclaw/.netclaw
 
 ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
 # Block in-place binary self-update — the image tag IS the version.
