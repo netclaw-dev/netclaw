@@ -174,6 +174,6 @@ public class MattermostRoutingPolicyTests
             IsDirectMessage: isDirectMessage,
             ContainsBotMention: false,
             Text: text,
-            ReceivedAt: DateTimeOffset.UtcNow);
+            ReceivedAt: TimeProvider.System.GetUtcNow());
     }
 }

@@ -70,5 +70,16 @@ public sealed class MattermostReminderTargetResolver : IReminderTargetResolver
     }
 
     private static bool IsMattermostId(string value)
-        => value.Length == 26 && value.All(c => char.IsLetterOrDigit(c));
+    {
+        if (value.Length != 26)
+            return false;
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(value[i]))
+                return false;
+        }
+
+        return true;
+    }
 }

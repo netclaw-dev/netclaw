@@ -70,6 +70,7 @@
       "properties": {
         "Enabled": { "type": "boolean" },
         "ServerUrl": { "type": "string", "format": "uri", "description": "Base URL of the Mattermost server (e.g. https://mm.example.com)." },
+        "BotToken": { "type": ["string", "null"] },
         "DefaultChannelId": { "type": ["string", "null"] },
         "AllowDirectMessages": { "type": "boolean" },
         "MentionOnly": { "type": "boolean", "default": true },

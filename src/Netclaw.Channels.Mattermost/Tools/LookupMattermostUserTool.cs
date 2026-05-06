@@ -83,13 +83,8 @@ public sealed partial class LookupMattermostUserTool : NetclawTool<LookupMatterm
     }
 
     private bool IsFilteredOut(global::Mattermost.Models.Users.User user)
-    {
-        if (_options.AllowedUserIds.Length > 0
-            && !_options.AllowedUserIds.Contains(user.Id, StringComparer.Ordinal))
-            return true;
-
-        return false;
-    }
+        => _options.AllowedUserIds.Length > 0
+            && !_options.AllowedUserIds.Contains(user.Id, StringComparer.Ordinal);
 
     private static void AppendUser(StringBuilder sb, global::Mattermost.Models.Users.User user)
     {

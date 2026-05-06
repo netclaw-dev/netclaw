@@ -512,7 +512,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         try
         {
-            var resolvedText = BuildResolvedApprovalText(
+            var resolvedText = MattermostApprovalPromptBuilder.BuildResolvedPromptText(
                 pending.Request,
                 selectedKey,
                 senderId);
@@ -683,7 +683,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
     {
-        var promptText = BuildApprovalPromptText(request);
+        var promptText = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
@@ -700,73 +700,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             await SendApprovalDenyOnFailureAsync(request.CallId);
             return null;
         }
-    }
-
-    /// <summary>
-    /// Builds a simple markdown-formatted approval prompt. Interactive
-    /// buttons will be added via a dedicated <c>MattermostApprovalPromptBuilder</c>
-    /// in a follow-up change.
-    /// </summary>
-    private static string BuildApprovalPromptText(ToolInteractionRequest request)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine(":lock: **Tool approval required**");
-        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
-
-        if (request.Patterns.Count > 0)
-        {
-            if (request.Patterns.Count == 1)
-            {
-                sb.Append("**Pattern:** `").Append(request.Patterns[0]).AppendLine("`");
-            }
-            else
-            {
-                sb.AppendLine("**Patterns:**");
-                foreach (var pattern in request.Patterns)
-                    sb.Append("  - `").Append(pattern).AppendLine("`");
-            }
-        }
-
-        if (request.HasAdoptedContext)
-        {
-            sb.Append("**Adopted context:** present").AppendLine();
-            sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).AppendLine("`");
-        }
-
-        sb.AppendLine();
-        sb.AppendLine("Reply with:");
-        sb.Append("A) ").AppendLine(ApprovalOptionKeys.ApproveOnceLabel);
-        sb.Append("B) ").AppendLine(ApprovalOptionKeys.ApproveSessionLabel);
-        sb.Append("C) ").AppendLine(ApprovalOptionKeys.ApproveAlwaysLabel);
-        sb.Append("D) ").AppendLine(ApprovalOptionKeys.DenyLabel);
-        return sb.ToString().TrimEnd();
-    }
-
-    private static string BuildResolvedApprovalText(
-        ToolInteractionRequest request,
-        string selectedKey,
-        string senderId)
-    {
-        var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
-            ? ":no_entry:"
-            : ":white_check_mark:";
-        var decisionLabel = selectedKey switch
-        {
-            ApprovalOptionKeys.ApproveOnce => ApprovalOptionKeys.ApproveOnceLabel,
-            ApprovalOptionKeys.ApproveSession => ApprovalOptionKeys.ApproveSessionLabel,
-            ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
-            ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
-            _ => selectedKey
-        };
-
-        var sb = new StringBuilder();
-        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
-        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
-        sb.Append("**Decision:** ").Append(decisionLabel);
-        sb.Append(" (by @").Append(senderId).Append(')');
-        return sb.ToString();
     }
 
     private async Task SafeReplyAsync(string text)
@@ -944,8 +877,16 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
 
         // Mattermost attachment URLs must originate from the configured server.
-        var serverUrl = _dependencies.ServerUrl ?? string.Empty;
-        if (!string.IsNullOrEmpty(serverUrl) && !MattermostAttachmentUrlTrust.IsAllowedAttachmentUrl(file.Url, serverUrl))
+        if (string.IsNullOrEmpty(_dependencies.ServerUrl))
+        {
+            _log.Warning(
+                "mattermost_attachment_rejected name={Name} reason=no-server-url-configured",
+                file.Name);
+            return new AttachmentIngestResult.Rejected(
+                $"`{file.Name}` was rejected because no Mattermost server URL is configured for URL trust validation.");
+        }
+
+        if (!MattermostAttachmentUrlTrust.IsAllowedAttachmentUrl(file.Url, _dependencies.ServerUrl))
         {
             _log.Warning(
                 "mattermost_attachment_rejected name={Name} url={Url} reason=untrusted-url",
@@ -1084,8 +1025,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     {
         try
         {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
+            File.Delete(tempPath);
         }
         catch (Exception ex)
         {

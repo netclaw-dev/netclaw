@@ -103,11 +103,10 @@ public sealed class MattermostChannel : IChannel
 
         var serverUrl = _options.ServerUrl
             ?? throw new InvalidOperationException("Mattermost:ServerUrl is required when Mattermost channel is enabled.");
-        var botToken = _options.BotToken.RequireValid("Mattermost:BotToken");
 
         try
         {
-            await _gatewayClient.ConnectAsync(serverUrl, botToken.Value, cancellationToken);
+            await _gatewayClient.ConnectAsync(serverUrl, _options.BotToken!.Value, cancellationToken);
 
             _gatewayClient.MessageReceived += HandleMessageReceivedAsync;
             _gatewayClient.InteractionReceived += HandleInteractionReceivedAsync;
@@ -120,9 +119,7 @@ public sealed class MattermostChannel : IChannel
                     IngressGate: _ingressGate,
                     TimeProvider: _timeProvider,
                     Options: _options,
-                    DefaultChannelId: !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
-                        ? new MattermostChannelId(_options.DefaultChannelId)
-                        : null,
+                    DefaultChannelId: DefaultChannelId,
                     ReplyClient: _replyClient,
                     ContentScanner: _contentScanner,
                     AudienceProfiles: _audienceProfiles,

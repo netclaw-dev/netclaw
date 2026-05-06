@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Mattermost;
+using Mattermost.Models.Responses;
 using Xunit;
 
 namespace Netclaw.Channels.Mattermost.IntegrationTests;
@@ -15,6 +16,9 @@ namespace Netclaw.Channels.Mattermost.IntegrationTests;
 [Collection("Mattermost")]
 public sealed class MattermostThreadHistoryIntegrationTests
 {
+    private static readonly TimeSpan PollTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+
     private readonly MattermostFixture _fixture;
 
     public MattermostThreadHistoryIntegrationTests(MattermostFixture fixture)
@@ -32,9 +36,7 @@ public sealed class MattermostThreadHistoryIntegrationTests
         await _fixture.PostAsTestUserAsync(_fixture.ChannelId, "History reply 1", rootId: rootPostId);
         await _fixture.PostAsTestUserAsync(_fixture.ChannelId, "History reply 2", rootId: rootPostId);
 
-        await Task.Delay(500, ct);
-
-        var threadPosts = await botClient.GetThreadPostsAsync(rootPostId);
+        var threadPosts = await PollThreadPostsAsync(botClient, rootPostId, minCount: 3, ct);
 
         Assert.NotNull(threadPosts);
         Assert.True(threadPosts.Posts.Count >= 3, $"Expected at least 3 posts, got {threadPosts.Posts.Count}");
@@ -49,9 +51,7 @@ public sealed class MattermostThreadHistoryIntegrationTests
         var rootPostId = await _fixture.PostAsTestUserAsync(_fixture.ChannelId, "Unique root content for history test");
         await _fixture.PostAsTestUserAsync(_fixture.ChannelId, "Reply to unique root", rootId: rootPostId);
 
-        await Task.Delay(500, ct);
-
-        var threadPosts = await botClient.GetThreadPostsAsync(rootPostId);
+        var threadPosts = await PollThreadPostsAsync(botClient, rootPostId, minCount: 2, ct);
 
         Assert.True(threadPosts.Posts.ContainsKey(rootPostId),
             "Thread history should include the root post");
@@ -68,12 +68,31 @@ public sealed class MattermostThreadHistoryIntegrationTests
 
         await botClient.CreatePostAsync(_fixture.ChannelId, "Bot reply in thread", replyToPostId: rootPostId);
 
-        await Task.Delay(500, ct);
-
-        var threadPosts = await botClient.GetThreadPostsAsync(rootPostId);
+        var threadPosts = await PollThreadPostsAsync(botClient, rootPostId, minCount: 2, ct);
         var botPosts = threadPosts.Posts.Values.Where(p => p.UserId == _fixture.BotUserId).ToList();
 
         Assert.Single(botPosts);
         Assert.Contains("Bot reply in thread", botPosts[0].Text);
+    }
+
+    private static async Task<ChannelPostsResponse> PollThreadPostsAsync(
+        MattermostClient client,
+        string rootPostId,
+        int minCount,
+        CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(PollTimeout);
+
+        while (!cts.Token.IsCancellationRequested)
+        {
+            var result = await client.GetThreadPostsAsync(rootPostId);
+            if (result.Posts.Count >= minCount)
+                return result;
+
+            await Task.Delay(PollInterval, cts.Token);
+        }
+
+        return await client.GetThreadPostsAsync(rootPostId);
     }
 }

@@ -31,6 +31,7 @@ public sealed class MattermostFixture : IAsyncLifetime
     private const string ChannelName = "test-channel";
 
     private IContainer? _container;
+    private string? _testUserToken;
 
     public string ServerUrl { get; private set; } = string.Empty;
     public string AdminToken { get; private set; } = string.Empty;
@@ -86,10 +87,11 @@ public sealed class MattermostFixture : IAsyncLifetime
         // Add bot to channel
         await AddUserToChannelAsync(http, ChannelId, BotUserId);
 
-        // Create test user
+        // Create test user and cache their auth token
         TestUserId = await CreateUserAsync(http, TestUserEmail, TestUserUsername, TestUserPassword);
         await AddUserToTeamAsync(http, TeamId, TestUserId);
         await AddUserToChannelAsync(http, ChannelId, TestUserId);
+        _testUserToken = await LoginAsync(http, TestUserUsername, TestUserPassword);
     }
 
     public async ValueTask DisposeAsync()
@@ -218,8 +220,8 @@ public sealed class MattermostFixture : IAsyncLifetime
     /// </summary>
     public async Task<string> PostAsTestUserAsync(string channelId, string text, string? rootId = null)
     {
-        var (http, _) = await CreateTestUserClientAsync();
-        using (http)
+        using var http = CreateHttpClient();
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _testUserToken);
         {
             var payload = new Dictionary<string, object?>
             {

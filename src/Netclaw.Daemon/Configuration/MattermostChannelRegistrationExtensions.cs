@@ -59,7 +59,7 @@ public static class MattermostChannelRegistrationExtensions
                 promptInjectionDetector,
                 mattermostOptions,
                 serverUrl,
-                gatewayClient.BotUserId?.Value,
+                () => gatewayClient.BotUserId?.Value,
                 toolConfig.AudienceProfiles,
                 modelCapabilities,
                 paths,

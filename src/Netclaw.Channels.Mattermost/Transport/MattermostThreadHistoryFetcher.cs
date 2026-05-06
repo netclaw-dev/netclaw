@@ -63,19 +63,19 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         IPromptInjectionDetector promptInjectionDetector,
         MattermostChannelOptions options,
         string serverUrl,
-        string? botUserId,
+        Func<string?> botUserIdFactory,
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
         NetclawPaths paths,
         ILogger<MattermostThreadHistoryFetcher> logger)
         : this(
-            (rootPostId, cancellationToken) => FetchRawMessagesAsync(client, rootPostId, botUserId, serverUrl, cancellationToken, logger),
+            (rootPostId, cancellationToken) => FetchRawMessagesAsync(client, rootPostId, botUserIdFactory(), serverUrl, cancellationToken, logger),
             (fileId, stagingDir, maxBytes, ct) => DownloadFileViaSdkAsync(client, fileId, stagingDir, maxBytes, ct),
             contentScanner,
             promptInjectionDetector,
             options,
             serverUrl,
-            botUserId,
+            botUserIdFactory(),
             audienceProfiles,
             modelCapabilities,
             paths,
@@ -473,7 +473,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         }
 
         var results = new List<HistoricalMessage>(threadResponse.Order.Count);
-        var normalizedServerUrl = serverUrl.TrimEnd('/');
+        var normalizedServerUrl = serverUrl.TrimEnd('/'); // serverUrl may not be pre-normalized when called from test delegates
 
         // Order list is provided by the API in chronological order
         foreach (var postId in threadResponse.Order)
