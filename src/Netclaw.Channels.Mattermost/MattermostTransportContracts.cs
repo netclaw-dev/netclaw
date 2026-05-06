@@ -43,6 +43,8 @@ public interface IMattermostGatewayClient
 
     MattermostUserId? BotUserId { get; }
 
+    string? BotUsername { get; }
+
     Task ConnectAsync(string serverUrl, string botToken, CancellationToken cancellationToken = default);
 
     Task DisconnectAsync(CancellationToken cancellationToken = default);
@@ -113,6 +115,8 @@ public sealed class UnconfiguredMattermostGatewayClient : IMattermostGatewayClie
     public bool IsConnected => false;
 
     public MattermostUserId? BotUserId => null;
+
+    public string? BotUsername => null;
 
     public Task ConnectAsync(string serverUrl, string botToken, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(

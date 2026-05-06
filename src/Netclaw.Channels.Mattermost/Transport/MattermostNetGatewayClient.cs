@@ -23,6 +23,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
     public bool IsConnected => _client.IsConnected;
     public MattermostUserId? BotUserId { get; private set; }
+    public string? BotUsername { get; private set; }
 
     public MattermostNetGatewayClient(
         MattermostClient client,
@@ -46,6 +47,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
         var me = await _client.GetMeAsync();
         BotUserId = new MattermostUserId(me.Id);
+        BotUsername = me.Username;
         _logger.LogInformation("Mattermost bot identity resolved: {BotUserId} (@{Username})",
             me.Id, me.Username);
 
@@ -82,35 +84,31 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
             ? new MattermostRootPostId(string.Empty)
             : new MattermostRootPostId(post.RootId);
 
-        IReadOnlyList<MattermostFileReference>? attachments = null;
-        if (post.FileIdentifiers.Count > 0)
-        {
-            attachments = post.FileIdentifiers
-                .Select(fileId => new MattermostFileReference(
-                    Name: fileId,
-                    MimeType: "application/octet-stream",
-                    Size: 0,
-                    Url: $"{_serverUrl}/api/v4/files/{fileId}"))
-                .ToList();
-        }
-
-        var gatewayMessage = new MattermostGatewayMessage(
-            EventId: new MattermostEventId(post.Id),
-            ChannelId: new MattermostChannelId(post.ChannelId),
-            PostId: new MattermostPostId(post.Id),
-            RootPostId: rootPostId,
-            SenderId: new MattermostUserId(post.UserId),
-            IsBotMessage: false, // Mattermost.NET already filters bot's own messages
-            IsDirectMessage: isDm,
-            ContainsBotMention: containsMention,
-            Text: post.Text ?? string.Empty,
-            ReceivedAt: _timeProvider.GetUtcNow(),
-            Attachments: attachments);
+        IReadOnlyList<string> fileIds = post.FileIdentifiers as IReadOnlyList<string> ?? post.FileIdentifiers.ToList();
+        var serverUrl = _serverUrl!;
+        var receivedAt = _timeProvider.GetUtcNow();
 
         _ = Task.Run(async () =>
         {
             try
             {
+                IReadOnlyList<MattermostFileReference>? attachments = null;
+                if (fileIds.Count > 0)
+                    attachments = await ResolveFileReferencesAsync(fileIds, serverUrl);
+
+                var gatewayMessage = new MattermostGatewayMessage(
+                    EventId: new MattermostEventId(post.Id),
+                    ChannelId: new MattermostChannelId(post.ChannelId),
+                    PostId: new MattermostPostId(post.Id),
+                    RootPostId: rootPostId,
+                    SenderId: new MattermostUserId(post.UserId),
+                    IsBotMessage: false, // Mattermost.NET already filters bot's own messages
+                    IsDirectMessage: isDm,
+                    ContainsBotMention: containsMention,
+                    Text: post.Text ?? string.Empty,
+                    ReceivedAt: receivedAt,
+                    Attachments: attachments);
+
                 await handler(gatewayMessage);
             }
             catch (Exception ex)
@@ -133,6 +131,34 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
     private void OnLogMessage(object? sender, LogEventArgs e)
     {
         _logger.LogDebug("[Mattermost.NET] {Message}", e.Message);
+    }
+
+    private async Task<IReadOnlyList<MattermostFileReference>> ResolveFileReferencesAsync(
+        IReadOnlyList<string> fileIds, string serverUrl)
+    {
+        var tasks = fileIds.Select(async fileId =>
+        {
+            try
+            {
+                var details = await _client.GetFileDetailsAsync(fileId);
+                return new MattermostFileReference(
+                    Name: details.Name ?? fileId,
+                    MimeType: details.MimeType ?? "application/octet-stream",
+                    Size: details.Size,
+                    Url: $"{serverUrl}/api/v4/files/{fileId}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed to resolve file details for {FileId}; using fallback metadata", fileId);
+                return new MattermostFileReference(
+                    Name: fileId,
+                    MimeType: "application/octet-stream",
+                    Size: 0,
+                    Url: $"{serverUrl}/api/v4/files/{fileId}");
+            }
+        });
+
+        return await Task.WhenAll(tasks);
     }
 
     public async Task HandleActionCallbackAsync(MattermostGatewayInteraction interaction)

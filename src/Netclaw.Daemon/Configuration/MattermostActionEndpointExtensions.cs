@@ -67,10 +67,36 @@ public static class MattermostActionEndpointExtensions
                 requesterSenderId = null;
 
             payload.Context.TryGetValue("root_post_id", out var rootPostId);
+            if (string.IsNullOrEmpty(rootPostId))
+                return Results.BadRequest("Missing required context field: root_post_id.");
+
+            // Verify HMAC signature to prove we created these buttons
+            var signingKey = sp.GetService<MattermostCallbackSigningKey>();
+            if (signingKey?.Key is { } key)
+            {
+                payload.Context.TryGetValue("signature", out var signature);
+                if (string.IsNullOrEmpty(signature)
+                    || !MattermostCallbackSigner.Verify(key, callId, selectedKey, requesterSenderId ?? string.Empty, rootPostId, signature))
+                {
+                    logger.LogWarning("Rejected Mattermost action callback with invalid HMAC signature for call {CallId}", callId);
+                    return Results.Unauthorized();
+                }
+            }
+
+            // ACL: verify the clicking user is allowed to interact
+            var options = sp.GetRequiredService<MattermostChannelOptions>();
+            if (!MattermostAclPolicy.IsAllowedUser(new MattermostUserId(payload.UserId), options))
+            {
+                logger.LogWarning("Rejected Mattermost action callback from non-allowed user {UserId}", payload.UserId);
+                return Results.Json(new ActionCallbackResponse
+                {
+                    EphemeralText = "You are not authorized to respond to tool approval prompts."
+                }, JsonOptions);
+            }
 
             var interaction = new MattermostGatewayInteraction(
                 ChannelId: new MattermostChannelId(payload.ChannelId),
-                RootPostId: new MattermostRootPostId(rootPostId ?? string.Empty),
+                RootPostId: new MattermostRootPostId(rootPostId),
                 CallId: callId,
                 SelectedKey: selectedKey,
                 SenderId: new MattermostUserId(payload.UserId),
@@ -125,3 +151,4 @@ public static class MattermostActionEndpointExtensions
     private static bool IsValidApprovalKey(string key)
         => key is "approve_once" or "approve_session" or "approve_always" or "deny";
 }
+

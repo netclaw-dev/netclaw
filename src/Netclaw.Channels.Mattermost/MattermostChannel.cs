@@ -32,6 +32,7 @@ public sealed class MattermostChannel : IChannel
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
     private readonly NetclawPaths _paths;
+    private readonly byte[]? _callbackSigningKey;
 
     private IActorRef? _gateway;
 
@@ -59,7 +60,8 @@ public sealed class MattermostChannel : IChannel
         ILogger<MattermostChannel> logger,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
-        NetclawPaths paths)
+        NetclawPaths paths,
+        MattermostCallbackSigningKey? callbackSigningKey = null)
     {
         _system = system;
         _pipeline = pipeline;
@@ -77,6 +79,7 @@ public sealed class MattermostChannel : IChannel
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
         _paths = paths;
+        _callbackSigningKey = callbackSigningKey?.Key;
     }
 
     public ChannelType ChannelType => ChannelType.Mattermost;
@@ -129,6 +132,8 @@ public sealed class MattermostChannel : IChannel
                     ServerUrl: serverUrl,
                     CallbackUrl: _options.CallbackUrl,
                     BotUserId: _gatewayClient.BotUserId,
+                    BotUsername: _gatewayClient.BotUsername,
+                    CallbackSigningKey: _callbackSigningKey,
                     PromptInjectionDetector: _promptInjectionDetector,
                     ThreadHistoryFetcher: _threadHistoryFetcher,
                     HttpClient: httpClient)),

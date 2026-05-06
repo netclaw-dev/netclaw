@@ -70,7 +70,6 @@
       "properties": {
         "Enabled": { "type": "boolean" },
         "ServerUrl": { "type": "string", "format": "uri", "description": "Base URL of the Mattermost server (e.g. https://mm.example.com)." },
-        "BotToken": { "type": ["string", "null"] },
         "CallbackUrl": { "type": ["string", "null"], "format": "uri", "description": "URL that Mattermost can reach for interactive button callbacks (e.g. http://netclaw-host:5199/api/mattermost/actions)." },
         "DefaultChannelId": { "type": ["string", "null"] },
         "AllowDirectMessages": { "type": "boolean" },

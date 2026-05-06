@@ -45,6 +45,14 @@ public static class MattermostChannelRegistrationExtensions
             client.DefaultRequestHeaders.Authorization =
                 new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", mattermostOptions.BotToken!.Value);
         });
+        // Ephemeral signing key for HMAC verification of button callbacks.
+        // Regenerated each daemon start — stale buttons from prior runs are rejected.
+        if (!string.IsNullOrEmpty(mattermostOptions.CallbackUrl))
+        {
+            services.AddSingleton(new MattermostCallbackSigningKey(
+                MattermostCallbackSigner.GenerateKey()));
+        }
+
         services.AddSingleton<IMattermostGatewayClient, MattermostNetGatewayClient>();
         services.AddSingleton<IMattermostReplyClient>(sp =>
         {

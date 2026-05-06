@@ -13,7 +13,8 @@ internal static class MattermostApprovalPromptBuilder
     public static (string Text, IReadOnlyList<MattermostAttachment> Attachments) BuildButtonPrompt(
         ToolInteractionRequest request,
         string callbackUrl,
-        string rootPostId)
+        string rootPostId,
+        byte[]? signingKey = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine(":lock: **Tool approval required**");
@@ -21,19 +22,31 @@ internal static class MattermostApprovalPromptBuilder
         sb.AppendLine();
         sb.Append("You can also reply with `A`, `B`, `C`, or `D` in this thread.");
 
+        var requesterSenderId = request.RequesterSenderId ?? string.Empty;
         var actions = request.Options
-            .Select(option => new MattermostAttachmentAction(
-                Id: $"tool_approval_{option.Key}",
-                Name: option.Label,
-                IntegrationUrl: callbackUrl,
-                Context: new Dictionary<string, string>
+            .Select(option =>
+            {
+                var context = new Dictionary<string, string>
                 {
                     ["call_id"] = request.CallId,
                     ["selected_key"] = option.Key,
-                    ["requester_sender_id"] = request.RequesterSenderId ?? string.Empty,
+                    ["requester_sender_id"] = requesterSenderId,
                     ["root_post_id"] = rootPostId
-                },
-                Style: GetButtonStyle(option.Key)))
+                };
+
+                if (signingKey is not null)
+                {
+                    context["signature"] = MattermostCallbackSigner.Sign(
+                        signingKey, request.CallId, option.Key, requesterSenderId, rootPostId);
+                }
+
+                return new MattermostAttachmentAction(
+                    Id: $"tool_approval_{option.Key}",
+                    Name: option.Label,
+                    IntegrationUrl: callbackUrl,
+                    Context: context,
+                    Style: GetButtonStyle(option.Key));
+            })
             .ToList();
 
         var attachment = new MattermostAttachment(

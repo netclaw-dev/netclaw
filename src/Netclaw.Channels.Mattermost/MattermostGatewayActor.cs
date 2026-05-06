@@ -155,8 +155,10 @@ public sealed record MattermostGatewayDependencies(
     string? ServerUrl = null,
     string? CallbackUrl = null,
     MattermostUserId? BotUserId = null,
+    string? BotUsername = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
     IThreadHistoryFetcher? ThreadHistoryFetcher = null,
+    byte[]? CallbackSigningKey = null,
     HttpClient? HttpClient = null,
     Func<MattermostChannelId, MattermostGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, MattermostChannelId, MattermostRootPostId, MattermostGatewayDependencies, Props>? SessionPropsFactory = null);

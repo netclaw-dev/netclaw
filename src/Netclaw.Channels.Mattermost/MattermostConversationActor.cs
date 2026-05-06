@@ -31,7 +31,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
     {
         _channelId = channelId;
         _dependencies = dependencies;
-        _botMentionTag = dependencies.BotUserId is { } botId ? $"@{botId.Value}" : null;
+        _botMentionTag = !string.IsNullOrEmpty(dependencies.BotUsername) ? $"@{dependencies.BotUsername}" : null;
         _log = Context.GetLogger()
             .WithContext("Adapter", "mattermost")
             .WithContext("MattermostChannelId", _channelId.Value);
@@ -189,6 +189,16 @@ internal sealed class MattermostConversationActor : ReceiveActor
 
     private void HandleGatewayInteraction(MattermostGatewayInteraction interaction)
     {
+        // ACL: verify the clicking user is allowed to interact
+        if (!MattermostAclPolicy.IsAllowedUser(interaction.SenderId, _dependencies.Options))
+        {
+            _log.Info(
+                "mattermost_interaction_denied sender={0} reason=user_not_allowed",
+                interaction.SenderId.Value);
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordEventDropped("interaction_user_not_allowed");
+            return;
+        }
+
         var actorName = BuildActorName(_channelId, interaction.RootPostId);
         var sessionBinding = Context.Child(actorName);
         if (sessionBinding.IsNobody())

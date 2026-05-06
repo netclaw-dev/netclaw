@@ -230,6 +230,100 @@ public sealed class MattermostApprovalPromptBuilderTests
         Assert.Null(attachment.Actions);
     }
 
+    [Fact]
+    public void BuildButtonPrompt_with_signing_key_includes_signature()
+    {
+        var request = CreateStandardRequest();
+        var signingKey = MattermostCallbackSigner.GenerateKey();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1", signingKey);
+
+        foreach (var action in attachments[0].Actions!)
+        {
+            Assert.True(action.Context.ContainsKey("signature"), $"Button '{action.Id}' missing signature");
+            Assert.NotEmpty(action.Context["signature"]);
+        }
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_without_signing_key_omits_signature()
+    {
+        var request = CreateStandardRequest();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1");
+
+        foreach (var action in attachments[0].Actions!)
+        {
+            Assert.False(action.Context.ContainsKey("signature"), $"Button '{action.Id}' should not have signature");
+        }
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_signatures_are_verifiable()
+    {
+        var request = CreateStandardRequest();
+        var signingKey = MattermostCallbackSigner.GenerateKey();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1", signingKey);
+
+        var approveOnce = attachments[0].Actions![0];
+        var verified = MattermostCallbackSigner.Verify(
+            signingKey,
+            approveOnce.Context["call_id"],
+            approveOnce.Context["selected_key"],
+            approveOnce.Context["requester_sender_id"],
+            approveOnce.Context["root_post_id"],
+            approveOnce.Context["signature"]);
+
+        Assert.True(verified);
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_signature_rejects_tampered_selected_key()
+    {
+        var request = CreateStandardRequest();
+        var signingKey = MattermostCallbackSigner.GenerateKey();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1", signingKey);
+
+        var approveOnce = attachments[0].Actions![0];
+        var verified = MattermostCallbackSigner.Verify(
+            signingKey,
+            approveOnce.Context["call_id"],
+            "approve_always", // tampered: was approve_once
+            approveOnce.Context["requester_sender_id"],
+            approveOnce.Context["root_post_id"],
+            approveOnce.Context["signature"]);
+
+        Assert.False(verified);
+    }
+
+    [Fact]
+    public void BuildButtonPrompt_signature_rejects_wrong_key()
+    {
+        var request = CreateStandardRequest();
+        var signingKey = MattermostCallbackSigner.GenerateKey();
+        var wrongKey = MattermostCallbackSigner.GenerateKey();
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "http://localhost/api/mattermost/actions", "root-post-1", signingKey);
+
+        var approveOnce = attachments[0].Actions![0];
+        var verified = MattermostCallbackSigner.Verify(
+            wrongKey,
+            approveOnce.Context["call_id"],
+            approveOnce.Context["selected_key"],
+            approveOnce.Context["requester_sender_id"],
+            approveOnce.Context["root_post_id"],
+            approveOnce.Context["signature"]);
+
+        Assert.False(verified);
+    }
+
     private static ToolInteractionRequest CreateStandardRequest()
         => new()
         {

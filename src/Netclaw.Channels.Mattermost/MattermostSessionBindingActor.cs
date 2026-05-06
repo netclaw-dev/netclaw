@@ -37,6 +37,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private const string BackfillDetectorWarning =
         ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
 
+    private const int MaxMattermostPostLength = 16_000;
+
     private readonly MattermostGatewayDependencies _dependencies;
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly SessionPipelineHandle _handle;
@@ -699,7 +701,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         string callbackUrl)
     {
         var (promptText, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, callbackUrl, _rootPostId.Value);
+            request, callbackUrl, _rootPostId.Value, _dependencies.CallbackSigningKey);
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
@@ -741,20 +743,25 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task SafeReplyAsync(string text)
     {
-        var startedAt = _dependencies.TimeProvider.GetTimestamp();
-        try
+        var chunks = ChunkMessage(text);
+        foreach (var chunk in chunks)
         {
-            var postMessage = BuildPostMessage(text);
-            await _dependencies.ReplyClient.PostReplyAsync(postMessage);
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
-        }
-        catch (Exception ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
+            var startedAt = _dependencies.TimeProvider.GetTimestamp();
+            try
+            {
+                var postMessage = BuildPostMessage(chunk);
+                await _dependencies.ReplyClient.PostReplyAsync(postMessage);
+                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+                ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
+            }
+            catch (Exception ex)
+            {
+                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+                _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value);
+                ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
+                await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
+                return;
+            }
         }
     }
 
@@ -1080,6 +1087,33 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         public sealed record Accepted(string Line, DataContent? Inline) : AttachmentIngestResult;
 
         public sealed record Rejected(string UserFacingReason) : AttachmentIngestResult;
+    }
+
+    internal static List<string> ChunkMessage(string text)
+    {
+        if (text.Length <= MaxMattermostPostLength)
+            return [text];
+
+        var chunks = new List<string>();
+        var remaining = text.AsSpan();
+        while (remaining.Length > 0)
+        {
+            if (remaining.Length <= MaxMattermostPostLength)
+            {
+                chunks.Add(remaining.ToString());
+                break;
+            }
+
+            var splitAt = MaxMattermostPostLength;
+            var newlineIdx = remaining[..splitAt].LastIndexOf('\n');
+            if (newlineIdx > 0)
+                splitAt = newlineIdx + 1;
+
+            chunks.Add(remaining[..splitAt].ToString());
+            remaining = remaining[splitAt..];
+        }
+
+        return chunks;
     }
 
     private void AdvanceCursor(string candidatePostId)

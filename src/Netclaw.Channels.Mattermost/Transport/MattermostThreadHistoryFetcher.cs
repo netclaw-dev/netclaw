@@ -496,7 +496,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             if (!HasUsableContent(post))
                 continue;
 
-            var attachments = BuildFileReferences(post, normalizedServerUrl);
+            var attachments = await ResolveFileReferencesAsync(client, post.FileIdentifiers, normalizedServerUrl, logger);
             var timestamp = DateTimeOffset.FromUnixTimeMilliseconds(post.CreatedAt);
 
             results.Add(new HistoricalMessage(
@@ -511,18 +511,35 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         return results;
     }
 
-    private static IReadOnlyList<MattermostFileReference> BuildFileReferences(Post post, string serverUrl)
+    private static async Task<IReadOnlyList<MattermostFileReference>> ResolveFileReferencesAsync(
+        MattermostClient client, IList<string> fileIds, string serverUrl, ILogger logger)
     {
-        if (post.FileIdentifiers.Count == 0)
+        if (fileIds.Count == 0)
             return [];
 
-        return post.FileIdentifiers
-            .Select(fileId => new MattermostFileReference(
-                Name: fileId,
-                MimeType: "application/octet-stream",
-                Size: 0,
-                Url: $"{serverUrl}/api/v4/files/{fileId}"))
-            .ToArray();
+        var tasks = fileIds.Select(async fileId =>
+        {
+            try
+            {
+                var details = await client.GetFileDetailsAsync(fileId);
+                return new MattermostFileReference(
+                    Name: details.Name ?? fileId,
+                    MimeType: details.MimeType ?? "application/octet-stream",
+                    Size: details.Size,
+                    Url: $"{serverUrl}/api/v4/files/{fileId}");
+            }
+            catch (Exception ex)
+            {
+                logger.LogDebug(ex, "Failed to resolve file details for {FileId}; using fallback metadata", fileId);
+                return new MattermostFileReference(
+                    Name: fileId,
+                    MimeType: "application/octet-stream",
+                    Size: 0,
+                    Url: $"{serverUrl}/api/v4/files/{fileId}");
+            }
+        });
+
+        return await Task.WhenAll(tasks);
     }
 
     private static async Task<(string FilePath, long BytesWritten)?> DownloadFileViaSdkAsync(
