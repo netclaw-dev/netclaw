@@ -85,9 +85,9 @@ jobs:
           # without secrets. The endpoint is fake (:11434 on loopback) —
           # the daemon doesn't actually call it during startup or health
           # checks, so unreachable is fine.
+          # Bind loopback (Local mode default) — the health probe runs
+          # inside the container via docker exec, so no port mapping needed.
           docker run -d --name netclaw-validate-ok \
-            -p 5399:5199 \
-            -e NETCLAW_Daemon__Host=0.0.0.0 \
             -e NETCLAW_Daemon__Port=5199 \
             -e NETCLAW_Providers__validate__Type=ollama \
             -e NETCLAW_Providers__validate__Endpoint=http://127.0.0.1:11434 \
@@ -95,9 +95,9 @@ jobs:
             -e NETCLAW_Models__Main__ModelId=qwen2:0.5b \
             "netclawd-pr:${{ steps.tag.outputs.tag }}" >/dev/null
 
-          # Poll /api/health/ready for up to 60s.
+          # Poll /api/health/ready for up to 60s from inside the container.
           for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:5399/api/health/ready >/dev/null 2>&1; then
+            if docker exec netclaw-validate-ok curl -fsS http://127.0.0.1:5199/api/health/ready >/dev/null 2>&1; then
               echo "✓ Daemon reported healthy after ${i}s"
               docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
               exit 0

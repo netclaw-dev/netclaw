@@ -124,6 +124,9 @@ public static class DaemonExposureValidator
                 IsTrustedProxyIssue: true));
         }
 
+        if (GetLoopbackViolationIssue(config) is { } loopbackIssue)
+            issues.Add(loopbackIssue);
+
         if (!config.ExposureMode.RequiresRemoteAuthentication())
             return issues;
 
@@ -244,6 +247,16 @@ public static class DaemonExposureValidator
 
         error = null;
         return false;
+    }
+
+    public static DaemonExposureValidationIssue? GetLoopbackViolationIssue(DaemonConfig config)
+    {
+        if (config.ExposureMode != ExposureMode.Local || IsLoopbackHost(config.Host))
+            return null;
+
+        return new DaemonExposureValidationIssue(
+            $"Invalid local topology: Daemon.Host '{config.Host}' is not a loopback address. ExposureMode 'local' requires binding to 127.0.0.1, ::1, or localhost.",
+            "Either bind to a loopback address, or set Daemon.ExposureMode to the appropriate tunnel or reverse-proxy mode for non-loopback traffic.");
     }
 
     public static DaemonExposureValidationIssue? GetMissingRequiredProcessIssue(

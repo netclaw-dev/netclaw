@@ -83,7 +83,19 @@ internal sealed class ExposureModeValidationService : IHostedService
         }
 
         if (_config.ExposureMode == ExposureMode.Local)
+        {
+            if (DaemonExposureValidator.GetLoopbackViolationIssue(_config) is { } loopbackIssue)
+            {
+                _logger.LogCritical(
+                    "Daemon startup aborted: {Message} Remediation: {Remediation}",
+                    loopbackIssue.Message,
+                    loopbackIssue.Remediation);
+
+                throw new InvalidOperationException($"{loopbackIssue.Message} {loopbackIssue.Remediation}");
+            }
+
             return;
+        }
 
         if (DaemonExposureValidator.GetMissingRequiredProcessIssue(_config, _processDetector) is { } processIssue)
         {

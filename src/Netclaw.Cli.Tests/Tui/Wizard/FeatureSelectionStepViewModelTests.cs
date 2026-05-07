@@ -146,10 +146,35 @@ public sealed class FeatureSelectionStepViewModelTests : WizardStepTestBase
         Assert.False(Context.FeatureSelections.WebhooksEnabled);
     }
 
-    private static void AssertSectionEnabled(Dictionary<string, object> config, string sectionKey, bool expected)
+    [Fact]
+    public void ContributeConfig_SkippedStep_DoesNotSetFeatureSelections()
     {
-        Assert.True(config.ContainsKey(sectionKey), $"Config should contain '{sectionKey}' section");
-        var section = (Dictionary<string, object>)config[sectionKey];
-        Assert.Equal(expected, section["Enabled"]);
+        using var step = new FeatureSelectionStepViewModel();
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.Null(builder.FeatureSelections);
     }
+
+    [Fact]
+    public void ContributeConfig_SkippedStep_ConfigDictionary_OmitsFeatureFlags()
+    {
+        using var step = new FeatureSelectionStepViewModel();
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+        var config = builder.BuildConfigDictionary();
+
+        // Feature sections should NOT have an Enabled flag injected by the skipped step.
+        // Some sections (e.g., SkillSync) exist unconditionally with other keys — the key
+        // assertion is that no Enabled:false was written.
+        AssertNoEnabledKey(config, "Memory");
+        AssertNoEnabledKey(config, "Search");
+        AssertNoEnabledKey(config, "SkillSync");
+        AssertNoEnabledKey(config, "Scheduling");
+        AssertNoEnabledKey(config, "SubAgents");
+        AssertNoEnabledKey(config, "Webhooks");
+    }
+
 }

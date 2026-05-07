@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Netclaw.Tests.Utilities;
@@ -29,7 +30,7 @@ public sealed class DailyStatsActorTests : IDisposable
     [Fact]
     public async Task QuerySkillUsageStats_returns_groupable_rows_for_each_method()
     {
-        var time = new AdjustableTimeProvider(new DateTimeOffset(2026, 4, 13, 12, 0, 0, TimeSpan.Zero));
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 4, 13, 12, 0, 0, TimeSpan.Zero));
         var actor = _system.ActorOf(Props.Create(() => new DailyStatsActor(
             _paths,
             time,
@@ -69,10 +70,5 @@ public sealed class DailyStatsActorTests : IDisposable
         _dir.Dispose();
     }
 
-    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        private DateTimeOffset _utcNow = utcNow;
 
-        public override DateTimeOffset GetUtcNow() => _utcNow;
-    }
 }

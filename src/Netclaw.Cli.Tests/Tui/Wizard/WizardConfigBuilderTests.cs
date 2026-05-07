@@ -6,7 +6,6 @@
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Configuration;
-using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
@@ -14,23 +13,13 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 /// <summary>
 /// Tests for <see cref="WizardConfigBuilder"/> config dictionary assembly.
 /// </summary>
-public sealed class WizardConfigBuilderTests : IDisposable
+public sealed class WizardConfigBuilderTests : WizardStepTestBase
 {
-    private readonly DisposableTempDir _dir = new();
-    private readonly NetclawPaths _paths;
-
-    public WizardConfigBuilderTests()
-    {
-        _paths = new NetclawPaths(_dir.Path);
-        _paths.EnsureDirectoriesExist();
-    }
-
-    public void Dispose() => _dir.Dispose();
 
     [Fact]
     public void BuildConfigDictionary_AlwaysIncludesConfigVersion()
     {
-        var builder = new WizardConfigBuilder(_paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
         var config = builder.BuildConfigDictionary();
 
         Assert.Equal(1, config["configVersion"]);
@@ -39,7 +28,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesProviderSection()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Provider = new ProviderConfigSection
             {
@@ -61,7 +50,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_OmitsAuthMethod_WhenNone()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Provider = new ProviderConfigSection
             {
@@ -80,7 +69,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesModelsSection()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Model = new ModelConfigSection
             {
@@ -100,7 +89,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesSlackSection_WhenEnabled()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Slack = new SlackConfigSection
             {
@@ -126,7 +115,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_OmitsSlack_WhenNotEnabled()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Slack = new SlackConfigSection { Enabled = false }
         };
@@ -139,7 +128,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesDiscordSection_WhenEnabled()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Discord = new DiscordConfigSection
             {
@@ -165,7 +154,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_OmitsDiscord_WhenNotEnabled()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Discord = new DiscordConfigSection { Enabled = false }
         };
@@ -178,7 +167,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesSecuritySection()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Security = new SecurityConfigSection
             {
@@ -198,7 +187,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_OmitsSearch_WhenDuckDuckGo()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Search = new SearchConfigSection { Backend = SearchBackend.DuckDuckGo }
         };
@@ -211,7 +200,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesSearch_WhenBrave()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Search = new SearchConfigSection { Backend = SearchBackend.Brave }
         };
@@ -225,7 +214,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesNotifications_WhenWebhookSet()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Notifications = new NotificationsConfigSection
             {
@@ -241,7 +230,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_OmitsNotifications_WhenNoWebhook()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             Notifications = new NotificationsConfigSection { WebhookUrl = null }
         };
@@ -254,7 +243,7 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_IncludesExternalSkills_WhenSet()
     {
-        var builder = new WizardConfigBuilder(_paths)
+        var builder = new WizardConfigBuilder(Context.Paths)
         {
             ExternalSkillSources =
             [
@@ -298,10 +287,28 @@ public sealed class WizardConfigBuilderTests : IDisposable
     [Fact]
     public void BuildConfigDictionary_OmitsExternalSkills_WhenNull()
     {
-        var builder = new WizardConfigBuilder(_paths);
+        var builder = new WizardConfigBuilder(Context.Paths);
 
         var config = builder.BuildConfigDictionary();
 
         Assert.False(config.ContainsKey("ExternalSkills"));
     }
+
+    [Fact]
+    public void BuildConfigDictionary_OmitsFeatureFlags_WhenFeatureSelectionsNull()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths);
+
+        var config = builder.BuildConfigDictionary();
+
+        // No Enabled flag should be injected into any feature section.
+        // Some sections (e.g., SkillSync) exist unconditionally with other keys.
+        AssertNoEnabledKey(config, "Memory");
+        AssertNoEnabledKey(config, "Search");
+        AssertNoEnabledKey(config, "SkillSync");
+        AssertNoEnabledKey(config, "Scheduling");
+        AssertNoEnabledKey(config, "SubAgents");
+        AssertNoEnabledKey(config, "Webhooks");
+    }
+
 }

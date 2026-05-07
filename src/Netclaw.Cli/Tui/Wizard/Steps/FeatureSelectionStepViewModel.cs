@@ -101,6 +101,9 @@ public sealed class FeatureSelectionStepViewModel : IWizardStepViewModel
 
     public void ContributeConfig(WizardConfigBuilder builder)
     {
+        if (_context is null)
+            return;
+
         builder.FeatureSelections = new FeatureSelectionsConfigSection
         {
             MemoryEnabled = _enabledFlags[0],

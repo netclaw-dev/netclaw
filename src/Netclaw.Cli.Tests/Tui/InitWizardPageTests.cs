@@ -311,6 +311,100 @@ public sealed class InitWizardPageTests : IDisposable
             "Expected DM to be enabled after selecting 'Yes' on the DM sub-step");
     }
 
+    // ── Config integrity: wizard choices must match written config ──────────
+
+    /// <summary>
+    /// Crash barrier: selecting Personal posture via keyboard, then writing config,
+    /// must not produce Enabled=false for any feature subsystem. Reproduces #905.
+    /// </summary>
+    [Fact]
+    public async Task PersonalPosture_WrittenConfig_DoesNotDisableFeatures()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        // Skip provider step programmatically (too many sub-steps to drive via keyboard)
+        vm.Orchestrator.GoNext(); // provider → security-posture
+
+        // Select Personal (index 0) via keyboard — this is the critical decision
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Ctrl+Q to exit after posture selection routes us past feature-selection
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        // Verify posture was selected correctly
+        Assert.Equal(DeploymentPosture.Personal, vm.Context.SelectedPosture);
+
+        // Now write config through the orchestrator (same path the health check step uses)
+        vm.Orchestrator.WriteConfig();
+
+        // Read back the written config and verify no features were silently disabled
+        var configText = File.ReadAllText(_paths.NetclawConfigPath);
+        var config = System.Text.Json.JsonSerializer.Deserialize<
+            System.Text.Json.JsonElement>(configText);
+
+        // Webhooks is omitted: Personal posture skips FeatureSelection, so only
+        // ExposureModeStep can write Webhooks — and it only does so when enabled.
+        string[] featureSections = ["Memory", "Search", "SkillSync", "Scheduling", "SubAgents"];
+        foreach (var section in featureSections)
+        {
+            if (config.TryGetProperty(section, out var sectionObj)
+                && sectionObj.TryGetProperty("Enabled", out var enabled))
+            {
+                Assert.True(enabled.GetBoolean(),
+                    $"Section '{section}' has Enabled=false in written config — " +
+                    $"Personal posture must not disable features. Full config:\n{configText}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Crash barrier: selecting Team posture and advancing through feature selection
+    /// (all defaults = all enabled) must produce Enabled=true for every feature.
+    /// </summary>
+    [Fact]
+    public async Task TeamPosture_DefaultFeatures_AllEnabledInWrittenConfig()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        vm.Orchestrator.GoNext(); // provider → security-posture
+
+        // Select Team (index 1) via keyboard: DownArrow then Enter
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        // Now on feature-selection step (Team posture shows it).
+        // Team defaults all features ON. Press Enter to accept defaults.
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        input.EnqueueKey(ConsoleKey.Q, control: true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(DeploymentPosture.Team, vm.Context.SelectedPosture);
+
+        vm.Orchestrator.WriteConfig();
+
+        var configText = File.ReadAllText(_paths.NetclawConfigPath);
+        var config = System.Text.Json.JsonSerializer.Deserialize<
+            System.Text.Json.JsonElement>(configText);
+
+        string[] featureSections = ["Memory", "Search", "SkillSync", "Scheduling", "SubAgents", "Webhooks"];
+        foreach (var section in featureSections)
+        {
+            Assert.True(config.TryGetProperty(section, out var sectionObj),
+                $"Section '{section}' missing from config");
+            Assert.True(sectionObj.TryGetProperty("Enabled", out var enabled),
+                $"Section '{section}' missing 'Enabled' key");
+            Assert.True(enabled.GetBoolean(),
+                $"Section '{section}' has Enabled=false — Team defaults should be all-on. " +
+                $"Full config:\n{configText}");
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm)

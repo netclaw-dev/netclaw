@@ -282,6 +282,40 @@ public sealed class WizardOrchestratorTests : WizardStepTestBase
     }
 
     [Fact]
+    public void WriteConfig_OnlyCallsContributeConfig_OnActiveSteps()
+    {
+        var steps = CreateSteps("a", "skipped", "c");
+        ((FakeStep)steps[1]).Applicable = false;
+
+        using var orchestrator = new WizardOrchestrator(steps, Context);
+
+        // Advance to end so all active steps are entered
+        orchestrator.GoNext(); // a → c (skipping "skipped")
+
+        orchestrator.WriteConfig();
+
+        Assert.True(((FakeStep)steps[0]).ContributeConfigCalled, "Active step 'a' should have ContributeConfig called");
+        Assert.False(((FakeStep)steps[1]).ContributeConfigCalled, "Non-applicable step 'skipped' should NOT have ContributeConfig called");
+        Assert.True(((FakeStep)steps[2]).ContributeConfigCalled, "Active step 'c' should have ContributeConfig called");
+    }
+
+    [Fact]
+    public void WriteConfig_OnlyCallsContributeSecrets_OnActiveSteps()
+    {
+        var steps = CreateSteps("a", "skipped", "c");
+        ((FakeStep)steps[1]).Applicable = false;
+
+        using var orchestrator = new WizardOrchestrator(steps, Context);
+        orchestrator.GoNext();
+
+        orchestrator.WriteConfig();
+
+        Assert.True(((FakeStep)steps[0]).ContributeSecretsCalled);
+        Assert.False(((FakeStep)steps[1]).ContributeSecretsCalled);
+        Assert.True(((FakeStep)steps[2]).ContributeSecretsCalled);
+    }
+
+    [Fact]
     public void StatusMessage_ClearedOnNavigation()
     {
         var steps = CreateSteps("a", "b");
@@ -361,8 +395,11 @@ public sealed class WizardOrchestratorTests : WizardStepTestBase
             LeftCalled = true;
         }
 
-        public void ContributeConfig(WizardConfigBuilder builder) { }
-        public void ContributeSecrets(WizardSecretsBuilder builder) { }
+        public bool ContributeConfigCalled { get; private set; }
+        public bool ContributeSecretsCalled { get; private set; }
+
+        public void ContributeConfig(WizardConfigBuilder builder) { ContributeConfigCalled = true; }
+        public void ContributeSecrets(WizardSecretsBuilder builder) { ContributeSecretsCalled = true; }
         public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct) => Task.CompletedTask;
 
         public void Dispose()

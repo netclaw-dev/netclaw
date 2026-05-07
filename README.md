@@ -86,6 +86,8 @@ docker run -d --name netclawd \
   -p 5199:5199 \
   -v ~/.netclaw:/home/netclaw/.netclaw \
   -e NETCLAW_Daemon__Host=0.0.0.0 \
+  -e NETCLAW_Daemon__ExposureMode=reverse-proxy \
+  -e NETCLAW_Daemon__TrustedProxies__0=172.16.0.0/12 \
   ghcr.io/netclaw-dev/netclaw:latest
 ```
 

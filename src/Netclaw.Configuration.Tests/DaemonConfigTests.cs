@@ -175,6 +175,40 @@ public sealed class DaemonConfigTests
         Assert.Equal(["10.0.0.5", "10.0.0.0/24"], result.TrustedProxies);
     }
 
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("10.0.0.5")]
+    [InlineData("192.168.1.100")]
+    public void Validator_rejects_non_loopback_host_in_local_mode(string host)
+    {
+        var issues = DaemonExposureValidator.Validate(
+            new DaemonConfig
+            {
+                ExposureMode = ExposureMode.Local,
+                Host = host
+            },
+            hasRemoteAuthenticationPath: false);
+
+        Assert.Contains(issues, issue => issue.Message.Contains("Invalid local topology", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("::1")]
+    [InlineData("localhost")]
+    public void Validator_accepts_loopback_host_in_local_mode(string host)
+    {
+        var issues = DaemonExposureValidator.Validate(
+            new DaemonConfig
+            {
+                ExposureMode = ExposureMode.Local,
+                Host = host
+            },
+            hasRemoteAuthenticationPath: false);
+
+        Assert.Empty(issues);
+    }
+
     [Fact]
     public void Validator_rejects_loopback_reverse_proxy_topology()
     {

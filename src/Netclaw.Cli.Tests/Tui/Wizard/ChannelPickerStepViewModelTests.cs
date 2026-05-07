@@ -237,6 +237,25 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void ContributeConfig_DisabledAdapters_DoNotPolluteConfig()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        picker.OnEnter(Context, NavigationDirection.Forward);
+
+        // Neither Slack nor Discord enabled — ContributeConfig delegates to both adapters
+        picker.OnLeave();
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        picker.ContributeConfig(builder);
+        var config = builder.BuildConfigDictionary();
+
+        Assert.Null(builder.Slack);
+        Assert.Null(builder.Discord);
+        Assert.False(config.ContainsKey("Slack"));
+        Assert.False(config.ContainsKey("Discord"));
+    }
+
+    [Fact]
     public void GetHelpText_PickerMode_ReturnsPickerHelp()
     {
         using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);

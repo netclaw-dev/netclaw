@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Doctor;
 using Netclaw.Configuration;
 using Xunit;
@@ -23,7 +24,7 @@ public sealed class DaemonCrashDoctorCheckTests
             "Netclaw daemon-unhandled crash at 2026-04-14T18:29:00.0000000+00:00\n\nSystem.InvalidOperationException: boom",
             TestContext.Current.CancellationToken);
 
-        var check = new DaemonCrashDoctorCheck(paths, new FixedTimeProvider(now));
+        var check = new DaemonCrashDoctorCheck(paths, new FakeTimeProvider(now));
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
@@ -42,7 +43,7 @@ public sealed class DaemonCrashDoctorCheckTests
             "Netclaw CLI crash at 2026-04-14T18:29:00.0000000+00:00\n\nSystem.InvalidOperationException: cli failure",
             TestContext.Current.CancellationToken);
 
-        var check = new DaemonCrashDoctorCheck(paths, new FixedTimeProvider(now));
+        var check = new DaemonCrashDoctorCheck(paths, new FakeTimeProvider(now));
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
@@ -62,7 +63,7 @@ public sealed class DaemonCrashDoctorCheckTests
 
         File.SetLastWriteTimeUtc(crashPath, new DateTime(2026, 4, 1, 8, 0, 0, DateTimeKind.Utc));
 
-        var check = new DaemonCrashDoctorCheck(paths, new FixedTimeProvider(now));
+        var check = new DaemonCrashDoctorCheck(paths, new FakeTimeProvider(now));
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
@@ -76,10 +77,4 @@ public sealed class DaemonCrashDoctorCheckTests
         return paths;
     }
 
-    private sealed class FixedTimeProvider(DateTimeOffset now) : TimeProvider
-    {
-        private DateTimeOffset _now = now;
-
-        public override DateTimeOffset GetUtcNow() => _now;
-    }
 }

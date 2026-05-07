@@ -17,13 +17,29 @@ public sealed class ExposureModeValidationServiceTests
     // ── Local mode ───────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task Local_SkipsAllValidation_EvenWhenNoProcessesExist()
+    public async Task Local_LoopbackHost_SkipsAllValidation()
     {
         var config = new DaemonConfig { ExposureMode = ExposureMode.Local };
         var sut = BuildService(config, _ => false); // no processes found
 
         // Must not throw
         await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData("0.0.0.0")]
+    [InlineData("10.0.0.5")]
+    [InlineData("192.168.1.100")]
+    public async Task Local_NonLoopbackHost_Throws(string host)
+    {
+        var config = new DaemonConfig { ExposureMode = ExposureMode.Local, Host = host };
+        var sut = BuildService(config, _ => false);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("Invalid local topology", ex.Message);
+        Assert.Contains(host, ex.Message);
     }
 
     // ── TailscaleServe ───────────────────────────────────────────────────────

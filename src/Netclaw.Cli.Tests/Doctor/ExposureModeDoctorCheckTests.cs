@@ -141,10 +141,10 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
         Assert.Contains("cloudflare-tunnel", result.Message);
     }
 
-    // ── Warning cases ─────────────────────────────────────────────────────────
+    // ── Local + non-loopback error cases ────────────────────────────────────
 
     [Fact]
-    public async Task Local_NonLoopbackHost_Warns()
+    public async Task Local_NonLoopbackHost_IsError()
     {
         WriteConfig("""
             {
@@ -157,14 +157,14 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("0.0.0.0", result.Message);
         Assert.Contains("loopback", result.Message);
         Assert.NotNull(result.Remediation);
     }
 
     [Fact]
-    public async Task Local_WithPublicIp_Warns()
+    public async Task Local_WithPrivateIp_IsError()
     {
         WriteConfig("""
             {
@@ -177,7 +177,7 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("192.168.1.100", result.Message);
     }
 

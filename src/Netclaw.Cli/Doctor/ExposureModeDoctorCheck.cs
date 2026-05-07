@@ -83,15 +83,12 @@ public sealed class ExposureModeDoctorCheck : IDoctorCheck
                 "Each Daemon.TrustedProxies entry must be a literal IP address or CIDR, for example '10.0.0.5' or '10.0.0.0/24'."));
         }
 
-        // Warning: local mode with non-loopback bind address — daemon exposed without tunnel.
-        if (mode == ExposureMode.Local && !DaemonExposureValidator.IsLoopbackHost(host))
+        if (DaemonExposureValidator.GetLoopbackViolationIssue(config) is { } loopbackIssue)
         {
-            return Task.FromResult(DoctorCheckResult.Warning(
+            return Task.FromResult(DoctorCheckResult.Error(
                 CheckName,
-                $"ExposureMode is 'local' but bind address '{host}' is not loopback. " +
-                "The daemon is reachable beyond loopback without tunnel protection.",
-                "Set ExposureMode to a tunnel mode (tailscale-serve, tailscale-funnel, " +
-                "cloudflare-tunnel) or bind to 127.0.0.1 in netclaw.json."));
+                loopbackIssue.Message,
+                loopbackIssue.Remediation));
         }
 
         if (DaemonExposureValidator.GetMissingRequiredProcessIssue(config, _processDetector) is { } processIssue)

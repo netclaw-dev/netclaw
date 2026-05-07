@@ -150,7 +150,7 @@ public sealed class WizardOrchestrator : IDisposable
         var configBuilder = new WizardConfigBuilder(_context.Paths);
         var secretsBuilder = new WizardSecretsBuilder(_context.Paths);
 
-        foreach (var step in _allSteps)
+        foreach (var step in _activeSteps)
         {
             step.ContributeConfig(configBuilder);
             step.ContributeSecrets(secretsBuilder);
@@ -160,11 +160,11 @@ public sealed class WizardOrchestrator : IDisposable
         secretsBuilder.WriteSecretsFile();
 
         // Write provider credentials (deferred from ContributeSecrets to finalization)
-        var providerStep = _allSteps.OfType<ProviderStepViewModel>().FirstOrDefault();
+        var providerStep = _activeSteps.OfType<ProviderStepViewModel>().FirstOrDefault();
         providerStep?.WriteProviderCredentials(_context.Paths);
 
         // Write identity files and seed built-in agents from the identity step
-        var identityStep = _allSteps.OfType<IdentityStepViewModel>().FirstOrDefault();
+        var identityStep = _activeSteps.OfType<IdentityStepViewModel>().FirstOrDefault();
         if (identityStep is not null)
         {
             identityStep.WriteIdentityFiles(_context.Paths);
@@ -173,7 +173,7 @@ public sealed class WizardOrchestrator : IDisposable
 
         // Write bootstrap paired device for non-Local exposure modes so the daemon
         // can start with at least one paired device (satisfies ExposureModeValidationService).
-        var exposureStep = _allSteps.OfType<ExposureModeStepViewModel>().FirstOrDefault();
+        var exposureStep = _activeSteps.OfType<ExposureModeStepViewModel>().FirstOrDefault();
         exposureStep?.WriteBootstrapDevice(_context.Paths);
     }
 
@@ -182,7 +182,7 @@ public sealed class WizardOrchestrator : IDisposable
     /// </summary>
     public async Task RunHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        foreach (var step in _allSteps)
+        foreach (var step in _activeSteps)
         {
             ct.ThrowIfCancellationRequested();
             await step.ContributeHealthChecksAsync(runner, ct);

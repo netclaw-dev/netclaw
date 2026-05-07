@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Telemetry;
@@ -409,7 +410,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
     public void OnSessionActivated_DoesNotRewriteLastActivity_ForExistingSession()
     {
         var paths = CreatePaths();
-        var fakeTime = new AdjustableTimeProvider(DateTimeOffset.Parse("2026-03-21T10:00:00Z"));
+        var fakeTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-03-21T10:00:00Z"));
         var service = CreateService(paths, timeProvider: fakeTime);
         var sessionId = new SessionId("signalr/test-active-last-activity");
 
@@ -445,15 +446,6 @@ public sealed class SessionCatalogServiceTests : IDisposable
         public void RecordMemoriesRecalled(int count) { }
         public void RecordSkillsLoaded(int count) { }
         public void RecordSkillLoaded(string skillName, SkillLoadMethod method) { }
-    }
-
-    private sealed class AdjustableTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        private DateTimeOffset _utcNow = utcNow;
-
-        public override DateTimeOffset GetUtcNow() => _utcNow;
-
-        public void Advance(TimeSpan by) => _utcNow = _utcNow.Add(by);
     }
 
     private static SqliteConnection OpenConn(NetclawPaths paths)
