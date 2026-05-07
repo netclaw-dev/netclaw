@@ -178,10 +178,15 @@ static async Task RunAsync(string[] args)
                 var models = initConfig.GetSection("Models")
                     .Get<ModelSelection>() ?? new ModelSelection();
 
+                var contextWindow = ContextWindowResolution.ResolveAsync(
+                    models.Main.ContextWindow,
+                    sp.GetRequiredService<DaemonApi>(),
+                    models.Main.ModelId).GetAwaiter().GetResult();
+
                 return new ModelCapabilities
                 {
                     ModelId = models.Main.ModelId,
-                    ContextWindowTokens = models.Main.ContextWindow ?? 32_768,
+                    ContextWindowTokens = contextWindow,
                     CompactionModelId = models.Compaction?.ModelId,
                 };
             });
@@ -1745,25 +1750,15 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
     services.AddSingleton(sessionConfig);
     services.AddSingleton(sp =>
     {
-        var contextWindow = models.Main.ContextWindow;
-        if (contextWindow is null)
-        {
-            var daemon = sp.GetRequiredService<DaemonApi>();
-            var status = daemon.GetStatusAsync().GetAwaiter().GetResult()
-                ?? throw new InvalidOperationException(
-                    "Daemon returned empty status. Cannot resolve effective context window. " +
-                    "Set Models.Main.ContextWindow in netclaw.json or ensure the daemon is healthy.");
-            contextWindow = status.Model?.ContextWindow is > 0 and var daemonCw
-                ? daemonCw
-                : throw new InvalidOperationException(
-                    $"Daemon reported no context window for model '{models.Main.ModelId}'. " +
-                    "Set Models.Main.ContextWindow in netclaw.json.");
-        }
+        var contextWindow = ContextWindowResolution.ResolveAsync(
+            models.Main.ContextWindow,
+            sp.GetRequiredService<DaemonApi>(),
+            models.Main.ModelId).GetAwaiter().GetResult();
 
         return new ModelCapabilities
         {
             ModelId = models.Main.ModelId,
-            ContextWindowTokens = contextWindow.Value,
+            ContextWindowTokens = contextWindow,
             CompactionModelId = models.Compaction?.ModelId,
         };
     });
