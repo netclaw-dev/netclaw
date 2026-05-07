@@ -336,9 +336,11 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 break;
 
             case UsageOutput msg:
-                // Compute context % from ViewModel's SessionConfig (known-good)
-                // rather than msg.ContextWindowTokens which may be default(0)
-                var ctxWindow = ViewModel.ContextWindowTokens;
+                // Prefer the daemon-reported context window (authoritative, auto-detected
+                // from the provider); fall back to the DI-injected value when absent.
+                var ctxWindow = msg.ContextWindowTokens > 0
+                    ? msg.ContextWindowTokens
+                    : ViewModel.ContextWindowTokens;
                 var usagePercent = msg.InputTokens.HasValue && ctxWindow > 0
                     ? (double)msg.InputTokens.Value / ctxWindow
                     : (double?)null;
