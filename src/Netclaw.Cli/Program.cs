@@ -178,10 +178,10 @@ static async Task RunAsync(string[] args)
                 var models = initConfig.GetSection("Models")
                     .Get<ModelSelection>() ?? new ModelSelection();
 
-                var contextWindow = ContextWindowResolution.Resolve(
+                var contextWindow = ContextWindowResolution.ResolveAsync(
                     models.Main.ContextWindow,
                     sp.GetRequiredService<DaemonApi>(),
-                    models.Main.ModelId);
+                    models.Main.ModelId).GetAwaiter().GetResult();
 
                 return new ModelCapabilities
                 {
@@ -1750,10 +1750,10 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
     services.AddSingleton(sessionConfig);
     services.AddSingleton(sp =>
     {
-        var contextWindow = ContextWindowResolution.Resolve(
+        var contextWindow = ContextWindowResolution.ResolveAsync(
             models.Main.ContextWindow,
             sp.GetRequiredService<DaemonApi>(),
-            models.Main.ModelId);
+            models.Main.ModelId).GetAwaiter().GetResult();
 
         return new ModelCapabilities
         {

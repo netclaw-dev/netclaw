@@ -15,12 +15,12 @@ internal static class ContextWindowResolution
     /// Returns the explicit config value when set; otherwise queries the daemon
     /// status endpoint for the auto-detected context window.
     /// </summary>
-    public static int Resolve(int? configuredContextWindow, DaemonApi daemon, string modelId)
+    public static async Task<int> ResolveAsync(int? configuredContextWindow, DaemonApi daemon, string modelId)
     {
         if (configuredContextWindow is > 0)
             return configuredContextWindow.Value;
 
-        var status = daemon.GetStatusAsync().GetAwaiter().GetResult()
+        var status = await daemon.GetStatusAsync()
             ?? throw new InvalidOperationException(
                 "Daemon returned empty status. Cannot resolve effective context window. " +
                 "Set Models.Main.ContextWindow in netclaw.json or ensure the daemon is healthy.");

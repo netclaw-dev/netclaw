@@ -14,38 +14,38 @@ namespace Netclaw.Cli.Tests.Daemon;
 public sealed class ContextWindowResolutionTests
 {
     [Fact]
-    public void ConfiguredValue_ReturnedWithoutDaemonQuery()
+    public async Task ConfiguredValue_ReturnedWithoutDaemonQuery()
     {
         var daemon = CreateDaemonApi(_ => throw new HttpRequestException("should not be called"));
 
-        var result = ContextWindowResolution.Resolve(131_072, daemon, "test-model");
+        var result = await ContextWindowResolution.ResolveAsync(131_072, daemon, "test-model");
 
         Assert.Equal(131_072, result);
     }
 
     [Fact]
-    public void NullConfig_DaemonReturnsContextWindow_ReturnsDaemonValue()
+    public async Task NullConfig_DaemonReturnsContextWindow_ReturnsDaemonValue()
     {
         var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(262_144)));
 
-        var result = ContextWindowResolution.Resolve(null, daemon, "qwen3:30b");
+        var result = await ContextWindowResolution.ResolveAsync(null, daemon, "qwen3:30b");
 
         Assert.Equal(262_144, result);
     }
 
     [Fact]
-    public void NullConfig_DaemonReturnsZeroContextWindow_Throws()
+    public async Task NullConfig_DaemonReturnsZeroContextWindow_Throws()
     {
         var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(0)));
 
-        var ex = Assert.Throws<InvalidOperationException>(
-            () => ContextWindowResolution.Resolve(null, daemon, "qwen3:30b"));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ContextWindowResolution.ResolveAsync(null, daemon, "qwen3:30b"));
 
         Assert.Contains("no context window", ex.Message);
     }
 
     [Fact]
-    public void NullConfig_DaemonReturnsNullModel_Throws()
+    public async Task NullConfig_DaemonReturnsNullModel_Throws()
     {
         var response = new
         {
@@ -58,19 +58,19 @@ public sealed class ContextWindowResolutionTests
         };
         var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(response));
 
-        var ex = Assert.Throws<InvalidOperationException>(
-            () => ContextWindowResolution.Resolve(null, daemon, "qwen3:30b"));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => ContextWindowResolution.ResolveAsync(null, daemon, "qwen3:30b"));
 
         Assert.Contains("no context window", ex.Message);
     }
 
     [Fact]
-    public void NullConfig_DaemonOffline_Throws()
+    public async Task NullConfig_DaemonOffline_Throws()
     {
         var daemon = CreateDaemonApi(_ => throw new HttpRequestException("connection refused"));
 
-        Assert.Throws<HttpRequestException>(
-            () => ContextWindowResolution.Resolve(null, daemon, "qwen3:30b"));
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => ContextWindowResolution.ResolveAsync(null, daemon, "qwen3:30b"));
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
