@@ -3,12 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Net;
-using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Daemon;
@@ -28,7 +26,7 @@ public sealed class ContextWindowResolutionTests
     [Fact]
     public void NullConfig_DaemonReturnsContextWindow_ReturnsDaemonValue()
     {
-        var daemon = CreateDaemonApi(_ => JsonResponse(BuildStatusResponse(262_144)));
+        var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(262_144)));
 
         var result = ContextWindowResolution.Resolve(null, daemon, "qwen3:30b");
 
@@ -38,7 +36,7 @@ public sealed class ContextWindowResolutionTests
     [Fact]
     public void NullConfig_DaemonReturnsZeroContextWindow_Throws()
     {
-        var daemon = CreateDaemonApi(_ => JsonResponse(BuildStatusResponse(0)));
+        var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(0)));
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => ContextWindowResolution.Resolve(null, daemon, "qwen3:30b"));
@@ -58,7 +56,7 @@ public sealed class ContextWindowResolutionTests
             Persistence = new { Provider = "sqlite" },
             Telemetry = new { Enabled = false },
         };
-        var daemon = CreateDaemonApi(_ => JsonResponse(response));
+        var daemon = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(response));
 
         var ex = Assert.Throws<InvalidOperationException>(
             () => ContextWindowResolution.Resolve(null, daemon, "qwen3:30b"));
@@ -103,24 +101,9 @@ public sealed class ContextWindowResolutionTests
         }
     };
 
-    private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK)
-        => new(status)
-        {
-            Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
-        };
-
     private sealed class StubHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name)
-            => new(new StubHttpMessageHandler(handler));
-    }
-
-    private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(handler(request));
-        }
+            => new(new FakeHttpMessageHandler(handler));
     }
 }

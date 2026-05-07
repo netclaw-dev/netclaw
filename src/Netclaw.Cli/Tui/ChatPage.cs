@@ -336,8 +336,6 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 break;
 
             case UsageOutput msg:
-                // Prefer the daemon-reported context window (authoritative, auto-detected
-                // from the provider); fall back to the DI-injected value when absent.
                 var ctxWindow = msg.ContextWindowTokens > 0
                     ? msg.ContextWindowTokens
                     : ViewModel.ContextWindowTokens;
