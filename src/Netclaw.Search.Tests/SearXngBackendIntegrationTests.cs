@@ -12,12 +12,8 @@ using Xunit;
 namespace Netclaw.Search.Tests;
 
 /// <summary>
-/// Layer 2 smoke test against a real SearXNG container. Catches wire-format drift
-/// when the upstream image is bumped — the day SearXNG renames "results" to
-/// "web_results", this test fails before users do.
-///
-/// Self-skips when Docker is unavailable (Windows CI runners, dev machines without
-/// Docker), so the test runs naturally on Linux CI but never breaks elsewhere.
+/// Smoke test against a real SearXNG container; catches wire-format drift on image bump.
+/// Self-skips when Docker is unavailable.
 /// </summary>
 [Trait("Category", "Integration")]
 public class SearXngBackendIntegrationTests : IAsyncLifetime

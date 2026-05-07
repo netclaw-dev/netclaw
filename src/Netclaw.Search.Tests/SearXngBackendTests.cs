@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Net;
 using System.Net.Http.Headers;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Search;
 using Xunit;
 
@@ -150,7 +151,7 @@ public class SearXngBackendTests
         var backend = new SearXngBackend(
             "http://searxng.local",
             new HttpClient(handler),
-            new FixedTimeProvider(fakeNow));
+            new FakeTimeProvider(fakeNow));
         var result = await backend.SearchAsync("test", 5, CancellationToken.None);
 
         Assert.IsType<SearchBackendResult.Success>(result);
@@ -292,8 +293,4 @@ public class SearXngBackendTests
         }
     }
 
-    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => utcNow;
-    }
 }

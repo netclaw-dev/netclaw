@@ -20,8 +20,8 @@ public sealed class SearXngBackend : ISearchBackend
     private const int MaxRetries = 3;
     private const string DocsUrl = "https://netclaw.dev/docs/configuration/search-providers/";
     private const string FormatErrorMessage =
-        "SearXNG returned a non-JSON response. Enable JSON output in settings.yml: " +
-        "set 'search.formats' to include 'json'. See " + DocsUrl + " for the supported configuration.";
+        $"SearXNG returned a non-JSON response. Enable JSON output in settings.yml: "
+        + $"set 'search.formats' to include 'json'. See {DocsUrl} for the supported configuration.";
 
     private readonly HttpClient _httpClient;
     private readonly string _endpoint;
@@ -30,9 +30,7 @@ public sealed class SearXngBackend : ISearchBackend
     public SearXngBackend(string endpoint, HttpClient? httpClient = null, TimeProvider? timeProvider = null)
     {
         _endpoint = endpoint.TrimEnd('/');
-        // When constructing our own HttpClient, set a default timeout so a misbehaving server
-        // can't hang a tool turn longer than intended. Caller-supplied clients are not mutated —
-        // tests inject their own and shouldn't be surprised by timeout side effects.
+        // Don't mutate caller-supplied clients; only set a default timeout when we own the instance.
         _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         _timeProvider = timeProvider ?? TimeProvider.System;
     }

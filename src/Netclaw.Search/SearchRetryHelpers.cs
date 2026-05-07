@@ -4,7 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http.Headers;
-using System.Reflection;
+using Netclaw.Configuration;
 
 namespace Netclaw.Search;
 
@@ -40,22 +40,8 @@ internal static class SearchRetryHelpers
 
     /// <summary>
     /// User-Agent value sent by every outbound search request. Format:
-    /// <c>Netclaw/{informational-version} (+https://netclaw.dev)</c>. Cached at type initialization.
+    /// <c>Netclaw/{version} (+https://netclaw.dev)</c>. Cached at type initialization.
     /// </summary>
-    internal static string UserAgent { get; } = BuildUserAgent();
-
-    private static string BuildUserAgent()
-    {
-        var asm = typeof(SearchRetryHelpers).Assembly;
-        var version = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
-                      ?? asm.GetName().Version?.ToString()
-                      ?? "0.0.0";
-
-        // Strip any "+commitsha" suffix that source-link-style versioning attaches.
-        var plus = version.IndexOf('+', StringComparison.Ordinal);
-        if (plus >= 0)
-            version = version[..plus];
-
-        return $"Netclaw/{version} (+https://netclaw.dev)";
-    }
+    internal static string UserAgent { get; } =
+        $"Netclaw/{BuildInfo.GetVersion(typeof(SearchRetryHelpers).Assembly)} (+https://netclaw.dev)";
 }
