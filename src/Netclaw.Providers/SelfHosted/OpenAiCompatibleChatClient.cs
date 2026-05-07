@@ -9,6 +9,8 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Netclaw.Providers.SelfHosted;
 
@@ -22,11 +24,15 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
     private readonly HttpClient _httpClient;
     private readonly OpenAiCompatibleEndpoint _endpoint;
     private readonly string _modelId;
-    public OpenAiCompatibleChatClient(HttpClient httpClient, OpenAiCompatibleEndpoint endpoint, string modelId)
+    private readonly ILogger _logger;
+
+    public OpenAiCompatibleChatClient(HttpClient httpClient, OpenAiCompatibleEndpoint endpoint, string modelId,
+        ILogger? logger = null)
     {
         _httpClient = httpClient;
         _endpoint = endpoint;
         _modelId = modelId;
+        _logger = logger ?? NullLogger.Instance;
     }
 
     public async Task<ChatResponse> GetResponseAsync(
@@ -67,6 +73,9 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         var hadStructuredToolCalls = false;
         ChatResponseUpdate? finalUpdate = null;
         var filter = new ToolCallTextFilter();
+        int textDeltaCount = 0, textDeltaChars = 0;
+        int thinkingDeltaCount = 0, thinkingDeltaChars = 0;
+        int toolCallDeltaCount = 0, suppressedDeltaCount = 0;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -99,11 +108,18 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     {
                         case TextContent tc:
                             accumulatedText.Append(tc.Text);
+                            textDeltaCount++;
+                            textDeltaChars += tc.Text?.Length ?? 0;
                             if (filter.ShouldSuppress(tc.Text))
                                 suppressThisUpdate = true;
                             break;
+                        case TextReasoningContent rc:
+                            thinkingDeltaCount++;
+                            thinkingDeltaChars += rc.Text?.Length ?? 0;
+                            break;
                         case FunctionCallContent:
                             hadStructuredToolCalls = true;
+                            toolCallDeltaCount++;
                             break;
                     }
                 }
@@ -115,6 +131,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                 // content-free keepalive so the caller knows the stream is alive.
                 if (suppressThisUpdate)
                 {
+                    suppressedDeltaCount++;
                     yield return KeepaliveUpdate;
                     continue;
                 }
@@ -122,6 +139,11 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                 yield return update;
             }
         }
+
+        _logger.LogDebug(
+            "SSE stream content breakdown: textDeltas={TextDeltas} textChars={TextChars} thinkingDeltas={ThinkingDeltas} thinkingChars={ThinkingChars} toolCallDeltas={ToolCallDeltas} suppressedDeltas={SuppressedDeltas} finishReason={FinishReason}",
+            textDeltaCount, textDeltaChars, thinkingDeltaCount, thinkingDeltaChars, toolCallDeltaCount,
+            suppressedDeltaCount, finalUpdate?.FinishReason?.ToString() ?? "null");
 
         // Fallback: if the model stopped without structured tool calls but the text
         // contains XML-like tool call blocks, emit a synthetic tool call update.
