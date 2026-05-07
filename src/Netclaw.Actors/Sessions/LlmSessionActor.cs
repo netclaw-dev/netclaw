@@ -363,6 +363,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<LlmCallFailed>(_ => { }); // stale failure arriving after watchdog timeout
+        Command<LlmResponseReceived>(_ => { }); // stale response arriving after transition to Ready
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
         CommandDistillationAckNoOp();
@@ -443,8 +445,31 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
 
-            // Check for tool calls
-            var toolCalls = lastMessage.Contents.OfType<FunctionCallContent>().ToList();
+            var toolCalls = new List<FunctionCallContent>();
+            bool hasText = false, hasThinking = false;
+            int textChars = 0, thinkingChars = 0;
+            foreach (var c in lastMessage.Contents)
+            {
+                switch (c)
+                {
+                    case TextContent tc:
+                        textChars += tc.Text?.Length ?? 0;
+                        if (!string.IsNullOrWhiteSpace(tc.Text)) hasText = true;
+                        break;
+                    case TextReasoningContent rc:
+                        thinkingChars += rc.Text?.Length ?? 0;
+                        if (!string.IsNullOrWhiteSpace(rc.Text)) hasThinking = true;
+                        break;
+                    case FunctionCallContent fc:
+                        toolCalls.Add(fc);
+                        break;
+                }
+            }
+
+            _log.Debug(
+                "LLM response content breakdown: text={TextChars}ch thinking={ThinkingChars}ch toolCalls={ToolCallCount} finishReason={FinishReason}",
+                textChars, thinkingChars, toolCalls.Count, response.FinishReason?.ToString() ?? "null");
+
             if (toolCalls.Count > 0 && _turnState.ForceNoToolsActive)
             {
                 TurnLog().Warning(
@@ -465,21 +490,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            // Guard: empty response (no text, no thinking, no tool calls) — delegate decision to tracker
-            var hasContent = lastMessage.Contents.Any(c =>
-                (c is TextContent tc && !string.IsNullOrWhiteSpace(tc.Text)) ||
-                (c is TextReasoningContent rc && !string.IsNullOrWhiteSpace(rc.Text)));
-            if (!hasContent)
+            if (!hasText && toolCalls.Count == 0)
             {
+                var label = hasThinking ? "thinking-only" : "empty";
                 switch (_turnState.EvaluateEmptyResponse())
                 {
                     case EmptyResponseAction.Retry retry:
-                        _log.Warning("LLM produced empty response — retrying with nudge");
+                        _log.Warning("LLM produced {Label} response ({ThinkingChars} chars) — retrying with nudge",
+                            label, thinkingChars);
                         _state = _state.AddSystemNudge(retry.NudgeText);
                         FireLlmCall();
                         return;
                     case EmptyResponseAction.Fail fail:
-                        _log.Warning("LLM produced empty response — failing turn");
+                        _log.Warning("LLM produced {Label} response — failing turn", label);
                         FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
                         return;
                 }

@@ -72,6 +72,12 @@ public sealed class LoggingChatClient : DelegatingChatClient
         var start = _timeProvider.GetTimestamp();
         long inputTokens = 0;
         long outputTokens = 0;
+        int textDeltaCount = 0;
+        int textDeltaChars = 0;
+        int thinkingDeltaCount = 0;
+        int thinkingDeltaChars = 0;
+        int toolCallDeltaCount = 0;
+        ChatFinishReason? lastFinishReason = null;
 
         IAsyncEnumerable<ChatResponseUpdate> stream;
         try
@@ -87,16 +93,41 @@ public sealed class LoggingChatClient : DelegatingChatClient
 
         await foreach (var update in stream)
         {
-            if (update.Contents?.OfType<UsageContent>().FirstOrDefault() is { } usage)
+            foreach (var item in update.Contents)
             {
-                inputTokens += usage.Details?.InputTokenCount ?? 0;
-                outputTokens += usage.Details?.OutputTokenCount ?? 0;
+                switch (item)
+                {
+                    case TextContent tc:
+                        textDeltaCount++;
+                        textDeltaChars += tc.Text?.Length ?? 0;
+                        break;
+                    case TextReasoningContent rc:
+                        thinkingDeltaCount++;
+                        thinkingDeltaChars += rc.Text?.Length ?? 0;
+                        break;
+                    case FunctionCallContent:
+                        toolCallDeltaCount++;
+                        break;
+                    case UsageContent usage:
+                        inputTokens += usage.Details?.InputTokenCount ?? 0;
+                        outputTokens += usage.Details?.OutputTokenCount ?? 0;
+                        break;
+                }
             }
+
+            if (update.FinishReason is not null)
+                lastFinishReason = update.FinishReason;
 
             yield return update;
         }
 
         var totalElapsed = _timeProvider.GetElapsedTime(start);
+
+        _logger.LogDebug(
+            "LLM streaming response content breakdown: textDeltas={TextDeltaCount} textChars={TextChars} thinkingDeltas={ThinkingDeltaCount} thinkingChars={ThinkingChars} toolCallDeltas={ToolCallDeltaCount} finishReason={FinishReason}",
+            textDeltaCount, textDeltaChars, thinkingDeltaCount, thinkingDeltaChars, toolCallDeltaCount,
+            lastFinishReason?.ToString() ?? "null");
+
         if (inputTokens > 0 || outputTokens > 0)
         {
             var delta = RecordInputTokens(inputTokens);
