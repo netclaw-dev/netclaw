@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.24.0"
+  version: "1.25.0"
 ---
 
 # Netclaw Operations
@@ -27,6 +27,7 @@ problems, how to update preferences, or how to maintain itself.
 | Check health, update self | [Self-Maintenance](#self-maintenance) |
 | Run long shell commands in background | [Background Jobs](#background-jobs) |
 | Manage inbound webhooks | [Webhook Management](#webhook-management) |
+| Search backend errors, configure SearXNG | [Search Providers](#search-providers) |
 
 ## Project Directory
 
@@ -444,6 +445,34 @@ full exception internally. Exception details are **never** forwarded to Slack.
 | Download timeout | bot token valid? Slack network reachable? check `daemon-{date}.log` |
 | Content scan rejection | `netclaw status` scanner section; check scan config |
 | Inbox write failure | disk space? permissions on `~/.netclaw/sessions/`? |
+
+## Search Providers
+
+The `web_search` and `web_fetch` tools route through one configured search
+backend, selected by `Search.Backend` in `netclaw.json`:
+
+| Backend | Shape | Notes |
+|---------|-------|-------|
+| `SearXng` | Self-hosted | Operator runs the instance; `Search.SearXngEndpoint` points at it. JSON output must be enabled in the instance's `settings.yml`. Authenticated instances are not supported in current releases. |
+| `Brave`   | Managed | Requires `Search.BraveApiKey` in `secrets.json`. |
+| `DuckDuckGo` | Scraped | No config; least reliable, may hit bot detection. |
+
+When a search tool returns an error mentioning `settings.yml`,
+`search.formats`, or "rate limit exceeded", the operator's SearXNG instance
+is misconfigured or being throttled. Point them at the canonical setup
+guide:
+
+```
+https://netclaw.dev/docs/configuration/search-providers/
+```
+
+That page lists the supported `settings.yml` keys, reverse-proxy header
+requirements (Netclaw's outbound `User-Agent` is `Netclaw/{version}
+(+https://netclaw.dev)` — non-empty UAs must pass), and the limiter
+behavior we honor (HTTP 429 + `Retry-After`).
+
+For Brave, an authentication error surfaces as "API authentication failed"
+— the fix is updating `Search.BraveApiKey` in `secrets.json`.
 
 ## Diagnostics
 

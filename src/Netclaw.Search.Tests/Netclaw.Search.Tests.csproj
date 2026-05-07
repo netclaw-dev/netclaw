@@ -12,6 +12,7 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk"/>
     <PackageReference Include="xunit.v3"/>
     <PackageReference Include="xunit.runner.visualstudio"/>
+    <PackageReference Include="Testcontainers"/>
   </ItemGroup>
 
   <ItemGroup>
@@ -23,6 +24,7 @@
   <ItemGroup>
     <EmbeddedResource Include="Fixtures/**/*.html" />
     <EmbeddedResource Include="Fixtures/**/*.json" />
+    <EmbeddedResource Include="Fixtures/**/*.yml" />
   </ItemGroup>
 
 </Project>

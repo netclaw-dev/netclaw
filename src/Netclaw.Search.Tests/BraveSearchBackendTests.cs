@@ -141,37 +141,6 @@ public class BraveSearchBackendTests
     }
 
     [Fact]
-    public void ParseRetryAfter_returns_delta_from_header()
-    {
-        var header = new RetryConditionHeaderValue(TimeSpan.FromSeconds(30));
-        var delay = BraveSearchBackend.ParseRetryAfter(header, 0, TimeProvider.System);
-        Assert.Equal(TimeSpan.FromSeconds(30), delay);
-    }
-
-    [Fact]
-    public void ParseRetryAfter_returns_remaining_time_from_date_header()
-    {
-        var now = new DateTimeOffset(2024, 6, 1, 12, 0, 0, TimeSpan.Zero);
-        var future = now.AddSeconds(45);
-        var header = new RetryConditionHeaderValue(future);
-        var fakeTime = new FixedTimeProvider(now);
-
-        var delay = BraveSearchBackend.ParseRetryAfter(header, 0, fakeTime);
-
-        Assert.Equal(TimeSpan.FromSeconds(45), delay);
-    }
-
-    [Theory]
-    [InlineData(0, 5)]
-    [InlineData(1, 10)]
-    [InlineData(2, 20)]
-    public void ParseRetryAfter_falls_back_to_exponential_backoff_when_header_absent(int attempt, int expectedSeconds)
-    {
-        var delay = BraveSearchBackend.ParseRetryAfter(null, attempt, TimeProvider.System);
-        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), delay);
-    }
-
-    [Fact]
     public async Task SearchAsync_handles_gzip_encoded_response()
     {
         var handler = new FakeHttpMessageHandler();
@@ -260,10 +229,5 @@ public class BraveSearchBackendTests
                 throw new InvalidOperationException("No more responses queued.");
             return Task.FromResult(_responses.Dequeue());
         }
-    }
-
-    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
-    {
-        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

@@ -1,0 +1,24 @@
+# Minimal SearXNG configuration used by SearXngBackendIntegrationTests.
+#
+# IMPORTANT: do not run a Valkey container alongside this. SearXNG's bot-detection
+# limiter requires Valkey to operate; without it, the limiter is inactive by
+# construction, which is what we want for a deterministic test run. Adding
+# Valkey "for realism" will reintroduce CI flakiness when the image is bumped.
+
+use_default_settings: true
+
+general:
+  instance_name: "Netclaw integration test"
+
+server:
+  # Static secret is fine — this instance is ephemeral and bound to a random
+  # localhost port during the test run.
+  secret_key: "netclaw-integration-test-do-not-use-in-production"
+  limiter: false
+  image_proxy: false
+
+search:
+  # Required: JSON output is what Netclaw queries for. Without this we get HTTP 403.
+  formats:
+    - html
+    - json

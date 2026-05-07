@@ -54,7 +54,7 @@ public sealed partial class BraveSearchBackend : ISearchBackend
                     if (attempt == MaxRetries - 1)
                         break;
 
-                    var delay = ParseRetryAfter(response.Headers.RetryAfter, attempt, _timeProvider);
+                    var delay = SearchRetryHelpers.ParseRetryAfter(response.Headers.RetryAfter, attempt, _timeProvider);
                     await Task.Delay(delay, ct);
                     continue;
                 }
@@ -107,29 +107,6 @@ public sealed partial class BraveSearchBackend : ISearchBackend
 
         return new SearchBackendResult.Error(
             "Brave Search API rate limit exceeded. Wait before retrying or upgrade your plan.");
-    }
-
-    /// <summary>
-    /// Parses the Retry-After response header into a wait duration.
-    /// Falls back to exponential backoff (5s, 10s, 20s) when the header is absent or in the past.
-    /// </summary>
-    internal static TimeSpan ParseRetryAfter(RetryConditionHeaderValue? retryAfter, int attempt, TimeProvider timeProvider)
-    {
-        if (retryAfter is not null)
-        {
-            if (retryAfter.Delta.HasValue)
-                return retryAfter.Delta.Value;
-
-            if (retryAfter.Date.HasValue)
-            {
-                var remaining = retryAfter.Date.Value - timeProvider.GetUtcNow();
-                if (remaining > TimeSpan.Zero)
-                    return remaining;
-            }
-        }
-
-        // Exponential backoff: 5s, 10s, 20s
-        return TimeSpan.FromSeconds(5 * Math.Pow(2, attempt));
     }
 
     internal static List<SearchResult> ParseResults(string json, int maxResults)
