@@ -123,9 +123,11 @@ public sealed class LoggingChatClient : DelegatingChatClient
 
         var totalElapsed = _timeProvider.GetElapsedTime(start);
 
-        _logger.LogDebug(
-            "LLM streaming response content breakdown: textDeltas={TextDeltaCount} textChars={TextChars} thinkingDeltas={ThinkingDeltaCount} thinkingChars={ThinkingChars} toolCallDeltas={ToolCallDeltaCount} finishReason={FinishReason}",
-            textDeltaCount, textDeltaChars, thinkingDeltaCount, thinkingDeltaChars, toolCallDeltaCount,
+        _logger.LogInformation(
+            "LLM streaming response content breakdown: text={TextSummary} thinking={ThinkingSummary} toolCalls={ToolCallDeltaCount} finishReason={FinishReason}",
+            $"{textDeltaCount}deltas/{textDeltaChars}ch",
+            $"{thinkingDeltaCount}deltas/{thinkingDeltaChars}ch",
+            toolCallDeltaCount,
             lastFinishReason?.ToString() ?? "null");
 
         if (inputTokens > 0 || outputTokens > 0)

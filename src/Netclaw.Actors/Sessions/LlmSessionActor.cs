@@ -466,7 +466,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 }
             }
 
-            _log.Debug(
+            _log.Warning(
                 "LLM response content breakdown: text={TextChars}ch thinking={ThinkingChars}ch toolCalls={ToolCallCount} finishReason={FinishReason}",
                 textChars, thinkingChars, toolCalls.Count, response.FinishReason?.ToString() ?? "null");
 
