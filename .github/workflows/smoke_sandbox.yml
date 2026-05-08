@@ -77,6 +77,16 @@ jobs:
           set -o pipefail
           bash scripts/smoke/check.sh 2>&1 | tee smoke-logs/check.log
 
+      - name: Install vhs (for interactive tapes)
+        run: bash scripts/smoke/install-vhs.sh
+
+      - name: Run interactive tapes (light)
+        run: |
+          mkdir -p smoke-logs
+          set -o pipefail
+          bash scripts/smoke/run-tapes.sh light --no-up --keep-stack 2>&1 \
+            | tee smoke-logs/tapes.log
+
       - name: Collect smoke logs
         if: always()
         run: |
