@@ -183,6 +183,28 @@ public sealed class ApprovalsCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Audience_flag_without_value_exits_one_with_specific_message()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "list", "--audience"],
+            _paths, _output);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("--audience requires a value", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Tool_flag_without_value_exits_one_with_specific_message()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", "git push", "--tool"],
+            _paths, _output);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("--tool requires a value", _output.ToString());
+    }
+
+    [Fact]
     public async Task Help_subcommand_exits_zero_and_prints_usage()
     {
         var exit = await ApprovalsCommand.RunAsync(["approvals", "help"], _paths, _output);

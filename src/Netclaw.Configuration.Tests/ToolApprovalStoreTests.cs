@@ -78,7 +78,7 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.True(_store.RemoveApproval(TrustAudience.Personal, "shell_execute", "git push"));
 
         var snapshot = _store.Snapshot();
-        Assert.Empty(snapshot.Audiences);
+        Assert.Empty(snapshot);
     }
 
     [Fact]
@@ -123,7 +123,7 @@ public sealed class ToolApprovalStoreTests : IDisposable
 
         _store.AddApproval(TrustAudience.Personal, "shell_execute", "git pull");
 
-        var personalShell = snapshot.Audiences["personal"]["shell_execute"];
+        var personalShell = snapshot["personal"]["shell_execute"];
         Assert.Equal(["git push"], personalShell);
     }
 }

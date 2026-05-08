@@ -19,6 +19,13 @@ public sealed class ToolApprovalStore
     private readonly string _filePath;
     private readonly object _lock = new();
 
+    /// <summary>
+    /// Path to the quarantine sibling file. Set by <see cref="QuarantineCorruptFile"/>
+    /// when a malformed file is moved aside; consumers can check
+    /// <see cref="File.Exists(string)"/> on this path to detect a recent quarantine.
+    /// </summary>
+    public string QuarantinePath => _filePath + ".invalid";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -62,17 +69,16 @@ public sealed class ToolApprovalStore
 
     private void QuarantineCorruptFile(JsonException cause)
     {
-        var quarantinePath = _filePath + ".invalid";
         try
         {
-            if (File.Exists(quarantinePath))
-                File.Delete(quarantinePath);
-            File.Move(_filePath, quarantinePath);
+            if (File.Exists(QuarantinePath))
+                File.Delete(QuarantinePath);
+            File.Move(_filePath, QuarantinePath);
         }
         catch (Exception moveEx)
         {
             throw new InvalidDataException(
-                $"Tool approvals file at '{_filePath}' is malformed and could not be quarantined to '{quarantinePath}'. Inspect the file manually before restarting.",
+                $"Tool approvals file at '{_filePath}' is malformed and could not be quarantined to '{QuarantinePath}'. Inspect the file manually before restarting.",
                 new AggregateException(cause, moveEx));
         }
     }
@@ -101,7 +107,10 @@ public sealed class ToolApprovalStore
                 audienceApprovals[toolName] = patterns;
             }
 
-            if (!patterns.Contains(pattern, StringComparer.Ordinal))
+            // Use the same comparer the daemon gate and the operator CLI use,
+            // otherwise on Windows "Git Push" and "git push" would dedupe as
+            // distinct on add but both get wiped by a single revoke.
+            if (!patterns.Contains(pattern, ToolApprovalEntryComparer.Comparer))
             {
                 patterns.Add(pattern);
                 Save(data);
@@ -196,22 +205,22 @@ public sealed class ToolApprovalStore
     }
 
     /// <summary>
-    /// Returns a deep clone of the current store contents. The returned object
-    /// is a snapshot — subsequent mutations to the underlying file are not
-    /// reflected. Suitable for read-only iteration by the operator CLI.
+    /// Returns a read-only snapshot of the current store contents, keyed by
+    /// audience wire value then tool name. The snapshot is decoupled from the
+    /// underlying file — subsequent mutations are not reflected.
     /// </summary>
-    public ToolApprovalData Snapshot()
+    public IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> Snapshot()
     {
         var data = Load();
-        var clone = new ToolApprovalData();
+        var result = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>>(StringComparer.Ordinal);
         foreach (var (audienceKey, tools) in data.Audiences)
         {
-            var clonedTools = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var clonedTools = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
             foreach (var (toolName, patterns) in tools)
-                clonedTools[toolName] = [.. patterns];
-            clone.Audiences[audienceKey] = clonedTools;
+                clonedTools[toolName] = patterns.ToArray();
+            result[audienceKey] = clonedTools;
         }
-        return clone;
+        return result;
     }
 
     private static void CleanupEmptySections(ToolApprovalData data, string audienceKey, string toolName)

@@ -58,12 +58,12 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
         DisplayApprovals.Clear();
         var snapshot = _store.Snapshot();
 
-        foreach (var audienceKey in snapshot.Audiences.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        foreach (var audienceKey in snapshot.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
             if (!SecurityPolicyDefaults.TryParseAudience(audienceKey, out var audience))
                 continue;
 
-            var tools = snapshot.Audiences[audienceKey];
+            var tools = snapshot[audienceKey];
             foreach (var toolName in tools.Keys.OrderBy(k => k, StringComparer.Ordinal))
             {
                 foreach (var pattern in tools[toolName].OrderBy(p => p, StringComparer.Ordinal))

@@ -17,6 +17,13 @@ namespace Netclaw.Cli.Approvals;
 /// </summary>
 internal static class ApprovalsCommand
 {
+    private sealed record ListOptions(TrustAudience? Audience, string? Tool, bool EmitJson);
+
+    private sealed record RevokeOptions(string? Pattern, TrustAudience? Audience, string? Tool, bool RevokeAll);
+
+    private static readonly TrustAudience[] AllAudiences =
+        [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
+
     public static Task<int> RunAsync(
         string[] args,
         NetclawPaths paths,
@@ -36,16 +43,15 @@ internal static class ApprovalsCommand
 
     private static int RunList(string[] args, NetclawPaths paths, TextWriter writer)
     {
-        if (!TryParseListFlags(args, writer, out var audienceFilter, out var toolFilter, out var emitJson))
+        if (TryParseListFlags(args, writer) is not { } opts)
             return 1;
 
-        WarnIfQuarantined(paths, writer);
-
         var store = new ToolApprovalStore(paths.ToolApprovalsPath);
-        var snapshot = store.Snapshot();
-        var view = BuildView(snapshot, audienceFilter, toolFilter);
+        WarnIfQuarantined(store, writer);
 
-        if (emitJson)
+        var view = BuildView(store.Snapshot(), opts.Audience, opts.Tool);
+
+        if (opts.EmitJson)
         {
             writer.WriteLine(JsonSerializer.Serialize(view, JsonDefaults.Indented));
             return 0;
@@ -58,13 +64,13 @@ internal static class ApprovalsCommand
         }
 
         var first = true;
-        foreach (var audienceKey in view.Audiences.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        foreach (var (audienceKey, tools) in view.Audiences)
         {
-            foreach (var toolName in view.Audiences[audienceKey].Keys.OrderBy(k => k, StringComparer.Ordinal))
+            foreach (var (toolName, patterns) in tools)
             {
                 if (!first) writer.WriteLine();
                 writer.WriteLine($"{audienceKey} / {toolName}");
-                foreach (var pattern in view.Audiences[audienceKey][toolName].OrderBy(p => p, StringComparer.Ordinal))
+                foreach (var pattern in patterns)
                     writer.WriteLine($"  {pattern}");
                 first = false;
             }
@@ -75,41 +81,23 @@ internal static class ApprovalsCommand
 
     private static int RunRevoke(string[] args, NetclawPaths paths, TextWriter writer)
     {
-        if (!TryParseRevokeFlags(args, writer, out var pattern, out var audienceFilter, out var toolFilter, out var revokeAll))
+        if (TryParseRevokeFlags(args, writer) is not { } opts)
             return 1;
 
-        if (revokeAll && toolFilter is null)
+        if (opts.RevokeAll && opts.Tool is null)
         {
             writer.WriteLine("Error: --all requires --tool <name>.");
             writer.WriteLine("Usage: netclaw approvals revoke --tool <name> --all [--audience personal|team|public]");
             return 1;
         }
 
-        WarnIfQuarantined(paths, writer);
-
         var store = new ToolApprovalStore(paths.ToolApprovalsPath);
+        WarnIfQuarantined(store, writer);
 
-        if (revokeAll)
-        {
-            var audiences = audienceFilter is null
-                ? new[] { TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public }
-                : [audienceFilter.Value];
+        if (opts.RevokeAll)
+            return RunRevokeAll(opts, store, writer);
 
-            var totalRemoved = 0;
-            foreach (var audience in audiences)
-                totalRemoved += store.RemoveAllForTool(audience, toolFilter!);
-
-            if (totalRemoved == 0)
-            {
-                writer.WriteLine($"No approvals found for tool '{toolFilter}'.");
-                return 1;
-            }
-
-            writer.WriteLine($"Removed {totalRemoved} approval(s) for tool '{toolFilter}'.");
-            return 0;
-        }
-
-        if (pattern is null)
+        if (opts.Pattern is null)
         {
             writer.WriteLine("Usage: netclaw approvals revoke <pattern> [--tool <name>] [--audience personal|team|public]");
             writer.WriteLine("       netclaw approvals revoke --tool <name> --all [--audience personal|team|public]");
@@ -119,21 +107,21 @@ internal static class ApprovalsCommand
         var snapshot = store.Snapshot();
         var removedAny = false;
 
-        foreach (var (audienceKey, tools) in snapshot.Audiences)
+        foreach (var (audienceKey, tools) in snapshot)
         {
             if (!SecurityPolicyDefaults.TryParseAudience(audienceKey, out var audience))
                 continue;
-            if (audienceFilter is not null && audience != audienceFilter.Value)
+            if (opts.Audience is { } target && audience != target)
                 continue;
 
             foreach (var (toolName, _) in tools)
             {
-                if (toolFilter is not null && !string.Equals(toolName, toolFilter, StringComparison.Ordinal))
+                if (opts.Tool is not null && !string.Equals(toolName, opts.Tool, StringComparison.Ordinal))
                     continue;
 
-                if (store.RemoveApproval(audience, toolName, pattern))
+                if (store.RemoveApproval(audience, toolName, opts.Pattern))
                 {
-                    writer.WriteLine($"Removed '{pattern}' from {audienceKey} / {toolName}.");
+                    writer.WriteLine($"Removed '{opts.Pattern}' from {audienceKey} / {toolName}.");
                     removedAny = true;
                 }
             }
@@ -145,6 +133,23 @@ internal static class ApprovalsCommand
             return 1;
         }
 
+        return 0;
+    }
+
+    private static int RunRevokeAll(RevokeOptions opts, ToolApprovalStore store, TextWriter writer)
+    {
+        var audiences = opts.Audience is { } only ? [only] : AllAudiences;
+        var totalRemoved = 0;
+        foreach (var audience in audiences)
+            totalRemoved += store.RemoveAllForTool(audience, opts.Tool!);
+
+        if (totalRemoved == 0)
+        {
+            writer.WriteLine($"No approvals found for tool '{opts.Tool}'.");
+            return 1;
+        }
+
+        writer.WriteLine($"Removed {totalRemoved} approval(s) for tool '{opts.Tool}'.");
         return 0;
     }
 
@@ -163,56 +168,90 @@ internal static class ApprovalsCommand
         writer.WriteLine("                    Flags: --audience <personal|team|public>");
         writer.WriteLine("  help              Show this message.");
         writer.WriteLine();
-        writer.WriteLine("Exit codes: 0 success, 1 user error or no match, 2 malformed file.");
+        writer.WriteLine("Exit codes: 0 success, 1 user error or no match.");
         writer.WriteLine();
         writer.WriteLine("The daemon does not require a restart after a revoke; the next approval");
         writer.WriteLine("check re-reads the file.");
         return 0;
     }
 
-    private static bool TryParseListFlags(
-        string[] args, TextWriter writer,
-        out TrustAudience? audienceFilter, out string? toolFilter, out bool emitJson)
+    private enum FlagOutcome { NotMine, Consumed, Error }
+
+    /// <summary>
+    /// Tries to consume a flag that <c>list</c> and <c>revoke</c> share
+    /// (<c>--audience</c>, <c>--tool</c>). Advances <paramref name="i"/> past
+    /// the flag's value when applicable. Returns <see cref="FlagOutcome.Error"/>
+    /// after writing a message if the flag is recognized but malformed.
+    /// </summary>
+    private static FlagOutcome TryConsumeSharedFlag(
+        string[] args, ref int i, TextWriter writer,
+        ref TrustAudience? audience, ref string? tool)
     {
-        audienceFilter = null;
-        toolFilter = null;
-        emitJson = false;
+        var arg = args[i];
+        switch (arg)
+        {
+            case "--audience":
+                if (i + 1 >= args.Length)
+                {
+                    writer.WriteLine("Error: --audience requires a value (personal, team, or public).");
+                    return FlagOutcome.Error;
+                }
+                var value = args[++i];
+                if (!SecurityPolicyDefaults.TryParseAudience(value, out var parsed))
+                {
+                    writer.WriteLine($"Error: Unknown audience '{value}'. Expected: personal, team, public.");
+                    return FlagOutcome.Error;
+                }
+                audience = parsed;
+                return FlagOutcome.Consumed;
+
+            case "--tool":
+                if (i + 1 >= args.Length)
+                {
+                    writer.WriteLine("Error: --tool requires a value.");
+                    return FlagOutcome.Error;
+                }
+                tool = args[++i];
+                return FlagOutcome.Consumed;
+
+            default:
+                return FlagOutcome.NotMine;
+        }
+    }
+
+    private static ListOptions? TryParseListFlags(string[] args, TextWriter writer)
+    {
+        TrustAudience? audience = null;
+        string? tool = null;
+        var emitJson = false;
 
         for (var i = 2; i < args.Length; i++)
         {
-            switch (args[i])
+            if (args[i] == "--json")
             {
-                case "--json":
-                    emitJson = true;
-                    break;
-                case "--audience" when i + 1 < args.Length:
-                    if (!SecurityPolicyDefaults.TryParseAudience(args[++i], out var audience))
-                    {
-                        writer.WriteLine($"Error: Unknown audience '{args[i]}'. Expected: personal, team, public.");
-                        return false;
-                    }
-                    audienceFilter = audience;
-                    break;
-                case "--tool" when i + 1 < args.Length:
-                    toolFilter = args[++i];
-                    break;
-                default:
-                    writer.WriteLine($"Error: Unknown flag or missing value: {args[i]}");
-                    return false;
+                emitJson = true;
+                continue;
             }
+
+            switch (TryConsumeSharedFlag(args, ref i, writer, ref audience, ref tool))
+            {
+                case FlagOutcome.Consumed: continue;
+                case FlagOutcome.Error: return null;
+            }
+
+            writer.WriteLine($"Error: Unknown flag: {args[i]}");
+            return null;
         }
 
-        return true;
+        return new ListOptions(audience, tool, emitJson);
     }
 
-    private static bool TryParseRevokeFlags(
-        string[] args, TextWriter writer,
-        out string? pattern, out TrustAudience? audienceFilter, out string? toolFilter, out bool revokeAll)
+    private static RevokeOptions? TryParseRevokeFlags(string[] args, TextWriter writer)
     {
-        pattern = null;
-        audienceFilter = null;
-        toolFilter = null;
-        revokeAll = false;
+        string? pattern = null;
+        TrustAudience? audience = null;
+        string? tool = null;
+        var revokeAll = false;
 
         for (var i = 2; i < args.Length; i++)
         {
@@ -224,47 +263,37 @@ internal static class ApprovalsCommand
                 continue;
             }
 
-            if (arg == "--audience" && i + 1 < args.Length)
+            switch (TryConsumeSharedFlag(args, ref i, writer, ref audience, ref tool))
             {
-                if (!SecurityPolicyDefaults.TryParseAudience(args[++i], out var audience))
-                {
-                    writer.WriteLine($"Error: Unknown audience '{args[i]}'. Expected: personal, team, public.");
-                    return false;
-                }
-                audienceFilter = audience;
-                continue;
-            }
-
-            if (arg == "--tool" && i + 1 < args.Length)
-            {
-                toolFilter = args[++i];
-                continue;
+                case FlagOutcome.Consumed: continue;
+                case FlagOutcome.Error: return null;
             }
 
             if (arg.StartsWith("--", StringComparison.Ordinal))
             {
                 writer.WriteLine($"Error: Unknown flag: {arg}");
-                return false;
+                return null;
             }
 
-            // Positional pattern; reject duplicates.
             if (pattern is not null)
             {
                 writer.WriteLine($"Error: Unexpected extra argument: {arg}");
-                return false;
+                return null;
             }
             pattern = arg;
         }
 
-        return true;
+        return new RevokeOptions(pattern, audience, tool, revokeAll);
     }
 
     private static ApprovalsListView BuildView(
-        ToolApprovalData snapshot, TrustAudience? audienceFilter, string? toolFilter)
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<string>>> snapshot,
+        TrustAudience? audienceFilter,
+        string? toolFilter)
     {
         var view = new ApprovalsListView();
 
-        foreach (var (audienceKey, tools) in snapshot.Audiences)
+        foreach (var (audienceKey, tools) in snapshot)
         {
             if (audienceFilter is not null)
             {
@@ -288,14 +317,13 @@ internal static class ApprovalsCommand
         return view;
     }
 
-    private static void WarnIfQuarantined(NetclawPaths paths, TextWriter writer)
+    private static void WarnIfQuarantined(ToolApprovalStore store, TextWriter writer)
     {
-        var quarantine = paths.ToolApprovalsPath + ".invalid";
-        if (File.Exists(quarantine))
-        {
-            writer.WriteLine($"Warning: A quarantined approvals file exists at '{quarantine}'.");
-            writer.WriteLine("         The active file was reset to empty after a parse failure.");
-            writer.WriteLine("         Inspect the .invalid copy before restoring grants.");
-        }
+        if (!File.Exists(store.QuarantinePath))
+            return;
+
+        writer.WriteLine($"Warning: A quarantined approvals file exists at '{store.QuarantinePath}'.");
+        writer.WriteLine("         The active file was reset to empty after a parse failure.");
+        writer.WriteLine("         Inspect the .invalid copy before restoring grants.");
     }
 }
