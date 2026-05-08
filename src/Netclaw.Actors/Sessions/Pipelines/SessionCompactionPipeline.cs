@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace Netclaw.Actors.Sessions.Pipelines;
@@ -172,6 +173,7 @@ internal static class SessionCompactionPipeline
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(sidecarTimeout);
+            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var observerMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,

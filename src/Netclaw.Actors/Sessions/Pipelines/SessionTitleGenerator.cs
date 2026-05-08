@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace Netclaw.Actors.Sessions.Pipelines;
@@ -33,6 +34,7 @@ internal static class SessionTitleGenerator
     /// </summary>
     public static async Task GenerateAsync(
         IChatClient client,
+        SessionId sessionId,
         IReadOnlyList<SerializableChatMessage> history,
         IActorRef self,
         ILoggingAdapter log,
@@ -41,6 +43,7 @@ internal static class SessionTitleGenerator
         try
         {
             using var cts = new CancellationTokenSource(timeout);
+            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var messages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.User,

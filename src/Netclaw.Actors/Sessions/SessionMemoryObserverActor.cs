@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -210,7 +211,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             _sidecarTimeout,
             Self,
             run.RunId,
-            run.ContentVersion);
+            run.ContentVersion,
+            _log);
     }
 
     private void HandleDistillationRunCompleted(DistillationRunCompleted msg)
@@ -338,7 +340,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         _contentVersion++;
     }
 
-    private async Task RunDistillationAsync(
+    internal static async Task RunDistillationAsync(
         IChatClient client,
         SessionId sessionId,
         int turnCount,
@@ -347,7 +349,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         TimeSpan timeout,
         IActorRef self,
         long runId,
-        long contentVersion)
+        long contentVersion,
+        ILoggingAdapter log)
     {
         long? inputTokens = null;
         long? outputTokens = null;
@@ -355,6 +358,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         try
         {
             using var cts = new CancellationTokenSource(timeout);
+            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var messages = new List<ChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System, DistillationSystemPrompt),
@@ -372,14 +376,14 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
             switch (parseResult.Outcome)
             {
                 case ParseProposalsOutcome.NoJsonFound:
-                    _log.Info(
+                    log.Info(
                         "session_observer_parse_no_json rawLength={RawLength} candidateCount={CandidateCount} preview={Preview}",
                         text.Length,
                         parseResult.CandidateCount,
                         parseResult.Preview);
                     break;
                 case ParseProposalsOutcome.ParseFailed:
-                    _log.Info(
+                    log.Info(
                         "session_observer_parse_failed rawLength={RawLength} candidateCount={CandidateCount} preview={Preview}",
                         text.Length,
                         parseResult.CandidateCount,

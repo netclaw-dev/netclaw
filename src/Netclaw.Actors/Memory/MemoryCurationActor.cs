@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
+using SessionId = Netclaw.Actors.Protocol.SessionId;
 
 namespace Netclaw.Actors.Memory;
 
@@ -55,15 +56,17 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
     private readonly SQLiteMemoryStore _store;
     private readonly IChatClient? _llmClient;
+    private readonly SessionId _sessionId;
     private readonly ILoggingAdapter _log;
 
     private IActorRef? _currentRequester;
 
     public IStash Stash { get; set; } = null!;
 
-    public MemoryCurationActor(SQLiteMemoryStore store, IChatClientProvider? clientProvider = null)
+    public MemoryCurationActor(SQLiteMemoryStore store, SessionId sessionId, IChatClientProvider? clientProvider = null)
     {
         _store = store;
+        _sessionId = sessionId;
         _llmClient = clientProvider != null
             ? clientProvider.GetClient(ModelRole.Compaction)
             : null;
@@ -75,8 +78,8 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
     /// <summary>
     /// Create Props for the MemoryCurationActor.
     /// </summary>
-    public static Props CreateProps(SQLiteMemoryStore store, IChatClientProvider? clientProvider = null)
-        => Props.Create(() => new MemoryCurationActor(store, clientProvider));
+    public static Props CreateProps(SQLiteMemoryStore store, SessionId sessionId, IChatClientProvider? clientProvider = null)
+        => Props.Create(() => new MemoryCurationActor(store, sessionId, clientProvider));
 
     // ── Idle behavior ───────────────────────────────────────────────
 
@@ -246,7 +249,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         // If rules tier is ambiguous and LLM is available, escalate
         if (rulesDecision.Kind == CurationDecisionKind.Ambiguous && _llmClient is not null)
         {
-            var llmDecision = await TryLlmEvaluationAsync(operation, candidates);
+            var llmDecision = await TryLlmEvaluationAsync(_llmClient, _sessionId, operation, candidates, _log);
             if (llmDecision is not null)
             {
                 _log.Info(
@@ -283,13 +286,17 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         return rulesDecision;
     }
 
-    private async Task<CurationDecision?> TryLlmEvaluationAsync(
+    internal static async Task<CurationDecision?> TryLlmEvaluationAsync(
+        IChatClient llmClient,
+        SessionId sessionId,
         SQLiteMemoryCurationOperation operation,
-        IReadOnlyList<ExistingMemoryCandidate> candidates)
+        IReadOnlyList<ExistingMemoryCandidate> candidates,
+        ILoggingAdapter log)
     {
         try
         {
             using var cts = new CancellationTokenSource(LlmTimeout);
+            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
 
             var messages = new List<ChatMessage>
             {
@@ -302,7 +309,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 MaxOutputTokens = 50
             };
 
-            var response = await _llmClient!.GetResponseAsync(messages, options, cts.Token);
+            var response = await llmClient.GetResponseAsync(messages, options, cts.Token);
             var responseText = response.Text?.Trim();
 
             if (string.IsNullOrWhiteSpace(responseText))
@@ -312,12 +319,12 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
         }
         catch (OperationCanceledException)
         {
-            _log.Warning("curation_llm_timeout anchor={0}", operation.AnchorCanonicalName);
+            log.Warning("curation_llm_timeout anchor={0}", operation.AnchorCanonicalName);
             return null;
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "curation_llm_error anchor={0}", operation.AnchorCanonicalName);
+            log.Warning(ex, "curation_llm_error anchor={0}", operation.AnchorCanonicalName);
             return null;
         }
     }

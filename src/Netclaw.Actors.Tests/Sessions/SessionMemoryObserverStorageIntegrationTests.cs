@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
 using Xunit;
@@ -59,7 +60,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         try
         {
             var curationActor = Sys.ActorOf(
-                MemoryCurationActor.CreateProps(store),
+                MemoryCurationActor.CreateProps(store, new SessionId("test-session")),
                 "curation-create");
 
             var probe = CreateTestProbe("curation-create-probe");
@@ -105,7 +106,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         try
         {
             var curationActor = Sys.ActorOf(
-                MemoryCurationActor.CreateProps(store),
+                MemoryCurationActor.CreateProps(store, new SessionId("test-session")),
                 "curation-batch");
 
             var probe = CreateTestProbe("curation-batch-probe");
@@ -162,7 +163,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         try
         {
             var curationActor = Sys.ActorOf(
-                MemoryCurationActor.CreateProps(store),
+                MemoryCurationActor.CreateProps(store, new SessionId("test-session")),
                 "curation-empty");
 
             var probe = CreateTestProbe("curation-empty-probe");

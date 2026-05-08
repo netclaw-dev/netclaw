@@ -259,7 +259,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (_memoryStore is not null)
             {
                 _curationActor = Context.ActorOf(
-                    Memory.MemoryCurationActor.CreateProps(_memoryStore, _clientProvider),
+                    Memory.MemoryCurationActor.CreateProps(_memoryStore, _sessionId, _clientProvider),
                     "memory-curation");
 
                 // Distillation processes a full transcript — allow 5x normal sidecar timeout
@@ -1450,7 +1450,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void MaybeGenerateTitle()
     {
         if (SessionTitleGenerator.ShouldGenerate(_state.TurnCount, _config.Tuning.TitleGenerationInterval))
-            _ = SessionTitleGenerator.GenerateAsync(_compactionClient, _state.History, Self, _log, _config.SidecarLlmTimeout);
+            _ = SessionTitleGenerator.GenerateAsync(_compactionClient, _sessionId, _state.History, Self, _log, _config.SidecarLlmTimeout);
     }
 
 
@@ -1465,12 +1465,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var self = Self;
         var client = _compactionClient;
         var timeout = _config.SidecarLlmTimeout;
+        var sessionId = _sessionId;
 
-        _ = InvokeMemoryExtractionCoreAsync(client, history, self, timeout);
+        _ = InvokeMemoryExtractionCoreAsync(client, sessionId, history, self, timeout);
     }
 
-    private static async Task InvokeMemoryExtractionCoreAsync(
+    internal static async Task InvokeMemoryExtractionCoreAsync(
         IChatClient client,
+        SessionId sessionId,
         IReadOnlyList<SerializableChatMessage> history,
         IActorRef self,
         TimeSpan timeout)
@@ -1478,6 +1480,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         try
         {
             using var cts = new CancellationTokenSource(timeout);
+            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId.Value);
             var extractionMessages = new List<AiChatMessage>
             {
                 new(Microsoft.Extensions.AI.ChatRole.System,
