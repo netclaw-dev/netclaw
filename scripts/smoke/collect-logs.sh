@@ -29,15 +29,15 @@ for service in ollama ollama-init netclaw-sandbox; do
 done
 
 run_timed "$STEP_TIMEOUT_SECONDS" docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" exec -T netclaw-sandbox sh -lc \
-  'if [ -f /root/.netclaw/logs/daemon.log ]; then cat /root/.netclaw/logs/daemon.log; fi' \
+  'if [ -f /home/netclaw/.netclaw/logs/daemon.log ]; then cat /home/netclaw/.netclaw/logs/daemon.log; fi' \
   >"$LOG_DIR/daemon.log" || true
 
 run_timed "$STEP_TIMEOUT_SECONDS" docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" exec -T netclaw-sandbox sh -lc \
-  'if [ -f /root/.netclaw/netclaw.pid ]; then cat /root/.netclaw/netclaw.pid; fi' \
+  'if [ -f /home/netclaw/.netclaw/netclaw.pid ]; then cat /home/netclaw/.netclaw/netclaw.pid; fi' \
   >"$LOG_DIR/netclaw.pid" || true
 
 run_timed "$STEP_TIMEOUT_SECONDS" docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" exec -T netclaw-sandbox sh -lc \
-  'ls -la /root/.netclaw || true' \
+  'ls -la /home/netclaw/.netclaw || true' \
   >"$LOG_DIR/netclaw-home-ls.txt" || true
 
 echo "Smoke logs collected at: $LOG_DIR"

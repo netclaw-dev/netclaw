@@ -32,9 +32,11 @@ services:
       NETCLAW_Models__Fallback__ModelId: ${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}
       NETCLAW_Models__Compaction__Provider: local-ollama
       NETCLAW_Models__Compaction__ModelId: ${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}
-    volumes:
-      - netclaw-home:/root/.netclaw
+    # tmpfs (not a named volume) so smoke runs always start with empty
+    # netclaw state and never collide with a host ~/.netclaw on a dev
+    # machine. Path matches the image's USER netclaw home (see Dockerfile).
+    tmpfs:
+      - /home/netclaw/.netclaw:uid=1654,gid=1654,mode=0755
 
 volumes:
   netclaw-ollama-data:
-  netclaw-home:
