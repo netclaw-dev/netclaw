@@ -188,6 +188,12 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
         var state = ViewModel.CurrentState.Value;
         var keyInfo = key.KeyInfo;
 
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.RequestQuit();
+            return;
+        }
+
         if (keyInfo.Key == ConsoleKey.Escape)
         {
             if (state == ApprovalsManagerState.RevokeConfirm)

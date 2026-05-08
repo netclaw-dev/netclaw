@@ -22,9 +22,8 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ChannelsStepView : IWizardStepView
 {
-    // Most-trusted-first cycling order. Sourced from TrustAudiences.All so new
-    // audiences flow through automatically; the .Reverse() preserves the
-    // original UI behavior (Personal → Team → Public on right-arrow).
+    // Most-trusted-first cycling order (Personal → Team → Public). Sourced
+    // from TrustAudiences.All so new audiences flow through automatically.
     private static readonly ImmutableArray<TrustAudience> AudienceValues =
         [.. TrustAudiences.All.Reverse()];
 

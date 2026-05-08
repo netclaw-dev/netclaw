@@ -116,4 +116,6 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
             Refresh();
         }
     }
+
+    public void RequestQuit() => Shutdown();
 }

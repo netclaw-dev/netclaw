@@ -136,16 +136,10 @@ internal static class ApprovalsCommand
 
     private static int RunRevokeAll(RevokeOptions opts, ToolApprovalStore store, TextWriter writer)
     {
+        IEnumerable<TrustAudience> audiences = opts.Audience is { } only ? [only] : TrustAudiences.All;
         var totalRemoved = 0;
-        if (opts.Audience is { } only)
-        {
-            totalRemoved = store.RemoveAllForTool(only, opts.Tool!);
-        }
-        else
-        {
-            foreach (var audience in TrustAudiences.All)
-                totalRemoved += store.RemoveAllForTool(audience, opts.Tool!);
-        }
+        foreach (var audience in audiences)
+            totalRemoved += store.RemoveAllForTool(audience, opts.Tool!);
 
         if (totalRemoved == 0)
         {
