@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -13,14 +15,10 @@ namespace Netclaw.Security;
 /// </summary>
 public static class ApprovalPatternMatching
 {
-    // Approval entries embed both filesystem paths (case-sensitive on POSIX,
-    // case-insensitive on Windows) and verb tokens that resolve to executables
-    // via the host's $PATH lookup, which honors filesystem case rules. Folding
-    // case unconditionally on POSIX would let an attacker who plants `Git`
-    // earlier in $PATH inherit the approval the user issued for `git` —
-    // similarly for case-distinct directory pairs like `/data/` vs `/Data/`.
-    private static StringComparison ApprovalEntryComparison =>
-        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+    // Case-sensitivity rules live in Netclaw.Configuration so the operator CLI
+    // and the daemon gate use exactly the same comparer — see
+    // ToolApprovalEntryComparer for the rationale.
+    private static StringComparison ApprovalEntryComparison => ToolApprovalEntryComparer.Comparison;
 
     public static bool MatchesShellApprovalEntry(string candidate, IEnumerable<string> approvedEntries)
     {

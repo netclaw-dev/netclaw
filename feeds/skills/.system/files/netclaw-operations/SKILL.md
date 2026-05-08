@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.26.0"
+  version: "1.27.0"
 ---
 
 # Netclaw Operations
@@ -299,11 +299,42 @@ one grant per path. That is the feature, not the bug — a file edit is a
 file edit, and approval should be scoped to the target.
 
 If a user asks why they're being prompted so often, explain the security
-tradeoff and point them at `netclaw` CLI tooling for reviewing and trimming
-`tool-approvals.json` if the grant list grows unmanageable.
+tradeoff and point them at `netclaw approvals` for auditing and trimming
+their persistent grants.
 
-If approval matching seems stale after an upgrade, delete the approval file and
-rebuild grants interactively:
+### Inspecting and revoking grants
+
+Use the `netclaw approvals` CLI rather than hand-editing
+`tool-approvals.json`. The daemon reads the file on every approval check, so
+revocations take effect on the next prompt without a daemon restart.
+
+```bash
+# Interactive TUI: see everything grouped by audience and tool, revoke with R
+netclaw approvals
+
+# List only — human-readable
+netclaw approvals list
+netclaw approvals list --audience personal --tool shell_execute
+
+# Scriptable JSON output (audiences → tools → patterns)
+netclaw approvals list --json
+
+# Remove an exact match (case-sensitive on POSIX, insensitive on Windows)
+netclaw approvals revoke "git push" --audience personal --tool shell_execute
+
+# Clear every entry for a tool (optionally scoped to one audience)
+netclaw approvals revoke --tool shell_execute --all
+netclaw approvals revoke --tool shell_execute --all --audience personal
+```
+
+`revoke` of a non-existent pattern exits non-zero with a clear message — the
+CLI never silently succeeds.
+
+### Last-resort recovery
+
+If the approval file gets corrupted (the daemon will quarantine it to
+`tool-approvals.json.invalid` and warn loudly), or if you want to wipe every
+persistent grant and start clean, delete the file directly:
 
 macOS/Linux:
 
@@ -317,7 +348,7 @@ PowerShell:
 Remove-Item "$HOME/.netclaw/config/tool-approvals.json" -Force
 ```
 
-Then restart the daemon so in-memory session approvals are cleared too.
+Restart the daemon so in-memory session approvals are cleared too.
 
 ## Skill Management
 

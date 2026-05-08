@@ -90,6 +90,7 @@ public sealed class CliArgsParserTests
             "chat", "sessions", "init", "doctor", "status", "stats",
             "daemon", "mcp", "provider", "model", "reminder",
             "secrets", "config", "update", "pair", "skill", "webhooks",
+            "approvals",
         };
 
         Assert.Equal(expected, CliArgsParser.KnownCommands);

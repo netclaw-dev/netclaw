@@ -33,6 +33,7 @@ public static class CliArgsParser
         "chat", "sessions", "init", "doctor", "status", "stats",
         "daemon", "mcp", "provider", "model", "reminder",
         "secrets", "config", "update", "pair", "skill", "webhooks",
+        "approvals",
     };
 
     /// <summary>Returns <c>true</c> if the token is a help flag (<c>help</c>, <c>-h</c>, <c>--help</c>).</summary>

@@ -126,6 +126,106 @@ public sealed class ToolApprovalStore
         return patterns;
     }
 
+    /// <summary>
+    /// Removes an approved pattern for a tool in the given audience. Comparison
+    /// uses <see cref="ToolApprovalEntryComparer.Comparison"/> so the CLI and
+    /// the daemon agree on what "the same entry" means. Empty per-tool and
+    /// per-audience maps are pruned so the file does not retain hollow
+    /// sections after a revoke.
+    /// </summary>
+    /// <returns><c>true</c> if an entry was removed; <c>false</c> otherwise.</returns>
+    public bool RemoveApproval(TrustAudience audience, string toolName, string pattern)
+    {
+        lock (_lock)
+        {
+            var data = Load();
+            var audienceKey = audience.ToWireValue();
+
+            if (!data.Audiences.TryGetValue(audienceKey, out var audienceApprovals))
+                return false;
+
+            if (!audienceApprovals.TryGetValue(toolName, out var patterns))
+                return false;
+
+            var index = -1;
+            for (var i = 0; i < patterns.Count; i++)
+            {
+                if (ToolApprovalEntryComparer.Equals(patterns[i], pattern))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index < 0)
+                return false;
+
+            patterns.RemoveAt(index);
+            CleanupEmptySections(data, audienceKey, toolName);
+            Save(data);
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Removes every approval entry for a tool in the given audience.
+    /// Returns the count removed; zero if the tool had no entries.
+    /// </summary>
+    public int RemoveAllForTool(TrustAudience audience, string toolName)
+    {
+        lock (_lock)
+        {
+            var data = Load();
+            var audienceKey = audience.ToWireValue();
+
+            if (!data.Audiences.TryGetValue(audienceKey, out var audienceApprovals))
+                return 0;
+
+            if (!audienceApprovals.TryGetValue(toolName, out var patterns))
+                return 0;
+
+            var removed = patterns.Count;
+            if (removed == 0)
+                return 0;
+
+            patterns.Clear();
+            CleanupEmptySections(data, audienceKey, toolName);
+            Save(data);
+            return removed;
+        }
+    }
+
+    /// <summary>
+    /// Returns a deep clone of the current store contents. The returned object
+    /// is a snapshot — subsequent mutations to the underlying file are not
+    /// reflected. Suitable for read-only iteration by the operator CLI.
+    /// </summary>
+    public ToolApprovalData Snapshot()
+    {
+        var data = Load();
+        var clone = new ToolApprovalData();
+        foreach (var (audienceKey, tools) in data.Audiences)
+        {
+            var clonedTools = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var (toolName, patterns) in tools)
+                clonedTools[toolName] = [.. patterns];
+            clone.Audiences[audienceKey] = clonedTools;
+        }
+        return clone;
+    }
+
+    private static void CleanupEmptySections(ToolApprovalData data, string audienceKey, string toolName)
+    {
+        if (!data.Audiences.TryGetValue(audienceKey, out var audienceApprovals))
+            return;
+
+        if (audienceApprovals.TryGetValue(toolName, out var patterns) && patterns.Count == 0)
+            audienceApprovals.Remove(toolName);
+
+        if (audienceApprovals.Count == 0)
+            data.Audiences.Remove(audienceKey);
+    }
+
     private void Save(ToolApprovalData data)
     {
         var dir = Path.GetDirectoryName(_filePath);

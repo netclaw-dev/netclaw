@@ -14,6 +14,7 @@ using System.Text.Json.Nodes;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli;
+using Netclaw.Cli.Approvals;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Json;
@@ -730,6 +731,35 @@ static async Task RunAsync(string[] args)
         }
 
         Environment.ExitCode = await ModelCommand.RunAsync(args, paths);
+        return;
+    }
+
+    // ── Approvals management ──
+    if (mode is "approvals")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+
+        var isTuiInvocation = args.Length == 1 || (args.Length > 1 && args[1] is "tui");
+        if (isTuiInvocation)
+        {
+            var builder = Host.CreateApplicationBuilder(args);
+            ConfigureConfigServices(builder.Services, builder.Configuration);
+            builder.Services.AddSingleton(paths);
+            builder.Logging.ClearProviders();
+            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+            var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-approvals-trace.log");
+            builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+            builder.Services.AddTermina("/approvals", t =>
+                t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals"));
+
+            await builder.Build().RunAsync();
+            return;
+        }
+
+        Environment.ExitCode = await ApprovalsCommand.RunAsync(args, paths);
         return;
     }
 
