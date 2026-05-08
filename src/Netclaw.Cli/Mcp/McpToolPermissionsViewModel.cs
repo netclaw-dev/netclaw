@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Immutable;
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
@@ -182,19 +183,22 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             _pendingGrants[serverName.Value] = audienceGrants;
     }
 
-    private static readonly TrustAudience[] AudienceValues =
-        [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
+    // Most-trusted-first cycling order. Sourced from TrustAudiences.All so new
+    // audiences flow through automatically; the .Reverse() preserves the
+    // original UI behavior (Personal → Team → Public on right-arrow).
+    private static readonly ImmutableArray<TrustAudience> AudienceValues =
+        [.. TrustAudiences.All.Reverse()];
 
     public void CycleAudience()
     {
-        var idx = Array.IndexOf(AudienceValues, SelectedAudience);
+        var idx = AudienceValues.IndexOf(SelectedAudience);
         SelectedAudience = AudienceValues[(idx + 1) % AudienceValues.Length];
         NotifyStateChanged();
     }
 
     public void CycleAudienceBack()
     {
-        var idx = Array.IndexOf(AudienceValues, SelectedAudience);
+        var idx = AudienceValues.IndexOf(SelectedAudience);
         SelectedAudience = AudienceValues[(idx - 1 + AudienceValues.Length) % AudienceValues.Length];
         NotifyStateChanged();
     }

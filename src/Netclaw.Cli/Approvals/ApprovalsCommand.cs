@@ -21,8 +21,6 @@ internal static class ApprovalsCommand
 
     private sealed record RevokeOptions(string? Pattern, TrustAudience? Audience, string? Tool, bool RevokeAll);
 
-    private static readonly TrustAudience[] AllAudiences =
-        [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
 
     public static Task<int> RunAsync(
         string[] args,
@@ -138,10 +136,16 @@ internal static class ApprovalsCommand
 
     private static int RunRevokeAll(RevokeOptions opts, ToolApprovalStore store, TextWriter writer)
     {
-        var audiences = opts.Audience is { } only ? [only] : AllAudiences;
         var totalRemoved = 0;
-        foreach (var audience in audiences)
-            totalRemoved += store.RemoveAllForTool(audience, opts.Tool!);
+        if (opts.Audience is { } only)
+        {
+            totalRemoved = store.RemoveAllForTool(only, opts.Tool!);
+        }
+        else
+        {
+            foreach (var audience in TrustAudiences.All)
+                totalRemoved += store.RemoveAllForTool(audience, opts.Tool!);
+        }
 
         if (totalRemoved == 0)
         {

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Immutable;
 using Netclaw.Actors.Channels;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
@@ -21,7 +22,11 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ChannelsStepView : IWizardStepView
 {
-    private static readonly TrustAudience[] AudienceValues = [TrustAudience.Personal, TrustAudience.Team, TrustAudience.Public];
+    // Most-trusted-first cycling order. Sourced from TrustAudiences.All so new
+    // audiences flow through automatically; the .Reverse() preserves the
+    // original UI behavior (Personal → Team → Public on right-arrow).
+    private static readonly ImmutableArray<TrustAudience> AudienceValues =
+        [.. TrustAudiences.All.Reverse()];
 
     private int _cursorIndex;
     private bool _addMode;
@@ -179,7 +184,7 @@ public sealed class ChannelsStepView : IWizardStepView
                 if (entries.Count > 0)
                 {
                     var entry = entries[_cursorIndex];
-                    var idx = Array.IndexOf(AudienceValues, entry.Audience);
+                    var idx = AudienceValues.IndexOf(entry.Audience);
                     entry.Audience = AudienceValues[(idx + 1) % AudienceValues.Length];
                 }
                 break;
@@ -188,7 +193,7 @@ public sealed class ChannelsStepView : IWizardStepView
                 if (entries.Count > 0)
                 {
                     var entry = entries[_cursorIndex];
-                    var idx = Array.IndexOf(AudienceValues, entry.Audience);
+                    var idx = AudienceValues.IndexOf(entry.Audience);
                     entry.Audience = AudienceValues[(idx - 1 + AudienceValues.Length) % AudienceValues.Length];
                 }
                 break;

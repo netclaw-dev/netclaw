@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Immutable;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -14,6 +16,19 @@ public enum TrustAudience
     Public,
     Team,
     Personal
+}
+
+/// <summary>
+/// Canonical "all audiences" enumeration. Sourced from the enum itself so any
+/// iteration that should cover every audience picks up new values automatically
+/// when <see cref="TrustAudience"/> grows. Use this anywhere you would
+/// otherwise hardcode <c>[Personal, Team, Public]</c> — a stale hardcoded
+/// array becomes a silent privilege-escalation hazard the moment a new
+/// audience is added.
+/// </summary>
+public static class TrustAudiences
+{
+    public static ImmutableArray<TrustAudience> All { get; } = [.. Enum.GetValues<TrustAudience>()];
 }
 
 /// <summary>
