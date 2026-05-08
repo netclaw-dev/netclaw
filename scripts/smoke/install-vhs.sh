@@ -14,8 +14,10 @@
 
 set -euo pipefail
 
-VHS_VERSION="${VHS_VERSION:-0.8.0}"
+VHS_VERSION="${VHS_VERSION:-0.11.0}"
 VHS_LINUX_X64_SHA256="${VHS_LINUX_X64_SHA256:-SKIP_VERIFY}"
+# 0.11.0 is the minimum that supports `Wait+Screen /pattern/`.
+# Earlier versions (e.g. 0.8.0) parse `Wait` as an unknown command.
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -54,12 +56,16 @@ esac
 
 if have apt-get; then
   echo "Installing vhs runtime deps (ttyd, ffmpeg) via apt-get..."
+  # Force non-interactive mode so apt never tries to open whiptail dialogs
+  # (e.g., the kernel-upgrade prompt) when running on a CI runner or under
+  # an SSH/agent session.
+  export DEBIAN_FRONTEND=noninteractive
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
     apt-get update
     apt-get install -y --no-install-recommends ttyd ffmpeg ca-certificates curl
   else
-    sudo apt-get update
-    sudo apt-get install -y --no-install-recommends ttyd ffmpeg ca-certificates curl
+    sudo -E apt-get update
+    sudo -E apt-get install -y --no-install-recommends ttyd ffmpeg ca-certificates curl
   fi
 else
   for dep in ttyd ffmpeg curl; do

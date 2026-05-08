@@ -50,9 +50,12 @@ that breaks them.
    but no `Screenshot` directives in the body. Visual diffs are not how
    we assert anything here.
 
-4. **Minimum terminal surface.** `Set Width 100` / `Set Height 30`,
-   `Set Padding 0`, no theme. Anything bigger reduces determinism and
-   slows vhs renders.
+4. **Terminal sizing is in pixels, not columns.** VHS interprets
+   `Set Width` / `Set Height` as pixel dimensions (minimum 120x120).
+   The preamble sets a sensible default (1400x800 at FontSize 14, which
+   gives ~95 cols × 50 rows). Don't override unless a specific tape
+   needs more vertical room — and even then, prefer scrolling-friendly
+   anchors over taller terminals.
 
 5. **Anchor regexes at every step.** After every `Type` / `Enter` /
    `Down` / etc. that changes the visible state, immediately

@@ -5,37 +5,49 @@
 # disturbing the smoke compose volume.
 #
 # The wrapper substitutes:
-#   __PROJECT__       — docker compose project name (e.g. netclaw-smoke-tapes)
+#   __PROJECT__       — docker compose project name
 #   __COMPOSE_FILE__  — path to docker-compose.smoke.yml
 #   __TAPE_NAME__     — short name (e.g. init-wizard) used to scope NETCLAW_HOME
 #
-# Tapes that include this preamble can assume:
-#   * They are inside an interactive bash session in the sandbox container.
+# After the preamble runs each tape body can assume:
+#   * It is inside an interactive bash session in the sandbox container.
 #   * NETCLAW_HOME points at an empty per-tape directory.
-#   * The shell prompt has been replaced with a deterministic marker so
-#     Wait+Screen anchors (e.g. /TAPE\$/) work without depending on PS1.
+#   * The shell prompt has been replaced with `TAPE$ ` so screen anchors
+#     like /TAPE\$/ work without depending on PS1.
+#
+# VHS v0.11 does not support escaped quotes inside `Type "..."`, so we
+# avoid them entirely by burning the per-tape directory path into the
+# preamble at substitution time.
 
 Set Shell "bash"
-Set Width 100
-Set Height 30
+# Width/Height are PIXELS in VHS, not character columns. At FontSize 14
+# this gives roughly 95 cols x 50 rows — enough for the wizard's panels
+# without wrapping the typed `docker compose exec` line.
+Set Width 1400
+Set Height 800
 Set FontSize 14
 Set Padding 0
 Set TypingSpeed 30ms
 
 Hide
 
-Type "exec docker compose -p __PROJECT__ -f __COMPOSE_FILE__ exec netclaw-sandbox bash --noprofile --norc"
+# Replace the host vhs-spawned bash with a docker exec into the sandbox.
+# Bash inside the netclaw image starts with an empty PS1 (USER netclaw,
+# no profile), so we cannot wait on a prompt — we wait briefly to let
+# the exec attach, then explicitly set PS1 ourselves so anchors below
+# work deterministically.
+Type "exec docker compose -p __PROJECT__ -f __COMPOSE_FILE__ exec netclaw-sandbox bash"
 Enter
-Wait+Screen /[#$] $/
+Sleep 1500ms
 
-Type "export NETCLAW_HOME=/tmp/tape-__TAPE_NAME__"
+Type "rm -rf /tmp/tape-__TAPE_NAME__ && mkdir -p /tmp/tape-__TAPE_NAME__"
 Enter
-Type "rm -rf \"$NETCLAW_HOME\" && mkdir -p \"$NETCLAW_HOME\""
+Type "export NETCLAW_HOME=/tmp/tape-__TAPE_NAME__"
 Enter
 Type "export PS1='TAPE$ '"
 Enter
 Type "clear"
 Enter
-Wait+Screen /TAPE\$ $/
+Wait+Screen /TAPE\$/
 
 Show

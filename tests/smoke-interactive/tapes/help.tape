@@ -3,12 +3,12 @@
 # end-to-end against the smoke compose stack. No interactive prompts;
 # the only assertion is that vhs reaches the end without timing out.
 
-Output /tmp/tape-help.gif
+Output "/tmp/tape-help.gif"
 
 Type "netclaw --help"
 Enter
-Wait+Screen /Usage:/
-Wait+Screen /TAPE\$ $/
+Wait+Screen@10s /Usage:/
+Wait+Screen@5s /TAPE\$/
 
 Type "exit"
 Enter

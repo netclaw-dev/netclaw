@@ -12,122 +12,121 @@
 #
 # Outputs only a debug GIF; tapes are not authored for screenshots.
 
-Output /tmp/tape-init-wizard.gif
+Output "/tmp/tape-init-wizard.gif"
 
 # ─── Launch ──────────────────────────────────────────────────────────
 Type "netclaw init"
 Enter
 
 # ─── Step 1: Provider ───────────────────────────────────────────────
-Wait+Screen /Choose your LLM provider:/
-# Anthropic is highlighted by default; move down to Ollama.
-# Provider list order is roughly: Anthropic, OpenAI, Ollama, ... — Ollama is index 2.
-Down
+Wait+Screen@10s /Choose your LLM provider:/
+# Provider list ordering is alphabetical by TypeKey:
+#   anthropic, ollama, openai, openai-compatible, openrouter
+# Display order matches: Anthropic (default), then Ollama (one Down).
 Down
 Enter
 
 # Endpoint input (default http://localhost:11434, but in compose ollama is at http://ollama:11434).
-Wait+Screen /endpoint:/
-# Replace default with the compose-internal hostname.
-Ctrl+U
+Wait+Screen@10s /endpoint:/
+# Clear the default value. VHS has no End/Home — push cursor right past
+# the existing text (Right N is a no-op when already at end), then
+# Backspace enough to clear. Default is "http://localhost:11434" (22 chars).
+Right 32
+Backspace 32
 Type "http://ollama:11434"
 Enter
 
-# Wait for connection probe + model discovery.
-Wait+Screen /Connected! Found/
-Wait+Screen /Select a model/
-# qwen2:0.5b is the only model the smoke stack pulls; first item.
+# Wait for connection probe + model discovery. The "Connected! Found N models"
+# success message auto-advances to the model list quickly enough that vhs
+# can miss it; wait directly for the model selection header instead.
+Wait+Screen@45s /Select a model/
+# Models are alphabetical: all-minilm first, qwen2 second. Move to qwen2:0.5b.
+Down
 Enter
 
 # ─── Step 2: Security Posture ────────────────────────────────────────
-Wait+Screen /Who will interact with this Netclaw instance/
+Wait+Screen@10s /Who will interact with this Netclaw instance/
 # Personal is the first / default-highlighted option.
 Enter
 
 # ─── Step 3: Channel Picker ──────────────────────────────────────────
-Wait+Screen /Which channels would you like to connect/
+Wait+Screen@10s /Which channels would you like to connect/
 # 'd' = done without selecting any channels (skip channel setup).
 Type "d"
 
 # ─── Step 4: Web Search ─────────────────────────────────────────────
-Wait+Screen /Choose your web search provider/
+Wait+Screen@10s /Choose your web search provider/
 # DuckDuckGo is the first / default option.
 Enter
 
 # ─── Step 5: Browser Automation ──────────────────────────────────────
-Wait+Screen /Enable browser automation/
+Wait+Screen@10s /Enable browser automation/
 # "No" is the first / default option.
 Enter
 
 # ─── Step 6: Identity ───────────────────────────────────────────────
-Wait+Screen /Agent name:/
+Wait+Screen@10s /Agent name:/
 Enter
 
-Wait+Screen /Communication style:/
+Wait+Screen@10s /Communication style:/
 Enter
 
-Wait+Screen /Your name:/
+Wait+Screen@10s /Your name:/
 Type "SmokeTester"
 Enter
 
-Wait+Screen /Your timezone:/
+Wait+Screen@10s /Your timezone:/
 Enter
 
-Wait+Screen /Projects directory:/
+Wait+Screen@10s /Projects directory:/
 Enter
 
-Wait+Screen /Notification webhook URL/
+Wait+Screen@10s /Notification webhook URL/
 Enter
 
-# ─── Step 7: External Skills ─────────────────────────────────────────
-# This step is conditional on detected external skills. In the smoke
-# container there's no Claude Code, so this prompt may be skipped
-# entirely — the tape treats both branches as acceptable by waiting
-# on whichever appears next.
-#
-# Using Wait+Screen with alternation: if the external-skills picker
-# shows up, accept it; otherwise we'll already be past it.
-Wait+Screen /Add a custom skill directory|External skill directories detected|Configured feeds:|Connect to a private skill server/
-
-# If we landed on the "External skill directories detected" page,
-# accept and move on. The "Add a custom skill directory" prompt
-# follows; press Enter to skip.
-# (If we landed elsewhere already, this Enter is a no-op for that view.)
-Enter
-
-# Custom skill directory — leave blank.
-Wait+Screen /Add a custom skill directory|Connect to a private skill server/
-Enter
+# ─── Step 7: External Skills (skipped in smoke) ─────────────────────
+# ExternalSkillsStep.IsApplicable returns false when _detectedSources.Count == 0.
+# The smoke container has no Claude Code etc., so the wizard goes straight
+# from Identity → SkillFeeds with no External Skills prompts. If that ever
+# changes (smoke image starts seeding Claude Code), we'll need to handle
+# the "External skill directories detected" multi-select + custom dir input.
 
 # ─── Step 8: Skill Feeds ────────────────────────────────────────────
-Wait+Screen /Connect to a private skill server/
-# "No — skip" is the second option.
+Wait+Screen@10s /Connect to a private skill server/
+# Default is "Yes, connect"; we want "No — skip" (Down + Enter).
 Down
 Enter
 
 # ─── Step 9: Network Exposure ───────────────────────────────────────
-Wait+Screen /How will this Netclaw daemon be accessed/
+Wait+Screen@10s /How will this Netclaw daemon be accessed/
 # "Local — loopback only" is the first / default option.
 Enter
 
-Wait+Screen /Should this daemon accept inbound webhooks/
+Wait+Screen@10s /Should this daemon accept inbound webhooks/
 # "No" — second option.
 Down
 Enter
 
 # ─── Step 10: Health Check ──────────────────────────────────────────
-Wait+Screen /Press Enter to run health checks/
+Wait+Screen@10s /Press Enter to run health checks/
 Enter
 
 # Health checks contact ollama, validate config, run doctor probes.
-# Wait for either a clear success indicator or the wizard to finish
-# and return to the shell prompt.
-Wait+Screen /TAPE\$ $/
+# On success the wizard auto-navigates to the chat page (the daemon is
+# running by this point and the user lands inside the TUI). Wait for
+# the chat status bar to show the configured model, then quit the TUI
+# with Ctrl+Q to drop back to the shell. The post-tape assertion runs
+# `netclaw doctor` against the config the wizard wrote, which is the
+# real signal — vhs only proves we got this far.
+Wait+Screen@120s /Ready  \|  qwen2:0.5b/
+Ctrl+Q
+
+Wait+Screen@10s /TAPE\$/
 
 # Sanity: re-check at the prompt that init reported success.
 Type "echo INIT_EXIT=$?"
 Enter
-Wait+Screen /INIT_EXIT=0/
+Wait+Screen@5s /INIT_EXIT=0/
 
 Type "exit"
 Enter
