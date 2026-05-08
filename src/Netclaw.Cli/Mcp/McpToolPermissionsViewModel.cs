@@ -596,6 +596,8 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         else if (_pendingGrants.TryGetValue(SelectedServer, out var existingGrants))
         {
             existingGrants.Remove(audienceName);
+            if (existingGrants.Count == 0)
+                _pendingGrants.Remove(SelectedServer);
         }
 
         NotifyStateChanged();

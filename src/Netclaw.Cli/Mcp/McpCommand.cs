@@ -255,11 +255,11 @@ internal static class McpCommand
         var toolsSection = GetOrCreateSection(config, "Tools");
         var profilesSection = GetOrCreateSection(toolsSection, "AudienceProfiles");
 
-        (TrustAudience audience, string approvalMode)[] audiences =
+        (TrustAudience audience, ToolApprovalMode approvalMode)[] audiences =
         [
-            (TrustAudience.Personal, "Auto"),
-            (TrustAudience.Team, "Approval"),
-            (TrustAudience.Public, "Deny"),
+            (TrustAudience.Personal, ToolApprovalMode.Auto),
+            (TrustAudience.Team, ToolApprovalMode.Approval),
+            (TrustAudience.Public, ToolApprovalMode.Deny),
         ];
 
         foreach (var (audience, approvalMode) in audiences)
@@ -275,7 +275,7 @@ internal static class McpCommand
 
             var approvalPolicy = GetOrCreateSection(audienceSection, "ApprovalPolicy");
             var serverDefaults = GetOrCreateSection(approvalPolicy, "McpServerDefaults");
-            serverDefaults[serverName.Value] = approvalMode;
+            serverDefaults[serverName.Value] = approvalMode.ToString();
         }
     }
 
