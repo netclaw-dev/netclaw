@@ -9,7 +9,7 @@
     <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.19.1</DiscordNetVersion>
-    <MicrosoftExtensionsAIVersion>10.5.0</MicrosoftExtensionsAIVersion>
+    <MicrosoftExtensionsAIVersion>10.5.2</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.7</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
   <!-- App dependencies -->
@@ -27,7 +27,7 @@
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.5.0" />
-    <PackageVersion Include="ModelContextProtocol.Core" Version="1.2.0" />
+    <PackageVersion Include="ModelContextProtocol.Core" Version="1.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="$(MicrosoftAspNetCoreVersion)" />
     <!-- Pinned to 10.0.6 to patch GHSA-w3x6-4m5h-cxqf (CVE-2026-26171) and GHSA-37gx-xxp4-5rgx (CVE-2026-33116).
