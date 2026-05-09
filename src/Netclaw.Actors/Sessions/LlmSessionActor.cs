@@ -1417,11 +1417,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Outer hang-detector for the whole compaction pipeline. The inner observer
     // call already enforces its own SidecarLlmTimeout via a linked CTS, so the
-    // outer budget needs headroom for: Phase 1 (clear tool results), Phase 2
+    // outer budget needs headroom for Phase 1 (clear tool results), Phase 2
     // (extractive reducer loop), threadpool scheduling/JIT/GC, plus the full
-    // sidecar call. Old formula was max(Turn, Sidecar) which equals Sidecar in
-    // the common case where they're configured identically — leaving zero
-    // headroom and racing the inner call on cold-start runners.
+    // sidecar call.
     private TimeSpan GetCompactionTimeout()
         => _config.SidecarLlmTimeout * 2 + TimeSpan.FromSeconds(5);
 

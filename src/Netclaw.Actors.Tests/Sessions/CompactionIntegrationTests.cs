@@ -303,7 +303,7 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
-        // Watchdog = SidecarLlmTimeout * 2 + 5s = 15s; allow margin on cold-start runners.
+        // Generous wait for the compaction watchdog to fire on cold-start runners.
         var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("compaction timed out", error.Message, StringComparison.OrdinalIgnoreCase);
 
