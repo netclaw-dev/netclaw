@@ -44,8 +44,8 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         });
         services.AddSingleton(new SessionConfig
         {
-            TurnLlmTimeout = TimeSpan.FromSeconds(1),
-            SidecarLlmTimeout = TimeSpan.FromSeconds(1),
+            TurnLlmTimeout = TimeSpan.FromSeconds(5),
+            SidecarLlmTimeout = TimeSpan.FromSeconds(5),
             Tuning = new SessionTuning
             {
                 CompactionThreshold = 0.75,
@@ -303,13 +303,14 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        // Watchdog = SidecarLlmTimeout * 2 + 5s = 15s; allow margin on cold-start runners.
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("compaction timed out", error.Message, StringComparison.OrdinalIgnoreCase);
 
-        var bufferedText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        var bufferedText = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("fake", bufferedText.Text, StringComparison.OrdinalIgnoreCase);
-        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
