@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SecurityPolicyDoctorCheck.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -63,8 +63,12 @@ public sealed class SecurityPolicyDoctorCheck(NetclawPaths paths) : IDoctorCheck
             warnings.Add("DeploymentPosture not set; strict fallback resolved to Public.");
         }
 
+        // Only warn about Personal + HostAllowed when the posture is implicit
+        // (resolved from fallback defaults). If the user explicitly set
+        // DeploymentPosture = Personal, they chose this intentionally.
         if (effective.DeploymentPosture == DeploymentPosture.Personal
-            && effective.ShellExecutionMode == ShellExecutionMode.HostAllowed)
+            && effective.ShellExecutionMode == ShellExecutionMode.HostAllowed
+            && !config.DeploymentPosture.HasValue)
         {
             warnings.Add("Personal posture with HostAllowed shell — full host access is enabled.");
         }

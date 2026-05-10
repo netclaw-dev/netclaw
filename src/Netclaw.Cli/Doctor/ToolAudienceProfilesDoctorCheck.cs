@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ToolAudienceProfilesDoctorCheck.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -90,7 +90,12 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             warnings.Add($"Missing explicit profiles for {string.Join(", ", missingProfiles)}; fallback defaults are in effect.");
         }
 
-        if (IsUnrestrictedPersonalProfile(toolConfig.AudienceProfiles.Personal))
+        // Only warn about unrestricted Personal when it's using fallback defaults.
+        // If the Personal profile was explicitly written (e.g., by `netclaw init`),
+        // the user made an intentional choice and this warning is noise.
+        var personalExplicit = !missingProfiles.Contains("personal");
+        if (IsUnrestrictedPersonalProfile(toolConfig.AudienceProfiles.Personal)
+            && !personalExplicit)
         {
             warnings.Add("Personal profile allows all tools and unrestricted filesystem access.");
             if (toolConfig.ShellMode == ShellExecutionMode.HostAllowed)

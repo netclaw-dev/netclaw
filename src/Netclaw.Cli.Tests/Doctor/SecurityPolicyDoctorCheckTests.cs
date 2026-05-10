@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SecurityPolicyDoctorCheckTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -57,8 +57,10 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task ExplicitPersonalPosture_HostAllowed_Warns()
+    public async Task ExplicitPersonalPosture_HostAllowed_Passes()
     {
+        // When the user explicitly sets Personal + HostAllowed, doctor should
+        // respect that intentional choice and pass cleanly.
         WriteConfig("""
             {
               "configVersion": 1,
@@ -73,8 +75,31 @@ public sealed class SecurityPolicyDoctorCheckTests : IDisposable
         var check = new SecurityPolicyDoctorCheck(_paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("full host access", result.Message);
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("Personal", result.Message);
+    }
+
+    [Fact]
+    public async Task ImplicitPersonalPosture_HostAllowed_Warns()
+    {
+        // When DeploymentPosture is missing and StrictDefaults is false,
+        // the fallback resolves to Personal with HostAllowed — this should
+        // warn because the user didn't explicitly choose this.
+        WriteConfig("""
+            {
+              "configVersion": 1,
+              "Security": {
+                "StrictDefaults": false
+              }
+            }
+            """);
+
+        var check = new SecurityPolicyDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        // StrictDefaults=false with no DeploymentPosture is an Error first
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("silently assumes Personal posture", result.Message);
     }
 
     [Fact]
