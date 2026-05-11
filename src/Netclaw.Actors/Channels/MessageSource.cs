@@ -89,6 +89,12 @@ public sealed record MessageSource
     public bool HasAdoptedContext { get; init; }
 
     /// <summary>
+    /// True when the adopted-context window includes at least one sender other than
+    /// the current authorized sender.
+    /// </summary>
+    public bool HasThirdPartyAdoptedContext { get; init; }
+
+    /// <summary>
     /// Stable sender ids present in the adopted-context window for this turn.
     /// </summary>
     public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];

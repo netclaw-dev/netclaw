@@ -261,6 +261,8 @@ internal static class NetclawProtoMapper
         {
             AuthorizedMessageId = r.AuthorizedMessageId,
             Projection = r.Projection,
+            HasAdoptedContext = r.HasAdoptedContext,
+            HasThirdPartyAdoptedContext = r.HasThirdPartyAdoptedContext,
             ProjectionPersisted = r.ProjectionPersisted
         };
         if (r.AuthorizerSenderId is not null)
@@ -269,6 +271,7 @@ internal static class NetclawProtoMapper
             proto.LowerBound = r.LowerBound;
         if (r.UpperBound is not null)
             proto.UpperBound = r.UpperBound;
+        proto.AdoptedSpeakerIds.AddRange(r.AdoptedSpeakerIds);
         proto.Messages.AddRange(r.Messages.Select(ToAdoptedContextSnapshotMessage));
         return proto;
     }
@@ -283,8 +286,13 @@ internal static class NetclawProtoMapper
             LowerBound = proto.HasLowerBound ? proto.LowerBound : null,
             UpperBound = proto.HasUpperBound ? proto.UpperBound : null,
             Projection = proto.Projection,
+            HasAdoptedContext = proto.HasAdoptedContext || proto.Messages.Count > 0,
+            HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
             ProjectionPersisted = proto.ProjectionPersisted
         };
+        r.AdoptedSpeakerIds.AddRange(proto.AdoptedSpeakerIds.Count > 0
+            ? proto.AdoptedSpeakerIds
+            : proto.Messages.Select(m => m.SenderId).Distinct(StringComparer.Ordinal));
         r.Messages.AddRange(proto.Messages.Select(FromAdoptedContextSnapshotMessage));
         return r;
     }
@@ -434,6 +442,8 @@ internal static class NetclawProtoMapper
             SessionId = ToProto(evt.SessionId),
             AuthorizedMessageId = evt.AuthorizedMessageId,
             Projection = evt.Projection,
+            HasAdoptedContext = evt.HasAdoptedContext,
+            HasThirdPartyAdoptedContext = evt.HasThirdPartyAdoptedContext,
             ProjectionPersisted = evt.ProjectionPersisted,
             RecordedAtMs = evt.RecordedAtMs
         };
@@ -443,6 +453,7 @@ internal static class NetclawProtoMapper
             proto.LowerBound = evt.LowerBound;
         if (evt.UpperBound is not null)
             proto.UpperBound = evt.UpperBound;
+        proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
         proto.Messages.AddRange(evt.Messages.Select(ToAdoptedMessageRecord));
         return proto;
     }
@@ -457,9 +468,14 @@ internal static class NetclawProtoMapper
             LowerBound = proto.HasLowerBound ? proto.LowerBound : null,
             UpperBound = proto.HasUpperBound ? proto.UpperBound : null,
             Projection = proto.Projection,
+            HasAdoptedContext = proto.HasAdoptedContext || proto.Messages.Count > 0,
+            HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
             ProjectionPersisted = proto.ProjectionPersisted,
             RecordedAtMs = proto.RecordedAtMs
         };
+        evt.AdoptedSpeakerIds.AddRange(proto.AdoptedSpeakerIds.Count > 0
+            ? proto.AdoptedSpeakerIds
+            : proto.Messages.Select(m => m.SenderId).Distinct(StringComparer.Ordinal));
         evt.Messages.AddRange(proto.Messages.Select(FromAdoptedMessageRecord));
         return evt;
     }

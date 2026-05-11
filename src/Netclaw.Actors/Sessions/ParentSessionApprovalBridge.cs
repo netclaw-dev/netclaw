@@ -22,6 +22,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
     private readonly string? _requesterSenderId;
     private readonly PrincipalClassification? _requesterPrincipal;
     private readonly bool _hasAdoptedContext;
+    private readonly bool _hasThirdPartyAdoptedContext;
     private readonly IReadOnlyList<string> _adoptedSpeakerIds;
 
     public ParentSessionApprovalBridge(
@@ -31,6 +32,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         string? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
         bool hasAdoptedContext,
+        bool hasThirdPartyAdoptedContext,
         IReadOnlyList<string> adoptedSpeakerIds)
     {
         _channel = channel;
@@ -39,6 +41,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         _requesterSenderId = requesterSenderId;
         _requesterPrincipal = requesterPrincipal;
         _hasAdoptedContext = hasAdoptedContext;
+        _hasThirdPartyAdoptedContext = hasThirdPartyAdoptedContext;
         _adoptedSpeakerIds = adoptedSpeakerIds;
     }
 
@@ -68,6 +71,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             ApprovalEntries = approvalEntries,
             DirectoryRoots = directoryRoots,
             HasAdoptedContext = _hasAdoptedContext,
+            HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
             PersistedAdoptedContext = _hasAdoptedContext,
             Options =

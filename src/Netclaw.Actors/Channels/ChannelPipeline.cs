@@ -81,6 +81,7 @@ public static class MessageSourceFactory
             ReceivedAt = input.ReceivedAt,
             ExecutableText = input.ExecutableText ?? textContent,
             HasAdoptedContext = input.HasAdoptedContext,
+            HasThirdPartyAdoptedContext = input.HasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = input.AdoptedSpeakerIds,
             AdoptedContextProjection = input.AdoptedContextProjection,
             AdoptedContextLowerBound = input.AdoptedContextLowerBound,

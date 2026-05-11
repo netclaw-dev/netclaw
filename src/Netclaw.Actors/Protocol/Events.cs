@@ -65,6 +65,12 @@ public sealed class AdoptedContextRecorded
 
     public string Projection { get; set; } = string.Empty;
 
+    public bool HasAdoptedContext { get; set; }
+
+    public bool HasThirdPartyAdoptedContext { get; set; }
+
+    public List<string> AdoptedSpeakerIds { get; set; } = [];
+
     public List<AdoptedMessageRecord> Messages { get; set; } = [];
 
     public bool ProjectionPersisted { get; set; }

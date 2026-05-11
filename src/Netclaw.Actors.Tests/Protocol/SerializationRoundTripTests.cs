@@ -380,6 +380,9 @@ public sealed class SerializationRoundTripTests : TestKit
             LowerBound = "msg-40",
             UpperBound = "msg-42",
             Projection = "Alice said hello; Bob replied",
+            HasAdoptedContext = true,
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = ["U12345", "U67890"],
             ProjectionPersisted = true,
             RecordedAtMs = 1708531200000,
             Messages =
@@ -402,6 +405,9 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal("msg-40", result.LowerBound);
         Assert.Equal("msg-42", result.UpperBound);
         Assert.Equal("Alice said hello; Bob replied", result.Projection);
+        Assert.True(result.HasAdoptedContext);
+        Assert.True(result.HasThirdPartyAdoptedContext);
+        Assert.Equal(["U12345", "U67890"], result.AdoptedSpeakerIds);
         Assert.True(result.ProjectionPersisted);
         Assert.Equal(1708531200000, result.RecordedAtMs);
         var msg = Assert.Single(result.Messages);
@@ -422,6 +428,8 @@ public sealed class SerializationRoundTripTests : TestKit
             LowerBound = null,
             UpperBound = null,
             Projection = "",
+            HasAdoptedContext = false,
+            HasThirdPartyAdoptedContext = false,
             ProjectionPersisted = false,
             RecordedAtMs = 1708531200000
         };
@@ -431,6 +439,9 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Null(result.AuthorizerSenderId);
         Assert.Null(result.LowerBound);
         Assert.Null(result.UpperBound);
+        Assert.False(result.HasAdoptedContext);
+        Assert.False(result.HasThirdPartyAdoptedContext);
+        Assert.Empty(result.AdoptedSpeakerIds);
         Assert.Empty(result.Messages);
     }
 

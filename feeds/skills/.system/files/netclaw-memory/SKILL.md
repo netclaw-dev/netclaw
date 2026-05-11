@@ -3,7 +3,7 @@ name: netclaw-memory
 description: "REQUIRED when the user asks what you remember, recall, or know from past conversations, previous sessions, or cross-session memory. Also before using memory tools: find_memories, get_memories, store_memory, update_memory."
 metadata:
   author: netclaw
-  version: "1.4.0"
+  version: "1.4.1"
 ---
 
 # Netclaw Memory
@@ -71,6 +71,14 @@ Policy rules for explicit writes:
 - explicit writes still inherit the current turn's `audience` and `boundary`
 - explicit writes may narrow policy scope, but must never widen it
 - raw secrets, credentials, tokens, and private keys are never durable memory
+
+Automatic observation note:
+- a non-empty adopted thread window still counts as adopted context for audit
+  and approval provenance
+- automatic memory suppression only kicks in when the adopted window includes a
+  sender other than the current authorized author
+- self-only adopted history does not suppress automatic memory formation by
+  itself
 
 ### `update_memory`
 

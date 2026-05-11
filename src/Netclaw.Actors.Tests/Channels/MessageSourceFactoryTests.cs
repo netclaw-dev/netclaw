@@ -118,4 +118,44 @@ public sealed class MessageSourceFactoryTests : TestKit
         Assert.Equal("check-pr:1712000000000", result.ReminderId);
         Assert.Same(probe.Ref, result.AckTarget);
     }
+
+    [Fact]
+    public void Create_propagates_self_only_adopted_context_without_third_party_flag()
+    {
+        var input = new ChannelInput
+        {
+            SenderId = "user-1",
+            Contents = [new TextContent("hello")],
+            ReceivedAt = DateTimeOffset.UtcNow,
+            HasAdoptedContext = true,
+            HasThirdPartyAdoptedContext = false,
+            AdoptedSpeakerIds = ["user-1"]
+        };
+
+        var result = MessageSourceFactory.Create(input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
+
+        Assert.True(result.HasAdoptedContext);
+        Assert.False(result.HasThirdPartyAdoptedContext);
+        Assert.Equal(["user-1"], result.AdoptedSpeakerIds);
+    }
+
+    [Fact]
+    public void Create_propagates_third_party_adopted_context_flag()
+    {
+        var input = new ChannelInput
+        {
+            SenderId = "user-1",
+            Contents = [new TextContent("hello")],
+            ReceivedAt = DateTimeOffset.UtcNow,
+            HasAdoptedContext = true,
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = ["user-1", "user-2"]
+        };
+
+        var result = MessageSourceFactory.Create(input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
+
+        Assert.True(result.HasAdoptedContext);
+        Assert.True(result.HasThirdPartyAdoptedContext);
+        Assert.Equal(["user-1", "user-2"], result.AdoptedSpeakerIds);
+    }
 }

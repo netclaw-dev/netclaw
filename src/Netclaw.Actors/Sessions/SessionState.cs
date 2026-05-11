@@ -26,6 +26,9 @@ public sealed record SessionState
         string? LowerBound,
         string? UpperBound,
         string Projection,
+        bool HasAdoptedContext,
+        bool HasThirdPartyAdoptedContext,
+        ImmutableList<string> AdoptedSpeakerIds,
         bool ProjectionPersisted,
         ImmutableList<AdoptedContextAuditMessage> Messages);
 
@@ -126,6 +129,9 @@ public sealed record SessionState
             evt.LowerBound,
             evt.UpperBound,
             evt.Projection,
+            evt.HasAdoptedContext,
+            evt.HasThirdPartyAdoptedContext,
+            [.. evt.AdoptedSpeakerIds],
             evt.ProjectionPersisted,
             [.. evt.Messages
                 .Select(message => new AdoptedContextAuditMessage(
@@ -324,6 +330,9 @@ public sealed record SessionState
                     LowerBound = record.LowerBound,
                     UpperBound = record.UpperBound,
                     Projection = record.Projection,
+                    HasAdoptedContext = record.HasAdoptedContext,
+                    HasThirdPartyAdoptedContext = record.HasThirdPartyAdoptedContext,
+                    AdoptedSpeakerIds = [.. record.AdoptedSpeakerIds],
                     ProjectionPersisted = record.ProjectionPersisted,
                     Messages = [.. record.Messages
                         .Select(message => new SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage
@@ -353,6 +362,9 @@ public sealed record SessionState
                     record.LowerBound,
                     record.UpperBound,
                     record.Projection,
+                    record.HasAdoptedContext,
+                    record.HasThirdPartyAdoptedContext,
+                    [.. record.AdoptedSpeakerIds],
                     record.ProjectionPersisted,
                     [.. record.Messages
                         .Select(message => new AdoptedContextAuditMessage(

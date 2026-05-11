@@ -110,6 +110,7 @@ public sealed record SessionOutputDto
     public List<string>? InteractionDirectoryRoots { get; init; }
     public List<ToolInteractionOption>? InteractionOptions { get; init; }
     public bool? InteractionHasAdoptedContext { get; init; }
+    public bool? InteractionHasThirdPartyAdoptedContext { get; init; }
     public List<string>? InteractionAdoptedSpeakerIds { get; init; }
 
     // SubAgent

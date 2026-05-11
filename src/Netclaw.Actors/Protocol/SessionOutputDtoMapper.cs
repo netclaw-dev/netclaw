@@ -183,6 +183,7 @@ public static class SessionOutputDtoMapper
             InteractionDirectoryRoots = [.. msg.DirectoryRoots],
             InteractionOptions = [.. msg.Options],
             InteractionHasAdoptedContext = msg.HasAdoptedContext,
+            InteractionHasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
             InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds]
         },
 
@@ -336,6 +337,7 @@ public static class SessionOutputDtoMapper
                 DisplayText = dto.InteractionDisplayText ?? string.Empty,
                 RequesterSenderId = dto.RequesterSenderId,
                 HasAdoptedContext = dto.InteractionHasAdoptedContext ?? false,
+                HasThirdPartyAdoptedContext = dto.InteractionHasThirdPartyAdoptedContext ?? false,
                 AdoptedSpeakerIds = dto.InteractionAdoptedSpeakerIds ?? [],
                 Patterns = dto.InteractionPatterns ?? [],
                 ApprovalEntries = dto.InteractionApprovalEntries ?? [],

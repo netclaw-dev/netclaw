@@ -127,6 +127,9 @@ message AdoptedContextRecordedProto {
   repeated AdoptedMessageRecordProto messages = 7;
   bool projection_persisted = 8;
   int64 recorded_at_ms = 9;
+  bool has_third_party_adopted_context = 10;
+  bool has_adopted_context = 11;
+  repeated string adopted_speaker_ids = 12;
 }
 
 // ── Snapshots ──
@@ -156,6 +159,9 @@ message SessionSnapshotProto {
     string projection = 5;
     bool projection_persisted = 6;
     repeated AdoptedContextSnapshotMessage messages = 7;
+    bool has_third_party_adopted_context = 8;
+    bool has_adopted_context = 9;
+    repeated string adopted_speaker_ids = 10;
   }
 
   repeated SerializableChatMessageProto history = 1;

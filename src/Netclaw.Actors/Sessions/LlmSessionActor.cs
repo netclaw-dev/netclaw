@@ -786,6 +786,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.RequesterSenderId,
                 msg.RequesterPrincipal,
                 msg.HasAdoptedContext,
+                msg.HasThirdPartyAdoptedContext,
                 msg.AdoptedSpeakerIds);
 
             PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
@@ -1011,9 +1012,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (msg.Proposals.Count > 0 && _curationActor is not null
             && CurrentTurnAudience() != TrustAudience.Public && _memoryConfig.Enabled)
         {
-            if (_currentTurnSource?.HasAdoptedContext == true)
+            if (_currentTurnSource?.HasThirdPartyAdoptedContext == true)
             {
-                TurnLog().Info("memory_curation_skipped adopted-context present; waiting for explicit elevation");
+                TurnLog().Info("memory_curation_skipped third-party adopted-context present; waiting for explicit elevation");
                 if (stopAfterAcceptedProposalPersistence)
                     CompletePassivation();
                 return;
@@ -1900,7 +1901,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Quoted adopted thread context is useful for the live turn, but it should not
         // silently become durable memory authority via the automatic observer path.
-        if (cmd.Source?.HasAdoptedContext != true)
+        if (cmd.Source?.HasThirdPartyAdoptedContext != true)
             _observerActor?.Tell(cmd);
 
         _turnState.ResetForNewTurn();
@@ -3089,6 +3090,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string? RequesterSenderId,
         PrincipalClassification? RequesterPrincipal,
         bool HasAdoptedContext,
+        bool HasThirdPartyAdoptedContext,
         IReadOnlyList<string> AdoptedSpeakerIds);
 
     private void PersistAdoptedContextIfNeeded(MessageSource? source)
@@ -3113,6 +3115,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             LowerBound = source.AdoptedContextLowerBound,
             UpperBound = source.AdoptedContextUpperBound ?? source.MessageId,
             Projection = source.AdoptedContextProjection ?? string.Empty,
+            HasAdoptedContext = source.HasAdoptedContext,
+            HasThirdPartyAdoptedContext = source.HasThirdPartyAdoptedContext,
+            AdoptedSpeakerIds = [.. source.AdoptedSpeakerIds],
             ProjectionPersisted = true,
             RecordedAtMs = NowMs(),
             Messages = [.. source.AdoptedContextEntries

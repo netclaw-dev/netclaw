@@ -372,6 +372,9 @@ public class SessionStateTests
             LowerBound = "cursor-0",
             UpperBound = "authorized-1",
             Projection = "[adopted-context]",
+            HasAdoptedContext = true,
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = ["user-1", "observer-1"],
             ProjectionPersisted = true,
             Messages =
             [
@@ -392,6 +395,9 @@ public class SessionStateTests
         Assert.Equal("user-1", record.Value.AuthorizerSenderId);
         Assert.Equal("cursor-0", record.Value.LowerBound);
         Assert.Equal("authorized-1", record.Value.UpperBound);
+        Assert.True(record.Value.HasAdoptedContext);
+        Assert.True(record.Value.HasThirdPartyAdoptedContext);
+        Assert.Equal(["user-1", "observer-1"], record.Value.AdoptedSpeakerIds);
         Assert.True(record.Value.ProjectionPersisted);
         Assert.Equal("[adopted-context]", record.Value.Projection);
         var message = Assert.Single(record.Value.Messages);

@@ -746,6 +746,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
             Assert.Equal("live message", input.ExecutableText);
             Assert.True(input.HasAdoptedContext);
+            Assert.True(input.HasThirdPartyAdoptedContext);
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));
@@ -789,12 +790,51 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
             Assert.Equal("tell me what they said", input.ExecutableText);
             Assert.True(input.HasAdoptedContext);
+            Assert.True(input.HasThirdPartyAdoptedContext);
 
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));
             Assert.Contains("/opsx-sync", textContent, StringComparison.Ordinal);
             Assert.Contains("tell me what they said", textContent, StringComparison.Ordinal);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Self_only_thread_history_sets_adopted_context_without_third_party_flag()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-self-only");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        var historyItem = Assert.Single(CreateHistoryItems(1));
+        historyFetcher.SetHistory(
+        [
+            historyItem with
+            {
+                SenderId = "user-1"
+            }
+        ]);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("summarize what I said", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.True(input.HasAdoptedContext);
+            Assert.False(input.HasThirdPartyAdoptedContext);
+            Assert.Equal(["user-1"], input.AdoptedSpeakerIds);
         }, cancellationToken: ct);
     }
 
@@ -904,6 +944,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Equal(1, historyFetcher.FetchCount);
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
             Assert.False(input.HasAdoptedContext);
+            Assert.False(input.HasThirdPartyAdoptedContext);
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));

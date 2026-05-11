@@ -390,6 +390,12 @@ public sealed record ToolInteractionRequest : SessionOutput
     public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
 
     /// <summary>
+    /// True when the adopted-context window includes at least one sender other than
+    /// the current authorized sender.
+    /// </summary>
+    public bool HasThirdPartyAdoptedContext { get; init; }
+
+    /// <summary>
     /// True when adopted-context provenance was preserved in stored approval state.
     /// </summary>
     public bool PersistedAdoptedContext { get; init; }
