@@ -88,14 +88,14 @@ phrasing — not just one magic prompt.
 The memory category intentionally separates three behaviors that used to be
 conflated by a single case:
 
-- **Identity preference routing** validates that personal preferences can be
-  routed into `SOUL.md` when identity guidance says they should shape future
-  sessions.
+- **Identity preference routing** validates that personal preferences route into
+  `SOUL.md` through identity-file edits when identity guidance says they should
+  shape future sessions.
 - **Explicit memory write** validates that a direct save request results in a
   `store_memory` tool call.
 - **Automatic checkpoint enqueue** validates that the session enqueues a memory
-  checkpoint for non-identity facts without requiring an explicit memory tool
-  call.
+  checkpoint for non-identity facts without taking an explicit memory-write tool
+  path.
 
 This means `memory_checkpoint_enqueue` is the case to watch for automatic memory
 formation regressions, while `memory_identity_preference_routing` and

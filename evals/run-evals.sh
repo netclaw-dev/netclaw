@@ -107,12 +107,10 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Operator must have run `netclaw init` so we can borrow the identity
-    # fixture for the eval container. We never read the host's netclaw.db,
-    # sessions, or config — only the identity markdown files.
-    if [[ ! -f "$HOME/.netclaw/identity/SOUL.md" ]]; then
-        echo "ERROR: no identity at $HOME/.netclaw/identity/SOUL.md." >&2
-        echo "       Run 'netclaw init' on the host first — evals borrow its identity files." >&2
+    # Identity files are rendered from repo templates into an isolated eval
+    # home; the host does not need a pre-initialized ~/.netclaw tree.
+    if [[ ! -f "$REPO_ROOT/src/Netclaw.Cli/Resources/identity/SOUL.template.md" ]]; then
+        echo "ERROR: missing identity template at $REPO_ROOT/src/Netclaw.Cli/Resources/identity/SOUL.template.md." >&2
         exit 1
     fi
 
@@ -927,7 +925,7 @@ assert_memory_recall_active() {
 }
 
 assert_memory_identity_preference_routing() {
-    (stdout_tool_called 'file_write' && stdout_contains 'SOUL\.md') || stdout_tool_called 'store_memory'
+    stdout_contains 'SOUL\.md' && (stdout_tool_called 'file_edit' || stdout_tool_called 'file_write')
 }
 
 assert_memory_explicit_store() {
@@ -935,7 +933,9 @@ assert_memory_explicit_store() {
 }
 
 assert_memory_checkpoint_enqueue() {
-    daemon_log_contains 'turn_memory_checkpoint_enqueued'
+    daemon_log_contains 'turn_memory_checkpoint_enqueued' \
+        && ! stdout_tool_called 'store_memory' \
+        && ! stdout_tool_called 'update_memory'
 }
 
 assert_memory_recall_filters() {
