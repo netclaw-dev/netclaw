@@ -86,7 +86,10 @@ public sealed record MessageSource
     /// <summary>
     /// True when the model input contains a quoted adopted-context window.
     /// </summary>
-    public bool HasAdoptedContext { get; init; }
+    public bool HasAdoptedContext
+        => (AdoptedSpeakerIds?.Count ?? 0) > 0
+           || (AdoptedContextEntries?.Count ?? 0) > 0
+           || !string.IsNullOrWhiteSpace(AdoptedContextProjection);
 
     /// <summary>
     /// True when the adopted-context window includes at least one sender other than

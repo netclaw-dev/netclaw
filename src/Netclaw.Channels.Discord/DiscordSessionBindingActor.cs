@@ -304,7 +304,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             Contents = mergedContents,
             ReceivedAt = message.ReceivedAt,
             ExecutableText = message.Text,
-            HasAdoptedContext = adoptedSpeakerIds.Count > 0,
             HasThirdPartyAdoptedContext = adoptedSpeakerIds.Any(id => !string.Equals(id, message.SenderId.Value, StringComparison.Ordinal)),
             AdoptedSpeakerIds = adoptedSpeakerIds,
             AdoptedContextProjection = projection,

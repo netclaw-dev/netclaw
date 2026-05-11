@@ -127,7 +127,6 @@ public sealed class MessageSourceFactoryTests : TestKit
             SenderId = "user-1",
             Contents = [new TextContent("hello")],
             ReceivedAt = DateTimeOffset.UtcNow,
-            HasAdoptedContext = true,
             HasThirdPartyAdoptedContext = false,
             AdoptedSpeakerIds = ["user-1"]
         };
@@ -147,7 +146,6 @@ public sealed class MessageSourceFactoryTests : TestKit
             SenderId = "user-1",
             Contents = [new TextContent("hello")],
             ReceivedAt = DateTimeOffset.UtcNow,
-            HasAdoptedContext = true,
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["user-1", "user-2"]
         };

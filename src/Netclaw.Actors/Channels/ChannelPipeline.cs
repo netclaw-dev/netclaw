@@ -80,7 +80,6 @@ public static class MessageSourceFactory
             Provenance = input.Provenance ?? options.DefaultProvenance,
             ReceivedAt = input.ReceivedAt,
             ExecutableText = input.ExecutableText ?? textContent,
-            HasAdoptedContext = input.HasAdoptedContext,
             HasThirdPartyAdoptedContext = input.HasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = input.AdoptedSpeakerIds,
             AdoptedContextProjection = input.AdoptedContextProjection,
