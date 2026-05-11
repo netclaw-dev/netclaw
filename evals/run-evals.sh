@@ -307,16 +307,16 @@ substitute_identity_template() {
         -e 's/{{STYLE_DESCRIPTION}}/Be concise and casual. Keep responses short and conversational./g' \
         -e 's/{{USER_NAME}}/Eval User/g' \
         -e 's/{{USER_TIMEZONE}}/UTC/g' \
-        -e 's|{{SYSTEM_SKILLS_DIR}}|/root/.netclaw/skills/.system/files|g' \
-        -e 's|{{IDENTITY_DIR}}|/root/.netclaw/identity|g' \
-        -e 's|{{SOUL_PATH}}|/root/.netclaw/identity/SOUL.md|g' \
-        -e 's|{{AGENTS_PATH}}|/root/.netclaw/identity/AGENTS.md|g' \
-        -e 's|{{TOOLING_PATH}}|/root/.netclaw/identity/TOOLING.md|g' \
-        -e 's|{{SOUL_DETAIL_DIR}}|/root/.netclaw/identity/soul|g' \
-        -e 's|{{AGENTS_DETAIL_DIR}}|/root/.netclaw/identity/agents|g' \
-        -e 's|{{TOOLING_DETAIL_DIR}}|/root/.netclaw/identity/tooling|g' \
-        -e 's|{{SKILLS_DIR}}|/root/.netclaw/skills|g' \
-        -e 's|{{WORKSPACES_DIR}}|/root/.netclaw/workspaces|g' \
+        -e 's|{{SYSTEM_SKILLS_DIR}}|/home/netclaw/.netclaw/skills/.system/files|g' \
+        -e 's|{{IDENTITY_DIR}}|/home/netclaw/.netclaw/identity|g' \
+        -e 's|{{SOUL_PATH}}|/home/netclaw/.netclaw/identity/SOUL.md|g' \
+        -e 's|{{AGENTS_PATH}}|/home/netclaw/.netclaw/identity/AGENTS.md|g' \
+        -e 's|{{TOOLING_PATH}}|/home/netclaw/.netclaw/identity/TOOLING.md|g' \
+        -e 's|{{SOUL_DETAIL_DIR}}|/home/netclaw/.netclaw/identity/soul|g' \
+        -e 's|{{AGENTS_DETAIL_DIR}}|/home/netclaw/.netclaw/identity/agents|g' \
+        -e 's|{{TOOLING_DETAIL_DIR}}|/home/netclaw/.netclaw/identity/tooling|g' \
+        -e 's|{{SKILLS_DIR}}|/home/netclaw/.netclaw/skills|g' \
+        -e 's|{{WORKSPACES_DIR}}|/home/netclaw/.netclaw/workspaces|g' \
         "$template_file" > "$output_file"
 }
 
@@ -351,16 +351,22 @@ start_eval_daemon() {
         cp -r "$REPO_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
     fi
 
+    # The eval container runs as the non-root `netclaw` user and needs write
+    # access to the bind-mounted identity, logs, skills, and data trees.
+    chmod -R ugo+rwX "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data" "$EVAL_HOME/skills"
+
     local -a docker_args=(
         run -d --rm
         --name "$EVAL_CONTAINER_NAME"
         --network host
-        -v "$EVAL_HOME/data:/root/.netclaw"
-        -v "$EVAL_HOME/identity:/root/.netclaw/identity"
-        -v "$EVAL_HOME/skills:/root/.netclaw/skills"
-        -v "$EVAL_HOME/logs:/root/.netclaw/logs"
+        -v "$EVAL_HOME/data:/home/netclaw/.netclaw"
+        -v "$EVAL_HOME/identity:/home/netclaw/.netclaw/identity"
+        -v "$EVAL_HOME/skills:/home/netclaw/.netclaw/skills"
+        -v "$EVAL_HOME/logs:/home/netclaw/.netclaw/logs"
         -e "NETCLAW_Daemon__Host=127.0.0.1"
         -e "NETCLAW_Daemon__Port=$EVAL_PORT"
+        -e "HOME=/home/netclaw"
+        -e "NETCLAW_HOME=/home/netclaw/.netclaw"
         -e "NETCLAW_Providers__eval__Type=$EVAL_PROVIDER_TYPE"
         -e "NETCLAW_Providers__eval__Endpoint=$EVAL_PROVIDER_ENDPOINT"
         -e "NETCLAW_Models__Main__Provider=eval"
@@ -422,7 +428,7 @@ start_eval_daemon() {
 # ─── Memory Seeding ──────────────────────────────────────────────────────────
 
 seed_eval_memories() {
-    local db_path="/root/.netclaw/netclaw.db"
+    local db_path="/home/netclaw/.netclaw/netclaw.db"
     local fixtures_path="$REPO_ROOT/evals/fixtures/eval-memories.json"
     local seed_script="$REPO_ROOT/evals/seed-memories.py"
 
@@ -434,6 +440,16 @@ seed_eval_memories() {
     if [[ ! -f "$seed_script" ]]; then
         echo "WARN: no seed script at $seed_script — memory tests may fail" >&2
         return
+    fi
+
+    # If the daemon has not touched memory yet, send one warm-up prompt through
+    # the normal headless path so the session pipeline creates netclaw.db before
+    # fixture seeding runs.
+    if ! docker exec "$EVAL_CONTAINER_NAME" test -f "$db_path" 2>/dev/null; then
+        NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
+        NETCLAW_HOME="$EVAL_HOME" \
+            timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "Warm up memory initialization. Reply with OK only." \
+            >/dev/null 2>&1 || true
     fi
 
     # Wait for the daemon to create the database.
@@ -910,7 +926,15 @@ assert_memory_recall_active() {
     daemon_log_contains 'turn_memory_recall.*degraded=False'
 }
 
-assert_memory_formation() {
+assert_memory_identity_preference_routing() {
+    (stdout_tool_called 'file_write' && stdout_contains 'SOUL\.md') || stdout_tool_called 'store_memory'
+}
+
+assert_memory_explicit_store() {
+    stdout_tool_called 'store_memory' || stdout_tool_called 'update_memory'
+}
+
+assert_memory_checkpoint_enqueue() {
     daemon_log_contains 'turn_memory_checkpoint_enqueued'
 }
 
@@ -1262,8 +1286,14 @@ run_all() {
     run_case memory_recall_active "recall active, not degraded" \
         "What do you know about me?"
 
-    run_case memory_formation "checkpoint enqueued" \
-        "Remember that my favorite color is blue"
+    run_case memory_identity_preference_routing "personal preference routed to SOUL.md" \
+        "Please remember this new preference for future conversations: my favorite color is chartreuse. Use whichever persistent storage path Netclaw's identity-vs-memory rules require, then acknowledge once you've saved it."
+
+    run_case memory_explicit_store "explicit remember request uses store_memory" \
+        "Please save this to your cross-session memory for later reference using store_memory: my preferred airline is United. Just acknowledge once you've saved it."
+
+    run_case memory_checkpoint_enqueue "checkpoint enqueued for non-identity fact" \
+        "During my commute I prefer aisle seats on flights because I like to stand up easily. Just acknowledge and do not save anything explicitly."
 
     run_case memory_recall_filters "candidate selection with score filtering" \
         "Tell me about my travel preferences"

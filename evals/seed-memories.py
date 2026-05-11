@@ -58,7 +58,7 @@ def seed_documents(conn, fixtures):
             INSERT INTO memory_documents(document_id, anchor_id, memory_class, title, markdown_body,
               update_semantics, boundary, audience, sensitivity, recall_mode, confidence,
               freshness_at, created_at, updated_at)
-            VALUES(?, ?, 'durable_fact', ?, ?, 'merge-document', 'boundary:trusted-instance', 'public',
+            VALUES(?, ?, 'durable_fact', ?, ?, 'merge-document', 'boundary:trusted-instance', 'personal',
               ?, ?, ?, ?, ?, ?)
             ON CONFLICT(document_id) DO UPDATE SET
               title=excluded.title,
@@ -96,7 +96,9 @@ def seed_documents(conn, fixtures):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Seed eval memories into netclaw database")
+    parser = argparse.ArgumentParser(
+        description="Seed eval memories into netclaw database"
+    )
     parser.add_argument("--db-path", required=True, help="Path to netclaw.db")
     parser.add_argument("--fixtures", required=True, help="Path to fixtures JSON file")
     args = parser.parse_args()
@@ -108,7 +110,9 @@ def main():
     conn.row_factory = sqlite3.Row
 
     seed_documents(conn, fixtures)
-    print(f"[seed] seeded {len(fixtures.get('seedDocuments', []))} memories into {args.db_path}")
+    print(
+        f"[seed] seeded {len(fixtures.get('seedDocuments', []))} memories into {args.db_path}"
+    )
 
     conn.close()
 

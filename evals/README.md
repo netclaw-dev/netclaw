@@ -63,7 +63,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 |----------|-------|-------------------|
 | Identity & Self-Awareness | 4 | Bot knows its name, version, repo, session ID |
 | Skill Auto-Loading | 4 | Keyword matching triggers correct skills |
-| Memory Pipeline | 2 | Memory recall is active, new memories form |
+| Memory Pipeline | 4 | Memory recall is active, identity-vs-memory routing is correct, explicit saves use memory tools, and automatic checkpointing still fires |
 | Tool Discovery & Use | 4 | Progressive tool discovery and invocation |
 | Grounding & Alignment | 3 | Uses tools to verify facts, admits uncertainty |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
@@ -80,8 +80,26 @@ phrasing — not just one magic prompt.
   (`[tool:call]`), text content, or absence of hallucinated content.
 - **daemon log assertions** — check the daemon's file log (tailed from
   `$EVAL_HOME/logs/daemon-$(date +%F).log`) for structured patterns like
-  `turn_skill_auto_load`, `turn_memory_recall`,
+  `turn_skill_auto_load`, `turn_memory_recall`, and
   `turn_memory_checkpoint_enqueued`.
+
+### Memory Pipeline Semantics
+
+The memory category intentionally separates three behaviors that used to be
+conflated by a single case:
+
+- **Identity preference routing** validates that personal preferences can be
+  routed into `SOUL.md` when identity guidance says they should shape future
+  sessions.
+- **Explicit memory write** validates that a direct save request results in a
+  `store_memory` tool call.
+- **Automatic checkpoint enqueue** validates that the session enqueues a memory
+  checkpoint for non-identity facts without requiring an explicit memory tool
+  call.
+
+This means `memory_checkpoint_enqueue` is the case to watch for automatic memory
+formation regressions, while `memory_identity_preference_routing` and
+`memory_explicit_store` cover user-facing routing behavior.
 
 ## Environment Variables
 
