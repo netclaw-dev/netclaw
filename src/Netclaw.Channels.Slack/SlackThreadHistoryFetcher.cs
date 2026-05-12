@@ -151,14 +151,30 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
             foreach (var message in response.Messages)
             {
-                if (!string.IsNullOrWhiteSpace(message.BotId))
-                    continue;
+                // Derive a sender id for the historical entry. Human messages
+                // carry a user id; bot messages may have a user id, only a bot
+                // id, or both. We include bot messages because a proactively-
+                // posted thread's root is a bot message — without it the
+                // session would have no anchor for what it said when the user
+                // replies. The cursor watermark already prevents replay of any
+                // bot output this session has already processed, so the only
+                // bot content the fetcher surfaces is content that was never
+                // captured by an in-session turn (i.e., the proactive-post
+                // bootstrap case). The adopted-context renderer presents the
+                // entry with the bot's sender id; system-prompt identity
+                // grounding lets the LLM recognize its own prior content.
+                var senderId = !string.IsNullOrWhiteSpace(message.User)
+                    ? message.User
+                    : !string.IsNullOrWhiteSpace(message.BotId)
+                        ? message.BotId
+                        : null;
 
-                if (string.IsNullOrWhiteSpace(message.User))
+                if (senderId is null)
                     continue;
 
                 var input = await ConvertMessageAsync(
                     message,
+                    senderId,
                     channelId,
                     audience,
                     attachmentPolicy,
@@ -183,6 +199,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
     private async Task<ChannelInput?> ConvertMessageAsync(
         SlackNet.Events.MessageEvent message,
+        string senderId,
         SlackChannelId channelId,
         TrustAudience audience,
         ChannelAttachmentPolicy attachmentPolicy,
@@ -238,7 +255,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         return new ChannelInput
         {
-            SenderId = message.User,
+            SenderId = senderId,
             ChannelId = channelId.Value,
             MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
             Contents = contents,

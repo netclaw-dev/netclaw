@@ -126,9 +126,15 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (message.IsBot)
-                    continue;
-
+                // Bot-authored history entries are included so that
+                // proactively-posted threads (where the bot's message is the
+                // thread root) surface as adopted context when the user
+                // replies. The cursor watermark prevents replay of bot
+                // content this session already processed; backfill only
+                // surfaces bot content that was never captured by an
+                // in-session turn. The inbound bot-message filter in
+                // DiscordConversationActor remains in place for loop
+                // prevention on the live ingress path.
                 var input = await ConvertMessageAsync(
                     message,
                     channelId,
@@ -447,7 +453,10 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
                         threadChannelId,
                         options: new RequestOptions { CancelToken = cancellationToken });
 
-                    if (rootMessage is not null && !rootMessage.Author.IsBot && HasUsableContent(rootMessage))
+                    // Include bot-authored thread roots: a proactively-posted
+                    // thread's root IS a bot message, and dropping it here
+                    // would defeat the whole point of the history backfill.
+                    if (rootMessage is not null && HasUsableContent(rootMessage))
                         results.Add(ToHistoricalMessage(rootMessage));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -465,12 +474,13 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (message.Author.IsBot)
-                continue;
-
             if (!HasUsableContent(message))
                 continue;
 
+            // Bot-authored messages flow through. The `IsBot` flag is
+            // preserved on the resulting HistoricalMessage so downstream
+            // code can distinguish if needed. See class-level note about
+            // watermark-based dedup.
             results.Add(ToHistoricalMessage(message));
         }
 

@@ -4,292 +4,228 @@ A reminder fires inside an ephemeral session (e.g.,
 `reminder/llama-cpp-mtp-pr-watch/<ts>`). The session's LLM calls
 `send_slack_message`, which posts a new top-level Slack thread via
 `PostNewThreadAsync` and asks the gateway to spawn a
-`SlackThreadBindingActor` for the new `{channelId}/{threadTs}`
-session id. Today, the binding actor calls `EnsureInitializedAsync`
-and acks; the originating tool returns success. The ephemeral
-reminder session terminates. The new Slack thread session is alive,
-but its transcript is empty — the posted message was never written
-into it.
+`SlackThreadBindingActor` for the new `{channelId}/{threadTs}` session
+id. The binding actor calls `EnsureInitializedAsync` and acks; the
+originating tool returns success; the ephemeral reminder session
+terminates. The new Slack thread session is alive but has no
+transcript content of its own — the posted message was written only
+into Slack, never into any in-session output pipeline.
 
-When a user replies in that thread (sometimes hours later), the
-binding actor loads context for the new turn. The seed is missing,
-so the LLM context contains only adopted memories and the user's
-reply. The agent confabulates a response from fuzzy memory recall.
-Concrete repro: session `D0AC6CKBK5K/1778533824.662179`.
+When the user replies in that thread, the binding actor processes the
+inbound. The existing `thread-history-backfill` machinery runs — it
+fetches prior thread messages from Slack via `conversations.replies`
+and merges them into adopted context — but `SlackThreadHistoryFetcher`
+at line 154 unconditionally drops any message with a `bot_id`. So the
+fetched-history result is empty, the adopted-context window is empty,
+and the LLM responds to the user with only the user's message in
+context plus whatever memory adoption surfaces. The result is the
+amnesia and confabulation observed in the repro.
 
-The fix is to seed the new session's transcript with the posted
-payload at bootstrap time. The design question is how to do that
-without (a) treating the seed as an LLM-produced turn (which would
-fire subscriber events, double-post to Slack, etc.), (b) violating
-existing invariants in adjacent code paths (notably the `BotId`
-filter in `SlackThreadHistoryFetcher`), or (c) introducing a new
-bug class where the bot reacts to its own seeded message.
+The exploration considered several mechanisms that would have
+introduced new protocol fields, new transcript-seeding events, and
+new actor states. All were rejected because the existing
+adopted-context machinery already does the job — the only thing
+missing is for the history fetcher to actually return the bot's
+posted message rather than filter it out.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Channel-agnostic contract: the same rule applies to Slack today,
-  Discord (issue #953), and any future channel adapter that ships a
-  proactive-post tool.
-- Smallest implementation surface that satisfies the contract.
-- Reuse existing actor infrastructure for ordering guarantees rather
-  than building new buffering or synchronization machinery.
-- Conformance must be testable in isolation with `Akka.TestKit` and
-  a fake outbound client (no real Slack network required for CI).
-- Eval-suite coverage for the LLM behavioral aspect (since the change
-  touches context assembly per `CLAUDE.md`'s eval-trigger list).
+- Smallest possible code change that closes the amnesia bug for the
+  observed repro and analogous scenarios.
+- Specify the rule cross-channel so Discord (issue #953) and any
+  future channel applying server-side history fetching land on the
+  same behavior.
+- Preserve every other invariant in the existing adopted-context and
+  watermark machinery.
 
 **Non-Goals:**
 
-- Recovery of the ephemeral producing session's *reasoning* (web_fetch
-  results, decision chain, etc.). The seed makes the new session see
-  *what* it posted, not *why*. Reasoning lineage / explainability is
-  a separable concern.
-- Backfilling history from Slack on inbound. The existing
-  `thread-history-backfill` mechanism with its `BotId` filter is
-  correct for all non-proactive cases and remains untouched.
-- Pre-allocating session ids before posting. We accept that the
-  platform mints the conversation id; the protocol carries the
-  payload after the post returns it.
-- Buffering inbound user messages awaiting bootstrap. The actor
-  infrastructure's natural FIFO ordering at the channel boundary
-  removes the need (see Decision 5).
-- Restructuring proactive posting as a session-spawning runtime
-  primitive (the heaviest variant considered during exploration).
-  Tool-based remains the right abstraction.
+- Recovery of the producing ephemeral session's reasoning. The fix
+  makes the new session see *what* it posted, not *why*.
+- A new bootstrap protocol field on `StartProactiveThread` (considered
+  during exploration; superseded by this simpler approach).
+- A new persisted event type for bootstrap seeding (considered;
+  superseded).
+- Output pipeline dispatch suppression for bootstrap seeds (no longer
+  needed; the fix never enters the output pipeline).
+- Marking the bot's adopted-context entry with an explicit
+  "assistant" role tag distinct from third-party speakers. The
+  adopted-context renderer presents the entry with the bot's sender
+  id; system-prompt identity grounding lets the LLM recognize its own
+  content. Can be revisited later.
 
 ## Decisions
 
-### Decision 1: Mechanism — push the payload through the bootstrap protocol message
+### Decision 1: Fix point is the history fetcher's bot-message filter
 
-The bootstrap protocol message that today carries
-`{channelId, threadTs, sessionId}` gains a new field for the **full
-posted payload** (text, attachments, blocks, anything that posted
-under the platform-assigned message id) and the **platform message
-id** itself.
+The single point of correction is the unconditional bot-message skip
+in each channel's history fetcher. Removing it surfaces the bot's
+prior posted message through the existing hydration path, and from
+there the existing adopted-context merge layer treats it as a quoted
+prior speaker.
 
 **Alternatives considered:**
 
 | Option | Why rejected |
 |---|---|
+| Add `Message` payload to `StartProactiveThread`; seed transcript at bootstrap time | Requires new protocol field, new persisted event, new SessionState handling, new subscriber dispatch suppression. ~200+ LOC vs. ~15 LOC for this approach. |
 | Capture the bot-message echo via Slack Events API | Echoes are filtered as loop-prevention; flipping the filter breaks the loop guard. Even with selective filtering, dedup against the output pipeline is fiddly and pure latency loss. |
-| Stop filtering bot messages in `SlackThreadHistoryFetcher` | Filter is correct for non-proactive cases (bot messages in history come from sessions that already have them). Removing it causes adopted-context double-counting across every threaded session. |
-| Pre-allocate sessionId, seed first, post after | Requires a local-id ↔ remote-id mapping layer for every channel. Significant new infra, no real win. |
-| Restructure `send_slack_message` into a session-spawning verb (M3 from exploration) | Architectural rewrite of proactive posting. Heaviest variant considered; the ingredients to fix this without that change all exist. |
+| Pre-allocate sessionId, seed first, post after | Requires a local-id ↔ remote-id mapping layer for every channel. Significant new infra. |
+| Restructure `send_slack_message` as session-spawning runtime primitive | Architectural rewrite of proactive posting. Heaviest variant considered. |
 
-**Rationale:** the calling tool has the payload in hand when it
-posts; the platform returns the message id synchronously; the bootstrap
-protocol is the natural carrier.
+**Rationale:** the bug is structurally "history fetch filters out the
+one bot message that's load-bearing." Fix it where the filter is.
 
-### Decision 2: Seed role and provenance — assistant-role with a `ProactivePostSeed` flag
+### Decision 2: Cursor watermark remains the dedup primitive
 
-The seeded entry is written into the new session's transcript with
-role `assistant` (because the agent did, in fact, post it) plus a
-`ProactivePostSeed` provenance flag that distinguishes it from a
-real LLM-produced turn.
+Removing the bot-message filter could theoretically reintroduce
+double-counting: a session that already produced bot output and
+recorded it in transcript could refetch the same bot output from
+Slack's server-side history.
 
-**Alternatives considered:**
+The existing `thread-history-backfill` capability already has the
+answer: the watermark. From the existing spec —
 
-- **`system`-role seed.** More semantically pure ("the system informs
-  the LLM that a prior agent session posted X"), but requires a new
-  role concept in the context assembler. The cost of revisiting later
-  is one line at the seeding site, so we start with assistant-role.
-- **`user`-role synthetic message.** Causes the LLM to treat it as a
-  user turn and respond to it. Defeats the purpose.
+> For a new authorized inbound with ordering key Y, the adapter SHALL
+> hydrate messages whose ordering key is strictly greater than the
+> watermark and strictly less than Y.
 
-The provenance flag is load-bearing: it suppresses
-`TurnCompleted` / `TurnRecorded` dispatch (Decision 3). If a future
-eval shows the LLM confabulates more on an `assistant`-role seed
-than a `system`-role seed, the role can be lifted to `system` at the
-seeding site without touching the rest of the design.
+A bot message the session itself produced is below the watermark by
+the time the next inbound runs (the watermark advanced when the
+session's own turn completed). The fetcher would never include it.
 
-### Decision 3: Seed write does not emit normal turn lifecycle events
+The only bot messages above the watermark are those the session
+itself never produced — which, in practice, means the opening
+message of a proactively-posted thread, because that's the one case
+where a bot message exists in Slack history without any in-session
+turn having recorded it.
 
-The seed write SHALL NOT fire the events that an LLM-produced
-assistant turn would fire — no `TurnCompleted`, no `TurnRecorded`, no
-subscriber dispatch (per `netclaw-session`'s subscriber model). The
-seed is a passive transcript write that only affects the next
-context assembly, not the active turn-completion pipeline.
+So the watermark + relaxed fetcher together do the right thing
+without any new dedup logic.
 
-**Implementation hook:** the `ProactivePostSeed` provenance flag (from
-Decision 2) is checked at the dispatch points in the session output
-pipeline; entries with the flag short-circuit the dispatch path while
-still being persisted to the transcript.
+### Decision 3: Sender id derivation prefers user id, falls back to bot id
 
-**Why this matters:** without this suppression, the subscriber model
-would fire `TurnCompleted` for a turn that no LLM produced — which is
-a lie to subscribers, would cause Slack to re-post the message
-(double-post), would inflate telemetry, and could trigger
-output-driven side effects (e.g., search indexing) on content that
-didn't go through the normal output path.
+Slack bot posts can carry both a `user` (the bot's user identity in
+the workspace) and a `bot_id` (the bot integration id). The fetcher
+derives a sender id from these:
 
-### Decision 4: Idempotency keyed by platform message id
+1. If `user` is present and non-empty → use it (matches the agent's
+   own workspace user id when the message is from our bot).
+2. Else if `bot_id` is present → use that.
+3. Else → drop the entry (no sender; can't enter adopted-context).
 
-The seeded transcript entry is keyed by the platform-assigned
-message id. A retried `StartProactiveThread` for the same message
-id — possible under Akka.Reminders redelivery, crash recovery, or any
-restart between post and ack — SHALL NOT double-seed. The existing
-entry is detected and the bootstrap acks normally.
+The user-id-first preference matters because the agent's
+system-prompt identity grounding refers to its workspace user id. The
+LLM recognizes "I (this workspace user) said X earlier" when the
+adopted-context entry's author attribute matches. If only the bot id
+were used, the LLM would see an unfamiliar identifier and might not
+recognize it as itself.
 
-**Why message id and not sessionId:** sessionId is keyed to the
-thread/conversation as a whole; a future "reply-with-more-content"
-proactive-post variant could legitimately want to add a *second*
-seeded entry to the same session. Message-id keying admits that
-without ambiguity.
+### Decision 4: Inbound bot-message filter is untouched
 
-### Decision 5: Ordering is a property of the actor infrastructure, not the protocol
+`SlackConversationActor.cs:50` (`IsBotMessage → drop`) is unchanged.
+That filter operates on live inbound events from the Events API and
+exists for loop prevention: without it, the bot would receive its own
+`chat.postMessage` echoes as inbound events and start a new turn on
+them. This change does not require any modification to that path; the
+two paths (live inbound and server-side history fetch) are
+independent.
 
-The race-window concern — that a user reply could arrive at the
-binding actor before the bootstrap seed — is not a real concern in
-production because:
+The spec delta makes this explicit so future readers don't conflate
+the two filters.
 
-```
-                  channel-boundary actor
-                  (e.g., SlackConversationActor)
-                  ─────────────────────────────
-                                                FIFO mailbox.
-                                                ONE message processed at
-                                                a time.
+### Decision 5: Cross-channel conformance lives in `thread-history-backfill`
 
-  Tool (in-process) ──▶ StartProactiveThread ──┐
-                                               │
-  Slack Events API ──▶ SlackInboundMessage  ──┴──▶ first to arrive wins.
+The new requirement is added to the existing `thread-history-backfill`
+capability rather than creating a new spec. Reasons:
 
-  Latency comparison:
-  - In-process Akka Ask: microseconds.
-  - Events API webhook for user reply: many round-trips + user
-    physically reading and typing. Many orders of magnitude slower.
+- The new requirement is structurally a refinement of how
+  `thread-history-backfill` hydrates — same machinery, different
+  filtering rule.
+- Discoverable in the same place as the watermark requirement that
+  governs dedup, which is the load-bearing argument for why the
+  filter can be safely removed.
+- Avoids a new top-level spec whose surface area would be a single
+  ADDED requirement.
 
-  So in production, bootstrap always wins; the binding actor is born
-  with the seed. No buffering machinery needed.
-```
-
-The conformance contract therefore does not specify ordering
-behavior. Implementations that route bootstrap through their channel
-boundary actor (which all channel adapters in this codebase do, by
-architectural convention) inherit ordering for free.
-
-**Alternative considered:** specify "no inbound message in the new
-session is processed before seeding" as a hard requirement,
-forcing implementations to buffer inbound or use an atomic init
-dance. Rejected because the architectural property already
-guarantees this; specifying it would create test obligations against
-a scenario that physics already prevents.
-
-### Decision 6: Scope is bootstrap-only
-
-Three categories of bot-authored content:
-
-| Category | How it lands in transcript | Spec covers? |
-|---|---|---|
-| Reentrant reminder (`DeliveryKind.CurrentSession`) | Normal `DeliverTrustedSessionTurn` → input queue → output pipeline → recorded | No (covered by `netclaw-session`) |
-| Normal LLM reply in existing session | Output pipeline records on the way out | No (covered by `netclaw-session`) |
-| Proactive post creating a new session | **Currently lost at handoff** | **Yes — this spec** |
-
-The first two are already coherent via the normal turn lifecycle.
-The new spec covers only the third.
-
-This is captured as an explicit out-of-scope clarification scenario
-in the spec so future readers don't try to extend the contract to
-cover the already-coherent cases.
+Discord and any future channel that ships a server-side history
+fetcher must satisfy the same requirement. There is no per-channel
+conformance test base today; we add one if/when a second channel
+implements proactive posts.
 
 ## Risks / Trade-offs
 
 | Risk | Mitigation |
 |---|---|
-| LLM behaves badly on assistant-role seed (confabulates reasoning when asked) | Eval suite regression case (per CLAUDE.md). If observed, lift role to `system` at the seeding site (one-line change). |
-| Subscriber dispatch suppression accidentally skips a legitimate `TurnCompleted` somewhere | Probe-based unit test: subscribe a fake subscriber, write a seed, assert no events; then write a real assistant turn, assert events fire. Catches accidental over-suppression. |
-| Provenance flag forgotten on transcript entry (regression risk) | Conformance test base asserts the provenance flag is present on entries written by `StartProactiveThread` (or its per-channel equivalent). |
-| Cross-channel drift (Discord ships with subtly different semantics) | Shared conformance test base; Discord's test project subclasses it and must pass. Failures are loud and channel-specific. |
-| Idempotency check missed in a retry path | Conformance test: send the same bootstrap twice; assert single entry. Crash-replay test: kill the binding actor between seed and ack, recreate, redeliver, assert single entry. |
-| Rich-payload bloat in session context | Out-of-scope to limit payload size in this spec; rely on existing context-window management. Operational signal (payload size logged) catches regressions empirically. |
-| Race-window edge case in non-actor channel adapters | The contract is silent on ordering. Any non-actor adapter that wants to claim conformance must achieve ordering by some other means. Not a concern for any current or proposed channel. |
+| Bot messages from *other* bots in the same channel now leak into adopted context | Acceptable — they're channel-level context the agent has permission to see, presented as third-party speakers in the existing adopted-context model. If a deployment wants to exclude specific bots, an ACL filter can be layered separately. |
+| LLM doesn't recognize its own bot sender id as itself | Sender id is the workspace user id (via the user-id-first derivation). System-prompt identity grounding already covers "you are user U…". If evals show otherwise, we can add explicit "assistant-role" tagging in the adopted-context renderer for the agent's own sender id. |
+| Cursor watermark not always set correctly at first inbound | Existing `thread-history-backfill` capability already covers crash-recovery semantics; no new code path. |
+| Discord ships without applying the requirement | Issue #953 references this spec; reviewer must confirm Discord's history fetcher honors it. Conformance test base can be added when N=2 channels exist. |
+| Sender-id-only framing isn't enough for the LLM to disambiguate its own content from other speakers' | Eval suite case (see Migration Plan) catches this. Escalation path: explicit role marking in the renderer. |
 
 ## Actor boundaries and persistence implications
 
-- **Channel boundary actor** (e.g., `SlackConversationActor`) remains
-  the single entry point for all session creation in the channel.
-  Both `StartProactiveThread` and inbound user messages route through
-  it. The boundary's FIFO mailbox is the ordering primitive.
-- **Channel binding actor** (e.g., `SlackThreadBindingActor`) owns
-  the session's transcript. The seed write is a method on that actor;
-  the bootstrap protocol handler invokes it before sending the ack.
-- **Persistence implications:** the seed is written to the same
-  transcript store as normal turns (whatever the session pipeline
-  uses), with the provenance flag on the persisted record. On
-  recovery, loading the session transcript naturally includes the
-  seed; no special recovery code path.
-- **Akka.Reminders interaction:** redelivery is the standard
-  failure-mode trigger. Idempotency keying (Decision 4) handles it.
-- **Output pipeline isolation:** the seed write does not enter the
-  output pipeline at all. Subscribers (`netclaw-session`) see the
-  session's normal turns; they never see synthetic events for the
-  seed. Persistence still happens because the transcript store is
-  upstream of the dispatch path.
+- **No actor topology changes.** The fix lives entirely inside
+  `SlackThreadHistoryFetcher`, which is invoked by the existing
+  hydration path.
+- **No new persisted events.** The bot's posted message enters the
+  session via adopted-context, which is already persisted as
+  `AdoptedContextRecorded` per the existing
+  `thread-history-backfill` spec.
+- **No watermark changes.** The watermark is the dedup primitive and
+  is unchanged.
+- **No subscriber dispatch changes.** The fix never enters the
+  session output pipeline.
 
 ## Failure modes and recovery behavior
 
 | Failure | Visible effect | Recovery |
 |---|---|---|
-| `PostNewThreadAsync` fails (network/Slack rate-limited) | Tool returns error to calling session; no bootstrap fires; no session created | LLM in calling session sees error, can retry or surface to user |
-| Bootstrap message lost in flight between tool and gateway (in-process Akka — effectively impossible) | Tool's `Ask` times out; tool returns error; **Slack message is posted with no actor backing it** | Tool error message includes thread coordinates; user replies would land on a session that doesn't exist yet, which causes the standard "lazy-create on first inbound" path (no seed) |
-| Seed write fails after post succeeded | Bootstrap actor logs failure, does not ack | Originating tool sees `Ask` failure; **same orphan-thread state** as above. See "Open question 1" below. |
-| Bootstrap ack arrives at tool after timeout | Tool already errored; bootstrap actor is fine | Slightly stale state; user replies still work because seed completed. Acceptable. |
-| Crash between post and bootstrap (e.g., daemon restart) | Slack has the message; no actor exists yet | First inbound lazy-creates the binding actor with no seed (current behavior, falls back to memory-adoption). On *manual* operator action, the seed cannot be reconstructed. See "Open question 2". |
-| Crash between seed write and ack | Seed is persisted; ack lost | Akka.Reminders redelivers; idempotency check (Decision 4) recognizes the existing seed; redelivery acks cleanly |
-| Subscriber probe receives spurious event from a seed write (bug) | Subscribers may double-handle | Caught by conformance unit test. Fix the suppression path before merge. |
+| Slack `conversations.replies` returns no entries | Fetcher returns empty list (current behavior); no hydration | Existing fallback path; LLM responds with memory adoption only. Same as today, no regression. |
+| Slack `conversations.replies` rate-limited or errors | Fetcher catches `SlackException`, returns empty list | Existing behavior; logged warning. No regression. |
+| Bot's message exists in Slack history but the agent's workspace user id has changed | Adopted-context entry has the *old* sender id; LLM may not recognize it as itself | Mitigation: identity grounding in the system prompt mentions the current and recent prior user ids; or evals catch the case and we add explicit role tagging. |
+| Watermark mis-set leading to bot output being refetched | Adopted context includes duplicate of content the session already has in transcript | Existing watermark machinery enforces correctness; this change does not introduce new watermark logic. |
 
 ## Migration Plan
 
-This is a forward-only change. No data migration is required: the
-seed mechanism only applies to *new* proactive-post sessions; existing
-amnesiac sessions stay amnesiac (their threads can be replied to but
-the agent's first reply on those threads will continue to be
-context-poor until the next proactive post on a new thread).
+This is a forward-only change. No data migration. No new persistence
+shape. Sessions persisted before this change recover identically.
 
-**Rollback strategy:** the change is gated behind code paths in the
-Slack channel; reverting the `StartProactiveThread` field addition
-and the seed-write call restores prior behavior. Eval regression
-case stays in the suite as a documenting fixture even if reverted.
+**Rollback strategy:** revert the two-line change in
+`SlackThreadHistoryFetcher.cs` (restore the unconditional bot-message
+skip; drop the senderId parameter on `ConvertMessageAsync`). The
+updated unit test stays as a regression fixture even if reverted.
 
 **Order of merge:**
 
-1. Spec + design + tasks (this change).
-2. Slack implementation (transcript seed + provenance flag handling +
-   conformance test).
-3. Eval regression case.
-4. Sandbox smoke test (manual).
-5. Cross-reference from `netclaw-slack-socket` (optional polish).
+1. Spec delta + proposal/design/tasks (this change).
+2. Slack history fetcher implementation (already in this branch).
+3. Optional: eval regression case for the proactive-post amnesia
+   scenario.
+4. Discord history fetcher conformance (deferred to issue #953).
 
 ## Open Questions
 
-1. **Seed-failed-after-post recovery.** If the network post succeeds
-   but the in-process seed write throws (out-of-memory, persistence
-   transient), we currently surface an error to the calling session
-   while the Slack post stays. Should the channel adapter attempt
-   compensating actions — e.g., `chat.delete` the just-posted
-   message? Lean: no, because the user has likely already seen the
-   message; deleting it is more confusing than the orphan state. But
-   worth a deliberate decision in implementation.
+1. **Should the renderer mark the agent's own adopted-context entries
+   with an explicit "self" / "assistant" attribute?** Today the
+   renderer formats every adopted entry with `author=<senderId>` and
+   relies on identity grounding for self-recognition. If evals show
+   the LLM behaves badly on the sender-id-only framing — e.g., treats
+   its own prior content as a third party's claim it must defend or
+   refute — we'd add a per-entry tag. Defer pending eval signal.
 
-2. **Crash-between-post-and-bootstrap recovery.** If the daemon
-   crashes after `PostNewThreadAsync` returns but before
-   `StartProactiveThread` is sent, the Slack message exists but the
-   bootstrap never runs. On daemon restart, the actor system has no
-   knowledge of the orphaned thread. Lean: accept the orphan; the
-   first user reply lazy-creates the binding actor with no seed
-   (current behavior). The operational signal
-   `proactive_session_seeded` failures should make these visible.
-   Recovery via Slack history backfill would require the change to
-   the backfill filter that Decision 1's alternatives table rejected.
+2. **Conformance test base when N=2 channels.** Today only Slack has a
+   server-side history fetcher with a bot-message filter to remove.
+   When Discord ships (issue #953), it'll need an analogous change in
+   its own fetcher. At that point a small shared test fixture (e.g.,
+   `IThreadHistoryFetcherConformance`) makes sense. Premature with
+   N=1.
 
-3. **Eval-suite assertion shape.** The eval case asserts "no
-   off-topic confabulation when the user replies." How strict should
-   the assertion be? Lean: assert that the response mentions or
-   references the seeded payload content (positive signal) AND does
-   not mention any of the known-hallucinated topics from the repro
-   ("DGX Spark", "NADDOD", "MI350P") that came from memory recall.
-
-These don't block the change; they're deliberation items for
-implementation.
+3. **Other bots in shared channels.** This change incidentally
+   surfaces messages from *other* bots in the same channel as adopted
+   context. For most deployments this is desirable (channel context
+   the agent has permission to see). If a deployment wants to exclude
+   specific bots, a layered ACL filter can be added separately; out of
+   scope for this change.
