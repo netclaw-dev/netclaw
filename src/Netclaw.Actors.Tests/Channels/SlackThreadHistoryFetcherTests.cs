@@ -66,11 +66,6 @@ public sealed class SlackThreadHistoryFetcherTests
     [Fact]
     public async Task Includes_bot_messages_with_bot_id_as_sender_when_user_is_missing()
     {
-        // Bot-authored history entries are included so that proactively-posted
-        // threads (where the bot's message is the thread root) surface as
-        // adopted context when the user replies. The cursor watermark prevents
-        // replay of bot content this session already processed; backfill only
-        // surfaces bot content that was never captured by an in-session turn.
         _replies.Set("C1", "1000.0", null, new ConversationMessagesResponse
         {
             Messages =

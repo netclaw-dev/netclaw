@@ -272,11 +272,6 @@ public sealed class DiscordThreadHistoryFetcherTests
     [Fact]
     public async Task Includes_bot_authored_messages_in_history_result()
     {
-        // Bot-authored history entries are included so that proactively-posted
-        // threads (where the bot's message is the thread root) surface as
-        // adopted context when the user replies. The cursor watermark prevents
-        // replay of bot content this session already processed; backfill only
-        // surfaces bot content that was never captured by an in-session turn.
         var fetcher = CreateFetcher(
             (_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>(
             [

@@ -126,15 +126,12 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Bot-authored history entries are included so that
-                // proactively-posted threads (where the bot's message is the
-                // thread root) surface as adopted context when the user
-                // replies. The cursor watermark prevents replay of bot
-                // content this session already processed; backfill only
-                // surfaces bot content that was never captured by an
-                // in-session turn. The inbound bot-message filter in
-                // DiscordConversationActor remains in place for loop
-                // prevention on the live ingress path.
+                // Bot-authored entries are included so the root of a
+                // proactively-posted thread surfaces during backfill.
+                // Downstream, the binding actor's cursor watermark filters
+                // already-processed entries out of adopted context. Live-loop
+                // prevention is the inbound filter in DiscordConversationActor,
+                // which is unchanged.
                 var input = await ConvertMessageAsync(
                     message,
                     channelId,
@@ -477,10 +474,6 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             if (!HasUsableContent(message))
                 continue;
 
-            // Bot-authored messages flow through. The `IsBot` flag is
-            // preserved on the resulting HistoricalMessage so downstream
-            // code can distinguish if needed. See class-level note about
-            // watermark-based dedup.
             results.Add(ToHistoricalMessage(message));
         }
 
