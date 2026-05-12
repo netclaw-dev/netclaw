@@ -36,9 +36,17 @@ public sealed class DaemonClientReconnectIntegrationTests
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnectedOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        // Sync on Reconnecting OR Disconnected: SignalR fires Reconnecting from
+        // its state machine as soon as the transport drops, before any retry
+        // attempt. Waiting for Disconnected alone requires WithAutomaticReconnect
+        // to exhaust its retries, which on Windows can exceed the test budget
+        // because ConnectEx to a closed loopback port is not immediate (Winsock
+        // SYN-retransmit path, exacerbated by WFP/AV filter drivers on hosted
+        // runners). Either event is sufficient evidence the client has observed
+        // the drop.
         using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
         {
-            if (evt.State is DaemonConnectionState.Disconnected)
+            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.Disconnected)
                 disconnected.TrySetResult();
 
             if (evt.State is DaemonConnectionState.Connected && disconnected.Task.IsCompleted)
@@ -89,11 +97,10 @@ public sealed class DaemonClientReconnectIntegrationTests
         var port = GetFreeTcpPort();
         var host1 = await StartFakeHubAsync(port);
 
-        // Fast reconnect delays exhaust auto-reconnect in ~50ms instead of ~17s,
-        // so the Disconnected event fires quickly and the test budget is not wasted
-        // waiting for built-in retries to time out.
-        // Short ServerTimeout (2s) ensures the client detects the server going away
-        // quickly on all platforms (Windows TCP stack can be slow to detect drops).
+        // Fast reconnect delays keep the post-restart reconnect tight on the happy
+        // path. Short ServerTimeout (2s) bounds how long the client can spend
+        // Connected-but-blind after host1 stops, on platforms where TCP-level
+        // detection is slow.
         await using var client = new DaemonClient(
             $"http://127.0.0.1:{port}",
             reconnectDelays: [TimeSpan.Zero, TimeSpan.FromMilliseconds(50)],
@@ -105,15 +112,22 @@ public sealed class DaemonClientReconnectIntegrationTests
         var clientDisconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnectedAfterRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Wait for Disconnected (auto-reconnect exhausted, Closed handler fired)
-        // before starting host2. This ensures host1's port is fully released
-        // before host2 binds, and that the client is not mid-reconnect when
-        // host2 starts. Using Task.IsCompleted as the guard is safe: the
-        // Disconnected event always fires before any subsequent Connected event
-        // from ReconnectLoopAsync.
+        // Sync on Reconnecting OR Disconnected. SignalR fires Reconnecting from
+        // its state machine as soon as the transport drops, before any retry
+        // attempt. Waiting for Disconnected alone requires WithAutomaticReconnect
+        // to exhaust its retries, which on Windows can exceed the test budget:
+        // ConnectEx to a closed loopback port is not immediate (Winsock
+        // SYN-retransmit path, exacerbated by WFP/AV filter drivers on hosted
+        // runners), so each StartAsync retry can take seconds rather than the
+        // sub-millisecond ECONNREFUSED seen on Linux.
+        //
+        // The IsCompleted guard for reconnectedAfterRestart is still safe: at
+        // least one Reconnecting/Disconnected always precedes any subsequent
+        // Connected emission. host1's port release is already synchronous via
+        // host1.Dispose(), so it is not gated on the client observing anything.
         using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
         {
-            if (evt.State is DaemonConnectionState.Disconnected)
+            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.Disconnected)
                 clientDisconnected.TrySetResult();
 
             if (evt.State is DaemonConnectionState.Connected && clientDisconnected.Task.IsCompleted)
@@ -144,10 +158,11 @@ public sealed class DaemonClientReconnectIntegrationTests
         await host1.StopAsync(TestContext.Current.CancellationToken);
         host1.Dispose();
 
-        // Wait for the client to observe Disconnected (auto-reconnect exhausted,
-        // Closed handler fired). With short reconnect delays this takes ~50ms.
-        // This ensures host1's port is fully released before host2 tries to bind,
-        // avoiding Windows TIME_WAIT conflicts.
+        // Wait for the client to observe the drop (Reconnecting or Disconnected).
+        // We do not gate on retry exhaustion: that is platform-dependent on
+        // Windows and not what this test cares about. host1's listener socket
+        // was released synchronously by host1.Dispose(); listener sockets do
+        // not enter TIME_WAIT.
         await WaitFor(clientDisconnected.Task, TimeSpan.FromSeconds(10));
 
         // Start the replacement server. ReconnectLoopAsync is already running at
