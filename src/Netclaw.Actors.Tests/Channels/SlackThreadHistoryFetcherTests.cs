@@ -64,7 +64,7 @@ public sealed class SlackThreadHistoryFetcherTests
     }
 
     [Fact]
-    public async Task Filters_out_bot_messages()
+    public async Task Includes_bot_messages_with_bot_id_as_sender_when_user_is_missing()
     {
         _replies.Set("C1", "1000.0", null, new ConversationMessagesResponse
         {
@@ -79,9 +79,35 @@ public sealed class SlackThreadHistoryFetcherTests
 
         var result = await CreateFetcher().FetchThreadHistoryAsync(new SessionId("C1/1000.0"), TestContext.Current.CancellationToken);
 
-        Assert.Equal(2, result.Count);
+        Assert.Equal(4, result.Count);
         Assert.Contains(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "root"));
         Assert.Contains(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "human reply"));
+
+        var botEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "bot reply"));
+        Assert.Equal("B_BOT", botEntry.SenderId);
+
+        var netclawEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "netclaw reply"));
+        Assert.Equal("B_NETCLAW", netclawEntry.SenderId);
+    }
+
+    [Fact]
+    public async Task Prefers_user_id_over_bot_id_when_both_are_present()
+    {
+        // Slack often sets both fields on bot posts. The user id is the more
+        // useful identifier (matches the agent's known user id in the system
+        // prompt), so it wins when present.
+        _replies.Set("C1", "1000.0", null, new ConversationMessagesResponse
+        {
+            Messages =
+            [
+                new MessageEvent { Ts = "1000.0", User = "U_BOT_AS_USER", BotId = "B_BOT", Text = "bot reply via user-and-bot ids" }
+            ]
+        });
+
+        var result = await CreateFetcher().FetchThreadHistoryAsync(new SessionId("C1/1000.0"), TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(result);
+        Assert.Equal("U_BOT_AS_USER", entry.SenderId);
     }
 
     [Fact]

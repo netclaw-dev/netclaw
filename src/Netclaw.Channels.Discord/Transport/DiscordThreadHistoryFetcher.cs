@@ -126,9 +126,12 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (message.IsBot)
-                    continue;
-
+                // Bot-authored entries are included so the root of a
+                // proactively-posted thread surfaces during backfill.
+                // Downstream, the binding actor's cursor watermark filters
+                // already-processed entries out of adopted context. Live-loop
+                // prevention is the inbound filter in DiscordConversationActor,
+                // which is unchanged.
                 var input = await ConvertMessageAsync(
                     message,
                     channelId,
@@ -447,7 +450,10 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
                         threadChannelId,
                         options: new RequestOptions { CancelToken = cancellationToken });
 
-                    if (rootMessage is not null && !rootMessage.Author.IsBot && HasUsableContent(rootMessage))
+                    // Include bot-authored thread roots: a proactively-posted
+                    // thread's root IS a bot message, and dropping it here
+                    // would defeat the whole point of the history backfill.
+                    if (rootMessage is not null && HasUsableContent(rootMessage))
                         results.Add(ToHistoricalMessage(rootMessage));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -464,9 +470,6 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         foreach (var message in messages.OrderBy(m => m.Timestamp))
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (message.Author.IsBot)
-                continue;
 
             if (!HasUsableContent(message))
                 continue;

@@ -269,6 +269,43 @@ public sealed class DiscordThreadHistoryFetcherTests
         Assert.Equal(1, handler.RequestCount);
     }
 
+    [Fact]
+    public async Task Includes_bot_authored_messages_in_history_result()
+    {
+        var fetcher = CreateFetcher(
+            (_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>(
+            [
+                new DiscordThreadHistoryFetcher.HistoricalMessage(
+                    MessageId: "2001",
+                    SenderId: "bot-1",
+                    IsBot: true,
+                    Text: "proactive post from the agent",
+                    Timestamp: TimeProvider.System.GetUtcNow(),
+                    Attachments: []),
+                new DiscordThreadHistoryFetcher.HistoricalMessage(
+                    MessageId: "2002",
+                    SenderId: "user-1",
+                    IsBot: false,
+                    Text: "human reply",
+                    Timestamp: TimeProvider.System.GetUtcNow(),
+                    Attachments: [])
+            ]));
+
+        var result = await fetcher.FetchThreadHistoryAsync(
+            new SessionId("ch-public/100000000000002001"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, result.Count);
+
+        var botEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>()
+            .Any(t => t.Text == "proactive post from the agent"));
+        Assert.Equal("bot-1", botEntry.SenderId);
+
+        var humanEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>()
+            .Any(t => t.Text == "human reply"));
+        Assert.Equal("user-1", humanEntry.SenderId);
+    }
+
     private static DiscordThreadHistoryFetcher CreateFetcher(
         DiscordThreadHistoryFetcher.MessageFetcher? messageFetcher = null,
         HttpMessageHandler? handler = null,

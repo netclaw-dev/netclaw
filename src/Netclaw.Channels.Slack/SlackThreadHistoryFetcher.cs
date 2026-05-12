@@ -151,14 +151,26 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
             foreach (var message in response.Messages)
             {
-                if (!string.IsNullOrWhiteSpace(message.BotId))
-                    continue;
+                // Bot-authored entries are included so the root of a
+                // proactively-posted thread surfaces during backfill.
+                // Downstream, the binding actor's cursor watermark filters
+                // already-processed entries out of adopted context (note:
+                // the watermark gates output, not the I/O cost of this loop;
+                // attachment dedup via the historical inbox keeps repeat
+                // fetches cheap). Live-loop prevention is the inbound
+                // filter in SlackConversationActor, which is unchanged.
+                var senderId = !string.IsNullOrWhiteSpace(message.User)
+                    ? message.User
+                    : !string.IsNullOrWhiteSpace(message.BotId)
+                        ? message.BotId
+                        : null;
 
-                if (string.IsNullOrWhiteSpace(message.User))
+                if (senderId is null)
                     continue;
 
                 var input = await ConvertMessageAsync(
                     message,
+                    senderId,
                     channelId,
                     audience,
                     attachmentPolicy,
@@ -183,6 +195,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
     private async Task<ChannelInput?> ConvertMessageAsync(
         SlackNet.Events.MessageEvent message,
+        string senderId,
         SlackChannelId channelId,
         TrustAudience audience,
         ChannelAttachmentPolicy attachmentPolicy,
@@ -238,7 +251,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         return new ChannelInput
         {
-            SenderId = message.User,
+            SenderId = senderId,
             ChannelId = channelId.Value,
             MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
             Contents = contents,
