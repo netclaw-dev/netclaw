@@ -35,7 +35,7 @@
 
 - [x] 6.1 Run targeted tests for subagent loading, routed skill execution, prompt assembly, and parent-context inheritance.
 - [x] 6.2 Run `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1 -Verify`.
-- [ ] 6.3 Run `openspec validate align-subagent-loading-and-parent-context`.
+- [x] 6.3 Run `openspec validate align-subagent-loading-and-parent-context`.
 - [ ] 6.4 `/opsx-verify align-subagent-loading-and-parent-context` after implementation lands.
 - [ ] 6.5 `/opsx-sync align-subagent-loading-and-parent-context` to merge the deltas into the main specs.
 - [ ] 6.6 `/opsx-archive align-subagent-loading-and-parent-context` after merge.
