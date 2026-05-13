@@ -19,7 +19,14 @@ public static class SecurityServiceExtensions
         services.AddSingleton<ContentPolicy>();
         services.AddSingleton<IContentScanner, MagicByteContentScanner>();
         services.AddSingleton<IPromptInjectionDetector, RegexPromptInjectionDetector>();
-        services.AddSingleton<ISkillContentScanner, RegexSkillContentScanner>();
+        // Skill content scanning is temporarily disabled (see netclaw-dev/netclaw issue
+        // for the hardening tracker): the regex detector false-positives on legitimate
+        // ops documentation — e.g. "re-enable after fixing the root cause" trips the
+        // PrivilegeEscalation pattern — and we re-scan trusted local skills at every
+        // skill_load invocation, which keeps reopening that false-positive surface.
+        // The RegexSkillContentScanner class is retained for tests and for the
+        // eventual re-enable once trust-tier / scanner hardening lands.
+        services.AddSingleton<ISkillContentScanner, NoOpSkillContentScanner>();
         return services;
     }
 

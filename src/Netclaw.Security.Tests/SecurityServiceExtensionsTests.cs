@@ -44,8 +44,12 @@ public sealed class SecurityServiceExtensionsTests
     }
 
     [Fact]
-    public void AddContentSecurity_registers_regex_skill_content_scanner()
+    public void AddContentSecurity_registers_noop_skill_content_scanner()
     {
+        // Skill content scanning is temporarily wired to the no-op until the
+        // regex detector is hardened against false positives on legitimate ops
+        // documentation. RegexSkillContentScanner remains exercised by its own
+        // unit tests so the implementation does not bit-rot.
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddContentSecurity();
@@ -53,6 +57,6 @@ public sealed class SecurityServiceExtensionsTests
         using var provider = services.BuildServiceProvider();
         var scanner = provider.GetRequiredService<ISkillContentScanner>();
 
-        Assert.IsType<RegexSkillContentScanner>(scanner);
+        Assert.IsType<NoOpSkillContentScanner>(scanner);
     }
 }
