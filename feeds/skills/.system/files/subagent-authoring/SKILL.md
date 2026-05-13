@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.2.0"
+  version: "1.2.1"
 ---
 
 # Subagent Authoring
@@ -144,6 +144,11 @@ metadata:
 If that target is missing, internal-only, or malformed, activation fails
 deterministically with no inline fallback. Keep routed skill metadata aligned
 with real user-facing subagent definitions.
+
+Routed skills go through the same loader + registry contract as explicit
+`spawn_agent`: the next routed activation reloads the definition from disk
+and inherits the parent session's `session_dir` and `project_dir` exactly
+the same way. There is no separate code path for routed execution.
 
 ## Verification checklist
 

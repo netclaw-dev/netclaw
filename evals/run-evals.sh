@@ -909,6 +909,10 @@ assert_skill_activation_soft_memory() {
     daemon_log_skill_loaded 'netclaw-memory' || stdout_tool_called 'find_memories'
 }
 
+assert_skill_activation_subagent_authoring() {
+    daemon_log_skill_loaded 'subagent-authoring'
+}
+
 # User skills (non-system, from eval fixtures)
 assert_skill_activation_user_coding() {
     daemon_log_skill_loaded 'modern-csharp-coding-standards'
@@ -1314,6 +1318,11 @@ run_all() {
         "What did we discuss last time about the API redesign?" \
         "Do you remember what database we decided to use?" \
         "What do you know about my project preferences?"
+
+    run_case skill_activation_subagent_authoring "skill loaded" \
+        "How do I create a custom subagent in Netclaw?" \
+        "Walk me through authoring a new file-based subagent." \
+        "What goes in a Netclaw agent definition file?"
 
     # User skills (non-system, loaded from eval fixtures)
     run_case skill_activation_user_coding "skill loaded" \

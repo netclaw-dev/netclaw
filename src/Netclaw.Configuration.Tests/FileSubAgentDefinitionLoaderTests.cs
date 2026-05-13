@@ -353,6 +353,58 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
         Assert.True(_loader.RefreshIfChanged(out var refreshed));
         Assert.Empty(refreshed);
     }
+
+    [Fact]
+    public void SyncInto_replaces_registry_profiles_when_disk_changes()
+    {
+        // Both spawn_agent and metadata.subagent routed activations go through the
+        // same SyncInto contract — exercising the loader+registry pair end-to-end
+        // proves the live-reload requirement for both entry points.
+        var path = WriteAgent("routable.md", """
+            ---
+            name: routable
+            description: First description
+            tools: [file_read]
+            ---
+
+            First body.
+            """);
+
+        var registry = new SubAgentDefinitionRegistry();
+        Assert.True(_loader.SyncInto(registry));
+        Assert.Equal("First description", registry.TryGetByName("routable")!.Description);
+
+        File.WriteAllText(path, """
+            ---
+            name: routable
+            description: Updated description
+            tools: [file_read]
+            ---
+
+            Updated body.
+            """);
+
+        Assert.True(_loader.SyncInto(registry));
+        Assert.Equal("Updated description", registry.TryGetByName("routable")!.Description);
+    }
+
+    [Fact]
+    public void SyncInto_is_a_no_op_when_directory_unchanged()
+    {
+        WriteAgent("stable.md", """
+            ---
+            name: stable
+            description: Stable
+            tools: [file_read]
+            ---
+
+            body
+            """);
+
+        var registry = new SubAgentDefinitionRegistry();
+        Assert.True(_loader.SyncInto(registry));
+        Assert.False(_loader.SyncInto(registry));
+    }
 }
 
 /// <summary>

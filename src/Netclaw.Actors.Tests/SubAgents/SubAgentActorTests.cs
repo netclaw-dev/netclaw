@@ -115,6 +115,111 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task Tool_execution_with_no_parent_project_directory_passes_null_through()
+    {
+        var fakeTool = new FakeNetclawTool("inspect_context", "ok");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-no-project", "inspect_context")]
+        };
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Inspect inherited paths.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentSessionDirectory = "/tmp/netclaw/sessions/xyz"
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeTool.LastContext);
+        Assert.Equal("/tmp/netclaw/sessions/xyz", fakeTool.LastContext!.SessionDirectory);
+        Assert.Null(fakeTool.LastContext.ProjectDirectory);
+    }
+
+    [Fact]
+    public async Task Each_spawn_snapshots_its_own_parent_project_directory()
+    {
+        // Mirrors D6: parent project changes between two activations show up
+        // in the second subagent run but never leak into the first.
+        var firstTool = new FakeNetclawTool("inspect_context", "ok");
+        var firstClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-1", "inspect_context")]
+        };
+        var firstAgent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([firstTool]), firstClient));
+
+        var firstResult = await firstAgent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "First run.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentProjectDirectory = "/home/user/workspaces/project-a"
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.True(firstResult.Success);
+        Assert.Equal("/home/user/workspaces/project-a", firstTool.LastContext!.ProjectDirectory);
+
+        var secondTool = new FakeNetclawTool("inspect_context", "ok");
+        var secondClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-2", "inspect_context")]
+        };
+        var secondAgent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([secondTool]), secondClient));
+
+        var secondResult = await secondAgent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Second run after parent project switch.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentProjectDirectory = "/home/user/workspaces/project-b"
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.True(secondResult.Success);
+        Assert.Equal("/home/user/workspaces/project-b", secondTool.LastContext!.ProjectDirectory);
+        Assert.Equal("/home/user/workspaces/project-a", firstTool.LastContext!.ProjectDirectory);
+    }
+
+    [Fact]
+    public async Task System_prompt_includes_inherited_project_instructions_when_present()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition() with { ProjectInstructions = "Project rules: prefer C#." };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        var systemMessage = fakeClient.LastReceivedMessages!.Single(m => m.Role == ChatRole.System);
+        Assert.Contains("You are a test agent.", systemMessage.Text);
+        Assert.Contains("Project rules: prefer C#.", systemMessage.Text);
+    }
+
+    [Fact]
+    public async Task System_prompt_omits_project_section_when_no_instructions_inherited()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Do the thing.", Timeout = TimeSpan.FromSeconds(5) },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        var systemMessage = fakeClient.LastReceivedMessages!.Single(m => m.Role == ChatRole.System);
+        Assert.Equal("You are a test agent.", systemMessage.Text);
+    }
+
+    [Fact]
     public async Task Approval_gated_tool_is_denied_inside_subagent()
     {
         var fakeTool = new FakeNetclawTool("shell_execute", "should not run");
