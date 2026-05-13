@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -13,13 +14,13 @@ internal sealed record GetUnapprovedPatterns(
     SessionId? SessionId,
     TrustAudience Audience,
     ToolName ToolName,
-    IReadOnlyList<string> Patterns);
+    IReadOnlyList<string> Patterns) : INoSerializationVerificationNeeded;
 
-internal sealed record UnapprovedPatternsResponse(IReadOnlyList<string> Patterns);
+internal sealed record UnapprovedPatternsResponse(IReadOnlyList<string> Patterns) : INoSerializationVerificationNeeded;
 
 internal sealed record RecordToolApproval(
     SessionId SessionId,
     TrustAudience Audience,
     ToolName ToolName,
     IReadOnlyList<string> Patterns,
-    bool Persistent);
+    bool Persistent) : INoSerializationVerificationNeeded;

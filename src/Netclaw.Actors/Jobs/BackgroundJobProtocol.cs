@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using System.Text.Json.Serialization;
 using Netclaw.Configuration;
 
@@ -89,7 +90,7 @@ public sealed record BackgroundJobCancelResponse(BackgroundJobId JobId, bool Fou
 /// <summary>
 /// Sent by <see cref="BackgroundJobExecutionActor"/> to parent when execution completes.
 /// </summary>
-internal sealed record BackgroundJobCompleted
+internal sealed record BackgroundJobCompleted : INoSerializationVerificationNeeded
 {
     public required BackgroundJobId JobId { get; init; }
     public required BackgroundJobStatus Status { get; init; }

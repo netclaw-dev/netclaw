@@ -10,7 +10,7 @@ namespace Netclaw.Actors.Protocol;
 /// <summary>
 /// Command delivering user input to a session actor.
 /// </summary>
-public sealed class SendUserMessage : IWithSessionId
+public sealed class SendUserMessage : IWithSessionId, IPersistableMessage
 {
     public SessionId SessionId { get; set; }
 
@@ -42,14 +42,14 @@ public sealed class SendUserMessage : IWithSessionId
 public sealed record DeliverTrustedSessionTurn(
     SessionId SessionId,
     string Content,
-    Channels.MessageSource Source) : IWithSessionId;
+    Channels.MessageSource Source) : IWithSessionId, IPersistableMessage;
 
 /// <summary>
 /// User's response to a <see cref="ToolInteractionRequest"/>.
 /// Routed from the channel adapter to the session actor to complete the
 /// blocked tool's <see cref="System.Threading.Tasks.TaskCompletionSource{T}"/>.
 /// </summary>
-public sealed class ToolInteractionResponse : IWithSessionId
+public sealed class ToolInteractionResponse : IWithSessionId, IPersistableMessage
 {
     public required SessionId SessionId { get; init; }
 

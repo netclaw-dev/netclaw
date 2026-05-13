@@ -8,7 +8,7 @@ namespace Netclaw.Actors.Protocol;
 /// <summary>
 /// Persisted event recording a completed turn (user message + assistant reply).
 /// </summary>
-public sealed class TurnRecorded
+public sealed class TurnRecorded : IPersistableMessage
 {
     public SessionId SessionId { get; set; }
 
@@ -40,7 +40,7 @@ public sealed class TurnRecorded
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 }
 
-public sealed class AdoptedContextRecorded
+public sealed class AdoptedContextRecorded : IPersistableMessage
 {
     public sealed class AdoptedMessageRecord
     {
@@ -83,7 +83,7 @@ public sealed class AdoptedContextRecorded
 /// <summary>
 /// Persisted event recording that the session title was set or updated.
 /// </summary>
-public sealed class SessionTitleSet
+public sealed class SessionTitleSet : IPersistableMessage
 {
     public SessionId SessionId { get; set; }
 
@@ -98,7 +98,7 @@ public sealed class SessionTitleSet
 /// Persisted event recording that a session's conversation history was compacted.
 /// A snapshot is also taken after this event to avoid replaying the full journal.
 /// </summary>
-public sealed class SessionCompacted
+public sealed class SessionCompacted : IPersistableMessage
 {
     public SessionId SessionId { get; set; }
 

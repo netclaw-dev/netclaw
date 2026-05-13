@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Linq;
 using Akka.Actor;
 using Akka.DependencyInjection;
 using Akka.Hosting;
@@ -195,24 +196,7 @@ public static class NetclawAkkaHostingExtensions
     {
         var boundTypes = new[]
         {
-            typeof(SessionId),
-            typeof(SendUserMessage),
-            typeof(SerializableChatMessage),
-            typeof(SerializableMediaReference),
-            typeof(SerializableToolCall),
-            typeof(TurnRecorded),
-            typeof(SessionTitleSet),
-            typeof(SessionCompacted),
-            typeof(SessionSnapshot),
-            typeof(TurnBroadcast),
-            typeof(CompactionBroadcast),
-            typeof(WorkingContext),
-            typeof(ReminderId),
-            typeof(ReminderDelivery),
-            typeof(ReminderSchedule),
-            typeof(ReminderPayload),
-            typeof(AdoptedContextRecorded),
-            typeof(Channels.CursorAdvanced),
+            typeof(IPersistableMessage),
         };
 
         return builder

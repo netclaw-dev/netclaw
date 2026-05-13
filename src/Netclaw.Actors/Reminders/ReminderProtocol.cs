@@ -3,15 +3,17 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using System.Text.Json.Serialization;
 using Netclaw.Configuration;
+using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Actors.Reminders;
 
 /// <summary>
 /// Strongly-typed reminder identity.
 /// </summary>
-public readonly record struct ReminderId(string Value)
+public readonly record struct ReminderId(string Value) : IPersistableMessage
 {
     public override string ToString() => Value;
 }
@@ -44,7 +46,7 @@ public enum DeliveryKind
 /// <summary>
 /// Structured delivery target for a reminder.
 /// </summary>
-public sealed class ReminderDelivery
+public sealed class ReminderDelivery : IPersistableMessage
 {
     /// <summary>
     /// How results are delivered.
@@ -102,7 +104,7 @@ public enum ReminderScheduleType
 /// <summary>
 /// Describes when and how a reminder fires.
 /// </summary>
-public sealed class ReminderSchedule
+public sealed class ReminderSchedule : IPersistableMessage
 {
     public ReminderScheduleType Type { get; set; }
 
@@ -142,7 +144,8 @@ public sealed class ReminderSchedule
 }
 
 /// <summary>
-/// Canonical reminder definition persisted to disk.
+/// Canonical reminder definition persisted to disk as JSON.
+/// Not serialized via Akka.NET - scheduled messages only carry a pointer (reminder ID).
 /// </summary>
 public sealed record ReminderDefinition
 {
@@ -231,7 +234,7 @@ public sealed record ReminderDefinition
 /// <summary>
 /// Message persisted inside Akka.Reminders. Intentionally lightweight: pointer to disk definition.
 /// </summary>
-public sealed class ReminderPayload
+public sealed class ReminderPayload : IPersistableMessage
 {
     public ReminderId Id { get; set; }
 }
@@ -325,7 +328,7 @@ internal sealed record ReminderExecutionCompleted(
     Guid ExecutionId,
     ReminderId Id,
     bool Success,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Signal emitted by the outbound channel pipeline when a reminder-sourced
@@ -347,14 +350,14 @@ internal sealed record ReminderExecutionCompleted(
 public sealed record ReminderDeliveryObserved(
     string ReminderDeliveryKey,
     Channels.ChannelType ChannelType,
-    long? ObservedAtMs = null);
+    long? ObservedAtMs = null) : INoSerializationVerificationNeeded;
 
 // ── Health query ──
 
 /// <summary>
 /// Query sent to <see cref="ReminderManagerActor"/> to obtain current health counters.
 /// </summary>
-public sealed record GetReminderHealthQuery
+public sealed record GetReminderHealthQuery : INoSerializationVerificationNeeded
 {
     public static readonly GetReminderHealthQuery Instance = new();
 }
@@ -365,7 +368,7 @@ public sealed record GetReminderHealthQuery
 public sealed record ReminderHealthResponse(
     int ScheduledCount,
     int ActiveExecutions,
-    int FailedCount);
+    int FailedCount) : INoSerializationVerificationNeeded;
 
 // ── Execution history ──
 

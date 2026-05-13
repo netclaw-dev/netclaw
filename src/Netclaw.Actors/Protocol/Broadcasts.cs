@@ -9,7 +9,7 @@ namespace Netclaw.Actors.Protocol;
 /// Published via Akka pub/sub after a session completes a turn.
 /// Adapters subscribe to deliver replies through their respective channels.
 /// </summary>
-public sealed class TurnBroadcast
+public sealed class TurnBroadcast : IPersistableMessage
 {
     public SessionId SessionId { get; set; }
 
@@ -23,7 +23,7 @@ public sealed class TurnBroadcast
 /// <summary>
 /// Published via Akka pub/sub after a session completes compaction.
 /// </summary>
-public sealed class CompactionBroadcast
+public sealed class CompactionBroadcast : IPersistableMessage
 {
     public SessionId SessionId { get; set; }
 

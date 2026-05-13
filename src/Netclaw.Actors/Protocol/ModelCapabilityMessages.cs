@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Protocol;
@@ -27,4 +28,4 @@ internal sealed record CapabilityResolved(
     string ModelId,
     ModelModality InputModalities,
     ModelModality OutputModalities,
-    bool Success);
+    bool Success) : INoSerializationVerificationNeeded;

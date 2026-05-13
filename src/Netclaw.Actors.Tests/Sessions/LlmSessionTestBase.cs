@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
+using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
@@ -24,7 +26,8 @@ public abstract class LlmSessionTestBase : TestKit
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
             .WithNetclawSerialization()
-            .WithNetclawActors();
+            .WithNetclawActors()
+            .WithStrictSerialization();
     }
 
     protected sealed override void ConfigureServices(HostBuilderContext context, IServiceCollection services)

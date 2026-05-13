@@ -12,7 +12,7 @@ namespace Netclaw.Actors.Protocol;
 /// Snapshot of session state for fast recovery. Persisted after compaction
 /// and periodically based on <see cref="Sessions.SessionConfig.SnapshotInterval"/>.
 /// </summary>
-public sealed class SessionSnapshot
+public sealed class SessionSnapshot : IPersistableMessage
 {
     public sealed class AdoptedContextSnapshotRecord
     {

@@ -5,9 +5,11 @@
 // -----------------------------------------------------------------------
 namespace Netclaw.Actors.Channels;
 
+using Netclaw.Actors.Protocol;
+
 /// <summary>
 /// Persistence event indicating a channel binding actor's inbound cursor moved forward.
 /// The cursor value is channel-specific (e.g. Slack timestamp, Discord snowflake)
 /// but serialized as an opaque string — only the owning actor interprets it.
 /// </summary>
-public readonly record struct CursorAdvanced(string Cursor);
+public readonly record struct CursorAdvanced(string Cursor) : IPersistableMessage;

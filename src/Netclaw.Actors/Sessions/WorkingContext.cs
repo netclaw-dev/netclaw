@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using Netclaw.Actors.Protocol;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -22,7 +23,7 @@ namespace Netclaw.Actors.Sessions;
 ///   root the session is working on. Set via <c>set_working_directory</c>
 ///   tool, persisted across crash/restart. Null means "no project selected."
 /// </summary>
-public sealed record WorkingContext
+public sealed record WorkingContext : IPersistableMessage
 {
     /// <summary>
     /// Maximum number of entries retained in <see cref="RecentFiles"/>.

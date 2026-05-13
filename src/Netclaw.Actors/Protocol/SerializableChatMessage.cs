@@ -9,7 +9,7 @@ namespace Netclaw.Actors.Protocol;
 /// Persistence-safe representation of a chat message.
 /// Never persist Microsoft.Extensions.AI types directly — use this instead.
 /// </summary>
-public sealed class SerializableChatMessage
+public sealed class SerializableChatMessage : IPersistableMessage
 {
     public ChatRole Role { get; set; }
 
@@ -39,7 +39,7 @@ public sealed class SerializableChatMessage
 /// <summary>
 /// Persistence-safe reference to a media file stored in the session directory.
 /// </summary>
-public sealed class SerializableMediaReference
+public sealed class SerializableMediaReference : IPersistableMessage
 {
     /// <summary>Relative path within the session media directory.</summary>
     public string RelativePath { get; set; } = string.Empty;
@@ -65,7 +65,7 @@ public enum MediaModality
 /// <summary>
 /// Persistence-safe representation of a single tool call from the assistant.
 /// </summary>
-public sealed class SerializableToolCall
+public sealed class SerializableToolCall : IPersistableMessage
 {
     public string CallId { get; set; } = string.Empty;
 

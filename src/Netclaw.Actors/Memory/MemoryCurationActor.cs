@@ -37,11 +37,11 @@ public sealed record CurationFailed(string Reason);
 // ── Internal messages ───────────────────────────────────────────────
 
 internal sealed record EvaluationBatchResult(
-    IReadOnlyList<(SQLiteMemoryCurationOperation Operation, CurationDecision Decision)> Decisions);
+    IReadOnlyList<(SQLiteMemoryCurationOperation Operation, CurationDecision Decision)> Decisions) : INoSerializationVerificationNeeded;
 
-internal sealed record WriteBatchResult(CurationCompleted Summary);
+internal sealed record WriteBatchResult(CurationCompleted Summary) : INoSerializationVerificationNeeded;
 
-internal sealed record WriteBatchFailed(Exception Exception);
+internal sealed record WriteBatchFailed(Exception Exception) : INoSerializationVerificationNeeded;
 
 // ── Actor ───────────────────────────────────────────────────────────
 
