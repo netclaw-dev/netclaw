@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 
+using Netclaw.Configuration;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -142,42 +144,14 @@ public static class PathUtility
     }
 
     /// <summary>
-    /// Expands shell path tokens: ~, $HOME, ${HOME}, %USERPROFILE%.
-    /// Does not normalize the path.
+    /// Expands shell path tokens: ~, $HOME, ${HOME}, %USERPROFILE%. Does not
+    /// normalize the path. Delegates to <see cref="PathExpansion.ExpandHome"/>
+    /// so Configuration and Security share one canonical implementation;
+    /// preserves the historical non-null contract by passing through the
+    /// original input on whitespace-only values.
     /// </summary>
     public static string ExpandHome(string path)
-    {
-        var expanded = path;
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-        if (expanded.StartsWith('~'))
-        {
-            if (!string.IsNullOrWhiteSpace(home))
-            {
-                expanded = expanded.Length == 1
-                    ? home
-                    : Path.Combine(home, expanded[1..].TrimStart('/', '\\'));
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(home))
-            return expanded;
-
-        // Skip the three substring scans entirely when no env-var sigil is
-        // present — the typical absolute-path candidate has neither.
-        if (expanded.Contains('$', StringComparison.Ordinal))
-        {
-            expanded = expanded.Replace("$HOME", home, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("${HOME}", home, StringComparison.OrdinalIgnoreCase);
-        }
-
-        if (expanded.Contains('%', StringComparison.Ordinal))
-        {
-            expanded = expanded.Replace("%USERPROFILE%", home, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return expanded;
-    }
+        => PathExpansion.ExpandHome(path) ?? path;
 
     /// <summary>
     /// Expands shell path tokens and normalizes relative to working directory.

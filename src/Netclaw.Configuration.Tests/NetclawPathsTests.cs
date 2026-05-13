@@ -97,6 +97,43 @@ public sealed class NetclawPathsTests : IDisposable
         Assert.Equal(envPath, paths.BasePath);
         Assert.Equal(workspacePath, paths.WorkspacesDirectory);
     }
+
+    [Theory]
+    [InlineData("~/repositories")]
+    [InlineData("$HOME/repositories")]
+    [InlineData("${HOME}/repositories")]
+    public void Tilde_and_HOME_tokens_in_workspacesDirectory_expand_to_user_home(string configured)
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var expected = Path.Combine(home, "repositories");
+
+        var paths = new NetclawPaths(workspacesDirectory: configured);
+
+        Assert.Equal(expected, paths.WorkspacesDirectory);
+    }
+
+    [Fact]
+    public void Tilde_in_basePath_expands_to_user_home()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var expected = Path.Combine(home, ".netclaw-test");
+
+        var paths = new NetclawPaths("~/.netclaw-test");
+
+        Assert.Equal(expected, paths.BasePath);
+    }
+
+    [Fact]
+    public void Tilde_in_NETCLAW_HOME_env_var_expands_to_user_home()
+    {
+        Environment.SetEnvironmentVariable(EnvVar, "~/.netclaw-env-test");
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var expected = Path.Combine(home, ".netclaw-env-test");
+
+        var paths = new NetclawPaths();
+
+        Assert.Equal(expected, paths.BasePath);
+    }
 }
 
 /// <summary>
