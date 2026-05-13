@@ -29,7 +29,7 @@
 - [x] 5.1 Update `docs/runbooks/subagents.md` to replace restart-required authoring guidance with live-reload guidance and fail-closed invalid-edit behavior.
 - [x] 5.2 Update `feeds/skills/.system/files/subagent-authoring/SKILL.md` to describe live reload, inherited parent context, and the new verification workflow.
 - [x] 5.3 Update any relevant skill-routing guidance so `metadata.subagent` documentation matches the shared reload and inheritance contract.
-- [ ] 5.4 Run the eval suite if system skill content changes as part of the implementation PR.
+- [x] 5.4 Run the eval suite if system skill content changes as part of the implementation PR.
 
 ## 6. Verification and OpenSpec completion
 
