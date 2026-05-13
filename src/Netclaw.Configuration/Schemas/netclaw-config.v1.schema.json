@@ -812,14 +812,14 @@
           "description": "Optional model provenance marker (e.g. AutoDetected, Manual)."
         },
         "InputModalities": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/ModelModality" },
-          "description": "Manual override for input modalities. Bypasses automated detection."
+          "type": "string",
+          "description": "Manual override for input modalities. Comma-separated ModelModality flags (e.g. \"Text\", \"Text, Image\"). Bypasses automated detection.",
+          "pattern": "^(Text|Image|Audio|Video)(\\s*,\\s*(Text|Image|Audio|Video))*$"
         },
         "OutputModalities": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/ModelModality" },
-          "description": "Manual override for output modalities. Bypasses automated detection."
+          "type": "string",
+          "description": "Manual override for output modalities. Comma-separated ModelModality flags (e.g. \"Text\"). Bypasses automated detection.",
+          "pattern": "^(Text|Image|Audio|Video)(\\s*,\\s*(Text|Image|Audio|Video))*$"
         }
       },
       "additionalProperties": false

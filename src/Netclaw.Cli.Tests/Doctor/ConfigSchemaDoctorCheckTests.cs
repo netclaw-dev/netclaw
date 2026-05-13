@@ -463,6 +463,64 @@ public sealed class ConfigSchemaDoctorCheckTests
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
+    [Fact]
+    public async Task ReturnsPass_WhenInputModalitiesIsValidCommaString()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Main": {
+                  "Provider": "p",
+                  "ModelId": "m",
+                  "InputModalities": "Text, Image",
+                  "OutputModalities": "Text"
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenInputModalitiesIsArray()
+    {
+        // Regression for #988: the legacy array form must now fail schema
+        // validation so operators discover the binding mismatch instead of
+        // silently getting a wrong (no-override) runtime value.
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Main": {
+                  "Provider": "p",
+                  "ModelId": "m",
+                  "InputModalities": ["Text", "Image"]
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+    }
+
     private static string CreateTempBasePath()
     {
         var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
