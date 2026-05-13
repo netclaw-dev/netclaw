@@ -10,7 +10,7 @@
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.19.1</DiscordNetVersion>
     <MicrosoftExtensionsAIVersion>10.5.0</MicrosoftExtensionsAIVersion>
-    <MicrosoftAspNetCoreVersion>10.0.7</MicrosoftAspNetCoreVersion>
+    <MicrosoftAspNetCoreVersion>10.0.8</MicrosoftAspNetCoreVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
