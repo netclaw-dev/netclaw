@@ -194,6 +194,15 @@ internal sealed record RequestFinalDistillation : INoSerializationVerificationNe
 internal sealed record PassivationTimeout : INoSerializationVerificationNeeded;
 
 /// <summary>
+/// Fired by a short timer after the session has finished its passivation
+/// distillation/snapshot work. The Passivating receive ignores in-flight
+/// snapshot acks but treats any user-initiated message as a signal to abort
+/// the stop, so this timer is the explicit "no one woke us up; commit now"
+/// signal. See <c>LlmSessionActor.CompletePassivation</c>.
+/// </summary>
+internal sealed record PassivationFinalStop : INoSerializationVerificationNeeded;
+
+/// <summary>
 /// Timer-fired message that triggers an LLM call retry after exponential backoff.
 /// Carries the attempt number for observability logging.
 /// </summary>
