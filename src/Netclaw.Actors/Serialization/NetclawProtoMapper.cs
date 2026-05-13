@@ -36,6 +36,7 @@ internal static class NetclawProtoMapper
         ReminderPayload v => ToProto(v),
         AdoptedContextRecorded v => ToProto(v),
         CursorAdvanced v => ToProto(v),
+        MemoriesDistilledV2 v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
 
@@ -502,6 +503,32 @@ internal static class NetclawProtoMapper
 
     internal static Proto.CursorAdvancedProto ToProto(CursorAdvanced ca) => new() { Cursor = ca.Cursor };
     internal static CursorAdvanced FromProto(Proto.CursorAdvancedProto proto) => new(proto.Cursor);
+
+    // ── MemoriesDistilledV2 / ProposedMemoryContext ──
+
+    internal static Proto.ProposedMemoryContextProto ToProto(ProposedMemoryContext ctx) => new()
+    {
+        Anchor = ctx.Anchor,
+        Title = ctx.Title,
+        Content = ctx.Content
+    };
+
+    internal static ProposedMemoryContext FromProto(Proto.ProposedMemoryContextProto proto) =>
+        new(proto.Anchor, proto.Title, proto.Content);
+
+    internal static Proto.MemoriesDistilledV2Proto ToProto(MemoriesDistilledV2 evt)
+    {
+        var proto = new Proto.MemoriesDistilledV2Proto { TimestampMs = evt.TimestampMs };
+        proto.Anchors.AddRange(evt.Anchors);
+        foreach (var p in evt.Proposals)
+            proto.Proposals.Add(ToProto(p));
+        return proto;
+    }
+
+    internal static MemoriesDistilledV2 FromProto(Proto.MemoriesDistilledV2Proto proto) => new(
+        Anchors: proto.Anchors.ToList(),
+        Proposals: proto.Proposals.Select(FromProto).ToList(),
+        TimestampMs: proto.TimestampMs);
 
     // ── ActiveJobInfo ──
 

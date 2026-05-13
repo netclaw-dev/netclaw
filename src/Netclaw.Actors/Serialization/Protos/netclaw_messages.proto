@@ -222,3 +222,17 @@ message ReminderPayloadProto {
 message CursorAdvancedProto {
   string cursor = 1;
 }
+
+// ── MemoriesDistilledV2 / ProposedMemoryContext ──
+
+message ProposedMemoryContextProto {
+  string anchor = 1;
+  string title = 2;
+  string content = 3;
+}
+
+message MemoriesDistilledV2Proto {
+  repeated string anchors = 1;
+  repeated ProposedMemoryContextProto proposals = 2;
+  int64 timestamp_ms = 3;
+}

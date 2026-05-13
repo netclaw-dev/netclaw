@@ -778,10 +778,10 @@ public sealed record MemoriesDistilled(IReadOnlyList<string> Anchors, long Times
 public sealed record MemoriesDistilledV2(
     IReadOnlyList<string> Anchors,
     IReadOnlyList<ProposedMemoryContext> Proposals,
-    long TimestampMs);
+    long TimestampMs) : IPersistableMessage;
 
 /// <summary>Context for a previously proposed memory, used for semantic dedup in subsequent distillation runs.</summary>
-public sealed record ProposedMemoryContext(string Anchor, string Title, string Content);
+public sealed record ProposedMemoryContext(string Anchor, string Title, string Content) : IPersistableMessage;
 
 /// <summary>Sent by the session actor after proposals survive gating and are accepted for curation.</summary>
 public sealed record RecordAcceptedDistillationProposals(IReadOnlyList<MemoryProposal> Proposals);

@@ -194,10 +194,9 @@ public static class NetclawAkkaHostingExtensions
     public static AkkaConfigurationBuilder WithNetclawSerialization(
         this AkkaConfigurationBuilder builder)
     {
-        var boundTypes = new[]
-        {
-            typeof(IPersistableMessage),
-        };
+        var boundTypes = typeof(IPersistableMessage).Assembly.GetTypes()
+            .Where(t => typeof(IPersistableMessage).IsAssignableFrom(t) && !t.IsInterface && !t.IsAbstract)
+            .ToArray();
 
         return builder
             .WithCustomSerializer(
