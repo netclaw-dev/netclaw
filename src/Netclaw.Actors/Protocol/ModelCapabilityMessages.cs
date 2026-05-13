@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Protocol;
@@ -10,7 +11,7 @@ namespace Netclaw.Actors.Protocol;
 /// <summary>
 /// Query the <see cref="ModelCapabilityActor"/> for a model's capabilities.
 /// </summary>
-public sealed record GetModelCapabilities(string ModelId);
+public sealed record GetModelCapabilities(string ModelId) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Response from the capability cache containing resolved modalities.
@@ -18,7 +19,7 @@ public sealed record GetModelCapabilities(string ModelId);
 public sealed record ModelCapabilitiesResponse(
     string ModelId,
     ModelModality InputModalities,
-    ModelModality OutputModalities);
+    ModelModality OutputModalities) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Internal message piped back from async resolution to the actor.
@@ -27,4 +28,4 @@ internal sealed record CapabilityResolved(
     string ModelId,
     ModelModality InputModalities,
     ModelModality OutputModalities,
-    bool Success);
+    bool Success) : INoSerializationVerificationNeeded;

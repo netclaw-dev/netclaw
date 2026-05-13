@@ -63,12 +63,6 @@ public sealed class ToolExecutionContext
         SessionDirectory = sessionDirectory;
     }
 
-    /// <summary>
-    /// Parent session's current project directory when subagent execution is spawned.
-    /// Read-only execution grounding; child runs must not mutate parent state.
-    /// </summary>
-    public string? ProjectDirectory { get; set; }
-
     public string? Audience { get; set; }
 
     public string? Boundary { get; set; }
@@ -133,6 +127,56 @@ public sealed class ToolExecutionContext
     /// Created lazily on first access.
     /// </summary>
     public string? SessionDirectory { get; }
+
+    /// <summary>
+    /// Resolved absolute working directory for the in-flight tool call. Set
+    /// by the session pipeline from the candidate tool arguments,
+    /// <c>WorkingContext.ProjectDirectory</c>, or <see cref="SessionDirectory"/>
+    /// — whichever resolves first. The approval gate uses this as the directory
+    /// half of the candidate <c>(verb, directory)</c> pair when evaluating
+    /// folder-scoped <see cref="Netclaw.Configuration.ApprovalEntry"/> records.
+    /// Null when the tool call is not directory-anchored (e.g. an in-process
+    /// tool like <c>store_memory</c>).
+    /// </summary>
+    public string? Cwd { get; set; }
+
+    /// <summary>
+    /// Absolute path to the project directory the agent is currently working
+    /// on, mirroring <c>WorkingContext.ProjectDirectory</c> from the session
+    /// state. Set by the session pipeline at context-build time so tools and
+    /// the approval gate can resolve a cwd without a round-trip through the
+    /// session actor. Null when no project root has been declared via
+    /// <c>set_working_directory</c>.
+    /// </summary>
+    public string? ProjectDirectory { get; set; }
+
+    /// <summary>
+    /// Resolves the working directory for a shell-style invocation. Returns
+    /// the first non-empty value of:
+    /// <list type="number">
+    /// <item><paramref name="explicitArg"/> — the tool call's
+    /// <c>WorkingDirectory</c> argument when the agent provided one;</item>
+    /// <item><see cref="ProjectDirectory"/> — the session's declared project
+    /// root, populated from <c>WorkingContext.ProjectDirectory</c>;</item>
+    /// <item><see cref="SessionDirectory"/> — the per-session scratch
+    /// directory under <c>~/.netclaw/sessions/&lt;id&gt;/</c>.</item>
+    /// </list>
+    /// Returns <c>null</c> only when none of the three is available, which is
+    /// the contract for tools that are not directory-anchored. Shell tools
+    /// SHALL never inherit the daemon process's cwd — that defeats the
+    /// approval policy's safe-space invariant because the daemon's cwd is
+    /// unrelated to what the agent is "working on."
+    /// </summary>
+    public string? ResolveShellCwd(string? explicitArg)
+    {
+        if (!string.IsNullOrWhiteSpace(explicitArg))
+            return explicitArg;
+        if (!string.IsNullOrWhiteSpace(ProjectDirectory))
+            return ProjectDirectory;
+        if (!string.IsNullOrWhiteSpace(SessionDirectory))
+            return SessionDirectory;
+        return null;
+    }
 
     /// <summary>
     /// File attachments registered by tools during execution.

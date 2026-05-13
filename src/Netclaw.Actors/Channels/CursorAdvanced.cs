@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Serialization;
+
 namespace Netclaw.Actors.Channels;
 
 /// <summary>
@@ -10,4 +12,4 @@ namespace Netclaw.Actors.Channels;
 /// The cursor value is channel-specific (e.g. Slack timestamp, Discord snowflake)
 /// but serialized as an opaque string — only the owning actor interprets it.
 /// </summary>
-public readonly record struct CursorAdvanced(string Cursor);
+public readonly record struct CursorAdvanced(string Cursor) : INetclawSerializableMessage;

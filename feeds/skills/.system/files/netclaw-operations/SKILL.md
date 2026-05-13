@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "1.28.0"
+  version: "2.1.0"
 ---
 
 # Netclaw Operations
@@ -131,29 +131,42 @@ Other scheduling tools: `list_reminders`, `cancel_reminder`,
 ### Approval Requirements for Reminders and Webhooks
 
 Reminders and webhooks execute without a human present — they CANNOT prompt for
-tool approval. If a reminder needs `shell_execute` or file tools, those command
-patterns must be pre-approved in `~/.netclaw/config/tool-approvals.json` BEFORE
-the reminder fires.
+tool approval. The cwd at firing time will not match any cwd a user clicked
+"Always here" for during interactive use, so folder-scoped approvals will not
+match.
 
-**Before creating a reminder that uses shell commands:**
-1. Identify what commands the reminder will need (e.g. `git pull`, `curl`,
-   `cat /var/log/app.log`)
-2. Run those commands interactively in the current session — this triggers the
-   approval prompt and persists the grant
-3. Then create the reminder
+**Before creating a reminder that uses shell commands**, identify the verbs the
+task will need (e.g. `freshdesk`, `curl`, `git pull`) and pre-approve them as
+global wildcards. Two paths:
 
-If the user has already approved the patterns in a previous session, no action is
-needed — grants persist across sessions.
+1. **Suggest `trust-verb` from the agent.** When you (the agent) are helping the
+   user set up a scheduled task, identify the verbs the task will need and ask
+   the user before pre-approving each one. Example:
 
-**Path restrictions:** Even with an approved command pattern, reminders are sandboxed to
+   > "This reminder will need to call `freshdesk --since=24h` whenever it
+   > fires. Mind if I pre-approve `freshdesk` as a global verb so the reminder
+   > can run unattended? I'll do this with
+   > `netclaw approvals trust-verb freshdesk`."
+
+   On confirmation, run the trust-verb command via `shell_execute`. The grant
+   becomes a `(verb, null)` entry — auto-approved for any cwd.
+
+2. **Operator runs the CLI directly:** `netclaw approvals trust-verb <verb>`.
+   Same outcome; useful when the user already knows what they want.
+
+If the user has already trusted the verb in a previous session, no action is
+needed — `(verb, null)` grants persist in `tool-approvals.json` across daemon
+restarts.
+
+**Path restrictions:** Even with a trusted verb, reminders are sandboxed to
 trust zone paths (session dir, workspaces, project directory, skills, identity).
-A reminder approved for `cat /srv/app/log.txt` can read that file inside trust
-zones but NOT arbitrary system paths like `/etc/shadow`. If a reminder needs
-access outside trust zones, the user must configure additional trusted roots.
+`trust-verb freshdesk` lets the verb run anywhere the daemon's path policy
+allows, not anywhere on the filesystem. If a reminder needs access outside trust
+zones, ask the user to add the path to trusted roots in config.
 
-**If a reminder fails with `command_not_pre_approved`:** The command pattern was
-not in the approval store. Run the command interactively to trigger approval,
-then the next reminder firing will succeed.
+**If a reminder fails with `command_not_pre_approved`:** The verb is not in the
+approval store as a global wildcard. Run
+`netclaw approvals trust-verb <verb>` and the next firing succeeds.
 
 **If a reminder fails with `path_outside_trust_zone`:** The command targets a
 path outside the allowed roots. Either move the target into a workspace, or ask
@@ -277,50 +290,95 @@ set.
 
 ## Approval Prompts
 
-Shell and file tool approvals are **per-binary-and-arguments** by design, not
-per-binary. `sleep 5` and `sleep 10` are distinct approval patterns. So are
-`rm foo.txt` and `rm bar.txt`, and `kill 12345` and `kill 67890`. This is not
-a bug — it is the security gate.
+Approvals are typed `(verb, directory)` pairs in `tool-approvals.json`:
 
-The same extraction rule that makes `sleep 5` prompt separately from `sleep 10`
-is what makes `rm foo.txt` prompt separately from `rm ~/.netclaw/netclaw.db`
-and `kill 12345` prompt separately from `kill $(pgrep netclawd)`. Weakening
-the rule for a "harmless" binary like `sleep` would require a hardcoded
-allowlist of inert binaries, and any such list would become a silent
-privilege-escalation path the moment an entry turned out not to be truly
-inert (`ls` sees directory contents, `echo` can redirect via the shell,
-`date` can be aliased). **Do not propose an inert-binary bypass list.** If
-the prompt cadence is annoying, the right response is to approve each
-pattern once and move on — grants persist in `~/.netclaw/config/tool-approvals.json`
-so the noise is bounded.
+- **verb** — the command head plus subcommand chain only (e.g. `git push`,
+  `grep`, `freshdesk`). No flags, no path arguments.
+- **directory** — the directory the grant applies to. Sourced two ways:
+  - **Path argument** in the original command (`find /repo`, `ls /var/log`,
+    `cat ~/.bashrc`). The path argument is the directory; for file targets
+    the parent directory is used so `cat ~/.bashrc` scopes to `~`.
+  - **Cwd** when no path argument is present (`git status`, `freshdesk`).
+  - **`null`** for the global wildcard ("approve this verb in any
+    directory") — only set by `Always anywhere`.
 
-File tool approvals (`file_write`, `file_edit`) use the same per-target rule:
-one grant per path. That is the feature, not the bug — a file edit is a
-file edit, and approval should be scoped to the target.
+**Folder-scoped trust compounds.** An entry on `(find, /home/user/repo)`
+auto-allows `find /home/user/repo/.netclaw -name X` because the candidate's
+extracted path is under the entry's directory. You don't have to call
+`set_working_directory` for this — running a command with a path argument
+declares scope implicitly.
 
-If a user asks why they're being prompted so often, explain the security
-tradeoff and point them at `netclaw approvals` for auditing and trimming
-their persistent grants.
+The approval gate runs three layers in order:
 
-### Inspecting and revoking grants
+1. **Hard-deny list** — system-protected paths. Always blocks.
+2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated
+   safe list (`ls`, `grep`, `cat`, `git status`, `git log`, …) AND the
+   effective directory (path arg or cwd) is under your declared safe space
+   (`session_dir` or `project_dir`), the call auto-runs with no prompt.
+   Mutating verbs (`git push`, `rm`, `sed -i`) are never on the list.
+3. **Interactive prompt** — everything else. Five buttons:
+   - **Once** — run this one time, persist nothing.
+   - **This chat** — allow the verbs in this directory for the rest of the
+     session.
+   - **Always here** — persist `(verb, effective directory)`. The
+     "directory" is the command's path argument when present, else cwd.
+   - **Always anywhere** — persist `(verb, null)` global wildcard.
+     Danger style.
+   - **Deny** — refuse this call only.
+
+**Side-effect-only clauses are authorized but not persisted.** When a
+compound command includes pure side-effect verbs (`echo`, `printf`, `:`,
+`true`, `false`) with no path argument and no redirect, those clauses are
+authorized for the current call by the click but no `ApprovalEntry` is
+written for them. Recording every literal `echo "==="` would be noise.
+
+**Why you may not see a prompt at all.** If the user invokes a read-only verb
+(say `grep`) with a path argument under a tree the operator has previously
+trusted, the safe-verb short-circuit applies and there is no prompt. This
+is intended behavior — read-only inspection of declared work surfaces is
+implicit. Mutating verbs in the same directory still prompt.
+
+**When the prompt offers fewer buttons.** Two cases:
+
+- **Complex commands** (bash control-flow like `for/while/done`, unbalanced
+  quotes/brackets) get only `Once` and `Deny`. The matcher cannot extract a
+  clean verb chain to remember, so persistence is structurally impossible.
+- **Shallow cwd** (e.g. `/etc/`, `/`) hides `Always here` only. Persisting a
+  too-shallow root would grant the verb across most of the filesystem;
+  `This chat` and `Always anywhere` remain available.
+
+If a user keeps getting prompted in their repo on read-only verbs, the
+likely cause is the commands they're running don't carry a path argument
+(e.g. `git status` with no `-C`). Suggest they call
+`set_working_directory <path>` so the safe-verb short-circuit treats that
+tree as a safe space. If they keep getting prompted for the same mutating
+verb (e.g. `git push`), suggest `Always here` to persist
+`(git push, effective directory)`.
+
+### Inspecting, revoking, and pre-approving grants
 
 Use the `netclaw approvals` CLI rather than hand-editing
 `tool-approvals.json`. The daemon reads the file on every approval check, so
-revocations take effect on the next prompt without a daemon restart.
+mutations take effect on the next prompt without a daemon restart.
 
 ```bash
-# Interactive TUI: see everything grouped by audience and tool, revoke with R
+# Interactive TUI: see everything grouped by audience and tool
 netclaw approvals
 
-# List only — human-readable
+# List — human-readable. Entries print as "<verb> in <dir>" or "<verb> anywhere".
 netclaw approvals list
 netclaw approvals list --audience personal --tool shell_execute
 
-# Scriptable JSON output (audiences → tools → patterns)
+# Scriptable JSON output (audiences → tools → typed entries)
 netclaw approvals list --json
 
-# Remove an exact match (case-sensitive on POSIX, insensitive on Windows)
-netclaw approvals revoke "git push" --audience personal --tool shell_execute
+# Revoke by user-visible form (the same labels list emits)
+netclaw approvals revoke "git remote in /home/user/repos/foo/"
+netclaw approvals revoke "freshdesk anywhere"
+
+# Pre-approve a verb as a global wildcard for unattended/scheduled tasks
+netclaw approvals trust-verb freshdesk
+netclaw approvals trust-verb gh --audience team
 
 # Clear every entry for a tool (optionally scoped to one audience)
 netclaw approvals revoke --tool shell_execute --all
@@ -328,13 +386,35 @@ netclaw approvals revoke --tool shell_execute --all --audience personal
 ```
 
 `revoke` of a non-existent pattern exits non-zero with a clear message — the
-CLI never silently succeeds.
+CLI never silently succeeds. `trust-verb` is idempotent — re-running it on an
+existing entry exits zero with "no changes."
+
+### Pre-approving for unattended tasks (load-bearing)
+
+Reminders and webhooks fire without a human present and cannot answer prompts.
+When you (the agent) are helping the user set up an unattended task that needs
+shell commands, **identify the verbs the task will need and proactively suggest
+pre-approving them as global wildcards** before the schedule fires.
+
+Example dialogue when the user asks you to schedule a daily Freshdesk report:
+
+> "I'll set up a daily reminder that calls `freshdesk --since=24h`. Since
+> reminders run unattended and can't prompt for approval, I need to pre-approve
+> the `freshdesk` verb globally — that's a `(freshdesk, null)` entry, meaning
+> it will auto-allow in any cwd. Mind if I do that with
+> `netclaw approvals trust-verb freshdesk`?"
+
+On confirmation, run the trust-verb command via `shell_execute`, then create
+the reminder. The grant persists across daemon restarts.
 
 ### Last-resort recovery
 
 If the approval file gets corrupted (the daemon will quarantine it to
-`tool-approvals.json.invalid` and warn loudly), or if you want to wipe every
-persistent grant and start clean, delete the file directly:
+`tool-approvals.json.invalid` and warn loudly), or if a v1 store gets detected
+during upgrade (the daemon quarantines it to `tool-approvals.json.v1.bak`),
+the active file is reset and the v2 store starts empty.
+
+To wipe every persistent grant and start clean, delete the file directly:
 
 macOS/Linux:
 

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Tools;
 
@@ -43,7 +44,7 @@ public sealed record SubAgentDefinition
 /// <summary>
 /// Message sent to a <see cref="SubAgentActor"/> to begin execution.
 /// </summary>
-public sealed record RunSubAgent
+public sealed record RunSubAgent : INoSerializationVerificationNeeded
 {
     /// <summary>The task for the subagent to perform (becomes part of the user message).</summary>
     public required string Task { get; init; }
@@ -96,7 +97,7 @@ public sealed record RunSubAgent
 /// <summary>
 /// Result returned by a <see cref="SubAgentActor"/> when execution completes.
 /// </summary>
-public sealed record SubAgentResult
+public sealed record SubAgentResult : INoSerializationVerificationNeeded
 {
     /// <summary>Whether the subagent completed successfully.</summary>
     public required bool Success { get; init; }

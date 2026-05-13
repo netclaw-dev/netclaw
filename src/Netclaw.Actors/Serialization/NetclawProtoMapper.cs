@@ -36,6 +36,7 @@ internal static class NetclawProtoMapper
         ReminderPayload v => ToProto(v),
         AdoptedContextRecorded v => ToProto(v),
         CursorAdvanced v => ToProto(v),
+        MemoriesDistilledV2 v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
 
@@ -106,19 +107,15 @@ internal static class NetclawProtoMapper
         return proto;
     }
 
-    internal static SerializableChatMessage FromProto(Proto.SerializableChatMessageProto proto)
+    internal static SerializableChatMessage FromProto(Proto.SerializableChatMessageProto proto) => new()
     {
-        var msg = new SerializableChatMessage
-        {
-            Role = (ChatRole)(int)proto.Role,
-            Content = proto.Content,
-            Name = proto.HasName ? proto.Name : null,
-            ToolCallId = proto.HasToolCallId ? proto.ToolCallId : null
-        };
-        msg.ToolCalls.AddRange(proto.ToolCalls.Select(FromProto));
-        msg.MediaReferences.AddRange(proto.MediaReferences.Select(FromProto));
-        return msg;
-    }
+        Role = (ChatRole)(int)proto.Role,
+        Content = proto.Content,
+        Name = proto.HasName ? proto.Name : null,
+        ToolCallId = proto.HasToolCallId ? proto.ToolCallId : null,
+        ToolCalls = proto.ToolCalls.Select(FromProto).ToArray(),
+        MediaReferences = proto.MediaReferences.Select(FromProto).ToArray()
+    };
 
     // ── SendUserMessage ──
 
@@ -133,16 +130,12 @@ internal static class NetclawProtoMapper
         return proto;
     }
 
-    internal static SendUserMessage FromProto(Proto.SendUserMessageProto proto)
+    internal static SendUserMessage FromProto(Proto.SendUserMessageProto proto) => new()
     {
-        var cmd = new SendUserMessage
-        {
-            SessionId = FromProto(proto.SessionId),
-            Content = proto.Content
-        };
-        cmd.MediaReferences.AddRange(proto.MediaReferences.Select(FromProto));
-        return cmd;
-    }
+        SessionId = FromProto(proto.SessionId),
+        Content = proto.Content,
+        MediaReferences = proto.MediaReferences.Select(FromProto).ToArray()
+    };
 
     // ── TurnRecorded ──
 
@@ -205,19 +198,15 @@ internal static class NetclawProtoMapper
         return proto;
     }
 
-    internal static SessionCompacted FromProto(Proto.SessionCompactedProto proto)
+    internal static SessionCompacted FromProto(Proto.SessionCompactedProto proto) => new()
     {
-        var evt = new SessionCompacted
-        {
-            SessionId = FromProto(proto.SessionId),
-            Summary = proto.Summary,
-            TurnCountBefore = proto.TurnCountBefore,
-            CompactedAtMs = proto.CompactedAtMs,
-            WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null
-        };
-        evt.CompactedMessages.AddRange(proto.CompactedMessages.Select(FromProto));
-        return evt;
-    }
+        SessionId = FromProto(proto.SessionId),
+        Summary = proto.Summary,
+        TurnCountBefore = proto.TurnCountBefore,
+        CompactedAtMs = proto.CompactedAtMs,
+        WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
+        CompactedMessages = proto.CompactedMessages.Select(FromProto).ToArray()
+    };
 
     // ── SessionSnapshot ──
 
@@ -239,20 +228,16 @@ internal static class NetclawProtoMapper
         return proto;
     }
 
-    internal static SessionSnapshot FromProto(Proto.SessionSnapshotProto proto)
+    internal static SessionSnapshot FromProto(Proto.SessionSnapshotProto proto) => new()
     {
-        var snap = new SessionSnapshot
-        {
-            TurnCount = proto.TurnCount,
-            Title = proto.HasTitle ? proto.Title : null,
-            EligibleDeliveryTurnNumber = proto.HasEligibleDeliveryTurnNumber ? proto.EligibleDeliveryTurnNumber : null,
-            WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null
-        };
-        snap.History.AddRange(proto.History.Select(FromProto));
-        snap.ActiveBackgroundJobs.AddRange(proto.ActiveBackgroundJobs.Select(FromProto));
-        snap.AdoptedContextRecords.AddRange(proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord));
-        return snap;
-    }
+        TurnCount = proto.TurnCount,
+        Title = proto.HasTitle ? proto.Title : null,
+        EligibleDeliveryTurnNumber = proto.HasEligibleDeliveryTurnNumber ? proto.EligibleDeliveryTurnNumber : null,
+        WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
+        History = proto.History.Select(FromProto).ToArray(),
+        ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
+        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray()
+    };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(
         SessionSnapshot.AdoptedContextSnapshotRecord r)
@@ -279,7 +264,11 @@ internal static class NetclawProtoMapper
     private static SessionSnapshot.AdoptedContextSnapshotRecord FromAdoptedContextSnapshotRecord(
         Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord proto)
     {
-        var r = new SessionSnapshot.AdoptedContextSnapshotRecord
+        var speakerIds = proto.AdoptedSpeakerIds.Count > 0
+            ? (IReadOnlyList<string>)proto.AdoptedSpeakerIds.ToArray()
+            : proto.Messages.Select(m => m.SenderId).Distinct(StringComparer.Ordinal).ToArray();
+
+        return new SessionSnapshot.AdoptedContextSnapshotRecord
         {
             AuthorizedMessageId = proto.AuthorizedMessageId,
             AuthorizerSenderId = proto.HasAuthorizerSenderId ? proto.AuthorizerSenderId : null,
@@ -288,13 +277,10 @@ internal static class NetclawProtoMapper
             Projection = proto.Projection,
             HasAdoptedContext = proto.HasAdoptedContext || proto.Messages.Count > 0,
             HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
-            ProjectionPersisted = proto.ProjectionPersisted
+            ProjectionPersisted = proto.ProjectionPersisted,
+            AdoptedSpeakerIds = speakerIds,
+            Messages = proto.Messages.Select(FromAdoptedContextSnapshotMessage).ToArray()
         };
-        r.AdoptedSpeakerIds.AddRange(proto.AdoptedSpeakerIds.Count > 0
-            ? proto.AdoptedSpeakerIds
-            : proto.Messages.Select(m => m.SenderId).Distinct(StringComparer.Ordinal));
-        r.Messages.AddRange(proto.Messages.Select(FromAdoptedContextSnapshotMessage));
-        return r;
     }
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord.Types.AdoptedContextSnapshotMessage
@@ -460,7 +446,11 @@ internal static class NetclawProtoMapper
 
     internal static AdoptedContextRecorded FromProto(Proto.AdoptedContextRecordedProto proto)
     {
-        var evt = new AdoptedContextRecorded
+        var speakerIds = proto.AdoptedSpeakerIds.Count > 0
+            ? (IReadOnlyList<string>)proto.AdoptedSpeakerIds.ToArray()
+            : proto.Messages.Select(m => m.SenderId).Distinct(StringComparer.Ordinal).ToArray();
+
+        return new AdoptedContextRecorded
         {
             SessionId = FromProto(proto.SessionId),
             AuthorizedMessageId = proto.AuthorizedMessageId,
@@ -471,13 +461,10 @@ internal static class NetclawProtoMapper
             HasAdoptedContext = proto.HasAdoptedContext || proto.Messages.Count > 0,
             HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
             ProjectionPersisted = proto.ProjectionPersisted,
-            RecordedAtMs = proto.RecordedAtMs
+            RecordedAtMs = proto.RecordedAtMs,
+            AdoptedSpeakerIds = speakerIds,
+            Messages = proto.Messages.Select(FromAdoptedMessageRecord).ToArray()
         };
-        evt.AdoptedSpeakerIds.AddRange(proto.AdoptedSpeakerIds.Count > 0
-            ? proto.AdoptedSpeakerIds
-            : proto.Messages.Select(m => m.SenderId).Distinct(StringComparer.Ordinal));
-        evt.Messages.AddRange(proto.Messages.Select(FromAdoptedMessageRecord));
-        return evt;
     }
 
     private static Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto ToAdoptedMessageRecord(
@@ -502,6 +489,32 @@ internal static class NetclawProtoMapper
 
     internal static Proto.CursorAdvancedProto ToProto(CursorAdvanced ca) => new() { Cursor = ca.Cursor };
     internal static CursorAdvanced FromProto(Proto.CursorAdvancedProto proto) => new(proto.Cursor);
+
+    // ── MemoriesDistilledV2 / ProposedMemoryContext ──
+
+    internal static Proto.ProposedMemoryContextProto ToProto(ProposedMemoryContext ctx) => new()
+    {
+        Anchor = ctx.Anchor,
+        Title = ctx.Title,
+        Content = ctx.Content
+    };
+
+    internal static ProposedMemoryContext FromProto(Proto.ProposedMemoryContextProto proto) =>
+        new(proto.Anchor, proto.Title, proto.Content);
+
+    internal static Proto.MemoriesDistilledV2Proto ToProto(MemoriesDistilledV2 evt)
+    {
+        var proto = new Proto.MemoriesDistilledV2Proto { TimestampMs = evt.TimestampMs };
+        proto.Anchors.AddRange(evt.Anchors);
+        foreach (var p in evt.Proposals)
+            proto.Proposals.Add(ToProto(p));
+        return proto;
+    }
+
+    internal static MemoriesDistilledV2 FromProto(Proto.MemoriesDistilledV2Proto proto) => new(
+        Anchors: proto.Anchors.ToList(),
+        Proposals: proto.Proposals.Select(FromProto).ToList(),
+        TimestampMs: proto.TimestampMs);
 
     // ── ActiveJobInfo ──
 

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Protocol;
@@ -14,7 +15,7 @@ namespace Netclaw.Actors.Protocol;
 /// it here so the dispatcher routes the line by message field, not by
 /// any ambient context that would not flow across actor mailboxes.
 /// </summary>
-public sealed record SessionLogDiagnostic : IWithSessionId
+public sealed record SessionLogDiagnostic : IWithSessionId, INoSerializationVerificationNeeded
 {
     public required SessionId SessionId { get; init; }
 

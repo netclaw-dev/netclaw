@@ -15,12 +15,21 @@ namespace Netclaw.Actors.Tools;
 /// results by tool name to update <c>WorkingContext.ProjectDirectory</c> and
 /// re-assemble the system prompt with project-scoped identity files.
 /// </summary>
-[NetclawTool("set_working_directory",
-    "Set the project directory for this session. This determines which project's identity files " +
-    "(AGENTS.md, CLAUDE.md) are loaded into context. Use an absolute path to the project root.",
+[NetclawTool(ToolName,
+    "Declare your project root and expand your trusted scope. " +
+    "Once set, read-only verbs (ls, grep, cat, git status, git log, ...) inside that tree " +
+    "auto-run without prompting — the safe-verb short-circuit treats the directory as a safe space. " +
+    "Mutating commands still prompt, but the prompt shows the right cwd so persisted approvals are " +
+    "correctly scoped. Also loads the project's identity file (AGENTS.md / CLAUDE.md / etc.) into the " +
+    "system prompt. Note: shell commands that pass a path argument (e.g. `find /repo`, `ls /var/log`) " +
+    "declare scope implicitly via that argument, so this tool is most useful for sessions where you'll " +
+    "run multiple commands without explicit paths (git status, git diff, make build, etc.). " +
+    "Use an absolute path to the project root.",
     Grant = "file")]
 public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDirectoryTool.Params>
 {
+    public const string ToolName = "set_working_directory";
+
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(

@@ -1,11 +1,22 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="IToolApprovalMatcher.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Security;
+
+/// <summary>
+/// One approval candidate extracted from a tool invocation. The verb is the
+/// command head plus subcommand chain (e.g., <c>find</c>, <c>git status</c>).
+/// The directory is the first path-like positional argument with the
+/// file-parent rule applied — when present it overrides the resolved cwd as
+/// the candidate's effective directory in the approval matcher; when null
+/// the matcher falls back to the spawned process's cwd.
+/// </summary>
+public sealed record ApprovalCandidate(string Verb, string? Directory);
 
 /// <summary>
 /// Tool-specific pattern extraction and matching for the approval system.
@@ -33,36 +44,66 @@ public interface IToolApprovalMatcher
     bool IsFailClosedOnPersonal(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
-    /// Extracts the exact approval patterns shown to the user.
-    /// For shell: normalized approval units. For other tools: the tool name.
+    /// Returns the exact display patterns shown to the user in the approval
+    /// prompt body. For shell these are normalized approval units (verb
+    /// chain plus any path-aware first argument); for other tools the tool
+    /// name. Reused as the retry-exact key for one-shot approvals.
     /// </summary>
     IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
-    /// Extracts the reusable approval entries consulted for session and persistent
-    /// approval checks.
+    /// Returns the candidate verb chains evaluated against persisted
+    /// <see cref="ApprovalEntry"/> records by the gate. For shell these are
+    /// pure verb chains (e.g., <c>git push</c>, <c>grep</c>); for other
+    /// tools typically <c>[toolName.Value]</c>. Derived from
+    /// <see cref="ExtractCandidates"/>.
     /// </summary>
-    IReadOnlyList<string> ExtractApprovalEntries(ToolName toolName, IDictionary<string, object?>? arguments);
+    IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
-    /// Checks if the tool call matches any approved pattern.
+    /// Returns the candidate <c>(verb, directory)</c> pairs for this tool
+    /// invocation. The directory half is the first path-like positional
+    /// argument extracted from each clause (with the file-parent rule
+    /// applied), or null when the clause has no path argument. The matcher
+    /// SHALL use this directory as the candidate's effective directory,
+    /// falling back to <see cref="ToolExecutionContext.Cwd"/> when null.
     /// </summary>
-    bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns);
+    IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments);
 
     /// <summary>
-    /// Formats the tool call for display in the approval prompt.
+    /// Returns true when every candidate verb chain finds a matching
+    /// <see cref="ApprovalEntry"/> under the supplied <paramref name="cwd"/>.
+    /// A folder-scoped entry matches when its directory contains the cwd and
+    /// no symlink segments exist between the two; a global-wildcard entry
+    /// (<c>directory: null</c>) matches any cwd.
+    /// </summary>
+    bool IsApproved(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        IReadOnlyList<ApprovalEntry> approvedEntries,
+        string? cwd);
+
+    /// <summary>
+    /// Returns true when the invocation cannot be cleanly split into
+    /// verb-chain approval units — for shell, when the command contains bash
+    /// control-flow keywords or unbalanced quotes/brackets. Approval prompts
+    /// for messy invocations omit persistent-grant buttons and surface a
+    /// "complex command" hint; the user can still grant a single retry via
+    /// <c>Once</c>. Non-shell matchers SHALL return <c>false</c>.
+    /// </summary>
+    bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments);
+
+    /// <summary>
+    /// Formats the tool call for display in the approval prompt header.
     /// </summary>
     string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments);
-
-    /// <summary>
-    /// Extracts reusable directory approval roots for the invocation.
-    /// </summary>
-    IReadOnlyList<DirectoryApprovalRoot> ExtractDirectoryRoots(ToolName toolName, IDictionary<string, object?>? arguments);
 }
 
 /// <summary>
-/// Shell-specific approval matcher using approval units bounded by &&, ||, and ;.
-/// Pipelines remain inside the same approval unit.
+/// Shell-specific approval matcher. Verb-chain extraction stops at the first
+/// flag, path, or URL token; <c>&amp;&amp;</c> / <c>||</c> / <c>;</c> split
+/// approval units while <c>|</c> stays inside one unit; <c>bash -c</c> /
+/// <c>sh -c</c> wrappers recurse into the inner command.
 /// </summary>
 public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
@@ -91,113 +132,206 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return patterns.ToList();
     }
 
-    public IReadOnlyList<string> ExtractApprovalEntries(ToolName toolName, IDictionary<string, object?>? arguments)
+    public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
+        => ExtractCandidates(toolName, arguments)
+            .Select(c => c.Verb)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+    public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
     {
         var command = GetCommand(arguments);
         if (string.IsNullOrWhiteSpace(command))
             return [];
 
-        // Shell approvals intentionally keep two parallel views of the same
-        // invocation:
-        //
-        // 1. `Patterns` are the exact normalized approval units shown in the
-        //    prompt and reused only for approve-once retries.
-        // 2. `ApprovalEntries` are the broader entries consulted for session
-        //    and persistent approval reuse.
-        //
-        // The directory-scoping algorithm starts here. We first break the
-        // command into approval units: &&, ||, and ; split into separate units,
-        // while pipelines joined by | stay together as one piece of work.
-        // `bash -c` / `sh -c` wrappers recurse into the inner command and feed
-        // those inner units back through the same logic.
-        //
-        // For each unit we try to derive reusable local directory roots. If we
-        // can do that safely, those roots become the approval entries recorded
-        // for B/C approvals. If we cannot, we fall back to the exact normalized
-        // unit. That keeps approve-once exact while letting broader approvals
-        // reuse local directory access without introducing verb allowlists.
-        var workingDirectory = GetWorkingDirectory(arguments);
-        var entries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // POSIX commands route through BashParser so we pick up the parser's
+        // cd-in-compound cwd attribution. The parser walks `cd X && verb`,
+        // `bash -c "cd X && verb"`, and multi-step `cd A && cd B && verb`
+        // chains; the candidate's directory inherits the latest cd target
+        // when the clause itself has no anchored path arg. Windows keeps
+        // the legacy ShellTokenizer path — ShellSyntaxTree is bash-only.
+        if (!OperatingSystem.IsWindows())
+            return ExtractCandidatesViaBashParser(command);
+
+        var seen = new HashSet<(string, string?)>();
+        var candidates = new List<ApprovalCandidate>();
         TraverseApprovalUnits(command, unit =>
         {
-            var roots = ShellTokenizer.ExtractDirectoryRoots(unit, workingDirectory);
-            if (roots.Count > 0)
-            {
-                foreach (var root in roots)
-                    entries.Add(root.ComparisonRoot);
+            var verb = ShellTokenizer.ExtractVerbChain(unit);
+            if (string.IsNullOrEmpty(verb))
                 return;
-            }
 
-            var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
-            if (!string.IsNullOrEmpty(normalized))
-                entries.Add(normalized);
+            var directory = ShellTokenizer.ExtractFirstPathArgument(unit);
+            var key = (verb.ToLowerInvariant(), directory);
+            if (seen.Add(key))
+                candidates.Add(new ApprovalCandidate(verb, directory));
         });
 
-        return entries.ToList();
+        return candidates;
     }
 
-    public bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
+    private static IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaBashParser(string command)
     {
-        var approvalEntries = ExtractApprovalEntries(toolName, arguments);
-        if (approvalEntries.Count == 0)
-            return true; // Empty command, nothing to approve
-
-        var approvedList = approvedPatterns as IReadOnlyList<string> ?? approvedPatterns.ToList();
-        foreach (var entry in approvalEntries)
+        ShellSyntaxTree.ParsedCommand result;
+        try
         {
-            if (!ApprovalPatternMatching.MatchesShellApprovalEntry(entry, approvedList))
+            result = new ShellSyntaxTree.BashParser().Parse(command);
+        }
+        catch
+        {
+            // Defensive: an unhandled parser exception shouldn't take down
+            // the approval flow. Fail-empty so the matcher treats this as
+            // a messy command (Once+Deny prompt only).
+            return [];
+        }
+
+        if (result.IsUnparseable || result.Clauses.Count == 0)
+            return [];
+
+        // Group consecutive Pipe clauses into a single approval unit so
+        // `cat /etc/hosts | wc -l` stays one decision rather than two.
+        // AndIf / OrIf / Sequence and the leading None-operator clause each
+        // start a fresh group.
+        var seen = new HashSet<(string, string?)>();
+        var candidates = new List<ApprovalCandidate>();
+        ShellSyntaxTree.Clause? groupHead = null;
+
+        foreach (var clause in result.Clauses)
+        {
+            if (clause.Operator != ShellSyntaxTree.CompoundOperator.Pipe)
+                groupHead = clause;
+
+            if (groupHead is null)
+                continue;
+
+            if (!ReferenceEquals(clause, groupHead))
+                continue;  // pipe-tail clauses fold into the group head
+
+            var verb = ShellTokenizer.ApplyVerbShortCircuit(clause.Verb.Joined);
+            if (string.IsNullOrEmpty(verb))
+                continue;
+
+            // Side-effect verbs (echo, printf, :, true, false) don't
+            // operate on the filesystem, so inheriting the cd target
+            // would (a) break ApprovalPatternMatching.IsPureSideEffect's
+            // null-directory invariant and (b) attach a misleading scope
+            // to a verb that ignores cwd. Their candidates remain
+            // directory-less; redirects (echo X > /tmp/log) still
+            // surface their target via the explicit-path scan above
+            // when BashParser exposes the redirect arg.
+            var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
+            var directory = ResolveClauseDirectory(clause, isSideEffectVerb);
+            var key = (verb.ToLowerInvariant(), directory);
+            if (seen.Add(key))
+                candidates.Add(new ApprovalCandidate(verb, directory));
+        }
+
+        return candidates;
+    }
+
+    private static string? ResolveClauseDirectory(ShellSyntaxTree.Clause clause, bool isSideEffectVerb)
+    {
+        // First explicit path arg wins — that's the candidate's own
+        // operand, e.g. `dotnet test /home/user/repos/Foo`. Only the
+        // anchored-path predicate from the legacy tokenizer counts (/, ~/,
+        // ./, ../ and the bare ~/./..), so `feature/freshdesk-cli-skill`
+        // and other internal-slash tokens stay as args, not directories.
+        // The IsPathToken classification runs on the raw user-facing form
+        // so branch names whose Resolved happens to look path-like don't
+        // get misclassified; once classified as a path, we persist the
+        // parser-resolved absolute path when available so it compares
+        // string-equal to cwd-attributed directories produced by other
+        // clauses (otherwise `cd ~/x && verb` produces "2 directories" in
+        // the approval prompt even though both refer to the same folder).
+        foreach (var arg in clause.Args)
+        {
+            if (arg.IsCwdAttribution)
+                continue;
+
+            var raw = arg.Raw;
+            if (string.IsNullOrEmpty(raw))
+                continue;
+
+            if (raw.StartsWith('-'))
+                continue;
+
+            if (ShellTokenizer.IsPathToken(raw))
+            {
+                var canonical = !string.IsNullOrEmpty(arg.Resolved) ? arg.Resolved : raw;
+                return ShellTokenizer.ApplyFileParentRule(canonical);
+            }
+        }
+
+        // Side-effect verbs ignore cd attribution — see caller's comment
+        // on why (null-directory invariant in IsPureSideEffect, and these
+        // verbs don't operate on the filesystem anyway).
+        if (isSideEffectVerb)
+            return null;
+
+        // No explicit path → inherit the cd-attributed cwd from any
+        // preceding `cd X` in this compound (or in a wrapping `bash -c
+        // "..."` invocation; the parser flattens that).
+        var cwdAttribution = clause.Args.FirstOrDefault(a => a.IsCwdAttribution);
+        return cwdAttribution?.Resolved;
+    }
+
+    public bool IsApproved(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        IReadOnlyList<ApprovalEntry> approvedEntries,
+        string? cwd)
+    {
+        // Fail-closed on a missing/empty Command argument: a malformed
+        // shell invocation cannot be "already approved" — the agent must
+        // round-trip through the gate so the operator sees what was
+        // attempted.
+        var command = GetCommand(arguments);
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+
+        // Messy commands cannot be auto-approved: the matcher cannot extract a
+        // candidate verb-chain to evaluate against the persisted store, so
+        // every messy invocation must round-trip through the user. The prompt
+        // builder offers only Once/Deny in this case (see IsMessy).
+        if (ShellTokenizer.IsMessyCompoundCommand(command))
+            return false;
+
+        // Fail-closed on a parser miss: BashParser swallows exceptions and
+        // unparseable results return an empty candidate list. Treating that
+        // as "approved" would silently auto-allow any command our parser
+        // regresses on. Force the gate instead.
+        var candidates = ExtractCandidates(toolName, arguments);
+        if (candidates.Count == 0)
+            return false;
+
+        foreach (var candidate in candidates)
+        {
+            // Pure side-effect candidates (echo "X" without a path or redirect,
+            // bash :, true/false) are always authorized — they're skipped on
+            // persistence so the store never contains them, and the matcher
+            // here mirrors that decision at evaluation time.
+            if (ApprovalPatternMatching.IsPureSideEffect(candidate))
+                continue;
+
+            if (!ApprovalPatternMatching.MatchesShellApproval(
+                    candidate.Verb, candidate.Directory, cwd, approvedEntries))
                 return false;
         }
 
         return true;
     }
 
+    public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
+        => ShellTokenizer.IsMessyCompoundCommand(GetCommand(arguments));
+
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
-    {
-        return GetCommand(arguments) ?? "(empty command)";
-    }
-
-    public IReadOnlyList<DirectoryApprovalRoot> ExtractDirectoryRoots(ToolName toolName, IDictionary<string, object?>? arguments)
-    {
-        var command = GetCommand(arguments);
-        if (string.IsNullOrWhiteSpace(command))
-            return [];
-
-        var roots = new List<DirectoryApprovalRoot>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        TraverseApprovalUnits(command, unit =>
-        {
-            foreach (var root in ShellTokenizer.ExtractDirectoryRoots(unit, GetWorkingDirectory(arguments)))
-            {
-                if (seen.Add(root.ComparisonRoot))
-                    roots.Add(root);
-            }
-        });
-
-        return roots;
-    }
+        => GetCommand(arguments) ?? "(empty command)";
 
     private static string? GetCommand(IDictionary<string, object?>? arguments)
-    {
-        if (arguments is null)
-            return null;
-
-        if (arguments.TryGetValue("Command", out var val) || arguments.TryGetValue("command", out val))
-            return val?.ToString();
-
-        return null;
-    }
+        => ToolArgumentHelper.GetString(arguments, "Command");
 
     private static string? GetWorkingDirectory(IDictionary<string, object?>? arguments)
-    {
-        if (arguments is null)
-            return null;
-
-        if (arguments.TryGetValue("WorkingDirectory", out var val) || arguments.TryGetValue("workingDirectory", out val))
-            return val?.ToString();
-
-        return null;
-    }
+        => ToolArgumentHelper.GetString(arguments, "WorkingDirectory");
 
     private static void TraverseApprovalUnits(string command, Action<string> visitUnit)
     {
@@ -222,7 +356,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
 /// <summary>
 /// Default approval matcher for non-shell tools. Approval is at the tool-name
-/// level — either the tool is approved or it isn't.
+/// level — either the tool is approved or it isn't. Directory scoping does
+/// not apply.
 /// </summary>
 public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
 {
@@ -235,29 +370,24 @@ public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
         => false;
 
     public IReadOnlyList<string> ExtractPatterns(ToolName toolName, IDictionary<string, object?>? arguments)
-    {
-        return [toolName.Value];
-    }
+        => [toolName.Value];
 
-    public IReadOnlyList<string> ExtractApprovalEntries(ToolName toolName, IDictionary<string, object?>? arguments)
-        => ExtractPatterns(toolName, arguments);
+    public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
+        => [toolName.Value];
 
-    public bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
-    {
-        foreach (var approved in approvedPatterns)
-        {
-            if (string.Equals(toolName.Value, approved, StringComparison.OrdinalIgnoreCase))
-                return true;
-        }
+    public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
+        => [new ApprovalCandidate(toolName.Value, Directory: null)];
 
-        return false;
-    }
+    public bool IsApproved(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        IReadOnlyList<ApprovalEntry> approvedEntries,
+        string? cwd)
+        => ApprovalPatternMatching.MatchesAny(toolName.Value, approvedEntries);
+
+    public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
+        => false;
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
-    {
-        return toolName.Value;
-    }
-
-    public IReadOnlyList<DirectoryApprovalRoot> ExtractDirectoryRoots(ToolName toolName, IDictionary<string, object?>? arguments)
-        => [];
+        => toolName.Value;
 }

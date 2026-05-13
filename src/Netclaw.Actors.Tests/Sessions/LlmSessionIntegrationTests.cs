@@ -34,6 +34,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.Parse("2026-03-21T12:00:00Z"));
     private readonly RecordingSessionLifecycleObserver _lifecycleObserver = new();
 
+    protected override bool VerifySerialization => true;
+
     public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output)
     {
     }

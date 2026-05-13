@@ -178,7 +178,7 @@ public sealed class SerializationRoundTripTests : TestKit
             Role = ChatRole.User,
             Content = "Check this image",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "abc123.png",
@@ -191,7 +191,7 @@ public sealed class SerializationRoundTripTests : TestKit
                     MimeType = "image/jpeg",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         };
 
         var result = RoundTrip(original);
@@ -214,14 +214,14 @@ public sealed class SerializationRoundTripTests : TestKit
             SessionId = new SessionId("C99999/1708531200.000100"),
             Content = "Look at this",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
                     MimeType = "image/png",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         };
 
         var result = RoundTrip(original);
@@ -324,7 +324,7 @@ public sealed class SerializationRoundTripTests : TestKit
         {
             Role = ChatRole.Assistant,
             ToolCalls =
-            {
+            [
                 new SerializableToolCall
                 {
                     CallId = "call-1",
@@ -332,7 +332,7 @@ public sealed class SerializationRoundTripTests : TestKit
                     ArgumentsJson = """{"Command":"dotnet test"}""",
                     MetaJson = """{"rationale":"running tests","timeout_seconds":300}"""
                 }
-            }
+            ]
         };
 
         var result = RoundTrip(original);
@@ -351,14 +351,14 @@ public sealed class SerializationRoundTripTests : TestKit
         {
             Role = ChatRole.Assistant,
             ToolCalls =
-            {
+            [
                 new SerializableToolCall
                 {
                     CallId = "call-1",
                     Name = "web_search",
                     ArgumentsJson = """{"query":"test"}"""
                 }
-            }
+            ]
         };
 
         var result = RoundTrip(original);
@@ -478,4 +478,54 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     private sealed record UnregisteredMessage(string Value);
+
+    [Fact]
+    public void MemoriesDistilledV2_round_trips()
+    {
+        // Regression: this type was added to SessionMemoryObserverActor but
+        // its serialization binding, proto message, and ProtoMapper entries
+        // were missed — production sessions hit "No serializer binding
+        // found for type MemoriesDistilledV2" three times in a four-minute
+        // window before the gap was caught. Strict serialization now
+        // refuses to fall back to JSON, so the gap manifests at
+        // Persist() time rather than silently writing schema-drift bytes.
+        var original = new MemoriesDistilledV2(
+            Anchors: ["alpha-anchor", "beta-anchor"],
+            Proposals:
+            [
+                new ProposedMemoryContext("alpha-anchor", "Alpha title", "Alpha content body."),
+                new ProposedMemoryContext("beta-anchor", "Beta title", "Beta content body.")
+            ],
+            TimestampMs: 1715520000000L);
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.Anchors, result.Anchors);
+        Assert.Equal(original.Proposals.Count, result.Proposals.Count);
+        for (var i = 0; i < original.Proposals.Count; i++)
+        {
+            Assert.Equal(original.Proposals[i].Anchor, result.Proposals[i].Anchor);
+            Assert.Equal(original.Proposals[i].Title, result.Proposals[i].Title);
+            Assert.Equal(original.Proposals[i].Content, result.Proposals[i].Content);
+        }
+        Assert.Equal(original.TimestampMs, result.TimestampMs);
+    }
+
+    [Fact]
+    public void MemoriesDistilledV2_with_empty_collections_round_trips()
+    {
+        // Edge: distillation with zero anchors / zero proposals is a real
+        // outcome when the LLM declines to propose anything. The wire
+        // shape must survive empty-list serialization without throwing.
+        var original = new MemoriesDistilledV2(
+            Anchors: [],
+            Proposals: [],
+            TimestampMs: 0);
+
+        var result = RoundTrip(original);
+
+        Assert.Empty(result.Anchors);
+        Assert.Empty(result.Proposals);
+        Assert.Equal(0L, result.TimestampMs);
+    }
 }

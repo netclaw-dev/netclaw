@@ -152,14 +152,14 @@ public class ChatMessageConverterTests
         {
             Role = ChatRole.Assistant,
             ToolCalls =
-            {
+            [
                 new SerializableToolCall
                 {
                     CallId = "call-1",
                     Name = "web_search",
                     ArgumentsJson = """{"query":"test"}"""
                 }
-            }
+            ]
         };
 
         var ai = ChatMessageConverter.ToAiMessage(msg);
@@ -254,14 +254,14 @@ public class ChatMessageConverterTests
             Role = ChatRole.User,
             Content = "Look at this",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "test.jpg",
                     MimeType = "image/jpeg",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         };
 
         var ai = ChatMessageConverter.ToAiMessage(msg, sessionDir: tempDir.Path);
@@ -309,14 +309,14 @@ public class ChatMessageConverterTests
             Role = ChatRole.User,
             Content = "Image was deleted",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "nonexistent.png",
                     MimeType = "image/png",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         };
 
         var ai = ChatMessageConverter.ToAiMessage(msg, sessionDir: tempDir.Path);

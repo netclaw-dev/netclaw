@@ -19,8 +19,21 @@ public enum ApprovalDecision
     /// <summary>Approved for the current session/thread only.</summary>
     ApprovedSession,
 
-    /// <summary>Approved permanently (persisted to tool-approvals.json).</summary>
+    /// <summary>
+    /// Approved persistently with folder scope: writes a
+    /// <c>(verb, prompt's cwd)</c> entry to <c>tool-approvals.json</c>.
+    /// Future invocations of the same verb under the same directory tree
+    /// auto-approve; the same verb in a different cwd still prompts.
+    /// </summary>
     ApprovedAlways,
+
+    /// <summary>
+    /// Approved persistently as a global wildcard: writes a
+    /// <c>(verb, null)</c> entry to <c>tool-approvals.json</c>. Future
+    /// invocations of the same verb in any cwd auto-approve. Used for
+    /// scheduled/unattended tasks where the cwd will vary across firings.
+    /// </summary>
+    ApprovedEverywhere,
 
     /// <summary>User denied the request.</summary>
     Denied,

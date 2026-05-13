@@ -50,8 +50,8 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         string toolName,
         string displayText,
         IReadOnlyList<string> patterns,
-        IReadOnlyList<string> approvalEntries,
-        IReadOnlyList<string> directoryRoots,
+        IReadOnlyList<string> candidateVerbs,
+        bool isMessy,
         CancellationToken ct)
     {
         var waitTask = _channel.WaitForApprovalAsync(callId, Timeout.InfiniteTimeSpan, ct);
@@ -68,8 +68,8 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             RequesterSenderId = _requesterSenderId,
             RequesterPrincipal = _requesterPrincipal,
             Patterns = patterns,
-            ApprovalEntries = approvalEntries,
-            DirectoryRoots = directoryRoots,
+            CandidateVerbs = candidateVerbs,
+            IsMessy = isMessy,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
@@ -90,6 +90,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             ApprovalDecision.ApprovedOnce => ParentApprovalDecision.ApprovedOnce,
             ApprovalDecision.ApprovedSession => ParentApprovalDecision.ApprovedSession,
             ApprovalDecision.ApprovedAlways => ParentApprovalDecision.ApprovedAlways,
+            ApprovalDecision.ApprovedEverywhere => ParentApprovalDecision.ApprovedEverywhere,
             ApprovalDecision.TimedOut => ParentApprovalDecision.TimedOut,
             _ => ParentApprovalDecision.Denied
         };

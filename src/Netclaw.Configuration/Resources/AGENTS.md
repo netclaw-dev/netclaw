@@ -17,6 +17,46 @@
   without attempting at least one fallback.
 - Never say "you can visit..." or "you can call..." — look it up yourself.
 
+## Declaring Project Scope (load-bearing for approvals)
+
+Path arguments to shell commands declare scope implicitly. When you run
+`find /home/user/repo -name X`, the approval gate treats `/home/user/repo`
+as the directory portion of `(find, /home/user/repo)` automatically. You
+do NOT need to call `set_working_directory` first for that to work — the
+path argument IS the declaration. Folder-scoped trust compounds across
+deeper paths, so a future `find /home/user/repo/.netclaw` is auto-allowed.
+
+**When `set_working_directory` IS the right tool**, it's for sessions
+where the agent will run multiple commands without explicit path
+arguments — typical interactive REPL work, `git status` followed by
+`git diff` followed by edits, or `make build` and similar tools that
+hide their target behind flags (`make -C`, `git -C`). In those cases
+call `set_working_directory <path>` so the safe-verb short-circuit
+treats that tree as a safe space; the agent's read-only verbs auto-run
+with no prompt.
+
+When the user task is scoped to a project or codebase the user named
+explicitly (a directory path, a repo, "this codebase"), declaring
+scope — either by passing the path on each command or by calling
+`set_working_directory` once — keeps the approval prompts from
+interrupting every read-only inspection. Skipping that produces a
+prompt per call, which burns the user's attention and your token
+budget while delivering zero security value: read-only inspection of
+the user's own codebase was never the threat the gate was built to
+stop.
+
+When NOT to declare scope at all: pure-conversation turns ("what's
+2+2?", "explain X"), sessions where no project has been mentioned, or
+one-shot lookups against external APIs. Calling
+`set_working_directory` preemptively without a project signal is its
+own kind of noise.
+
+**Recovery from a denied shell call.** If `shell_execute` fails with a denial
+that mentions cwd being outside the safe spaces, the result includes a hint
+pointing at `set_working_directory <path>`. Read the hint, call the tool with
+the directory the user is asking about, then retry the original shell call —
+do not re-prompt the user.
+
 ## Grounding Rules
 
 - Never state runtime facts (versions, status, availability) without checking with a tool.

@@ -782,14 +782,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _pendingToolInteractions[msg.CallId] = new PendingToolInteraction(
                 msg.ToolName,
                 msg.Patterns,
-                msg.ApprovalEntries,
-                msg.DirectoryRoots,
+                msg.CandidateVerbs,
                 CurrentTurnAudience(),
                 msg.RequesterSenderId,
                 msg.RequesterPrincipal,
                 msg.HasAdoptedContext,
                 msg.HasThirdPartyAdoptedContext,
-                msg.AdoptedSpeakerIds);
+                msg.AdoptedSpeakerIds,
+                msg.Cwd,
+                msg.IsMessy,
+                msg.Candidates);
 
             PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
 
@@ -825,21 +827,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
                 ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
                 ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
+                ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
                 ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
                 _ => ApprovalDecision.Denied
             };
 
             _log.Info("Approval response for {CallId}: {Decision}", msg.CallId, decision);
 
-            if (decision is ApprovalDecision.ApprovedSession or ApprovalDecision.ApprovedAlways
+            if (decision is ApprovalDecision.ApprovedSession
+                or ApprovalDecision.ApprovedAlways
+                or ApprovalDecision.ApprovedEverywhere
                 && _approvalService is not null)
             {
-                await _approvalService.RecordApprovalAsync(
-                    _sessionId.Value,
-                    pending.Audience,
-                    new ToolName(pending.ToolName),
-                    pending.ApprovalEntries,
-                    persistent: decision == ApprovalDecision.ApprovedAlways,
+                await PersistApprovalCandidatesAsync(
+                    pending,
+                    decision,
                     CancellationToken.None);
             }
 
@@ -1667,14 +1669,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (registry.TryGet<BackgroundJobManagerActorKey>(out var mgr))
             bgJobManager = mgr;
 
+        // Pre-compute set_working_directory exposure once per dispatch so the
+        // pipeline's deny-path hint logic can run without a policy lookup.
+        // The hint is suppressed for audiences that cannot call the tool
+        // (Public, audience profiles that explicitly drop it).
+        var setWorkingDirectoryAvailable = IsSetWorkingDirectoryAvailable();
+
         _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
-            _state.WorkingContext.ProjectDirectory,
             approvalChannel: _approvalChannel,
             emitApprovalRequest: request => self.Tell(request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
             maxToolTimeoutSeconds: _toolAccessPolicy?.MaxToolTimeoutSeconds ?? 600,
             shellTimeoutSeconds: _toolAccessPolicy?.ShellTimeoutSeconds ?? 60,
-            backgroundJobManager: bgJobManager);
+            backgroundJobManager: bgJobManager,
+            projectDirectory: _state.WorkingContext.ProjectDirectory,
+            setWorkingDirectoryAvailable: setWorkingDirectoryAvailable);
     }
 
     private void HandleTextResponse(
@@ -2484,6 +2493,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return _toolAccessPolicy.FilterExposedTools(_availableTools, _fullRegistry, _currentTrustContext);
     }
 
+    /// <summary>
+    /// Returns true when <c>set_working_directory</c> is exposed to the
+    /// current turn's audience profile. Used by the deny-path hint logic in
+    /// <see cref="SessionToolExecutionPipeline"/>: the hint points the agent
+    /// at the tool, so emitting it on a Public-audience turn that cannot call
+    /// the tool would be misleading.
+    /// </summary>
+    private bool IsSetWorkingDirectoryAvailable()
+    {
+        if (_toolAccessPolicy is null || _fullRegistry is null)
+            return false;
+
+        var registration = _fullRegistry.GetRegistrationByToolName(SetWorkingDirectoryTool.ToolName);
+        return registration is not null
+               && _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext);
+    }
+
 
     private static readonly string SkillHintText =
         "[skill-hint] Before answering any technical or knowledge question, scan [available-skills] for a relevant skill and call skill_load(name=\"...\"). " +
@@ -2507,7 +2533,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// a registered skill, activation path selection is deterministic:
     /// metadata.subagent route first, then inline injection when metadata is absent.
     /// </summary>
-    private bool TryHandleSlashCommand(string userContent, List<SerializableMediaReference> mediaRefs)
+    private bool TryHandleSlashCommand(string userContent, IReadOnlyList<SerializableMediaReference> mediaRefs)
     {
         if (_skillRegistry is null || string.IsNullOrWhiteSpace(userContent) || userContent[0] != '/')
             return false;
@@ -2559,7 +2585,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return true;
     }
 
-    private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, List<SerializableMediaReference> mediaRefs)
+    private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs)
     {
         string skillBody;
         try
@@ -2605,7 +2631,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return true;
     }
 
-    private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, List<SerializableMediaReference> mediaRefs, string routedSubagent)
+    private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs, string routedSubagent)
     {
         if (_subAgentRegistry is null || _subAgentSpawner is null)
         {
@@ -2910,9 +2936,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private SessionSnapshot BuildSnapshot()
     {
-        var snapshot = _state.ToSnapshot();
-        snapshot.EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber;
-        return snapshot;
+        return _state.ToSnapshot() with { EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber };
     }
 
     private void MaybeSnapshot()
@@ -3099,14 +3123,178 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private sealed record PendingToolInteraction(
         string ToolName,
         IReadOnlyList<string> Patterns,
-        IReadOnlyList<string> ApprovalEntries,
-        IReadOnlyList<string> DirectoryRoots,
+        IReadOnlyList<string> CandidateVerbs,
         TrustAudience Audience,
         string? RequesterSenderId,
         PrincipalClassification? RequesterPrincipal,
         bool HasAdoptedContext,
         bool HasThirdPartyAdoptedContext,
-        IReadOnlyList<string> AdoptedSpeakerIds);
+        IReadOnlyList<string> AdoptedSpeakerIds,
+        string? Cwd,
+        bool IsMessy,
+        // Per-clause (verb, directory) pairs preserved across the pause-
+        // for-approval round trip so the persistence path on
+        // ApprovedAlways can write per-clause folder-scoped grants from
+        // the path arguments the agent originally passed, rather than
+        // collapsing everything to cwd. Empty list when the request did
+        // not carry candidate-level data (e.g. older callers).
+        IReadOnlyList<ApprovalCandidate> Candidates) : INoSerializationVerificationNeeded;
+
+    private async Task PersistApprovalCandidatesAsync(
+        PendingToolInteraction pending,
+        ApprovalDecision decision,
+        CancellationToken ct)
+    {
+        if (_approvalService is null)
+            return;
+
+        var persistent = decision is ApprovalDecision.ApprovedAlways
+            or ApprovalDecision.ApprovedEverywhere;
+        var globalWildcard = decision == ApprovalDecision.ApprovedEverywhere;
+
+        // Prefer per-clause Candidates so we can use each clause's extracted
+        // path argument as the directory half. Fall back to the verb-only
+        // CandidateVerbs list for older callers (or non-shell tools whose
+        // matcher doesn't populate Candidates).
+        if (pending.Candidates.Count == 0)
+        {
+            var fallbackCwd = globalWildcard ? null : pending.Cwd;
+            await _approvalService.RecordApprovalAsync(
+                _sessionId.Value,
+                pending.Audience,
+                new ToolName(pending.ToolName),
+                pending.CandidateVerbs,
+                persistent,
+                fallbackCwd,
+                ct);
+            return;
+        }
+
+        // Group candidates by their effective directory so we make one
+        // RecordApprovalAsync call per (audience, tool, directory) bucket
+        // rather than one per verb. Side-effect-only clauses are dropped
+        // before grouping — they're authorized for the current call by
+        // the decision but persistence is suppressed.
+        //
+        // Bucket key is string.Empty for the null-directory (global wildcard)
+        // bucket; mapped back to null when calling the persistence layer
+        // below. The session-scratch dead-on-arrival guard is applied inside
+        // BuildApprovalBuckets for persistent scope only — session-scope
+        // entries are matched verb-only at lookup time so threading cwd
+        // through here just feeds the filter that drops standalone verbs
+        // with no path arg (curl, gh, git status).
+        var sessionDirectory = GetSessionDirectory();
+
+        var grouping = BuildApprovalBuckets(
+            pending.Candidates,
+            persistent,
+            globalWildcard,
+            pending.Cwd,
+            sessionDirectory);
+
+        foreach (var (key, verbs) in grouping)
+        {
+            if (verbs.Count == 0)
+                continue;
+
+            // Re-derive null vs concrete directory: the dictionary key was
+            // string.Empty for null to satisfy the comparer; map back here.
+            var directory = string.IsNullOrEmpty(key) ? null : key;
+
+            await _approvalService.RecordApprovalAsync(
+                _sessionId.Value,
+                pending.Audience,
+                new ToolName(pending.ToolName),
+                verbs,
+                persistent,
+                directory,
+                ct);
+        }
+    }
+
+    /// <summary>
+    /// Pure helper that groups approval candidates into the per-directory
+    /// buckets <see cref="PersistApprovalCandidatesAsync"/> turns into
+    /// <c>RecordApprovalAsync</c> calls. Extracted so the session-scope
+    /// vs persistent-scope branching is regression-tested at the unit
+    /// level — the bucketing is where the no-path-arg-verb retry bug
+    /// (curl https://..., gh pr list) was hiding.
+    /// </summary>
+    /// <remarks>
+    /// Session-scope entries (<c>persistent: false</c>, not global wildcard)
+    /// use <c>candidate.Directory</c> directly without falling back to
+    /// <paramref name="cwd"/>. The session approval dict in
+    /// <c>ToolApprovalActor._sessionApprovals</c> is keyed by
+    /// <c>(sessionId, audience, tool)</c> and matches verb-only — the
+    /// directory half is never consulted at lookup time, so threading
+    /// cwd through here just creates buckets that the session-scratch
+    /// guard then drops on the floor (which is what was silently
+    /// breaking retries on standalone verbs with no anchored path arg).
+    ///
+    /// Persistent scope (<c>persistent: true</c>) still falls back to
+    /// <paramref name="cwd"/> and applies the session-scratch guard, so
+    /// folder-scoped grants whose effective directory resolves to the
+    /// ephemeral session directory continue to be dropped — those entries
+    /// would be dead-on-arrival because the next session has a fresh
+    /// session_dir and the saved entry could never match again.
+    /// </remarks>
+    internal static Dictionary<string, List<string>> BuildApprovalBuckets(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        bool persistent,
+        bool globalWildcard,
+        string? cwd,
+        string? sessionDirectory)
+    {
+        var grouping = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var candidate in candidates)
+        {
+            if (ApprovalPatternMatching.IsPureSideEffect(candidate))
+                continue;
+
+            string? effectiveDirectory;
+            if (globalWildcard)
+            {
+                effectiveDirectory = null;
+            }
+            else if (!persistent)
+            {
+                effectiveDirectory = candidate.Directory;
+            }
+            else
+            {
+                effectiveDirectory = candidate.Directory ?? cwd;
+
+                if (effectiveDirectory is not null
+                    && sessionDirectory is not null
+                    && IsSessionScratchDirectory(effectiveDirectory, sessionDirectory))
+                {
+                    continue;
+                }
+            }
+
+            var key = effectiveDirectory ?? string.Empty;
+            if (!grouping.TryGetValue(key, out var verbs))
+            {
+                verbs = [];
+                grouping[key] = verbs;
+            }
+
+            if (!verbs.Contains(candidate.Verb, StringComparer.OrdinalIgnoreCase))
+                verbs.Add(candidate.Verb);
+        }
+
+        return grouping;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="effectiveDirectory"/> is the same
+    /// path as <paramref name="sessionDirectory"/>. Used by the persistence
+    /// guard to skip dead-on-arrival folder-scoped grants whose directory
+    /// matches the session's ephemeral scratch dir.
+    /// </summary>
+    private static bool IsSessionScratchDirectory(string effectiveDirectory, string sessionDirectory)
+        => PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory);
 
     private void PersistAdoptedContextIfNeeded(MessageSource? source)
     {
@@ -3155,12 +3343,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private sealed record RoutedSkillExecutionCompleted(
         string SkillName,
         string SubagentName,
-        SubAgentResult Result);
+        SubAgentResult Result) : INoSerializationVerificationNeeded;
 
     private sealed record RoutedSkillExecutionFailed(
         string SkillName,
         string SubagentName,
-        string ErrorMessage);
+        string ErrorMessage) : INoSerializationVerificationNeeded;
 
     private sealed record RoutedSkillSubAgentActivity(
         long TimestampMs,
@@ -3169,7 +3357,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         int ToolCount,
         bool? Success,
         TimeSpan? Duration,
-        int FindingsCount);
+        int FindingsCount) : INoSerializationVerificationNeeded;
 
     private void BindTurnTelemetry(MessageSource? source)
     {

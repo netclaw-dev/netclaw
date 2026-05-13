@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 
 namespace Netclaw.Actors.Protocol;
@@ -12,67 +13,71 @@ namespace Netclaw.Actors.Protocol;
 /// Snapshot of session state for fast recovery. Persisted after compaction
 /// and periodically based on <see cref="Sessions.SessionConfig.SnapshotInterval"/>.
 /// </summary>
-public sealed class SessionSnapshot
+public sealed record SessionSnapshot : INetclawSerializableMessage
 {
-    public sealed class AdoptedContextSnapshotRecord
+    public sealed record AdoptedContextSnapshotRecord
     {
-        public sealed class AdoptedContextSnapshotMessage
+        public sealed record AdoptedContextSnapshotMessage
         {
-            public string MessageId { get; set; } = string.Empty;
+            public string MessageId { get; init; } = string.Empty;
 
-            public string SenderId { get; set; } = string.Empty;
+            public string SenderId { get; init; } = string.Empty;
 
-            public long TimestampMs { get; set; }
+            public long TimestampMs { get; init; }
 
-            public string AuthorityAtInclusion { get; set; } = string.Empty;
+            public string AuthorityAtInclusion { get; init; } = string.Empty;
         }
 
-        public string AuthorizedMessageId { get; set; } = string.Empty;
+        public string AuthorizedMessageId { get; init; } = string.Empty;
 
-        public string? AuthorizerSenderId { get; set; }
+        public string? AuthorizerSenderId { get; init; }
 
-        public string? LowerBound { get; set; }
+        public string? LowerBound { get; init; }
 
-        public string? UpperBound { get; set; }
+        public string? UpperBound { get; init; }
 
-        public string Projection { get; set; } = string.Empty;
+        public string Projection { get; init; } = string.Empty;
 
-        public bool HasAdoptedContext { get; set; }
+        public bool HasAdoptedContext { get; init; }
 
-        public bool HasThirdPartyAdoptedContext { get; set; }
+        public bool HasThirdPartyAdoptedContext { get; init; }
 
-        public List<string> AdoptedSpeakerIds { get; set; } = [];
+        public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = Array.Empty<string>();
 
-        public bool ProjectionPersisted { get; set; }
+        public bool ProjectionPersisted { get; init; }
 
-        public List<AdoptedContextSnapshotMessage> Messages { get; set; } = [];
+        public IReadOnlyList<AdoptedContextSnapshotMessage> Messages { get; init; } =
+            Array.Empty<AdoptedContextSnapshotMessage>();
     }
 
-    public List<SerializableChatMessage> History { get; set; } = [];
+    public IReadOnlyList<SerializableChatMessage> History { get; init; } =
+        Array.Empty<SerializableChatMessage>();
 
-    public int TurnCount { get; set; }
+    public int TurnCount { get; init; }
 
-    public string? Title { get; set; }
+    public string? Title { get; init; }
 
     /// <summary>
     /// Persisted so a recovered session can handle late-arriving
     /// <see cref="DeliveryFailed"/> feedback after passivation.
     /// Null when no turn is eligible (initial state or retries exhausted).
     /// </summary>
-    public int? EligibleDeliveryTurnNumber { get; set; }
+    public int? EligibleDeliveryTurnNumber { get; init; }
 
     /// <summary>
     /// Durable working-context state (recent files). Null when the session
     /// has never set a non-empty context — <see cref="Sessions.SessionState.FromSnapshot"/>
     /// defaults to <see cref="WorkingContext.Empty"/> in that case.
     /// </summary>
-    public WorkingContext? WorkingContext { get; set; }
+    public WorkingContext? WorkingContext { get; init; }
 
     /// <summary>
     /// Background jobs this session is waiting on. Persisted because jobs
     /// are long-lived and must survive recovery.
     /// </summary>
-    public List<ActiveJobInfo> ActiveBackgroundJobs { get; set; } = [];
+    public IReadOnlyList<ActiveJobInfo> ActiveBackgroundJobs { get; init; } =
+        Array.Empty<ActiveJobInfo>();
 
-    public List<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; set; } = [];
+    public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
+        Array.Empty<AdoptedContextSnapshotRecord>();
 }

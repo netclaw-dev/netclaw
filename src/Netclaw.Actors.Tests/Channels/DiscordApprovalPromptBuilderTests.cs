@@ -68,8 +68,11 @@ public sealed class DiscordApprovalPromptBuilderTests
     [Fact]
     public void BuildDecisionStatus_formats_known_keys()
     {
-        Assert.Contains("Approve once", DiscordApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveOnce));
-        Assert.Contains("Approve always", DiscordApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveAlways));
+        // Labels updated in section 7 (approval-policy-v2) — see ApprovalOptionKeys.
+        // Discord prompt body redesign to single-line resolution lands in section 8;
+        // for now we only assert the new label spellings make it through.
+        Assert.Contains("Once", DiscordApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveOnce));
+        Assert.Contains("Always here", DiscordApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.ApproveAlways));
         Assert.Contains("Deny", DiscordApprovalPromptBuilder.BuildDecisionStatus(ApprovalOptionKeys.Deny));
     }
 
@@ -191,8 +194,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         Assert.Contains(":white_check_mark:", text);
         Assert.Contains("git_push", text);
         Assert.Contains("push to origin/main", text);
-        Assert.Contains("origin/main", text);
-        Assert.Contains(ApprovalOptionKeys.ApproveOnceLabel, text);
+        // v2 single-line resolution message replaces "**Decision:** <label>".
+        Assert.Contains("Approved (no save)", text);
         Assert.Contains("<@user-42>", text);
     }
 
@@ -213,7 +216,8 @@ public sealed class DiscordApprovalPromptBuilderTests
             request, ApprovalOptionKeys.Deny, "user-99");
 
         Assert.Contains(":no_entry:", text);
-        Assert.Contains(ApprovalOptionKeys.DenyLabel, text);
+        // v2 single-line resolution message: "Denied" instead of "Decision: Deny".
+        Assert.Contains("Denied", text);
         Assert.DoesNotContain(":white_check_mark:", text);
     }
 
@@ -235,5 +239,131 @@ public sealed class DiscordApprovalPromptBuilderTests
             request, ApprovalOptionKeys.ApproveOnce, "user-1");
 
         Assert.DoesNotContain("Pattern", text);
+    }
+
+    // ── v2 prompt redesign (parallel to Slack section 7) ──
+
+    private static IReadOnlyList<ToolInteractionOption> FullButtonRow() =>
+    [
+        new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+        new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+        new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+        new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.ApproveEverywhereLabel),
+        new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+    ];
+
+    private static IReadOnlyList<ToolInteractionOption> MessyRow() =>
+    [
+        new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+        new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+    ];
+
+    private static ToolInteractionRequest V2Request(
+        string command,
+        IReadOnlyList<string> verbs,
+        string? cwd,
+        IReadOnlyList<ToolInteractionOption> options,
+        bool isMessy = false)
+        => new()
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = "call-1",
+            ToolName = "shell_execute",
+            DisplayText = command,
+            Patterns = verbs,
+            CandidateVerbs = verbs,
+            Cwd = cwd,
+            IsMessy = isMessy,
+            Options = options
+        };
+
+    [Fact]
+    public void V2_single_verb_collapses_into_header()
+    {
+        var request = V2Request("git status", ["git status"], "/home/user/repos/foo", FullButtonRow());
+
+        var (text, _) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.Contains("Approve git status in /home/user/repos/foo?", text);
+    }
+
+    [Fact]
+    public void V2_multi_verb_uses_generic_header_with_bullets()
+    {
+        var request = V2Request(
+            "git fetch && git rebase && git status",
+            ["git fetch", "git rebase", "git status"],
+            "/home/user/repos/foo",
+            FullButtonRow());
+
+        var (text, _) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.Contains("Approve in /home/user/repos/foo?", text);
+        Assert.Contains("• `git fetch`", text);
+        Assert.Contains("• `git rebase`", text);
+        Assert.Contains("• `git status`", text);
+    }
+
+    [Fact]
+    public void V2_messy_command_emits_complex_command_hint()
+    {
+        var request = V2Request(
+            "for f in *.log; do grep ERROR \"$f\"; done",
+            verbs: [],
+            cwd: "/home/user/repos/foo",
+            options: MessyRow(),
+            isMessy: true);
+
+        var (text, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.Contains("complex command", text);
+        Assert.Equal(2, buttons.Count);
+    }
+
+    [Fact]
+    public void V2_button_row_has_five_buttons_with_danger_styling_on_danger_keys()
+    {
+        var request = V2Request("git status", ["git status"], "/home/user/repos/foo", FullButtonRow());
+
+        var (_, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.Equal(5, buttons.Count);
+        var byLabel = buttons.ToDictionary(b => b.Label, b => b);
+        Assert.Equal(DiscordButtonStyle.Success, byLabel[ApprovalOptionKeys.ApproveOnceLabel].Style);
+        Assert.Equal(DiscordButtonStyle.Secondary, byLabel[ApprovalOptionKeys.ApproveSessionLabel].Style);
+        Assert.Equal(DiscordButtonStyle.Secondary, byLabel[ApprovalOptionKeys.ApproveAlwaysLabel].Style);
+        Assert.Equal(DiscordButtonStyle.Danger, byLabel[ApprovalOptionKeys.ApproveEverywhereLabel].Style);
+        Assert.Equal(DiscordButtonStyle.Danger, byLabel[ApprovalOptionKeys.DenyLabel].Style);
+    }
+
+    [Fact]
+    public void V2_resolved_text_for_always_here_uses_Saved_verbs_in_dir()
+    {
+        var request = V2Request("git pull && git rebase", ["git pull", "git rebase"], "/home/user/repos/foo", FullButtonRow());
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(request, ApprovalOptionKeys.ApproveAlways, "U123");
+
+        Assert.Contains("Saved: git pull, git rebase in /home/user/repos/foo", text);
+    }
+
+    [Fact]
+    public void V2_resolved_text_for_always_anywhere_uses_Saved_verbs_anywhere()
+    {
+        var request = V2Request("freshdesk --since=24h", ["freshdesk"], "/home/user/.netclaw/sessions/abc", FullButtonRow());
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(request, ApprovalOptionKeys.ApproveEverywhere, "U123");
+
+        Assert.Contains("Saved: freshdesk anywhere", text);
+    }
+
+    [Fact]
+    public void V2_resolved_text_for_this_chat_uses_Saved_for_this_chat()
+    {
+        var request = V2Request("jsonlint config.json", ["jsonlint config.json"], "/home/user/repos/foo", FullButtonRow());
+
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(request, ApprovalOptionKeys.ApproveSession, "U123");
+
+        Assert.Contains("Saved for this chat: jsonlint config.json in /home/user/repos/foo", text);
     }
 }

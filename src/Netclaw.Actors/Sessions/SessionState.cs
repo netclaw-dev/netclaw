@@ -186,16 +186,11 @@ public sealed record SessionState
     /// Add a user message to history (before firing an LLM call).
     /// This is transient state that gets persisted as part of <see cref="TurnRecorded"/>.
     /// </summary>
-    public SessionState AddUserMessage(string content, List<SerializableMediaReference>? mediaReferences = null)
+    public SessionState AddUserMessage(string content, IReadOnlyList<SerializableMediaReference>? mediaReferences = null)
     {
-        var msg = new SerializableChatMessage
-        {
-            Role = ChatRole.User,
-            Content = content
-        };
-
-        if (mediaReferences is { Count: > 0 })
-            msg.MediaReferences = mediaReferences;
+        var msg = mediaReferences is { Count: > 0 }
+            ? new SerializableChatMessage { Role = ChatRole.User, Content = content, MediaReferences = mediaReferences }
+            : new SerializableChatMessage { Role = ChatRole.User, Content = content };
 
         return this with { History = History.Add(msg) };
     }

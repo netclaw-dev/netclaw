@@ -127,7 +127,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
     private ILayoutNode BuildListView()
     {
         var rows = ViewModel.DisplayApprovals
-            .Select(item => $"{item.AudienceWire,-10} {item.ToolName,-20} {item.Pattern}")
+            .Select(item => $"{item.AudienceWire,-10} {item.ToolName,-20} {item.DisplayText}")
             .ToList();
 
         _approvalList = Layouts.SelectionList(rows)
@@ -149,7 +149,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  {"Audience",-10} {"Tool",-20} Pattern")
+            .WithChild(new TextNode($"  {"Audience",-10} {"Tool",-20} Approval")
                 .WithForeground(Color.White).Bold())
             .WithChild(_approvalList);
     }
@@ -159,7 +159,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
         var target = ViewModel.PendingRevoke;
         var summary = target is null
             ? "  Revoke entry?"
-            : $"  Revoke '{target.Pattern}' from {target.AudienceWire} / {target.ToolName}?";
+            : $"  Revoke '{target.DisplayText}' from {target.AudienceWire} / {target.ToolName}?";
 
         var items = new List<string> { "Yes, revoke", "No, cancel" };
         _confirmList = Layouts.SelectionList(items)

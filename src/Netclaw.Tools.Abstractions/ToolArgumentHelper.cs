@@ -14,8 +14,14 @@ namespace Netclaw.Tools;
 /// </summary>
 public static class ToolArgumentHelper
 {
-    private static bool TryGetValueFlexible(IDictionary<string, object?> arguments, string key, out object? value)
+    private static bool TryGetValueFlexible(IDictionary<string, object?>? arguments, string key, out object? value)
     {
+        if (arguments is null)
+        {
+            value = null;
+            return false;
+        }
+
         if (arguments.TryGetValue(key, out value))
             return true;
 
@@ -61,7 +67,7 @@ public static class ToolArgumentHelper
         return count == 0 ? string.Empty : new string(buffer, 0, count);
     }
 
-    public static string? GetString(IDictionary<string, object?> arguments, string key)
+    public static string? GetString(IDictionary<string, object?>? arguments, string key)
     {
         if (string.Equals(key, "Message", StringComparison.OrdinalIgnoreCase)
             && !TryGetValueFlexible(arguments, key, out _)
@@ -89,7 +95,7 @@ public static class ToolArgumentHelper
         };
     }
 
-    public static int? GetNullableInt(IDictionary<string, object?> arguments, string key)
+    public static int? GetNullableInt(IDictionary<string, object?>? arguments, string key)
     {
         if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;
@@ -106,7 +112,7 @@ public static class ToolArgumentHelper
         };
     }
 
-    public static double? GetNullableDouble(IDictionary<string, object?> arguments, string key)
+    public static double? GetNullableDouble(IDictionary<string, object?>? arguments, string key)
     {
         if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;
@@ -124,7 +130,7 @@ public static class ToolArgumentHelper
         };
     }
 
-    public static bool? GetNullableBool(IDictionary<string, object?> arguments, string key)
+    public static bool? GetNullableBool(IDictionary<string, object?>? arguments, string key)
     {
         if (!TryGetValueFlexible(arguments, key, out var value) || value is null)
             return null;

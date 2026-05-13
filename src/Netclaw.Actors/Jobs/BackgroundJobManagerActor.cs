@@ -356,7 +356,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
                output + filePath;
     }
 
-    private sealed record Reconcile
+    private sealed record Reconcile : INoSerializationVerificationNeeded
     {
         public static readonly Reconcile Instance = new();
     }

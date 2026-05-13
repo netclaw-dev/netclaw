@@ -11,6 +11,7 @@ using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Reminders;
+using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
@@ -29,7 +30,8 @@ public class SetReminderToolTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
-            .WithNetclawSerialization();
+            .WithNetclawSerialization()
+            .WithSerializationVerification();
     }
 
     [Fact]

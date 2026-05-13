@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
@@ -22,7 +23,7 @@ public sealed record SlackFileReference(
     string Name,
     string MimeType,
     long Size,
-    string UrlPrivateDownload);
+    string UrlPrivateDownload) : INoSerializationVerificationNeeded;
 
 public sealed record SlackInboundMessage(
     SlackInboundKind Kind,
@@ -36,7 +37,7 @@ public sealed record SlackInboundMessage(
     string? Subtype,
     bool Hidden,
     bool IsDirectMessage,
-    IReadOnlyList<SlackFileReference>? Files = null);
+    IReadOnlyList<SlackFileReference>? Files = null) : INoSerializationVerificationNeeded;
 
 public sealed record SlackThreadInbound(
     SessionId SessionId,
@@ -50,13 +51,13 @@ public sealed record SlackThreadInbound(
     SourceProvenance Provenance,
     string Text,
     DateTimeOffset ReceivedAt,
-    IReadOnlyList<SlackFileReference>? Files = null);
+    IReadOnlyList<SlackFileReference>? Files = null) : INoSerializationVerificationNeeded;
 
 public sealed record SlackPostMessage(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
     string Text,
-    IReadOnlyList<Block>? Blocks = null);
+    IReadOnlyList<Block>? Blocks = null) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Sent to the gateway to wire up the actor hierarchy for a proactively-created thread.
@@ -66,13 +67,13 @@ public sealed record SlackPostMessage(
 public sealed record StartProactiveThread(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
-    SessionId SessionId);
+    SessionId SessionId) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Acknowledgement that the proactive thread's session pipeline was initialized.
 /// Returned by <see cref="SlackThreadBindingActor"/> in response to <see cref="StartProactiveThread"/>.
 /// </summary>
-public sealed record ProactiveThreadAck(SessionId SessionId);
+public sealed record ProactiveThreadAck(SessionId SessionId) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Routes a tool approval response from the Slack Block Kit button handler
@@ -85,4 +86,4 @@ public sealed record SlackApprovalResponse(
     string CallId,
     string SelectedKey,
     string SenderId,
-    string? RequesterSenderId = null);
+    string? RequesterSenderId = null) : INoSerializationVerificationNeeded;

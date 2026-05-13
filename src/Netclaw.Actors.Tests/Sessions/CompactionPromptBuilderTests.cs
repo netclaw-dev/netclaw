@@ -37,14 +37,14 @@ public class CompactionPromptBuilderTests
                 Role = ChatRole.Assistant,
                 Content = "Let me search",
                 ToolCalls =
-                {
+                [
                     new SerializableToolCall
                     {
                         CallId = "call-1",
                         Name = "web_search",
                         ArgumentsJson = """{"query": "netclaw docs"}"""
                     }
-                }
+                ]
             }
         };
 
@@ -73,7 +73,7 @@ public class CompactionPromptBuilderTests
             {
                 Role = ChatRole.Assistant,
                 ToolCalls =
-                {
+                [
                     new SerializableToolCall
                     {
                         CallId = "call-1",
@@ -81,7 +81,7 @@ public class CompactionPromptBuilderTests
                         ArgumentsJson = """{"Command":"dotnet test"}""",
                         MetaJson = meta.ToJson()
                     }
-                }
+                ]
             }
         };
 
@@ -100,14 +100,14 @@ public class CompactionPromptBuilderTests
             {
                 Role = ChatRole.Assistant,
                 ToolCalls =
-                {
+                [
                     new SerializableToolCall
                     {
                         CallId = "call-1",
                         Name = "web_search",
                         ArgumentsJson = """{"query":"test"}"""
                     }
-                }
+                ]
             }
         };
 

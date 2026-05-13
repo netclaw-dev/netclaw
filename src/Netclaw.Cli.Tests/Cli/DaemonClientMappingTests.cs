@@ -269,8 +269,7 @@ public sealed class DaemonClientMappingTests
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["device-1", "device-2"],
             Patterns = ["git push"],
-            ApprovalEntries = ["git push"],
-            DirectoryRoots = [],
+            CandidateVerbs = ["git push"],
             Options =
             [
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
@@ -288,8 +287,7 @@ public sealed class DaemonClientMappingTests
         Assert.True(dto.InteractionHasAdoptedContext);
         Assert.True(dto.InteractionHasThirdPartyAdoptedContext);
         Assert.Equal(["device-1", "device-2"], dto.InteractionAdoptedSpeakerIds);
-        Assert.Equal(["git push"], dto.InteractionApprovalEntries);
-        Assert.Equal([], dto.InteractionDirectoryRoots ?? []);
+        Assert.Equal(["git push"], dto.InteractionCandidateVerbs);
 
         var roundTripped = DaemonClient.FromDto(dto);
         var result = Assert.IsType<ToolInteractionRequest>(roundTripped);
@@ -301,8 +299,7 @@ public sealed class DaemonClientMappingTests
         Assert.True(result.HasThirdPartyAdoptedContext);
         Assert.Equal(["device-1", "device-2"], result.AdoptedSpeakerIds);
         Assert.Equal(["git push"], result.Patterns);
-        Assert.Equal(["git push"], result.ApprovalEntries);
-        Assert.Equal([], result.DirectoryRoots);
+        Assert.Equal(["git push"], result.CandidateVerbs);
         Assert.Equal(4, result.Options.Count);
     }
 

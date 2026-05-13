@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -17,7 +19,7 @@ namespace Netclaw.Actors.Protocol;
 ///   <see cref="SessionTitleOutput"/>) are always delivered.
 /// - Content messages require the matching flag in the subscriber's filter.
 /// </summary>
-public abstract record SessionOutput : IWithSessionId
+public abstract record SessionOutput : IWithSessionId, INoSerializationVerificationNeeded
 {
     public required SessionId SessionId { get; init; }
 
@@ -364,17 +366,40 @@ public sealed record ToolInteractionRequest : SessionOutput
     public IReadOnlyList<string> Patterns { get; init; } = [];
 
     /// <summary>
-    /// Entries checked against the accumulated session/persistent approval
-    /// state. For shell commands these are reusable directory roots when local
-    /// roots can be extracted, and exact fallback units otherwise.
+    /// Verb-only projection of <see cref="Candidates"/>. Renderers (Slack,
+    /// Discord) bullet-list these in the prompt body. Persisted approval
+    /// matching uses <see cref="Candidates"/> instead so the directory half
+    /// of each <c>(verb, directory)</c> pair is preserved.
     /// </summary>
-    public IReadOnlyList<string> ApprovalEntries { get; init; } = [];
+    public IReadOnlyList<string> CandidateVerbs { get; init; } = [];
 
     /// <summary>
-    /// Human-visible reusable roots extracted from the current invocation so the
-    /// prompt can explain what broader B/C approvals would cover.
+    /// Per-clause <c>(verb, directory)</c> pairs extracted from this
+    /// invocation. The directory half is the path argument extracted
+    /// from each clause when present, else null (in which case the
+    /// matcher falls back to <see cref="Cwd"/>). The session actor
+    /// reads this on <c>ApprovedAlways</c> so "Always here" persists
+    /// per-clause folder-scoped grants from the actual path arguments
+    /// the agent passed.
     /// </summary>
-    public IReadOnlyList<string> DirectoryRoots { get; init; } = [];
+    public IReadOnlyList<ApprovalCandidate> Candidates { get; init; } = [];
+
+    /// <summary>
+    /// Resolved working directory for this invocation, used by the approval
+    /// gate to evaluate folder-scoped <c>ApprovalEntry</c> records. May be
+    /// null for tools whose approvals are not directory-anchored.
+    /// </summary>
+    public string? Cwd { get; init; }
+
+    /// <summary>
+    /// True when the invocation cannot be cleanly split into verb-chain
+    /// approval units — for shell, when the command contains bash control-flow
+    /// keywords (<c>for</c>/<c>while</c>/<c>do</c>/<c>done</c>/<c>then</c>/
+    /// <c>fi</c>/<c>case</c>/<c>esac</c>) or unbalanced quotes/brackets.
+    /// Channel adapters render only the <c>Once</c>/<c>Deny</c> buttons and
+    /// surface a "complex command" hint when this is true.
+    /// </summary>
+    public bool IsMessy { get; init; }
 
     /// <summary>Available response options (e.g., approve once, approve for this chat, approve always, deny).</summary>
     public required IReadOnlyList<ToolInteractionOption> Options { get; init; }

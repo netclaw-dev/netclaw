@@ -320,7 +320,9 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
             foreach (var (audienceKey, tools) in data.Audiences)
             {
-                if (!tools.TryGetValue(ShellTool.ToolName, out var patterns))
+                if (!tools.TryGetValue(ShellTool.ToolName, out var entries))
+                    continue;
+                if (entries.Count == 0)
                     continue;
 
                 if (toolConfig.ShellMode == ShellExecutionMode.Off)
@@ -329,20 +331,6 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                         $"Persistent approvals exist for {audienceKey}.{ShellTool.ToolName} " +
                         "but shell is disabled.");
                 }
-
-                var stalePathAwarePatterns = patterns
-                    .Where(ShellTokenizer.IsSingleTokenPathAwarePattern)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .Order(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-
-                if (stalePathAwarePatterns.Length == 0)
-                    continue;
-
-                warnings.Add(
-                    $"Persistent shell approvals for audience '{audienceKey}' contain bare path-aware command patterns " +
-                    $"({string.Join(", ", stalePathAwarePatterns)}). These no longer pre-approve path-targeting shell commands. " +
-                    $"Delete '{approvalsPath}' and restart the daemon to rebuild approvals under the stricter matcher.");
             }
         }
         catch (Exception ex)

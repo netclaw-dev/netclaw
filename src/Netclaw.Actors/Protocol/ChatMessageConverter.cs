@@ -103,27 +103,26 @@ public static class ChatMessageConverter
             : msg.Role == AiChatRole.Tool ? ChatRole.Tool
             : ChatRole.User;
 
-        var result = new SerializableChatMessage
-        {
-            Role = role,
-            Content = string.Empty
-        };
+        var content = string.Empty;
+        var toolCalls = new List<SerializableToolCall>();
+        var mediaRefs = new List<SerializableMediaReference>();
+        string? toolCallId = null;
 
         // Extract structured content
-        foreach (var content in msg.Contents)
+        foreach (var c in msg.Contents)
         {
-            switch (content)
+            switch (c)
             {
                 case TextContent text:
                     // Append text (there may be text alongside tool calls)
-                    result.Content = string.IsNullOrEmpty(result.Content)
+                    content = string.IsNullOrEmpty(content)
                         ? text.Text ?? string.Empty
-                        : result.Content + (text.Text ?? string.Empty);
+                        : content + (text.Text ?? string.Empty);
                     break;
 
                 case FunctionCallContent toolCall:
                     var (meta, cleanArgs) = ExtractMeta(toolCall.Arguments);
-                    result.ToolCalls.Add(new SerializableToolCall
+                    toolCalls.Add(new SerializableToolCall
                     {
                         CallId = toolCall.CallId,
                         Name = toolCall.Name,
@@ -135,26 +134,33 @@ public static class ChatMessageConverter
                     break;
 
                 case FunctionResultContent toolResult:
-                    result.ToolCallId = toolResult.CallId;
-                    result.Content = toolResult.Result?.ToString() ?? string.Empty;
+                    toolCallId = toolResult.CallId;
+                    content = toolResult.Result?.ToString() ?? string.Empty;
                     break;
 
                 case DataContent data when sessionDir is not null:
                     var mediaRef = WriteMediaToSession(data, sessionDir);
                     if (mediaRef is not null)
-                        result.MediaReferences.Add(mediaRef);
+                        mediaRefs.Add(mediaRef);
                     break;
             }
         }
 
         // Fallback: if no structured content was found, use .Text
-        if (string.IsNullOrEmpty(result.Content) && result.ToolCalls.Count == 0
-            && result.ToolCallId is null && result.MediaReferences.Count == 0)
+        if (string.IsNullOrEmpty(content) && toolCalls.Count == 0
+            && toolCallId is null && mediaRefs.Count == 0)
         {
-            result.Content = msg.Text ?? string.Empty;
+            content = msg.Text ?? string.Empty;
         }
 
-        return result;
+        return new SerializableChatMessage
+        {
+            Role = role,
+            Content = content,
+            ToolCalls = toolCalls,
+            ToolCallId = toolCallId,
+            MediaReferences = mediaRefs
+        };
     }
 
     private static SerializableMediaReference? WriteMediaToSession(DataContent data, string sessionDir)

@@ -15,3 +15,24 @@ updates:
   directory: "/"
   schedule:
     interval: daily
+  groups:
+    microsoft-platform:
+      patterns:
+        - "Microsoft.AspNetCore.*"
+        - "Microsoft.Extensions.Configuration.*"
+        - "Microsoft.Extensions.Hosting*"
+        - "Microsoft.Extensions.Http*"
+        - "Microsoft.Extensions.Logging.*"
+        - "Microsoft.Data.*"
+        - "System.Security.Cryptography.*"
+    microsoft-extensions-ai:
+      patterns:
+        - "Microsoft.Extensions.AI*"
+        - "Microsoft.Extensions.TimeProvider.*"
+    opentelemetry:
+      patterns:
+        - "OpenTelemetry*"
+    akka:
+      patterns:
+        - "Akka.*"
+        - "Aaron.Akka.*"

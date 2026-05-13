@@ -40,6 +40,20 @@ public static class ShellTokenizer
     };
 
     /// <summary>
+    /// Verbs that are stdout-only side effects without redirects. The verb-
+    /// chain extractor caps at one token for these so <c>echo done</c>
+    /// resolves to verb <c>echo</c> rather than the 2-token chain
+    /// <c>echo done</c>. Consumed by both the verb-chain short-circuit
+    /// (<see cref="ApplyVerbShortCircuit"/>) and the pure-side-effect
+    /// skip-on-persist rule (<c>ApprovalPatternMatching.IsPureSideEffect</c>);
+    /// keeping a single source of truth prevents the two paths from drifting.
+    /// </summary>
+    internal static readonly HashSet<string> SingleTokenSideEffectVerbs = new(StringComparer.Ordinal)
+    {
+        "echo", "printf", ":", "true", "false"
+    };
+
+    /// <summary>
     /// Tokenizes a shell command string, respecting single and double quotes.
     /// Strips quote delimiters from tokens.
     /// </summary>
@@ -84,21 +98,174 @@ public static class ShellTokenizer
     /// Splits a compound command on <c>&&</c>, <c>||</c>, and <c>;</c>
     /// operators, returning each approval unit trimmed. Pipes remain inside the
     /// same unit so shell pipelines can be approved as one piece of directory
-    /// work.
+    /// work. Returns an empty list when the command is "messy" — i.e., contains
+    /// bash control-flow keywords (<c>for</c>/<c>while</c>/<c>do</c>/<c>done</c>/
+    /// <c>then</c>/<c>fi</c>/<c>case</c>/<c>esac</c>) or unbalanced
+    /// quotes/brackets — so the approval gate can offer only one-shot approval
+    /// without persisting fragmentary verb chains derived from control-flow
+    /// tokens. See <see cref="IsMessyCompoundCommand"/> for the predicate.
     /// </summary>
     public static IReadOnlyList<string> SplitCompoundCommand(string command)
-        => ShellApprovalSemantics.ForCommand(command).SplitCompoundCommand(command);
+    {
+        if (IsMessyCompoundCommand(command))
+            return [];
+        return ShellApprovalSemantics.ForCommand(command).SplitCompoundCommand(command);
+    }
+
+    private static readonly HashSet<string> BashControlFlowKeywords = new(StringComparer.Ordinal)
+    {
+        "for", "while", "do", "done", "then", "fi", "case", "esac"
+    };
 
     /// <summary>
-    /// Extracts the verb chain (command name + subcommands) from a tokenized
-    /// command. Stops at the first token that looks like a flag (starts with -)
-    /// or an argument (path, URL, etc.), and caps at <paramref name="maxDepth"/>
-    /// tokens (default: 2) to avoid capturing positional arguments as subcommands.
-    /// For path-aware verbs (cat, grep, bash, etc.), appends the first non-flag
-    /// argument so the approval pattern captures what the command operates on.
+    /// Returns true when <paramref name="command"/> contains bash control-flow
+    /// keywords as unquoted standalone words, or has unbalanced quotes,
+    /// parentheses, brackets, or braces. Used by the approval gate to refuse
+    /// persistent grants for commands that cannot be cleanly split into verb
+    /// chains the operator could later reason about.
+    ///
+    /// Cheap structural scan; not a bash parser. Heredocs, here-strings, and
+    /// command substitution are not analyzed semantically — only their
+    /// quote/bracket balance contributes.
     /// </summary>
-    public static string ExtractVerbChain(string command, int maxDepth = 2)
+    public static bool IsMessyCompoundCommand(string? command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+            return false;
+
+        char? quote = null;
+        var parens = 0;
+        var brackets = 0;
+        var braces = 0;
+        var word = new StringBuilder();
+
+        foreach (var ch in command)
+        {
+            // Quote handling: opens skip the bracket scan, closes resume it.
+            if (quote is null && (ch == '\'' || ch == '"'))
+            {
+                if (FlushWordAsKeyword(word)) return true;
+                quote = ch;
+                continue;
+            }
+
+            if (quote == ch)
+            {
+                quote = null;
+                continue;
+            }
+
+            if (quote is not null)
+                continue;
+
+            switch (ch)
+            {
+                case '(':
+                    parens++;
+                    if (FlushWordAsKeyword(word)) return true;
+                    continue;
+                case ')':
+                    if (--parens < 0) return true;
+                    if (FlushWordAsKeyword(word)) return true;
+                    continue;
+                case '[':
+                    brackets++;
+                    if (FlushWordAsKeyword(word)) return true;
+                    continue;
+                case ']':
+                    if (--brackets < 0) return true;
+                    if (FlushWordAsKeyword(word)) return true;
+                    continue;
+                case '{':
+                    braces++;
+                    if (FlushWordAsKeyword(word)) return true;
+                    continue;
+                case '}':
+                    if (--braces < 0) return true;
+                    if (FlushWordAsKeyword(word)) return true;
+                    continue;
+            }
+
+            if (char.IsWhiteSpace(ch) || ch is ';' or '|' or '&')
+            {
+                if (FlushWordAsKeyword(word)) return true;
+                continue;
+            }
+
+            word.Append(ch);
+        }
+
+        if (FlushWordAsKeyword(word)) return true;
+
+        return quote is not null || parens != 0 || brackets != 0 || braces != 0;
+    }
+
+    private static bool FlushWordAsKeyword(StringBuilder word)
+    {
+        if (word.Length == 0)
+            return false;
+
+        var match = BashControlFlowKeywords.Contains(word.ToString());
+        word.Clear();
+        return match;
+    }
+
+    /// <summary>
+    /// Extracts the verb chain (command name + subcommand chain) from a
+    /// shell command. Backed by <c>ShellSyntaxTree.BashParser</c> on POSIX
+    /// shells: extends through every "verb-like" token (no slash, no dot,
+    /// no flag prefix) until it hits a path or flag. Path-aware verbs
+    /// (cat, grep, find, ls, ...) and single-token side-effect verbs
+    /// (echo, printf, ...) are capped at depth 1 by post-check so the
+    /// chain doesn't bake call-specific arguments (search patterns, file
+    /// targets) into persisted approval keys. The verb chain SHALL NOT
+    /// include any path-like tokens — paths are extracted separately via
+    /// <see cref="ExtractFirstPathArgument"/> and become the candidate's
+    /// effective directory in the approval matcher.
+    /// <paramref name="maxDepth"/> is honored as a hard upper bound for
+    /// callers that need a tighter cap; the default is effectively
+    /// unlimited.
+    /// </summary>
+    public static string ExtractVerbChain(string command, int maxDepth = int.MaxValue)
         => ShellApprovalSemantics.ForCommand(command).ExtractVerbChain(command, maxDepth);
+
+    /// <summary>
+    /// Returns the first path-like positional argument from a single shell
+    /// clause, or null when no path token is present. Used by the approval
+    /// gate to determine the candidate's effective directory: when present,
+    /// it overrides the resolved cwd; when absent, the matcher falls back
+    /// to cwd.
+    /// </summary>
+    /// <remarks>
+    /// File-targeting commands (e.g. <c>cat ~/.bashrc</c>) return the parent
+    /// directory of the extracted path so persisted approvals scope to a
+    /// folder rather than a single file. This is a deterministic string
+    /// operation — no filesystem syscall is performed at extract time.
+    /// </remarks>
+    public static string? ExtractFirstPathArgument(string command)
+        => ShellApprovalSemantics.ForCommand(command).ExtractFirstPathArgument(command);
+
+    /// <summary>
+    /// Conservative path-token classifier. Returns true when the token
+    /// starts with <c>/</c>, <c>~/</c>, <c>./</c>, <c>../</c>, or is exactly
+    /// <c>~</c>, <c>.</c>, or <c>..</c>. Tokens that merely contain a slash
+    /// internally (URLs, regexes, docker tags, git refs) are NOT classified
+    /// as paths — false positives here would silently expand or contract
+    /// the approval gate's trust scope.
+    /// </summary>
+    public static bool IsPathToken(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        if (token == "~" || token == "." || token == "..")
+            return true;
+
+        return token.StartsWith('/')
+            || token.StartsWith("~/", StringComparison.Ordinal)
+            || token.StartsWith("./", StringComparison.Ordinal)
+            || token.StartsWith("../", StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Produces an exact shell approval unit string with recognizable local paths
@@ -106,13 +273,6 @@ public static class ShellTokenizer
     /// </summary>
     public static string NormalizeApprovalUnit(string command, string? workingDirectory = null)
         => ShellApprovalSemantics.ForCommand(command).NormalizeApprovalUnit(command, workingDirectory);
-
-    /// <summary>
-    /// Extracts reusable directory approval roots from a shell approval unit.
-    /// Returns an empty list when no reusable roots can be extracted.
-    /// </summary>
-    public static IReadOnlyList<DirectoryApprovalRoot> ExtractDirectoryRoots(string command, string? workingDirectory = null)
-        => ShellApprovalSemantics.ForCommand(command).ExtractDirectoryRoots(command, workingDirectory);
 
     /// <summary>
     /// Normalizes a path token using the active shell family's path semantics.
@@ -163,8 +323,6 @@ public static class ShellTokenizer
     public static bool LooksLikePath(string token)
         => ShellApprovalSemantics.ForCommand(token).LooksLikePath(token);
 
-    internal const int MinDirectoryScopeDepth = 2;
-
     /// <summary>
     /// Returns true when the pattern is a single-token shell approval for a
     /// path-aware verb such as <c>cat</c> or <c>bash</c>.
@@ -188,4 +346,63 @@ public static class ShellTokenizer
         return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
     }
 
+    /// <summary>
+    /// When the extracted path looks like a file (has an extension on its
+    /// last component, or is a dotfile basename), return the parent
+    /// directory so persisted approvals scope to the folder rather than a
+    /// single file. Pure string operation, no filesystem syscall.
+    /// </summary>
+    /// <remarks>
+    /// Path.HasExtension is the deterministic heuristic; dot-prefixed
+    /// dotfiles like ~/.bashrc don't return an extension via this API
+    /// (the leading dot is treated as part of the basename), so
+    /// <see cref="LooksLikeDotfile"/> is the secondary check for that
+    /// shape.
+    /// </remarks>
+    internal static string? ApplyFileParentRule(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return token;
+
+        var hasExtension = Path.HasExtension(token);
+        if (!hasExtension && !LooksLikeDotfile(token))
+            return token;
+
+        var parent = Path.GetDirectoryName(token);
+        // GetDirectoryName returns "" for a bare filename and the literal
+        // separator for root-level files. Fall back to the token unchanged
+        // when we can't sensibly compute a parent.
+        if (string.IsNullOrEmpty(parent))
+            return token;
+
+        return parent;
+    }
+
+    internal static bool LooksLikeDotfile(string token)
+    {
+        var basename = Path.GetFileName(token);
+        return basename.Length > 1 && basename[0] == '.';
+    }
+
+    /// <summary>
+    /// Caps a verb chain at depth 1 when the first token is a path-aware
+    /// verb (cat, grep, find, ls, ...) or a single-token side-effect verb
+    /// (echo, printf, ...). This prevents call-specific positional
+    /// arguments — search patterns, file targets — from baking into
+    /// persisted approval keys, so <c>grep secret /etc/passwd</c> and
+    /// <c>grep "TODO" file.cs</c> both persist as the verb <c>grep</c>.
+    /// </summary>
+    internal static string ApplyVerbShortCircuit(string? rawVerb)
+    {
+        if (string.IsNullOrEmpty(rawVerb))
+            return string.Empty;
+
+        var firstSpace = rawVerb.IndexOf(' ', StringComparison.Ordinal);
+        var firstToken = firstSpace < 0 ? rawVerb : rawVerb[..firstSpace];
+        if (PathAwareVerbs.Contains(firstToken)
+            || SingleTokenSideEffectVerbs.Contains(firstToken))
+            return firstToken;
+
+        return rawVerb;
+    }
 }

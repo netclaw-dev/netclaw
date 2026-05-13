@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tests.Hosting;
 using VerifyXunit;
 using Xunit;
 
@@ -30,7 +31,8 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
-            .WithNetclawSerialization();
+            .WithNetclawSerialization()
+            .WithSerializationVerification();
     }
 
     /// <summary>
@@ -852,7 +854,7 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         }
     }
 
-    private sealed class GetChild
+    private sealed class GetChild : INoSerializationVerificationNeeded
     {
         public static readonly GetChild Instance = new();
     }

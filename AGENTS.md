@@ -143,6 +143,18 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
   cross-cutting concerns that aren't visible from the call site. A good
   comment answers "why would this surprise me?" — not "what does this
   line do?"
+- **File organization: do NOT enforce "one type per file."** This repo
+  groups closely related types in the same file when that keeps the call
+  chain readable — an interface plus its implementations
+  (`IToolApprovalMatcher` + `ShellApprovalMatcher` + `DefaultApprovalMatcher`),
+  a base type plus its concrete subtypes, a record plus the helpers that
+  produce it. Splitting types into separate files purely for the sake of
+  separation creates review noise without improving navigation. Reviewers
+  (and agents running cleanup passes) SHALL NOT suggest file splits on
+  the basis of "one type per file" alone. Real reasons to split: a file
+  has grown past ~600 lines AND the contained types serve distinct
+  callers; a type genuinely belongs in a different namespace or
+  assembly; circular-include relief in generated code.
 
 ## Testing Guidelines
 

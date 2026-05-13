@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
+
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>
@@ -23,7 +25,7 @@ public enum DeliveryFailureKind
 /// Sent by a channel adapter when the session's output could not be delivered.
 /// The session can use this structured feedback to decide whether to retry.
 /// </summary>
-public sealed record DeliveryFailed : IWithSessionId
+public sealed record DeliveryFailed : IWithSessionId, INoSerializationVerificationNeeded
 {
     public required SessionId SessionId { get; init; }
 

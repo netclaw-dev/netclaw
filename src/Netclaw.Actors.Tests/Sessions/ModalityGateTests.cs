@@ -70,14 +70,14 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
             SessionId = sessionId,
             Content = "What is in this picture?",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
                     MimeType = "image/png",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // The first output is the LLM response itself — there is no longer a
@@ -120,14 +120,14 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
             SessionId = sessionId,
             Content = "",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
                     MimeType = "image/png",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var reply = await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
@@ -194,14 +194,14 @@ public class ModalityGateVisionTests : LlmSessionTestBase
             SessionId = sessionId,
             Content = "Describe this image",
             MediaReferences =
-            {
+            [
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
                     MimeType = "image/png",
                     Modality = (int)MediaModality.Image
                 }
-            }
+            ]
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Should NOT receive an "images removed" acknowledgement — go straight to LLM response

@@ -90,16 +90,27 @@ SHALL be able to add or remove patterns via configuration.
 
 ### Requirement: Shell command pattern matching
 
-The system SHALL extract verb-chain prefix patterns from shell commands using
-tokenization. The verb chain SHALL consist of non-flag tokens from the start of
-the command until the first flag (`-`), path, or URL argument. For shell
-approval units, `&&`, `||`, and `;` SHALL split into separate units, while `|`
-SHALL remain inside the current unit.
-For `bash -c` or `sh -c` wrappers, the inner command SHALL be extracted and
+The system SHALL extract verb-chain prefix patterns from shell commands
+using tokenization. The verb chain SHALL consist of non-flag tokens from
+the start of the command until the first flag (`-`), path, or URL
+argument. For shell approval units, `&&`, `||`, and `;` SHALL split into
+separate units, while `|` SHALL remain inside the current unit. For
+`bash -c` or `sh -c` wrappers, the inner command SHALL be extracted and
 scanned recursively.
 
-When a shell approval unit has no reusable directory roots, the system SHALL use
-exact approval behavior for that unit.
+When `ShellTokenizer.SplitCompoundCommand` detects bash control-flow
+tokens or unbalanced quotes/brackets, it SHALL return an empty
+verb-chain list. The approval gate SHALL then offer only `Once` and
+`Deny`. See the "Pattern extraction refuses bash control-flow"
+requirement for details.
+
+The matcher SHALL operate on `ApprovalEntry` records keyed by
+`(verb, directory)`. The "is this string a verb chain or a directory
+root?" inspection logic of v1 SHALL NOT be present in the v2 matcher.
+
+Approval persistence SHALL store one `ApprovalEntry` per extracted verb
+chain. Compound commands SHALL produce N entries from one user click on
+`Always here` or `Always anywhere`.
 
 #### Scenario: Verb chain extracted from simple command
 
@@ -111,7 +122,8 @@ exact approval behavior for that unit.
 
 - **GIVEN** the command `ls -la /tmp`
 - **WHEN** the pattern is extracted
-- **THEN** the pattern is `ls /tmp`
+- **THEN** the pattern is `ls`
+- **AND** the flag and path are not part of the persisted verb chain
 
 #### Scenario: Multi-level verb chain
 
@@ -123,31 +135,23 @@ exact approval behavior for that unit.
 
 - **GIVEN** the command `git add . && git commit -m "fix" && git push`
 - **WHEN** approval is checked
-- **THEN** `git add`, `git commit`, and `git push` are checked as separate
-  approval units against the approval state surfaced through
-  `IToolApprovalService`
+- **THEN** `git add`, `git commit`, and `git push` are checked as
+  separate approval units against the v2 matcher
 
-#### Scenario: Unapproved compound segments batched in one prompt
+#### Scenario: Compound segments batched in one prompt
 
-- **GIVEN** `git add` is approved but `git commit` and `git push` are not
-- **WHEN** the command `git add . && git commit -m "fix" && git push` is checked
-- **THEN** a single approval prompt lists both `git commit` and `git push`
-- **AND** the full compound command is shown for context
+- **GIVEN** none of `git add`, `git commit`, `git push` are approved
+- **WHEN** the command `git add . && git commit -m "fix" && git push`
+  is checked
+- **THEN** a single approval prompt lists all three verbs as bullets
+- **AND** one click on `Always here` persists three `(verb, cwd)` entries
 
 #### Scenario: bash -c inner command scanned recursively
 
 - **GIVEN** the command `bash -c "git push --force"`
 - **WHEN** approval and hard deny are checked
 - **THEN** the inner command `git push --force` is extracted and scanned
-- **AND** pattern `git push` is checked through `IToolApprovalService`
-
-#### Scenario: Pipeline stays in one approval unit for root matching
-
-- **GIVEN** `/home/.netclaw/logs/` is in the approved `shell_execute` roots
-- **WHEN** the agent runs `grep "error" /home/.netclaw/logs/crash.log | wc -l`
-- **THEN** the pipeline is treated as one approval unit
-- **AND** the unit is auto-approved because its recognized local filesystem path
-  stays under the approved root
+- **AND** verb chain `git push` is checked through the v2 matcher
 
 ### Requirement: IToolApprovalMatcher extension point
 
@@ -173,8 +177,11 @@ a custom matcher.
 The system SHALL pause individual tool execution tasks when approval is required
 without blocking other tool calls in the same batch. The pause SHALL use a
 `TaskCompletionSource` that completes when the session actor receives an approval
-response. A configurable timeout (default: 5 minutes) SHALL auto-deny if no
-response arrives.
+response. The pause SHALL wait indefinitely for user response — the system
+SHALL NOT auto-deny on a timer. Operators take as long as they need to
+evaluate a prompt; a clock-driven auto-deny silently transitions the
+workflow to a denied state and manufactures race conditions (late clicks
+landing in already-terminated workflows) for zero security benefit.
 
 #### Scenario: Approval-pending tool blocks while others complete
 
@@ -185,12 +192,14 @@ response arrives.
 - **AND** `shell_execute` blocks waiting for approval
 - **AND** the session actor remains responsive to messages
 
-#### Scenario: Approval timeout auto-denies
+#### Scenario: Approval pause waits indefinitely for user response
 
 - **GIVEN** an approval prompt has been emitted
-- **WHEN** no response arrives within the configured timeout
-- **THEN** the tool task unblocks with `ApprovalDecision.TimedOut`
-- **AND** the tool result says "Approval timed out after X seconds"
+- **AND** the user has not yet clicked any button
+- **WHEN** an arbitrarily long time passes (minutes, hours, until daemon restart)
+- **THEN** the workflow remains paused on the TaskCompletionSource
+- **AND** no clock-driven transition to `TimedOut` occurs
+- **AND** when the user eventually clicks, the workflow resumes from that state
 
 #### Scenario: Approved tool executes and returns result
 
@@ -288,56 +297,92 @@ context remains quoted, non-executable background.
 
 ### Requirement: Persistent approval storage
 
-The system SHALL store persistent approvals ("Approve Always" decisions) in
-`~/.netclaw/config/tool-approvals.json`, separate from `netclaw.json`. The file
-SHALL NOT be monitored by `ConfigWatcherService`. The file SHALL contain
-per-audience sections with per-tool approval lists. For the shipped MVP shell
-flow, the lists SHALL contain exact approvals and directory roots as applicable.
-Approval lookup and recording SHALL be mediated by `IToolApprovalService`.
+The system SHALL store persistent approvals in
+`~/.netclaw/config/tool-approvals.json` using a `version: 2` typed
+schema. Each entry SHALL be an `ApprovalEntry` with a required `verb`
+field (the verb chain, e.g. `git remote`) and an optional `directory`
+field (an absolute path, or `null` for the global wildcard). The file
+SHALL contain per-audience sections with per-tool `ApprovalEntry` lists.
+The file SHALL NOT be monitored by `ConfigWatcherService`.
 
-The file SHALL also be operator-editable via the `netclaw approvals` CLI
-(see the `netclaw-cli` capability). The daemon SHALL pick up out-of-band
-edits — whether made by direct file editing or by the CLI — on the next
-approval check, without requiring a restart.
+When the daemon reads a `tool-approvals.json` file that does not have
+`version: 2`, the file SHALL be quarantined to
+`tool-approvals.json.v1.bak` and an empty v2 store SHALL be returned.
+The daemon SHALL write the empty v2 store on the next persist call. No
+automatic translation of v1 entries SHALL be performed.
 
-#### Scenario: Approve always persists directory root to file
+The matcher SHALL approve a candidate invocation when there exists an
+`ApprovalEntry` whose `verb` equals the candidate's extracted verb
+chain AND (`directory` is `null` OR the candidate's cwd is under
+`directory`).
 
-- **GIVEN** the user clicks "Approve Always" for a command targeting
-  `/home/.netclaw/logs/crash.log`
+The file SHALL also be operator-editable via the `netclaw approvals`
+CLI (see the `netclaw-cli` capability). The daemon SHALL pick up
+out-of-band edits — whether made by direct file editing or by the
+CLI — on the next approval check, without requiring a restart.
+
+#### Scenario: Always here persists typed (verb, directory) entries
+
+- **GIVEN** the user clicks `Always here` for verbs `git remote` and
+  `git rev-parse` in cwd `~/repos/foo/`
 - **WHEN** the approval is processed
-- **THEN** `/home/.netclaw/logs/` is added to the Personal `shell_execute` list
-  in `tool-approvals.json`
+- **THEN** `tool-approvals.json` contains
+  `[{"verb":"git remote","directory":"~/repos/foo/"},
+    {"verb":"git rev-parse","directory":"~/repos/foo/"}]`
 - **AND** the daemon does NOT restart
 
-#### Scenario: Persistent approvals loaded at startup
+#### Scenario: Always anywhere persists null-directory entry
+
+- **GIVEN** the user clicks `Always anywhere` for verb `freshdesk`
+- **WHEN** the approval is processed
+- **THEN** `tool-approvals.json` contains
+  `{"verb":"freshdesk","directory":null}`
+
+#### Scenario: v1 file quarantined on first read
+
+- **GIVEN** `tool-approvals.json` exists without a `version` field
+  (or with `version` other than `2`)
+- **WHEN** the daemon loads the file
+- **THEN** the file is moved to `tool-approvals.json.v1.bak`
+- **AND** `Load()` returns an empty v2 store
+- **AND** no v1 entries are translated to v2
+
+#### Scenario: Matcher approves under directory entry
 
 - **GIVEN** `tool-approvals.json` contains
-  `{"personal":{"shell_execute":["git push", "/home/.netclaw/logs/"]}}`
-- **WHEN** the daemon starts
-- **THEN** `git push` is pre-approved for Personal audience shell commands
-- **AND** later shell approval units whose recognized local paths all stay under
-  `/home/.netclaw/logs/` are pre-approved
+  `{"verb":"git remote","directory":"~/repos/foo/"}`
+- **WHEN** the agent invokes `git remote -v` with cwd `~/repos/foo/`
+- **THEN** the matcher returns approved
+- **AND** no prompt is rendered
+
+#### Scenario: Matcher approves under null-directory entry
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"freshdesk","directory":null}`
+- **WHEN** the agent invokes `freshdesk --since=24h` with cwd
+  `~/.netclaw/sessions/<id>/`
+- **THEN** the matcher returns approved regardless of cwd
+
+#### Scenario: Matcher rejects when cwd is outside entry directory
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"git remote","directory":"~/repos/foo/"}`
+- **WHEN** the agent invokes `git remote -v` with cwd `~/repos/bar/`
+- **THEN** the matcher returns not-approved
+- **AND** the approval gate prompts the user
 
 #### Scenario: Approve once is retry-scoped only
 
-- **GIVEN** the user clicks "Approve Once" for pattern `docker build`
+- **GIVEN** the user clicks `Once` for command `docker build`
 - **WHEN** the approval is processed
 - **THEN** the blocked `docker build` call is retried immediately
 - **AND** a later `docker build` call in the same session prompts again
 - **AND** `tool-approvals.json` is NOT modified
 
-#### Scenario: Approve for this chat stores directory root in session
-
-- **GIVEN** the user clicks "Approve For This Chat" for a command targeting
-  `/home/.netclaw/logs/daemon.log`
-- **WHEN** the approval is processed
-- **THEN** the directory root is approved for the current session only
-- **AND** `tool-approvals.json` is NOT modified
-- **AND** a new session will prompt again
-
 #### Scenario: Operator-applied revocation visible without restart
 
-- **GIVEN** the daemon is running with a persisted approval for `git push`
+- **GIVEN** the daemon is running with a persisted entry
+  `{"verb":"git push","directory":null}`
 - **WHEN** an operator removes that entry via `netclaw approvals revoke`
 - **AND** a new approval check evaluates `git push`
 - **THEN** the daemon re-loads the file and observes the entry is gone
@@ -368,161 +413,313 @@ support it, the system SHALL immediately deny the tool with reason
 
 ### Requirement: Directory-root approvals for shell_execute
 
-For `shell_execute`, `Approve once` SHALL remain exact blocked-call retry only.
-It SHALL NOT create a reusable session approval, persistent approval, or
-directory-root approval.
+For `shell_execute`, persistent approvals SHALL be stored as typed
+`(verb, directory)` `ApprovalEntry` records, NOT as separate verb
+patterns and directory-root entries. The matcher SHALL approve a
+candidate invocation when an `ApprovalEntry` exists whose `verb` matches
+the candidate's verb chain AND (`directory` is `null` OR the candidate's
+cwd is under `directory`).
 
-For `shell_execute`, when the user selects `Approve for this chat` (B) or
-`Approve always` (C) and the shell approval unit contains one or more
-recognized local filesystem paths, the system SHALL store directory roots for
-that approval unit instead of verb-specific or command-pattern-specific shell
-approvals.
+`Once` SHALL retry only the blocked call; it SHALL NOT create any
+session or persistent approval.
 
-Directory approvals SHALL be root-based and verb-agnostic. A later shell
-approval unit SHALL be auto-approved only when every recognized local
-filesystem path in that unit resolves under already approved roots.
+`This chat` SHALL store `(verb, prompt's directory)` entries in
+session-scoped memory only.
 
-If a shell approval unit yields no reusable local directory roots, directory
-approval SHALL NOT apply and the system SHALL fall back to exact approval
-behavior for that unit.
+`Always here` SHALL persist `(verb, prompt's directory)` entries to
+`tool-approvals.json`.
 
-The system SHALL enforce minimum directory depth, path normalization,
-boundary-safe containment, path traversal checks, and `ToolPathPolicy` as the
-safety backstop for directory-root approvals. `ToolPathPolicy` SHALL resolve
-symlinks along every component of a candidate path so that a planted symlink
-under an approved root cannot be used to reach a protected path that lies
-outside that root.
+`Always anywhere` SHALL persist `(verb, null)` entries to
+`tool-approvals.json` — the global wildcard.
 
-#### Scenario: Approve once retries only the blocked call
+The system SHALL enforce path normalization, boundary-safe containment,
+path traversal checks, and `ToolPathPolicy` as the safety backstop.
+`ToolPathPolicy` SHALL resolve symlinks along every component of a
+candidate path so that a planted symlink under an approved directory
+cannot be used to reach a protected path that lies outside that
+directory.
 
-- **GIVEN** a shell command `cat /home/.netclaw/logs/crash.log` requires approval
-- **WHEN** the user selects `Approve once`
+The minimum-depth check from v1 (rejecting roots like `/` or `/etc/`)
+SHALL still apply to the directory portion of `(verb, directory)`
+entries: `Always here` SHALL NOT persist a directory shallower than
+two path segments. When the prompt's directory is too shallow, the
+prompt SHALL omit the `Always here` button (only `Once`, `This chat`,
+`Always anywhere`, `Deny` remain), so the user cannot accidentally
+write a too-shallow root.
+
+#### Scenario: Once retries only the blocked call
+
+- **GIVEN** a shell command `cat ~/repos/foo/notes.md` requires approval
+- **WHEN** the user clicks `Once`
 - **THEN** only the current blocked call is retried
-- **AND** no reusable approval is recorded
-- **AND** a later `cat /home/.netclaw/logs/other.log` prompts again
+- **AND** no `ApprovalEntry` is recorded
+- **AND** a later `cat ~/repos/foo/other.md` prompts again
 
-#### Scenario: Approve for this chat stores a reusable directory root
+#### Scenario: Always here stores (verb, directory) entry
 
-- **GIVEN** a shell command `cat /home/.netclaw/logs/crash-foo.log` requires approval
-- **WHEN** the user selects `Approve for this chat`
-- **THEN** the session-scoped approval stores the directory root `/home/.netclaw/logs/`
-- **AND** a later `grep "error" /home/.netclaw/logs/daemon.log` in the same session
-  does not prompt
+- **GIVEN** a shell command `grep -l "timeout" daemon.log` with cwd
+  `~/.netclaw/logs/`
+- **WHEN** the user clicks `Always here`
+- **THEN** `{"verb":"grep","directory":"~/.netclaw/logs/"}` is written
+  to `tool-approvals.json`
+- **AND** a future `wc -l app.log` with cwd `~/.netclaw/logs/` does NOT
+  match this entry (different verb)
+- **AND** a future `grep "info" archive.log` with cwd
+  `~/.netclaw/logs/` is auto-approved (same verb, same directory)
 
-#### Scenario: Approve always stores a reusable directory root
+#### Scenario: Always anywhere stores (verb, null) entry
 
-- **GIVEN** a shell command `grep -l "timeout" /home/.netclaw/logs/daemon.log`
-  requires approval
-- **WHEN** the user selects `Approve always`
-- **THEN** `/home/.netclaw/logs/` is written to `tool-approvals.json` for
-  `shell_execute`
-- **AND** a future-session `ls /home/.netclaw/logs/archive.log` is auto-approved
-
-#### Scenario: All recognized local paths in a unit must be covered
-
-- **GIVEN** `/home/.netclaw/logs/` is approved for `shell_execute`
-- **WHEN** the agent runs `cat /home/.netclaw/logs/app.log /home/.netclaw/config/netclaw.json`
-- **THEN** the command still requires approval because not all recognized local
-  filesystem paths fall under approved roots
-
-#### Scenario: No reusable local roots falls back to exact approval behavior
-
-- **GIVEN** a shell command `git push origin main` requires approval
-- **WHEN** the user selects `Approve for this chat`
-- **THEN** no directory root is stored
-- **AND** the system falls back to exact approval behavior for `git push`
-
-#### Scenario: Shallow directory root falls back to exact approval behavior
-
-- **GIVEN** a shell command `cat /etc/passwd` requires approval
-- **WHEN** directory-root extraction runs
-- **THEN** the derived root `/etc/` is rejected as too shallow
-- **AND** the system falls back to exact approval behavior
+- **GIVEN** a shell command `freshdesk --since=24h` requires approval
+- **WHEN** the user clicks `Always anywhere`
+- **THEN** `{"verb":"freshdesk","directory":null}` is written to
+  `tool-approvals.json`
+- **AND** a scheduled task firing `freshdesk` in any cwd is
+  auto-approved on next invocation
 
 #### Scenario: Boundary-safe matching prevents prefix collisions
 
-- **GIVEN** `/home/user/` is approved for `shell_execute`
-- **WHEN** the agent runs `cat /home/usersecret/data.txt`
-- **THEN** the command requires approval
-- **AND** `PathUtility.IsWithinRoot` prevents the false positive
+- **GIVEN** `{"verb":"cat","directory":"/home/user/"}` is approved
+- **WHEN** the agent runs `cat data.txt` with cwd `/home/usersecret/`
+- **THEN** the candidate does NOT match the entry
+- **AND** the approval gate prompts the user
 
-#### Scenario: Symlink under approved root cannot reach a protected path
+#### Scenario: Symlink in cwd breaks the approval match
 
-- **GIVEN** `/home/user/safe/` is approved for `shell_execute`
-- **AND** `/home/user/safe/leak` is a directory symlink whose target resolves
+- **GIVEN** `{"verb":"cat","directory":"/home/user/safe/"}` is approved
+- **AND** `/home/user/safe/leak` is a directory symlink resolving
   to `/etc`
-- **WHEN** the agent runs `cat /home/user/safe/leak/passwd`
-- **THEN** the approval gate auto-approves the unit because the literal path
-  is within the approved root
-- **AND** `ToolPathPolicy.CommandReferencesDeniedPath` blocks execution because
-  the canonical path resolves to `/etc/passwd` after symlink resolution along
-  every path component
+- **WHEN** the agent runs `cat passwd` with cwd `/home/user/safe/leak/`
+- **THEN** the symlink-segment check breaks the auto-approval
+- **AND** `ToolPathPolicy.CommandReferencesDeniedPath` blocks execution
+  if the canonical path is protected
 
-### Requirement: Directory root extraction via IToolApprovalMatcher
+#### Scenario: Shallow directory prevents Always here
 
-`IToolApprovalMatcher` SHALL define an `ExtractDirectoryRoots()` method that
-returns reusable directory roots for a tool invocation.
+- **GIVEN** an approval prompt for `cat /etc/passwd` (cwd `/etc/`)
+- **WHEN** the prompt is rendered
+- **THEN** the `Always here` button is omitted
+- **AND** only `Once`, `This chat`, `Always anywhere`, `Deny` are shown
 
-For `shell_execute`, extraction SHALL operate on shell approval units. Units
-SHALL split on `&&`, `||`, and `;`. Pipelines joined by `|` SHALL stay inside
-the same approval unit.
+### Requirement: Safe-verb auto-allow short-circuit in declared safe spaces
 
-`ShellApprovalMatcher` SHALL scan each approval unit for recognized local
-filesystem paths, expand and normalize them, derive reusable parent directory
-roots, and enforce minimum depth and path-safety checks. For `bash -c` or
-`sh -c` wrappers, the inner command SHALL be extracted and scanned recursively.
+The system SHALL maintain a per-OS curated list of demonstrably read-only
+verb chains (`safe-verbs.linux.json` and `safe-verbs.windows.json`) shipped
+with the daemon and overridable at `~/.netclaw/config/safe-verbs.<os>.json`.
+A `ScopedShellSafeVerbPolicy` SHALL evaluate each shell invocation against
+the safe-verbs list AND the audience-aware safe-space roots resolved by
+`ToolAudienceProfileResolver`. When the candidate verb chain is on the
+safe-verbs list AND the candidate's cwd resolves under at least one
+safe-space root AND the path contains no symlink segments
+(`ContainsSymlinkSegment` returns false), the approval gate SHALL
+short-circuit to "approved" with no user prompt. Otherwise the existing
+approval gate SHALL apply.
 
-`DefaultApprovalMatcher` and `FilePathApprovalMatcher` SHALL return empty lists.
+Safe-space roots SHALL be:
 
-#### Scenario: grep extracts a root from a later argument
+- For Personal and Team audiences: `session_dir` (always) plus
+  `project_dir` from `WorkingContext` (when set).
+- For Public audience: `session_dir` only. Public sessions SHALL NOT
+  expand their safe space via `project_dir`, mirroring the read-roots
+  restriction `ScopedFileAccessPolicy` enforces for file_read.
 
-- **GIVEN** the command `grep -l "timeout" /home/.netclaw/logs/daemon.log`
-- **WHEN** `ExtractDirectoryRoots` runs
-- **THEN** the root `/home/.netclaw/logs/` is extracted
-- **AND** the search term `"timeout"` is ignored
+The hard-deny list (layer 1) SHALL apply unchanged. The safe-verb
+short-circuit SHALL only relax the interactive approval gate (layer 2).
+`ToolPathPolicy.CommandReferencesDeniedPath` SHALL still block execution
+if a denied path is referenced.
 
-#### Scenario: Pipeline stays in one approval unit
+#### Scenario: Read-only verb in project directory auto-runs
 
-- **GIVEN** the command `grep "error" /home/.netclaw/logs/app.log | wc -l`
-- **WHEN** `ExtractDirectoryRoots` runs
-- **THEN** the pipeline is treated as one approval unit
-- **AND** the root `/home/.netclaw/logs/` is extracted for that unit
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `grep` is on the Linux safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with command
+  `grep -r "error" .` and cwd `~/repos/foo/`
+- **THEN** the approval gate short-circuits to "approved"
+- **AND** no prompt is rendered to the user
+- **AND** `tool-approvals.json` is NOT modified
 
-#### Scenario: Control operators split approval units
+#### Scenario: Read-only verb in session directory auto-runs
 
-- **GIVEN** the command `cat /home/.netclaw/logs/app.log && cat /home/.netclaw/config/netclaw.json`
-- **WHEN** `ExtractDirectoryRoots` runs
-- **THEN** the `&&` creates two approval units
-- **AND** each unit is evaluated independently for reusable roots
+- **GIVEN** a Personal session with no `project_dir` set
+- **AND** `cat` is on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with command
+  `cat inbox/notes.md` and cwd `~/.netclaw/sessions/<id>/`
+- **THEN** the approval gate short-circuits to "approved"
+- **AND** no prompt is rendered
 
-#### Scenario: Glob paths use parent directory root
+#### Scenario: Read-only verb outside safe spaces still prompts
 
-- **GIVEN** the command `ls /home/.netclaw/logs/crash-*.log`
-- **WHEN** `ExtractDirectoryRoots` runs
-- **THEN** the root `/home/.netclaw/logs/` is extracted
-- **AND** the glob component does not become part of the stored root
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `grep` is on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with cwd `/etc/`
+- **THEN** the approval gate prompts the user
+- **AND** the prompt body shows `/etc/` as the directory header
 
-### Requirement: Dynamic approval option labels
+#### Scenario: Mutating verb in safe space still prompts
 
-When directory roots are available, the system SHALL customize the approval
-option labels to show the reusable root scope. The labels SHALL follow the
-format:
-- B: `"Approve in {directory-root} for this chat"`
-- C: `"Approve in {directory-root} always"`
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `git push` is NOT on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with command
+  `git push origin main` and cwd `~/repos/foo/`
+- **THEN** the approval gate prompts the user
+- **AND** the user can grant `(git push, ~/repos/foo/)` via "Always here"
 
-Options A ("Approve once") and D ("Deny") SHALL retain their default labels.
+#### Scenario: Public audience cannot use project_dir as safe space
 
-#### Scenario: Labels show reusable root scope for shell commands
+- **GIVEN** a Public session with `project_dir` set to `~/repos/foo/`
+- **AND** `grep` is on the safe-verbs list
+- **WHEN** the agent invokes `shell_execute` with cwd `~/repos/foo/`
+- **THEN** the approval gate prompts the user
+- **AND** Public's only safe space remains `session_dir`
 
-- **GIVEN** a shell command `grep "error" /home/.netclaw/logs/app.log`
-  requires approval
-- **WHEN** the approval prompt is generated
-- **THEN** option B reads `Approve in /home/.netclaw/logs/ for this chat`
-- **AND** option C reads `Approve in /home/.netclaw/logs/ always`
+#### Scenario: Symlink under safe-space root cannot extend safe scope
 
-#### Scenario: Labels use defaults when no reusable directory root exists
+- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
+- **AND** `~/repos/foo/leak` is a symlink resolving to `/etc`
+- **WHEN** the agent invokes `shell_execute` with cwd `~/repos/foo/leak/`
+  and command `cat passwd`
+- **THEN** the safe-verb short-circuit SHALL NOT apply
+  (`ContainsSymlinkSegment` returns true)
+- **AND** the approval gate prompts the user (or `ToolPathPolicy`
+  hard-denies if the resolved path is protected)
 
-- **GIVEN** a shell command `git push origin main` requires approval
-- **WHEN** the approval prompt is generated
-- **THEN** option B reads the default "Approve for this chat"
-- **AND** option C reads the default "Approve always"
+#### Scenario: User-overridden safe-verbs file extends defaults
+
+- **GIVEN** the user has written
+  `~/.netclaw/config/safe-verbs.linux.json` containing the verb `eza`
+- **WHEN** the daemon loads safe-verbs configuration
+- **THEN** `eza` is treated as a safe verb in addition to the shipped defaults
+- **AND** `eza` invocations in safe spaces auto-run without prompting
+
+### Requirement: Five-button approval prompt with verb-and-directory framing
+
+When the approval gate prompts the user, the prompt SHALL render five
+buttons in one row: `Once`, `This chat`, `Always here`, `Always anywhere`,
+`Deny`. The buttons `Always anywhere` and `Deny` SHALL be styled as
+danger (Slack `style: "danger"`, Discord `ButtonStyle.Danger`). All
+button labels SHALL fit within Slack's 76-character and Discord's
+80-character button-text caps.
+
+The prompt body SHALL show the cwd in the header
+(`Approve in <cwd> ?`) and the extracted verb chains as a bulleted list.
+Single-verb commands MAY collapse the list into the header
+(`Approve <verb> in <cwd> ?`). The body SHALL NOT render separate
+"Patterns" or "Directory Roots" sections.
+
+Button semantics:
+
+- `Once` SHALL run the command this one time and persist nothing.
+- `This chat` SHALL allow the extracted verbs in the prompt's directory
+  for the rest of the session, stored in session-scoped memory only.
+- `Always here` SHALL persist `(verb, prompt's directory)` entries to
+  `tool-approvals.json` for each extracted verb.
+- `Always anywhere` SHALL persist `(verb, null)` entries for each
+  extracted verb — the global wildcard.
+- `Deny` SHALL refuse this call only. Denying a verb SHALL NOT ban it
+  for future invocations.
+
+#### Scenario: Compound command shows verbs as bullets
+
+- **GIVEN** the agent invokes `shell_execute` with command
+  `cd ~/repos/foo && git remote -v && git rev-parse HEAD`
+  and cwd `~/repos/foo/`
+- **WHEN** the approval prompt is rendered on Slack
+- **THEN** the body header reads `Approve in ~/repos/foo/ ?`
+- **AND** the verbs `cd`, `git remote`, `git rev-parse` appear as bullets
+- **AND** the action row contains five buttons
+- **AND** `Always anywhere` and `Deny` are styled as danger
+
+#### Scenario: Always here persists folder-scoped entries
+
+- **GIVEN** an approval prompt for verbs `git remote`, `git rev-parse`
+  in cwd `~/repos/foo/`
+- **WHEN** the user clicks `Always here`
+- **THEN** `tool-approvals.json` gains entries
+  `{"verb": "git remote", "directory": "~/repos/foo/"}` and
+  `{"verb": "git rev-parse", "directory": "~/repos/foo/"}`
+- **AND** the resolution message reads
+  `Saved: git remote, git rev-parse in ~/repos/foo/`
+
+#### Scenario: Always anywhere persists global entries
+
+- **GIVEN** an approval prompt for verb `freshdesk` in cwd `~/.netclaw/sessions/<id>/`
+- **WHEN** the user clicks `Always anywhere`
+- **THEN** `tool-approvals.json` gains entry
+  `{"verb": "freshdesk", "directory": null}`
+- **AND** the resolution message reads `Saved: freshdesk anywhere`
+
+#### Scenario: This chat persists session-scoped only
+
+- **GIVEN** an approval prompt for verb `jsonlint` in cwd `~/repos/foo/`
+- **WHEN** the user clicks `This chat`
+- **THEN** session-scoped memory records `(jsonlint, ~/repos/foo/)`
+- **AND** `tool-approvals.json` is NOT modified
+- **AND** a new session prompts again
+
+#### Scenario: Deny refuses only the current call
+
+- **GIVEN** an approval prompt for verb `git push`
+- **WHEN** the user clicks `Deny`
+- **THEN** the current call is refused
+- **AND** `tool-approvals.json` is NOT modified
+- **AND** a later `git push` call still prompts
+
+### Requirement: Resolution message single-line format
+
+After an approval response is processed, the channel SHALL render a
+single-line resolution message replacing today's separate `Patterns` and
+`Directory Roots` sections. The line SHALL identify the verbs and the
+scope. Permitted formats:
+
+- `Saved: <verb-list> in <directory>` — for `Always here`.
+- `Saved: <verb-list> anywhere` — for `Always anywhere`.
+- `Saved for this chat: <verb-list> in <directory>` — for `This chat`.
+- `Approved (no save)` — for `Once`.
+- `Denied` — for `Deny`.
+
+#### Scenario: Resolution shows folder scope for Always here
+
+- **GIVEN** the user has clicked `Always here` for verbs
+  `jsonlint, git pull` in `~/repos/foo/`
+- **WHEN** the resolution message is rendered
+- **THEN** the message reads `Saved: jsonlint, git pull in ~/repos/foo/`
+- **AND** no `Patterns` or `Directory Roots` headers are emitted
+
+#### Scenario: Resolution shows global scope for Always anywhere
+
+- **GIVEN** the user has clicked `Always anywhere` for verb `freshdesk`
+- **WHEN** the resolution message is rendered
+- **THEN** the message reads `Saved: freshdesk anywhere`
+
+### Requirement: Pattern extraction refuses bash control-flow
+
+`ShellTokenizer.SplitCompoundCommand` SHALL detect bash control-flow
+tokens (`for`, `while`, `do`, `done`, `then`, `fi`, `case`, `esac`) and
+unbalanced quotes/brackets. When detected, the tokenizer SHALL return an
+empty verb-chain list. The approval gate SHALL respond by offering only
+the `Once` and `Deny` buttons (no `This chat`, `Always here`, or
+`Always anywhere`) and the prompt body SHALL show a hint: "complex
+command — only one-shot approval available". No persistent grant SHALL
+be possible for unparseable commands.
+
+#### Scenario: For-loop produces empty verb-chain list
+
+- **GIVEN** the command
+  `for pid in $(pgrep netclawd); do echo "$pid"; done`
+- **WHEN** `ShellTokenizer.SplitCompoundCommand` runs
+- **THEN** the returned verb-chain list is empty
+
+#### Scenario: Approval prompt for messy command offers only Once and Deny
+
+- **GIVEN** the agent invokes `shell_execute` with the for-loop above
+  and cwd outside any safe space
+- **WHEN** the approval prompt is rendered
+- **THEN** only `Once` and `Deny` buttons are present
+- **AND** the body shows the "complex command" hint
+
+#### Scenario: Unbalanced quotes treated as messy
+
+- **GIVEN** the command `echo "unterminated`
+- **WHEN** the tokenizer runs
+- **THEN** the verb-chain list is empty
+- **AND** the approval gate offers only `Once` and `Deny`
+

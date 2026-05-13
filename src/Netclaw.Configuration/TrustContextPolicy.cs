@@ -222,6 +222,18 @@ public static class SecurityPolicyDefaults
         return ResolveAudienceFromChannelType(prefix);
     }
 
+    /// <summary>
+    /// Resolves the effective audience for a tool invocation, preferring the
+    /// explicit <paramref name="configuredAudience"/> wire value when it parses
+    /// and falling back to <see cref="ResolveAudienceFromSessionId"/> otherwise.
+    /// Centralizes the pattern previously copied across the scoped-policy /
+    /// dispatching / audience-profile helpers in <c>Netclaw.Actors.Tools</c>.
+    /// </summary>
+    public static TrustAudience ResolveAudienceWithFallback(string? configuredAudience, string? sessionId)
+        => TryParseAudience(configuredAudience, out var parsed)
+            ? parsed
+            : ResolveAudienceFromSessionId(sessionId);
+
     public static string ResolveBoundaryFromAudience(TrustAudience audience) => audience switch
     {
         TrustAudience.Public => PublicBoundary,

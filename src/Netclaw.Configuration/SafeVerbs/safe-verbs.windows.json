@@ -1,0 +1,33 @@
+{
+  "$comment": "Bundled defaults for shell verbs the approval gate auto-allows on Windows when invoked inside a trusted zone (per-audience trustedZones + session_dir + audience baseline). Each entry is a verb chain matched by exact equality against the shell parser's verb-chain extraction. Includes both cmd.exe builtins and PowerShell read-only cmdlets, plus the same git read subcommands as the Linux list. Mutating verbs are intentionally absent. This list is immutable at runtime: no on-disk override file is read. Widening the list goes through code review and a daemon release so the agent cannot extend its own auto-pass surface via file writes.",
+  "verbs": [
+    "cd",
+    "chdir",
+    "pushd",
+    "popd",
+    "Set-Location",
+    "Push-Location",
+    "Pop-Location",
+    "dir",
+    "type",
+    "more",
+    "where",
+    "findstr",
+    "Get-ChildItem",
+    "Get-Content",
+    "Select-String",
+    "Get-Item",
+    "Test-Path",
+    "Get-Location",
+    "Resolve-Path",
+    "git status",
+    "git log",
+    "git diff",
+    "git show",
+    "git branch",
+    "git remote",
+    "git rev-parse",
+    "git ls-files",
+    "git blame"
+  ]
+}

@@ -106,8 +106,9 @@ public sealed record SessionOutputDto
     public string? InteractionDisplayText { get; init; }
     public string? RequesterSenderId { get; init; }
     public List<string>? InteractionPatterns { get; init; }
-    public List<string>? InteractionApprovalEntries { get; init; }
-    public List<string>? InteractionDirectoryRoots { get; init; }
+    public List<string>? InteractionCandidateVerbs { get; init; }
+    public string? InteractionCwd { get; init; }
+    public bool? InteractionIsMessy { get; init; }
     public List<ToolInteractionOption>? InteractionOptions { get; init; }
     public bool? InteractionHasAdoptedContext { get; init; }
     public bool? InteractionHasThirdPartyAdoptedContext { get; init; }

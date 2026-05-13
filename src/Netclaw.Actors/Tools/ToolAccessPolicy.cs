@@ -23,6 +23,7 @@ public sealed class ToolAccessPolicy
     private readonly IShellTrustZonePolicy? _shellTrustZonePolicy;
     private readonly IToolApprovalMatcher _fileApprovalMatcher;
     private readonly FeatureGates _featureGates;
+    private readonly ScopedShellSafeVerbPolicy? _safeVerbPolicy;
 
     public ToolAccessPolicy(
         ToolConfig toolConfig,
@@ -31,7 +32,8 @@ public sealed class ToolAccessPolicy
         IToolApprovalMatcher? fileApprovalMatcher = null,
         ToolPathPolicy? toolPathPolicy = null,
         FeatureGates? featureGates = null,
-        IShellTrustZonePolicy? shellTrustZonePolicy = null)
+        IShellTrustZonePolicy? shellTrustZonePolicy = null,
+        SafeVerbList? safeVerbs = null)
     {
         _toolConfig = toolConfig;
         _defaults = defaults;
@@ -41,6 +43,7 @@ public sealed class ToolAccessPolicy
         _shellTrustZonePolicy = shellTrustZonePolicy;
         _fileApprovalMatcher = fileApprovalMatcher ?? DefaultApprovalMatcher.Instance;
         _featureGates = featureGates ?? FeatureGates.AllEnabled;
+        _safeVerbPolicy = safeVerbs is not null ? new ScopedShellSafeVerbPolicy(safeVerbs) : null;
     }
 
     public int MaxToolTimeoutSeconds => _toolConfig.MaxToolTimeoutSeconds;
@@ -137,7 +140,8 @@ public sealed class ToolAccessPolicy
         {
             var hardDenyDecision = _shellCommandPolicy.Evaluate(shellCommand);
             if (!hardDenyDecision.Allowed)
-                return ToolAccessDecision.Deny($"hard_deny_{hardDenyDecision.DenyCategory ?? "unknown"}");
+                return ToolAccessDecision.Deny(
+                    $"hard_deny_{hardDenyDecision.DenyCategory?.ToWireName() ?? "unknown"}");
         }
 
         var workingDirectory = ExtractWorkingDirectory(arguments);
@@ -243,16 +247,18 @@ public sealed class ToolAccessPolicy
 
     private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
     {
+        // Use the shared extractor so JsonElement-valued arguments (the
+        // shape LLM-generated tool calls arrive in) get string-converted
+        // correctly. The direct `is string` pattern previously here
+        // silently returned null for every real shell call, which disabled
+        // the hard-deny pre-check at AuthorizeInvocation. The matcher's
+        // GetCommand uses ToolArgumentHelper.GetString — mirror it here
+        // for consistency.
         if (arguments is null)
             return null;
 
-        if (arguments.TryGetValue("Command", out var command) && command is string text)
-            return text;
-
-        if (arguments.TryGetValue("command", out command) && command is string lowerText)
-            return lowerText;
-
-        return null;
+        return ToolArgumentHelper.GetString(arguments, "Command")
+            ?? ToolArgumentHelper.GetString(arguments, "command");
     }
 
     private static string? ExtractWorkingDirectory(IDictionary<string, object?>? arguments)
@@ -297,37 +303,184 @@ public sealed class ToolAccessPolicy
             return ToolAccessDecision.Allow();
         }
 
-        // Approval prompts carry three related views of the invocation:
+        // Approval prompts carry three views of the invocation:
         // - `patterns`: the exact blocked units shown to the user and reused by
         //   approve-once retries.
-        // - `approvalEntries`: what broader B/C approvals actually record and
-        //   later compare against. For shell this prefers reusable directory
-        //   roots and falls back to the exact unit when no reusable roots exist.
-        // - `directoryRoots`: the human-facing root list, surfaced to the user
-        //   in the channel-specific message body (Slack section block, Discord
-        //   summary line). Button labels stay fixed; runtime values like paths
-        //   never enter button text because Slack caps button text at 76 chars
-        //   and Discord at 80, and channel-agnostic policy cannot enforce
-        //   channel-specific length budgets.
+        // - `candidates`: the (verb, directory) pairs evaluated against
+        //   persisted ApprovalEntry records by the gate. The directory half is
+        //   the path argument extracted from each clause when present, falling
+        //   back to ToolExecutionContext.Cwd at evaluation time.
+        // - `candidateVerbs`: the verb-only projection of `candidates`, kept
+        //   for renderers (Slack/Discord builders) that bullet-list verbs in
+        //   the prompt body. Button labels stay fixed; runtime values like
+        //   paths never enter button text because Slack caps button text at
+        //   76 chars and Discord at 80.
         var patterns = matcher.ExtractPatterns(toolName, arguments);
-        var approvalEntries = matcher.ExtractApprovalEntries(toolName, arguments);
-        var directoryRoots = matcher.ExtractDirectoryRoots(toolName, arguments);
+        var candidates = matcher.ExtractCandidates(toolName, arguments);
+        var candidateVerbs = candidates
+            .Select(static c => c.Verb)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
         var displayText = matcher.FormatForDisplay(toolName, arguments);
+        var isMessy = matcher.IsMessy(toolName, arguments);
+
+        // Resolve cwd up-front for shell so it's available to the safe-verb
+        // short-circuit, the shallow-cwd guard, AND the approval context that
+        // gets persisted on "Always here". Doing this only inside the
+        // short-circuit branch (as the original v2 layout did) drops cwd from
+        // ToolApprovalContext when conditions don't match — silently turning
+        // every "Always here" click into "Always anywhere" because the
+        // persistence path reads PendingToolInteraction.Cwd.
+        var isShell = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal);
+        if (isShell && context is not null)
+            context.Cwd = context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
+
+        // Safe-verb ∩ safe-space short-circuit. Runs only for shell and only
+        // when the matcher could extract candidate verbs cleanly — messy
+        // commands always prompt regardless of verb membership. Auto-allows
+        // demonstrably read-only verbs (cat/ls/grep/find/git status/...)
+        // when the cwd is inside session_dir or project_dir.
+        if (_safeVerbPolicy is not null
+            && context is not null
+            && isShell
+            && !isMessy
+            && candidateVerbs.Count > 0
+            && _safeVerbPolicy.AllShortCircuit(candidateVerbs, context.Cwd, context))
+        {
+            return ToolAccessDecision.Allow();
+        }
+
+        var options = BuildApprovalOptions(
+            isMessy,
+            isCwdShallow: IsCwdTooShallow(context?.Cwd),
+            allEffectiveDirsAreSessionScratch: AllCandidatesResolveToSessionScratch(
+                candidates, context?.Cwd, context?.SessionDirectory));
 
         var approvalContext = new ToolApprovalContext(
             toolName.Value,
             displayText,
             patterns,
-            approvalEntries,
-            [
-                new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                new ToolApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
-                new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
-                new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
-            ],
-            [.. directoryRoots.Select(static x => x.DisplayPath)]);
+            candidateVerbs,
+            options,
+            Cwd: context?.Cwd,
+            IsMessy: isMessy,
+            Candidates: candidates);
 
         return ToolAccessDecision.RequiresApproval(approvalContext);
+    }
+
+    /// <summary>
+    /// Returns true when every candidate's effective directory resolves to
+    /// the session's ephemeral <c>session_dir</c>. Persisting an "Always
+    /// here" grant scoped to that directory is dead-on-arrival because the
+    /// next session has a fresh session_dir; matching against the saved
+    /// entry would never succeed. The button is hidden in that case so
+    /// operators can pick "This chat" (the equivalent in-session
+    /// semantics) or "Always anywhere" (folder-agnostic) instead.
+    /// </summary>
+    private static bool AllCandidatesResolveToSessionScratch(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        string? sessionDirectory)
+    {
+        if (string.IsNullOrEmpty(sessionDirectory) || candidates.Count == 0)
+            return false;
+
+        foreach (var candidate in candidates)
+        {
+            var effective = candidate.Directory ?? cwd;
+            if (string.IsNullOrEmpty(effective))
+                return false;
+
+            if (!PathUtility.AreEquivalentPaths(effective, sessionDirectory))
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the prompt's button row. The five-button default
+    /// (Once / This chat / Always here / Always anywhere / Deny) is pruned
+    /// in three cases:
+    /// <list type="bullet">
+    /// <item><b>Messy commands</b> (bash control-flow / unbalanced
+    /// quotes/brackets) — only <c>Once</c> and <c>Deny</c> are offered.
+    /// Persistence is impossible because the matcher cannot extract a verb
+    /// chain to remember.</item>
+    /// <item><b>Shallow cwd</b> (path depth fails the minimum-scope check) —
+    /// <c>Always here</c> is omitted so an operator cannot accidentally write
+    /// a folder-scoped grant for a too-shallow root like <c>/etc/</c>.
+    /// <c>This chat</c> and <c>Always anywhere</c> remain available.</item>
+    /// <item><b>Session-scratch effective directory</b> (every candidate's
+    /// effective directory is the session's ephemeral <c>session_dir</c>) —
+    /// <c>Always here</c> is omitted because the saved grant would be scoped
+    /// to a directory that won't recur. <c>This chat</c> already provides
+    /// the equivalent in-session semantics without polluting the persistent
+    /// store.</item>
+    /// </list>
+    /// </summary>
+    private static IReadOnlyList<ToolApprovalOption> BuildApprovalOptions(
+        bool isMessy,
+        bool isCwdShallow,
+        bool allEffectiveDirsAreSessionScratch)
+    {
+        if (isMessy)
+        {
+            return
+            [
+                new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+            ];
+        }
+
+        var options = new List<ToolApprovalOption>(5)
+        {
+            new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+            new ToolApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel)
+        };
+
+        if (!isCwdShallow && !allEffectiveDirsAreSessionScratch)
+        {
+            options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel));
+        }
+
+        options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.ApproveEverywhereLabel));
+        options.Add(new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel));
+
+        return options;
+    }
+
+    /// <summary>
+    /// Returns true when the cwd is too shallow to support a folder-scoped
+    /// approval grant. Mirrors the v1 minimum-depth check: a path with fewer
+    /// than two non-empty segments under its root (e.g. <c>/</c>, <c>/etc/</c>,
+    /// <c>C:\</c>) cannot be safely persisted as an ApprovalEntry directory.
+    /// </summary>
+    private static bool IsCwdTooShallow(string? cwd)
+    {
+        if (string.IsNullOrWhiteSpace(cwd))
+            return false;
+
+        try
+        {
+            var segments = PathUtility.Normalize(cwd).Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+
+            // POSIX root → 0 segments after trim. /etc → 1 segment. /home/user → 2 segments.
+            // Windows: C:\ → ["C:"] → 1 segment but conventionally a root, so still shallow.
+            //          C:\Users\foo → 3 segments.
+            // Require at least 2 distinct path segments for folder-scoped persistence.
+            return segments.Length < 2;
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // Treat unparseable cwds as shallow — fail closed on the
+            // persistent button rather than offering a grant whose target we
+            // could not normalize.
+            return true;
+        }
     }
 
     private static ToolApprovalMode GetMissingApprovalPolicyDefaultMode(
@@ -394,9 +547,7 @@ public sealed class ToolAccessPolicy
         => trustContext?.EffectiveAudience ?? TrustAudience.Public;
 
     private static TrustAudience ResolveAudience(ToolExecutionContext? context)
-        => SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
-            ? parsed
-            : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
+        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context?.Audience, context?.SessionId);
 
     private static ToolExecutionContext CreateContext(TrustAudience audience)
         => new(null, null) { Audience = audience.ToWireValue() };
@@ -472,11 +623,29 @@ public sealed record ToolApprovalContext(
     string ToolName,
     string DisplayText,
     IReadOnlyList<string> Patterns,
-    IReadOnlyList<string> ApprovalEntries,
+    // Verb-only projection of Candidates. Kept for renderers that bullet-
+    // list verbs in the prompt body (Slack, Discord) without needing the
+    // directory half.
+    IReadOnlyList<string> CandidateVerbs,
     IReadOnlyList<ToolApprovalOption> Options,
-    // Human-facing roots shown in the prompt. Approval lookups use
-    // ApprovalEntries instead so display formatting never leaks into matching.
-    IReadOnlyList<string> DirectoryRoots);
+    // Resolved cwd at the moment the gate decided approval was required.
+    // Threaded through ToolInteractionRequest → PendingToolInteraction so
+    // an "Always here" click persists with the actual directory rather
+    // than a null sentinel (which would silently behave as "Always
+    // anywhere").
+    string? Cwd = null,
+    // True when the invocation cannot be cleanly split into verb-chain
+    // approval units (bash control-flow, unbalanced quotes/brackets).
+    // Channel adapters use this to omit the persistent-grant buttons and
+    // surface the "complex command" hint.
+    bool IsMessy = false,
+    // Per-clause (verb, directory) pairs evaluated against the persisted
+    // ApprovalEntry store. The directory half is the path argument
+    // extracted from the clause when present, falling back to Cwd at
+    // match time. The persistence path reads this on ApprovedAlways so
+    // "Always here" stores per-clause folder-scoped grants from the
+    // actual paths the agent touched.
+    IReadOnlyList<ApprovalCandidate>? Candidates = null);
 
 public sealed record ToolApprovalOption(string Key, string Label);
 

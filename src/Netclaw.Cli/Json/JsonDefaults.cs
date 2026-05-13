@@ -40,6 +40,18 @@ internal static class JsonDefaults
     };
 
     /// <summary>
+    /// Pretty-printed terminal output with nulls omitted. Used by surfaces
+    /// (e.g. <c>netclaw approvals list --json</c>) that round-trip nullable
+    /// fields to a file format that also omits nulls, so the CLI output and
+    /// the on-disk file have a matching shape.
+    /// </summary>
+    internal static readonly JsonSerializerOptions IndentedOmitNull = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    /// <summary>
     /// Config and secrets file serialization: pretty-printed with enum values as strings.
     /// </summary>
     internal static readonly JsonSerializerOptions ConfigFile = new()

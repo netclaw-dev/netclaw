@@ -78,8 +78,19 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             psi.ArgumentList.Add(args.Command);
         }
 
-        if (!string.IsNullOrWhiteSpace(args.WorkingDirectory))
-            psi.WorkingDirectory = args.WorkingDirectory;
+        // Resolve working directory in priority order: explicit arg →
+        // WorkingContext.ProjectDirectory (declared via set_working_directory)
+        // → SessionDirectory (per-session scratch). Never falls through to
+        // ProcessStartInfo's default of inheriting the daemon process's cwd —
+        // that location is wherever the daemon happened to be launched and is
+        // unrelated to what the agent is "working on," which makes it
+        // impossible for the approval policy to reason about safe-space
+        // membership. The matcher reads context.Cwd against the same
+        // resolution chain so the gate evaluates folder-scoped ApprovalEntry
+        // records against the directory the spawned process will run in.
+        var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
+        if (!string.IsNullOrWhiteSpace(resolvedCwd))
+            psi.WorkingDirectory = resolvedCwd;
 
         var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
             ? context.RequestedTimeoutSeconds.Value

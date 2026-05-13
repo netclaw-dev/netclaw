@@ -131,6 +131,58 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Single(approvals);
     }
 
+    [Fact]
+    public async Task Approval_request_propagates_cwd_from_approval_context()
+    {
+        // Regression: ToolApprovalContext.Cwd was never threaded into the
+        // emitted ToolInteractionRequest, so PendingToolInteraction.Cwd ended
+        // up null on the session-actor side. That silently turned every
+        // "Always here" click (ApprovedAlways) into a global wildcard
+        // because the persistence path read pending.Cwd to scope the entry.
+        const string cwd = "/tmp/scoped-approval";
+        var executor = new ApprovalWithCwdExecutor(cwd);
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("cwd-propagation-probe");
+        var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-cwd", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "ls"
+            })
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            new SessionId("D1/cwd-propagation-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: approvalChannel,
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request),
+            approvalTimeout: Timeout.InfiniteTimeSpan);
+
+        var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(cwd, approvalRequest.Cwd);
+
+        approvalChannel.Complete(new ToolCallId(approvalRequest.CallId), ApprovalDecision.ApprovedAlways);
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+    }
+
     private sealed class ApprovalThenSuccessExecutor : IToolExecutor
     {
         private int _attempt;
@@ -148,19 +200,49 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                     ToolName: toolCall.Name,
                     DisplayText: "git push origin dev",
                     Patterns: ["git push origin dev"],
-                    ApprovalEntries: ["git push origin dev"],
+                    CandidateVerbs: ["git push origin dev"],
                     Options:
                     [
                         new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
                         new ToolApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
                         new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
                         new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
-                    ],
-                    DirectoryRoots: []));
+                    ]));
             }
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("approved-and-ran");
+        }
+    }
+
+    private sealed class ApprovalWithCwdExecutor(string cwd) : IToolExecutor
+    {
+        private int _attempt;
+
+        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+        {
+            _attempt++;
+            if (_attempt == 1)
+            {
+                throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                    ToolName: toolCall.Name,
+                    DisplayText: "ls",
+                    Patterns: ["ls"],
+                    CandidateVerbs: ["ls"],
+                    Options:
+                    [
+                        new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                        new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                        new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    ],
+                    Cwd: cwd));
+            }
+
+            ct.ThrowIfCancellationRequested();
+            return Task.FromResult("ok");
         }
     }
 }

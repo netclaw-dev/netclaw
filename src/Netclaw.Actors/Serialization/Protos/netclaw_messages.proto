@@ -222,3 +222,20 @@ message ReminderPayloadProto {
 message CursorAdvancedProto {
   string cursor = 1;
 }
+
+// ── Memory observer events ──
+
+// Journaled by SessionMemoryObserverActor when a distillation completes.
+// Each entry carries an anchor (the memory's slug) plus the title and content
+// context used for semantic dedup against future distillation runs.
+message ProposedMemoryContextProto {
+  string anchor = 1;
+  string title = 2;
+  string content = 3;
+}
+
+message MemoriesDistilledV2Proto {
+  repeated string anchors = 1;
+  repeated ProposedMemoryContextProto proposals = 2;
+  int64 timestamp_ms = 3;
+}

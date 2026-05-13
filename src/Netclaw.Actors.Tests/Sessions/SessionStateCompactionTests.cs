@@ -196,14 +196,14 @@ public class SessionStateCompactionTests
                     Role = ChatRole.Assistant,
                     Content = string.Empty,
                     ToolCalls =
-                    {
+                    [
                         new SerializableToolCall
                         {
                             CallId = $"call-{i}",
                             Name = "web_search",
                             ArgumentsJson = $"{{\"query\":\"query {i}\"}}"
                         }
-                    }
+                    ]
                 })
             };
 

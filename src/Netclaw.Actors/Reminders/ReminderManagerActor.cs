@@ -47,7 +47,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private IReminderClient? _client;
 
-    private readonly HashSet<Guid> _activeExecutionIds = [];
+    private readonly ActiveExecutionTracker _activeExecutions = new();
     private readonly Queue<ReminderId> _deferredQueue = new();
     private readonly Dictionary<ReminderId, int> _failureCounts = [];
 
@@ -260,6 +260,16 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
 
             nextFire = scheduleResult.NextFire;
+
+            // Persist the (possibly rescheduled) interval first-fire time so a daemon
+            // restart re-uses the same anchor instead of resetting "now + interval".
+            if (normalized.Schedule.Type == ReminderScheduleType.Interval && nextFire is not null)
+            {
+                normalized = normalized with
+                {
+                    Schedule = normalized.Schedule with { FireAt = nextFire }
+                };
+            }
         }
         else
         {
@@ -520,6 +530,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         _log.Info("Reminder fired: id='{0}', title='{1}', schedule_type={2}",
             reminderId.Value, definition.Title, definition.Schedule.Type);
 
+        if (_activeExecutions.IsExecuting(reminderId))
+        {
+            _log.Warning("reminder_skipped_duplicate_execution reminder_id={0} title={1}",
+                reminderId.Value, definition.Title);
+            await _client!.AckAsync(envelope);
+            return;
+        }
+
         // Cron reminders are implemented as recurring single-shot schedules.
         if (definition.Schedule.Type == ReminderScheduleType.Cron)
         {
@@ -532,7 +550,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         var isCurrentSessionDelivery = definition.Delivery.Kind == DeliveryKind.CurrentSession;
 
-        if (_activeExecutionIds.Count >= MaxConcurrentExecutions)
+        if (_activeExecutions.Count >= MaxConcurrentExecutions)
         {
             _log.Info("Concurrency limit reached ({0}), deferring reminder '{1}'",
                 MaxConcurrentExecutions, reminderId.Value);
@@ -561,7 +579,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private async Task HandleExecutionCompletedAsync(ReminderExecutionCompleted completed)
     {
-        if (!_activeExecutionIds.Remove(completed.ExecutionId))
+        if (!_activeExecutions.Remove(completed.Id))
             return;
 
         var definition = _definitionStore.Get(completed.Id);
@@ -715,7 +733,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private void StartExecution(ReminderDefinition definition, ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         var executionId = Guid.NewGuid();
-        _activeExecutionIds.Add(executionId);
+        _activeExecutions.Add(new ReminderId(definition.Id));
 
         var actorName = $"exec-{SanitizeActorName(definition.Id)}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}";
         var executionActor = Context.ActorOf(
@@ -735,12 +753,19 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private async Task ProcessDeferredQueueAsync()
     {
-        while (_deferredQueue.Count > 0 && _activeExecutionIds.Count < MaxConcurrentExecutions)
+        while (_deferredQueue.Count > 0 && _activeExecutions.Count < MaxConcurrentExecutions)
         {
             var nextId = _deferredQueue.Dequeue();
             var definition = _definitionStore.Get(nextId);
             if (definition is null || !definition.Enabled)
                 continue;
+
+            if (_activeExecutions.IsExecuting(nextId))
+            {
+                _log.Warning("reminder_skipped_duplicate_execution reminder_id={0} title={1} source=deferred_queue",
+                    nextId.Value, definition.Title);
+                continue;
+            }
 
             var now = _timeProvider.GetUtcNow();
             if (definition.Schedule.Type is not ReminderScheduleType.OneShot
@@ -813,8 +838,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                         : definition.Schedule.FireAt is { } explicitFirst && explicitFirst > now
                             ? explicitFirst
                             : now.Add(interval);
-
-                    definition.Schedule.FireAt = first;
 
                     var result = await _client.ScheduleRecurringReminderAsync(key, first, interval, payload);
                     return result.ResponseCode == ReminderScheduleResponseCode.Success
@@ -918,17 +941,17 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         var scheduledCount = _definitionStore.List().Count(d => d.Enabled);
         Sender.Tell(new ReminderHealthResponse(
             scheduledCount,
-            _activeExecutionIds.Count,
+            _activeExecutions.Count,
             _failureCounts.Count));
     }
 
-    private sealed record ScheduleAttempt(bool IsSuccess, DateTimeOffset? NextFire, string? ErrorMessage)
+    private sealed record ScheduleAttempt(bool IsSuccess, DateTimeOffset? NextFire, string? ErrorMessage) : INoSerializationVerificationNeeded
     {
         public static ScheduleAttempt Ok(DateTimeOffset? nextFire) => new(true, nextFire, null);
         public static ScheduleAttempt Fail(string message) => new(false, null, message);
     }
 
-    private sealed record ReminderAudienceAuthorizationResult(bool IsSuccess, TrustAudience? EffectiveAudience, string? ErrorMessage)
+    private sealed record ReminderAudienceAuthorizationResult(bool IsSuccess, TrustAudience? EffectiveAudience, string? ErrorMessage) : INoSerializationVerificationNeeded
     {
         public static ReminderAudienceAuthorizationResult Success(TrustAudience effectiveAudience)
             => new(true, effectiveAudience, null);
@@ -937,7 +960,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             => new(false, null, errorMessage);
     }
 
-    internal sealed record ReconcileReminders
+    internal sealed record ReconcileReminders : INoSerializationVerificationNeeded
     {
         public static readonly ReconcileReminders Instance = new();
     }
@@ -946,5 +969,5 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     /// Ack sent back to <see cref="ReconcileReminders"/> callers so they can
     /// synchronize on reconcile completion instead of polling.
     /// </summary>
-    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DeletedOneShots, int DisabledExpired = 0);
+    internal sealed record ReconcileCompleted(int CancelledOrphans, int RestoredSchedules, int DeletedOneShots, int DisabledExpired = 0) : INoSerializationVerificationNeeded;
 }

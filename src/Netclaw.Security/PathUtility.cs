@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 
+using Netclaw.Configuration;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -51,8 +53,16 @@ public static class PathUtility
     /// Uses platform-appropriate case sensitivity.
     /// </summary>
     public static bool IsWithinRoot(string candidate, string root)
+        => IsNormalizedWithinRoot(Normalize(candidate), root);
+
+    /// <summary>
+    /// Like <see cref="IsWithinRoot"/> but assumes <paramref name="normalizedCandidate"/>
+    /// has already been canonicalized via <see cref="Normalize"/>. Use on hot
+    /// paths that compare many roots against the same candidate to avoid
+    /// re-running <c>Path.GetFullPath</c> on the candidate per iteration.
+    /// </summary>
+    public static bool IsNormalizedWithinRoot(string normalizedCandidate, string root)
     {
-        var normalizedCandidate = Normalize(candidate);
         var normalizedRoot = Normalize(root);
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
@@ -66,6 +76,30 @@ public static class PathUtility
 
         var boundary = normalizedCandidate[normalizedRoot.Length];
         return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="a"/> and <paramref name="b"/> resolve
+    /// to the same canonical filesystem path under the platform's casing
+    /// rules. Both inputs are passed through <see cref="Normalize"/> first.
+    /// Swallows <see cref="ArgumentException"/>, <see cref="NotSupportedException"/>,
+    /// and <see cref="System.Security.SecurityException"/> (returning false) so
+    /// callers can compare untrusted or partially-formed paths without
+    /// wrapping the call in a try/catch.
+    /// </summary>
+    public static bool AreEquivalentPaths(string a, string b)
+    {
+        try
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(Normalize(a), Normalize(b), comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -110,33 +144,14 @@ public static class PathUtility
     }
 
     /// <summary>
-    /// Expands shell path tokens: ~, $HOME, ${HOME}, %USERPROFILE%.
-    /// Does not normalize the path.
+    /// Expands shell path tokens: ~, $HOME, ${HOME}, %USERPROFILE%. Does not
+    /// normalize the path. Delegates to <see cref="PathExpansion.ExpandHome"/>
+    /// so Configuration and Security share one canonical implementation;
+    /// preserves the historical non-null contract by passing through the
+    /// original input on whitespace-only values.
     /// </summary>
     public static string ExpandHome(string path)
-    {
-        var expanded = path;
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-
-        if (expanded.StartsWith('~'))
-        {
-            if (!string.IsNullOrWhiteSpace(home))
-            {
-                expanded = expanded.Length == 1
-                    ? home
-                    : Path.Combine(home, expanded[1..].TrimStart('/', '\\'));
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(home))
-        {
-            expanded = expanded.Replace("$HOME", home, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("${HOME}", home, StringComparison.OrdinalIgnoreCase);
-            expanded = expanded.Replace("%USERPROFILE%", home, StringComparison.OrdinalIgnoreCase);
-        }
-
-        return expanded;
-    }
+        => PathExpansion.ExpandHome(path) ?? path;
 
     /// <summary>
     /// Expands shell path tokens and normalizes relative to working directory.
@@ -146,5 +161,53 @@ public static class PathUtility
     {
         var expanded = ExpandHome(path);
         return TryNormalize(expanded, workingDirectory, out var normalized) ? normalized : null;
+    }
+
+    /// <summary>
+    /// Returns true when any segment of <paramref name="fullPath"/>, walking from
+    /// <paramref name="allowedRoot"/> outward, is a filesystem reparse point
+    /// (symbolic link, junction, or other reparse target). Used by the approval
+    /// gate and file-access policy to refuse to honor a grant when the candidate
+    /// path's resolution depends on a symlink that could redirect the I/O outside
+    /// the granted root.
+    ///
+    /// Errors reading attributes are conservatively treated as a positive
+    /// detection: if we cannot determine whether a segment is a symlink, we
+    /// assume it is.
+    /// </summary>
+    public static bool ContainsSymlinkSegment(string allowedRoot, string fullPath)
+    {
+        var relativePath = Path.GetRelativePath(allowedRoot, fullPath);
+        if (string.IsNullOrWhiteSpace(relativePath) || relativePath == ".")
+            return false;
+
+        var segments = relativePath.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
+        var currentPath = allowedRoot;
+
+        foreach (var segment in segments)
+        {
+            currentPath = Path.Combine(currentPath, segment);
+            if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
+                continue;
+
+            try
+            {
+                var attributes = File.GetAttributes(currentPath);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    return true;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

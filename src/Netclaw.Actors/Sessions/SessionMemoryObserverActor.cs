@@ -11,6 +11,7 @@ using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Serialization;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 
@@ -30,7 +31,7 @@ namespace Netclaw.Actors.Sessions;
 /// persistence. Token usage from the sidecar call is included in the result
 /// so the parent can emit it through the standard usage pipeline.</para>
 ///
-/// <para>Persistent: journals <see cref="MemoriesDistilled"/> events so the
+/// <para>Persistent: journals <see cref="MemoriesDistilledV2"/> events so the
 /// skip list of already-proposed anchors survives across session incarnations.</para>
 /// </summary>
 public sealed class SessionMemoryObserverActor : ReceivePersistentActor
@@ -44,10 +45,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
     private readonly ILoggingAdapter _log = Context.GetLogger();
 
     private readonly StringBuilder _transcript = new();
-    // V1 backward compat: sessions with existing MemoriesDistilled journal
-    // entries only carry anchor slugs. _proposedAnchors is populated during
-    // V1 recovery so those anchors are not lost. New sessions use V2 events
-    // and populate _proposedMemories instead.
     private readonly HashSet<string> _proposedAnchors = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ProposedMemoryContext> _proposedMemories = [];
     private bool _hasNewContent;
@@ -86,15 +83,6 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         _timeProvider = timeProvider ?? TimeProvider.System;
 
         PersistenceId = $"memory-observer-{sessionId.Value}";
-
-        Recover<MemoriesDistilled>(evt =>
-        {
-            foreach (var anchor in evt.Anchors)
-            {
-                _proposedAnchors.Add(anchor);
-                _proposedMemories.Add(new ProposedMemoryContext(anchor, anchor, string.Empty));
-            }
-        });
 
         Recover<MemoriesDistilledV2>(evt =>
         {
@@ -757,9 +745,9 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         PropertyNameCaseInsensitive = true
     };
 
-    private sealed record PendingPassivationRequest(IActorRef ReplyTo, long RequiredContentVersion);
+    private sealed record PendingPassivationRequest(IActorRef ReplyTo, long RequiredContentVersion) : INoSerializationVerificationNeeded;
 
-    private sealed record DistillationRunState(long RunId, long ContentVersion, IActorRef ReplyTo);
+    private sealed record DistillationRunState(long RunId, long ContentVersion, IActorRef ReplyTo) : INoSerializationVerificationNeeded;
 
     private sealed record DistillationRunCompleted(
         long RunId,
@@ -768,26 +756,23 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
         IReadOnlyList<string> Anchors,
         long? InputTokens,
         long? OutputTokens,
-        string? FailureReason) : INotInfluenceReceiveTimeout;
+        string? FailureReason) : INotInfluenceReceiveTimeout, INoSerializationVerificationNeeded;
 }
-
-/// <summary>Journaled event recording which anchors were proposed in a distillation.</summary>
-public sealed record MemoriesDistilled(IReadOnlyList<string> Anchors, long TimestampMs);
 
 /// <summary>Journaled event recording proposed anchors with title and content context for deduplication.</summary>
 public sealed record MemoriesDistilledV2(
     IReadOnlyList<string> Anchors,
     IReadOnlyList<ProposedMemoryContext> Proposals,
-    long TimestampMs);
+    long TimestampMs) : INetclawSerializableMessage;
 
 /// <summary>Context for a previously proposed memory, used for semantic dedup in subsequent distillation runs.</summary>
 public sealed record ProposedMemoryContext(string Anchor, string Title, string Content);
 
 /// <summary>Sent by the session actor after proposals survive gating and are accepted for curation.</summary>
-public sealed record RecordAcceptedDistillationProposals(IReadOnlyList<MemoryProposal> Proposals);
+public sealed record RecordAcceptedDistillationProposals(IReadOnlyList<MemoryProposal> Proposals) : INoSerializationVerificationNeeded;
 
 /// <summary>Ack from the observer once accepted proposal dedup state has been persisted.</summary>
-public sealed class AcceptedDistillationProposalsRecorded
+public sealed class AcceptedDistillationProposalsRecorded : INoSerializationVerificationNeeded
 {
     public static readonly AcceptedDistillationProposalsRecorded Instance = new();
 
@@ -797,13 +782,13 @@ public sealed class AcceptedDistillationProposalsRecorded
 }
 
 /// <summary>System context injection forwarded to the observer (recalled memories, loaded skills).</summary>
-public sealed record ObserverSystemContext(string Label, string Content);
+public sealed record ObserverSystemContext(string Label, string Content) : INoSerializationVerificationNeeded;
 
 /// <summary>Signal from parent: distill now (used during passivation).</summary>
-public sealed record DistillMemories;
+public sealed record DistillMemories : INoSerializationVerificationNeeded;
 
 /// <summary>Observer's response with memory proposals and token usage for billing.</summary>
-public sealed record SessionDistillationCompleted : INotInfluenceReceiveTimeout
+public sealed record SessionDistillationCompleted : INotInfluenceReceiveTimeout, INoSerializationVerificationNeeded
 {
     public static readonly SessionDistillationCompleted Empty = new() { Proposals = [] };
 
@@ -813,4 +798,4 @@ public sealed record SessionDistillationCompleted : INotInfluenceReceiveTimeout
     public string? FailureReason { get; init; }
 }
 
-internal sealed record DistillationResponse(IReadOnlyList<MemoryProposal>? Proposals);
+internal sealed record DistillationResponse(IReadOnlyList<MemoryProposal>? Proposals) : INoSerializationVerificationNeeded;

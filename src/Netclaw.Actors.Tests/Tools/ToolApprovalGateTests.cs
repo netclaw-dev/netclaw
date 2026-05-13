@@ -757,10 +757,10 @@ public sealed class ToolApprovalGateTests
         public IReadOnlyList<string> GetTrustZoneRoots(ToolExecutionContext context) => _roots;
     }
 
-    // ── Directory-root shell approvals ──
+    // ── v2 candidate-verb extraction (replaces v1 directory-root extraction) ──
 
     [Fact]
-    public void Shell_path_command_populates_directory_roots_and_root_entries()
+    public void Shell_path_command_extracts_path_aware_verb_chain_with_no_directory_roots()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create("Command", "cat /home/user/.netclaw/logs/crash.log");
@@ -769,13 +769,22 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.NeedsApproval);
         Assert.NotNull(decision.ApprovalContext);
-        Assert.NotEmpty(decision.ApprovalContext!.DirectoryRoots);
-        Assert.Contains("/home/user/.netclaw/logs/", decision.ApprovalContext.DirectoryRoots.Select(p => p.Replace('\\', '/')));
-        Assert.Contains("/home/user/.netclaw/logs/", decision.ApprovalContext.ApprovalEntries.Select(p => p.Replace('\\', '/')));
+        // Under v2.1 path-extraction, the verb chain is the command head
+        // only; the path is captured separately as the candidate's
+        // directory (with the file-parent rule reducing the leaf file to
+        // its parent directory).
+        Assert.Contains("cat", decision.ApprovalContext!.CandidateVerbs);
+        Assert.NotNull(decision.ApprovalContext.Candidates);
+        var candidate = Assert.Single(decision.ApprovalContext.Candidates!);
+        Assert.Equal("cat", candidate.Verb);
+        Assert.NotNull(candidate.Directory);
+        Assert.Equal(
+            "/home/user/.netclaw/logs",
+            candidate.Directory!.Replace('\\', '/'));
     }
 
     [Fact]
-    public void Shell_path_command_uses_fixed_labels_with_root_in_directory_roots()
+    public void Shell_path_command_uses_fixed_labels()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create("Command", "grep 'error' /home/user/.netclaw/logs/app.log");
@@ -788,9 +797,6 @@ public sealed class ToolApprovalGateTests
         var alwaysOption = options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, alwaysOption.Label);
-        // Directory scope is preserved on the context for the channel adapter
-        // to render in the message body.
-        Assert.NotEmpty(decision.ApprovalContext.DirectoryRoots);
     }
 
     [Fact]
@@ -805,11 +811,10 @@ public sealed class ToolApprovalGateTests
         var options = decision.ApprovalContext!.Options;
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways).Label);
-        Assert.True(decision.ApprovalContext.DirectoryRoots.Count > 1);
     }
 
     [Fact]
-    public void Shell_relative_path_command_records_relative_root_and_absolute_entry()
+    public void Shell_relative_path_command_extracts_verb_chain_without_directory_roots()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -825,15 +830,12 @@ public sealed class ToolApprovalGateTests
             var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
             Assert.True(decision.NeedsApproval);
-            // DirectoryRoots keeps the relative display form for channel-body
-            // rendering. ApprovalEntries gets the absolute root because that's
-            // what gets persisted and matched against on retry.
-            Assert.Equal(["logs/"], decision.ApprovalContext!.DirectoryRoots);
-            var absoluteRoot = PathUtility.Normalize(logs) + Path.DirectorySeparatorChar;
-            Assert.Contains(absoluteRoot, decision.ApprovalContext.ApprovalEntries);
-            // Button labels are fixed regardless of relative/absolute path
-            // form — Slack's 76-char and Discord's 80-char button caps make
-            // dynamic labels structurally unsafe.
+            // Pipelines stay inside one approval unit, so the candidate is
+            // the verb chain of the unit's first command (path-aware
+            // "grep <first-arg>").
+            Assert.Contains(decision.ApprovalContext!.CandidateVerbs, v => v.StartsWith("grep", StringComparison.Ordinal));
+            // Button labels are fixed; Slack's 76-char and Discord's 80-char
+            // button caps make dynamic labels structurally unsafe.
             Assert.Equal(
                 ApprovalOptionKeys.ApproveSessionLabel,
                 decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
@@ -848,7 +850,7 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_path_command_uses_default_labels()
+    public void Non_path_command_extracts_full_greedy_verb_chain()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create("Command", "git push origin main");
@@ -856,8 +858,13 @@ public sealed class ToolApprovalGateTests
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
-        Assert.Empty(decision.ApprovalContext!.DirectoryRoots);
-        Assert.Equal(["git push origin main"], decision.ApprovalContext.ApprovalEntries);
+        // ExtractVerbChain (post-ShellSyntaxTree-0.1.4) extracts greedily
+        // through every verb-like token. `origin` and `main` have no slash,
+        // dot, or flag prefix, so the chain extends through both. This is
+        // the operator-friendly contract: persisted approvals key on the
+        // specific arg shape (`git push origin main *`) rather than the
+        // verb family (`git push *`), making them safer by construction.
+        Assert.Equal(["git push origin main"], decision.ApprovalContext!.CandidateVerbs);
         var sessionOption = decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession);
         var alwaysOption = decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
@@ -879,7 +886,6 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
-        Assert.NotEmpty(decision.ApprovalContext.DirectoryRoots);
         Assert.All(options, option => Assert.True(
             option.Label.Length <= ApprovalOptionKeys.MaxLabelLength,
             $"Option '{option.Key}' label '{option.Label}' is {option.Label.Length} chars; must stay within {ApprovalOptionKeys.MaxLabelLength}."));

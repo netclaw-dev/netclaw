@@ -80,7 +80,13 @@ public sealed class DaemonRestartCoordinatorTests : IDisposable
     [Fact]
     public async Task RequestConfigRestartAsync_reopens_ingress_when_coordination_fails()
     {
-        var coordinator = CreateCoordinator([], throwOnEnumeration: true, restartDrainTimeout: TimeSpan.FromMilliseconds(100));
+        // Drain timeout is intentionally wide. The test asserts that the
+        // stub's InvalidOperationException propagates and reopens the
+        // ingress gate; a tight timeout (100ms) races with the Ask on
+        // slow CI runners and yields TaskCanceledException instead,
+        // making this test flake. The timeout is irrelevant to the
+        // behavior under test.
+        var coordinator = CreateCoordinator([], throwOnEnumeration: true, restartDrainTimeout: TimeSpan.FromSeconds(30));
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.RequestConfigRestartAsync(CancellationToken.None));
 

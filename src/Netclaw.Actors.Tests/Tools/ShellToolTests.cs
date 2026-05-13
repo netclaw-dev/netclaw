@@ -112,6 +112,120 @@ public class ShellToolTests
         Assert.Contains("missing", result, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ── Cwd resolution chain: explicit arg → ProjectDirectory → SessionDirectory ──
+
+    [Fact]
+    public async Task Cwd_falls_back_to_project_directory_when_no_explicit_arg()
+    {
+        var projectDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(projectDir);
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            var context = new ToolExecutionContext("session-1", sessionDir) { ProjectDirectory = projectDir };
+            var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Exit code: 0", result);
+            var resolved = projectDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            Assert.Contains(resolved, result, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(projectDir)) Directory.Delete(projectDir, recursive: true);
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Cwd_falls_back_to_session_directory_when_project_directory_null()
+    {
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            var context = new ToolExecutionContext("session-1", sessionDir);
+            // ProjectDirectory not set
+            var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Exit code: 0", result);
+            var resolved = sessionDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            Assert.Contains(resolved, result, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Cwd_explicit_arg_overrides_project_and_session_directories()
+    {
+        var explicitDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var projectDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(explicitDir);
+        Directory.CreateDirectory(projectDir);
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            var context = new ToolExecutionContext("session-1", sessionDir) { ProjectDirectory = projectDir };
+            var args = ToolInput.Create(
+                "Command", OperatingSystem.IsWindows() ? "cd" : "pwd",
+                "WorkingDirectory", explicitDir);
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Exit code: 0", result);
+            var resolved = explicitDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            Assert.Contains(resolved, result, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(explicitDir)) Directory.Delete(explicitDir, recursive: true);
+            if (Directory.Exists(projectDir)) Directory.Delete(projectDir, recursive: true);
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Cwd_does_not_inherit_daemon_process_directory()
+    {
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            // The daemon's cwd is wherever this test process is running. We
+            // assert the resolved cwd is the session dir, not whatever
+            // Environment.CurrentDirectory happens to be — proving the
+            // ProcessStartInfo default-fall-through is gone.
+            var context = new ToolExecutionContext("session-1", sessionDir);
+            var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Exit code: 0", result);
+            var sessionResolved = sessionDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            Assert.Contains(sessionResolved, result, StringComparison.OrdinalIgnoreCase);
+
+            var daemonCwd = Path.GetFullPath(Environment.CurrentDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.Equals(daemonCwd, sessionResolved, StringComparison.OrdinalIgnoreCase))
+            {
+                // Only assert non-inheritance when the daemon cwd is distinct
+                // from the session dir; otherwise the test is vacuous.
+                Assert.DoesNotContain($"\n{daemonCwd}\n", result);
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Null_arguments_returns_error()
     {

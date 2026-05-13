@@ -8,11 +8,11 @@ namespace Netclaw.Security;
 /// <summary>
 /// Result of evaluating a shell command against the hard deny list.
 /// </summary>
-public sealed record ShellCommandDecision(bool Allowed, string? DenyReason = null, string? DenyCategory = null)
+public sealed record ShellCommandDecision(bool Allowed, string? DenyReason = null, DenyCategory? DenyCategory = null)
 {
     public static ShellCommandDecision Allow() => new(true);
 
-    public static ShellCommandDecision Deny(string reason, string category) => new(false, reason, category);
+    public static ShellCommandDecision Deny(string reason, DenyCategory category) => new(false, reason, category);
 }
 
 /// <summary>
@@ -27,20 +27,83 @@ public sealed class ShellCommandPolicy
     private readonly IReadOnlyList<RawStringPattern> _rawStringPatterns;
 
     public ShellCommandPolicy(IEnumerable<string>? additionalDenyPatterns = null)
+        : this(additionalDenyPatterns, overrideRules: null)
     {
-        var patterns = new List<DenyPattern>(DefaultDenyPatterns);
+    }
+
+    /// <summary>
+    /// Constructs the policy with both legacy string-based deny patterns
+    /// (kept for back-compat with <c>toolConfig.HardDenyPatterns</c>) and
+    /// structured operator override rules from <see cref="HardDenyRule"/>.
+    /// Both inputs are additive — shipped defaults
+    /// (<see cref="DefaultDenyPatterns"/>, <see cref="DefaultRawStringPatterns"/>)
+    /// are always present and cannot be removed via either input.
+    /// </summary>
+    public ShellCommandPolicy(
+        IEnumerable<string>? additionalDenyPatterns,
+        IEnumerable<HardDenyRule>? overrideRules)
+    {
+        var structured = new List<DenyPattern>(DefaultDenyPatterns);
+        var raw = new List<RawStringPattern>(DefaultRawStringPatterns);
+
         if (additionalDenyPatterns is not null)
         {
             foreach (var pattern in additionalDenyPatterns)
             {
                 var parsed = ParseDenyPattern(pattern);
                 if (parsed is not null)
-                    patterns.Add(parsed);
+                    structured.Add(parsed);
             }
         }
 
-        _denyPatterns = patterns;
-        _rawStringPatterns = DefaultRawStringPatterns;
+        if (overrideRules is not null)
+        {
+            foreach (var rule in overrideRules)
+            {
+                rule.Validate();
+                TranslateRule(rule, structured, raw);
+            }
+        }
+
+        _denyPatterns = structured;
+        _rawStringPatterns = raw;
+    }
+
+    private static void TranslateRule(
+        HardDenyRule rule,
+        List<DenyPattern> structured,
+        List<RawStringPattern> raw)
+    {
+        if (!string.IsNullOrWhiteSpace(rule.RawText))
+        {
+            raw.Add(new RawStringPattern(rule.RawText, rule.Reason, rule.Category));
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(rule.VerbPrefix))
+        {
+            structured.Add(new VerbPrefixDenyPattern(rule.VerbPrefix, rule.Reason, rule.Category));
+            return;
+        }
+
+        if (rule.Verb is { Count: > 0 })
+        {
+            // Refined verb-chain match: verb-chain prefix + optional argFlags +
+            // optional firstPath. Falls back to plain VerbChainDenyPattern when
+            // no refinements are present.
+            if (rule.ArgFlags is not { Count: > 0 } && rule.FirstPath is null)
+            {
+                structured.Add(new VerbChainDenyPattern(rule.Verb, rule.Reason, rule.Category));
+                return;
+            }
+
+            structured.Add(new RefinedVerbChainDenyPattern(
+                rule.Verb,
+                rule.ArgFlags,
+                rule.FirstPath,
+                rule.Reason,
+                rule.Category));
+        }
     }
 
     /// <summary>
@@ -102,7 +165,7 @@ public sealed class ShellCommandPolicy
         if (tokens.Count == 0)
             return null;
 
-        return new VerbChainDenyPattern(tokens, raw, "custom_deny");
+        return new VerbChainDenyPattern(tokens, raw, DenyCategory.CustomDeny);
     }
 
     // ── Default deny patterns ──
@@ -110,23 +173,23 @@ public sealed class ShellCommandPolicy
     private static readonly IReadOnlyList<DenyPattern> DefaultDenyPatterns =
     [
         // Self-destruction: killing the netclaw daemon
-        new VerbChainDenyPattern(["netclaw", "daemon", "stop"], "Cannot stop the daemon from within a session", "self_destructive"),
-        new VerbChainDenyPattern(["netclaw", "daemon", "kill"], "Cannot kill the daemon from within a session", "self_destructive"),
-        new VerbChainDenyPattern(["systemctl", "stop", "netclaw"], "Cannot stop the netclaw service", "self_destructive"),
-        new VerbChainDenyPattern(["systemctl", "kill", "netclaw"], "Cannot kill the netclaw service", "self_destructive"),
+        new VerbChainDenyPattern(["netclaw", "daemon", "stop"], "Cannot stop the daemon from within a session", DenyCategory.SelfDestructive),
+        new VerbChainDenyPattern(["netclaw", "daemon", "kill"], "Cannot kill the daemon from within a session", DenyCategory.SelfDestructive),
+        new VerbChainDenyPattern(["systemctl", "stop", "netclaw"], "Cannot stop the netclaw service", DenyCategory.SelfDestructive),
+        new VerbChainDenyPattern(["systemctl", "kill", "netclaw"], "Cannot kill the netclaw service", DenyCategory.SelfDestructive),
 
         // Process killing patterns targeting netclaw
-        new ProcessKillDenyPattern("Cannot kill processes from within a session", "self_destructive"),
+        new ProcessKillDenyPattern("Cannot kill processes from within a session", DenyCategory.SelfDestructive),
 
         // Privilege escalation: the agent must never elevate privileges.
         // If it needs elevated access, the daemon should run as a user with those permissions.
-        new PrivilegeEscalationDenyPattern("Cannot escalate privileges from within a session", "privilege_escalation"),
+        new PrivilegeEscalationDenyPattern("Cannot escalate privileges from within a session", DenyCategory.PrivilegeEscalation),
 
         // System-destructive: rm -rf on root or home
-        new RmRfRootDenyPattern("Cannot remove root or home directories", "system_destructive"),
+        new RmRfRootDenyPattern("Cannot remove root or home directories", DenyCategory.SystemDestructive),
 
         // Filesystem destruction (mkfs, mkfs.ext4, mkfs.xfs, etc.)
-        new VerbPrefixDenyPattern("mkfs", "Cannot create filesystems", "system_destructive"),
+        new VerbPrefixDenyPattern("mkfs", "Cannot create filesystems", DenyCategory.SystemDestructive),
     ];
 
     /// <summary>
@@ -135,15 +198,15 @@ public sealed class ShellCommandPolicy
     /// </summary>
     private static readonly IReadOnlyList<RawStringPattern> DefaultRawStringPatterns =
     [
-        new(":(){ :|:& };:", "Fork bomb detected", "system_destructive"),
-        new(":(){:|:&};:", "Fork bomb detected", "system_destructive"),
+        new(":(){ :|:& };:", "Fork bomb detected", DenyCategory.SystemDestructive),
+        new(":(){:|:&};:", "Fork bomb detected", DenyCategory.SystemDestructive),
     ];
 
-    internal sealed record RawStringPattern(string Pattern, string Reason, string Category);
+    internal sealed record RawStringPattern(string Pattern, string Reason, DenyCategory Category);
 
     // ── Pattern types ──
 
-    internal abstract record DenyPattern(string Reason, string Category)
+    internal abstract record DenyPattern(string Reason, DenyCategory Category)
     {
         public abstract bool Matches(IReadOnlyList<string> tokens);
     }
@@ -154,7 +217,7 @@ public sealed class ShellCommandPolicy
     internal sealed record VerbChainDenyPattern(
         IReadOnlyList<string> VerbChain,
         string Reason,
-        string Category) : DenyPattern(Reason, Category)
+        DenyCategory Category) : DenyPattern(Reason, Category)
     {
         public override bool Matches(IReadOnlyList<string> tokens)
         {
@@ -179,7 +242,7 @@ public sealed class ShellCommandPolicy
     internal sealed record VerbPrefixDenyPattern(
         string Prefix,
         string Reason,
-        string Category) : DenyPattern(Reason, Category)
+        DenyCategory Category) : DenyPattern(Reason, Category)
     {
         public override bool Matches(IReadOnlyList<string> tokens)
         {
@@ -195,7 +258,7 @@ public sealed class ShellCommandPolicy
     /// Matches kill/killall/pkill commands. These are categorically denied because
     /// the agent could target the daemon process or other critical processes.
     /// </summary>
-    internal sealed record ProcessKillDenyPattern(string Reason, string Category)
+    internal sealed record ProcessKillDenyPattern(string Reason, DenyCategory Category)
         : DenyPattern(Reason, Category)
     {
         private static readonly HashSet<string> KillVerbs = new(StringComparer.OrdinalIgnoreCase)
@@ -218,7 +281,7 @@ public sealed class ShellCommandPolicy
     /// These are categorically denied because the agent should never
     /// need to elevate privileges beyond the daemon user.
     /// </summary>
-    internal sealed record PrivilegeEscalationDenyPattern(string Reason, string Category)
+    internal sealed record PrivilegeEscalationDenyPattern(string Reason, DenyCategory Category)
         : DenyPattern(Reason, Category)
     {
         private static readonly HashSet<string> EscalationVerbs = new(StringComparer.OrdinalIgnoreCase)
@@ -239,7 +302,7 @@ public sealed class ShellCommandPolicy
     /// <summary>
     /// Matches rm -rf targeting root (/) or home (~/ or $HOME).
     /// </summary>
-    internal sealed record RmRfRootDenyPattern(string Reason, string Category)
+    internal sealed record RmRfRootDenyPattern(string Reason, DenyCategory Category)
         : DenyPattern(Reason, Category)
     {
         public override bool Matches(IReadOnlyList<string> tokens)
@@ -296,6 +359,127 @@ public sealed class ShellCommandPolicy
                 || string.Equals(trimmed, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
                     StringComparison.OrdinalIgnoreCase);
         }
+    }
+
+    /// <summary>
+    /// Verb-chain match with optional argFlags and firstPath refinements.
+    /// Used when an operator override rule combines a structured verb match
+    /// with additional constraints (e.g. "deny rm -rf when targeting root").
+    /// </summary>
+    internal sealed record RefinedVerbChainDenyPattern(
+        IReadOnlyList<string> VerbChain,
+        IReadOnlyList<string>? ArgFlags,
+        PathConstraint? FirstPath,
+        string Reason,
+        DenyCategory Category) : DenyPattern(Reason, Category)
+    {
+        public override bool Matches(IReadOnlyList<string> tokens)
+        {
+            if (tokens.Count < VerbChain.Count)
+                return false;
+
+            for (var i = 0; i < VerbChain.Count; i++)
+            {
+                var tokenVerb = ShellTokenizer.TrimShellPunctuation(tokens[i]);
+                if (!string.Equals(tokenVerb, VerbChain[i], StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            if (ArgFlags is { Count: > 0 } && !AnyFlagPresent(tokens, ArgFlags))
+                return false;
+
+            if (FirstPath is not null && !FirstNonFlagMatchesConstraint(tokens, VerbChain.Count, FirstPath))
+                return false;
+
+            return true;
+        }
+
+        private static bool AnyFlagPresent(IReadOnlyList<string> tokens, IReadOnlyList<string> requiredFlags)
+        {
+            // The flag is "present" if it appears as a standalone token OR if a
+            // short combined flag token contains all requested short flag chars
+            // (e.g. argFlag '-rf' matches token '-rfv').
+            foreach (var required in requiredFlags)
+            {
+                if (TokensContainFlag(tokens, required))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool TokensContainFlag(IReadOnlyList<string> tokens, string required)
+        {
+            for (var i = 0; i < tokens.Count; i++)
+            {
+                var token = tokens[i];
+                if (string.Equals(token, required, StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                // Combined short flags: '-rf' present if any combined token
+                // starts with '-' (single dash) and contains every short char.
+                if (required.Length >= 2 && required[0] == '-' && required[1] != '-'
+                    && token.Length >= 2 && token[0] == '-' && token[1] != '-')
+                {
+                    var requiredChars = required[1..];
+                    var tokenChars = token[1..];
+                    var allPresent = true;
+                    foreach (var c in requiredChars)
+                    {
+                        if (!tokenChars.Contains(c, StringComparison.Ordinal))
+                        {
+                            allPresent = false;
+                            break;
+                        }
+                    }
+
+                    if (allPresent)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool FirstNonFlagMatchesConstraint(
+            IReadOnlyList<string> tokens,
+            int verbChainCount,
+            PathConstraint constraint)
+        {
+            if (constraint.OneOf is not { Count: > 0 })
+                return false;
+
+            // Skip past the verb-chain tokens already consumed by the
+            // prefix match in Matches(), then over any flag tokens; the
+            // first remaining positional argument is the candidate path.
+            // A bug landed when this was a static helper that assumed a
+            // single-token verb chain — multi-token chains like
+            // `git push` would treat `push` as the candidate path and
+            // silently miss firstPath deny rules.
+            for (var i = verbChainCount; i < tokens.Count; i++)
+            {
+                var token = tokens[i];
+                if (token.StartsWith('-'))
+                    continue;
+
+                var normalized = NormalizePathToken(token);
+                foreach (var candidate in constraint.OneOf)
+                {
+                    var normalizedCandidate = NormalizePathToken(candidate);
+                    if (string.Equals(normalized, normalizedCandidate, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+
+                // First non-flag positional arg checked; further args don't
+                // satisfy "first path" semantics.
+                return false;
+            }
+
+            return false;
+        }
+
+        private static string NormalizePathToken(string token)
+            => PathUtility.ExpandHome(token).TrimEnd('/', '\\');
     }
 
 }

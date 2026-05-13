@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "createdAt": "2026-04-11T20:25:26.1743299+00:00",
-  "updatedAt": "2026-04-11T20:25:26.1800921+00:00",
-  "description": "Baseline created on 2026-04-11 20:25:26 UTC",
+  "createdAt": "2026-05-12T17:20:55.7365203+00:00",
+  "updatedAt": "2026-05-12T17:20:55.74213+00:00",
+  "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC",
   "entries": [
     {
       "hash": "9d4a53dc5193e639",
       "ruleId": "SW005",
       "filePath": "Directory.Build.props",
-      "lineNumber": 6,
+      "lineNumber": 7,
       "codeSnippet": "<NoWarn>$(NoWarn);CS1591</NoWarn>",
       "message": "Adding warnings to NoWarn: CS1591",
-      "baselinedAt": "2026-04-11T20:25:26.1799366+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7419017+00:00"
     },
     {
       "hash": "c70b817b8444deb3",
@@ -20,7 +20,7 @@
       "lineNumber": 12,
       "codeSnippet": "<NoWarn>$(NoWarn);OPENAI001</NoWarn>",
       "message": "Adding warnings to NoWarn: OPENAI001",
-      "baselinedAt": "2026-04-11T20:25:26.1800377+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7420234+00:00"
     },
     {
       "hash": "e5c152257aa8816d",
@@ -29,79 +29,115 @@
       "lineNumber": 8,
       "codeSnippet": "<NoWarn>$(NoWarn);OPENAI001</NoWarn>",
       "message": "Adding warnings to NoWarn: OPENAI001",
-      "baselinedAt": "2026-04-11T20:25:26.1800436+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7420301+00:00"
+    },
+    {
+      "hash": "1a29ed65e4ed3efb",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Daemon.Tests/Services/ConfigWatcherServiceTests.cs",
+      "lineNumber": 139,
+      "codeSnippet": "Task.Delay(50, ct)",
+      "message": "Test uses Task.Delay(50) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-05-12T17:20:55.7420338+00:00"
+    },
+    {
+      "hash": "fcb5e461d7f70a7c",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Daemon.Tests/Services/ConfigWatcherServiceTests.cs",
+      "lineNumber": 154,
+      "codeSnippet": "Task.Delay(100, ct)",
+      "message": "Test uses Task.Delay(100) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-05-12T17:20:55.7420454+00:00"
     },
     {
       "hash": "6ea5c8bbead4b59c",
       "ruleId": "SW004",
       "filePath": "src/Netclaw.Daemon.Tests/Gateway/DaemonRuntimeStatusServiceTests.cs",
-      "lineNumber": 62,
+      "lineNumber": 76,
       "codeSnippet": "Task.Delay(25 * (i + 1))",
       "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-04-11T20:25:26.1800482+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7420571+00:00"
+    },
+    {
+      "hash": "87955c2f94cc69fb",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/ShellTokenizerTests.cs",
+      "lineNumber": 281,
+      "codeSnippet": "Theory(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only Path.GetDirectoryName semantics\")",
+      "message": "Test method 'ExtractFirstPathArgument_applies_file_parent_rule_posix' is disabled: POSIX-only Path.GetDirectoryName semantics",
+      "baselinedAt": "2026-05-12T17:20:55.7420635+00:00"
+    },
+    {
+      "hash": "2b5354a745d6eabb",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/TrustStateComposerTests.cs",
+      "lineNumber": 147,
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only path semantics\")",
+      "message": "Test method 'Compose_uses_home_directory_override_for_tilde_expansion' is disabled: POSIX-only path semantics",
+      "baselinedAt": "2026-05-12T17:20:55.7420675+00:00"
+    },
+    {
+      "hash": "89f7104059c82e18",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherTests.cs",
+      "lineNumber": 231,
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only path semantics\")",
+      "message": "Test method 'ExtractCandidates_strips_path_from_verb' is disabled: POSIX-only path semantics",
+      "baselinedAt": "2026-05-12T17:20:55.7420713+00:00"
     },
     {
       "hash": "6e43e1de0090c276",
       "ruleId": "SW003",
       "filePath": "src/Netclaw.Actors/Protocol/InboxWriter.cs",
-      "lineNumber": 114,
+      "lineNumber": 119,
       "codeSnippet": "catch\n        {\n            // best-effort cleanup; do not mask the original exception\n        }",
       "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-04-11T20:25:26.1800601+00:00"
-    },
-    {
-      "hash": "16969d3453617fc8",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Actors.Tests/Sessions/MemoryRecallScenarioTests.cs",
-      "lineNumber": 318,
-      "codeSnippet": "Task.Delay(25 * (i + 1))",
-      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-04-11T20:25:26.1800637+00:00"
-    },
-    {
-      "hash": "c00fb5b6beafab8b",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Actors.Tests/SubAgents/SubAgentActorTests.cs",
-      "lineNumber": 334,
-      "codeSnippet": "Task.Delay(Delay, cancellationToken)",
-      "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-04-11T20:25:26.1800701+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7421078+00:00"
     },
     {
       "hash": "8777b7954cd69fa1",
       "ruleId": "SW004",
       "filePath": "src/Netclaw.Actors.Tests/Sessions/LlmSessionIntegrationTests.cs",
-      "lineNumber": 1679,
+      "lineNumber": 1879,
       "codeSnippet": "Task.Delay(Delay, cancellationToken)",
       "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-04-11T20:25:26.1800748+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7421117+00:00"
+    },
+    {
+      "hash": "16969d3453617fc8",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Actors.Tests/Sessions/MemoryRecallScenarioTests.cs",
+      "lineNumber": 329,
+      "codeSnippet": "Task.Delay(25 * (i + 1))",
+      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-05-12T17:20:55.7421146+00:00"
+    },
+    {
+      "hash": "c00fb5b6beafab8b",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Actors.Tests/SubAgents/SubAgentActorTests.cs",
+      "lineNumber": 459,
+      "codeSnippet": "Task.Delay(Delay, cancellationToken)",
+      "message": "Test uses Task.Delay(Delay) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-05-12T17:20:55.7421212+00:00"
     },
     {
       "hash": "b691cefe260611c6",
       "ruleId": "SW004",
       "filePath": "src/Netclaw.Actors.Tests/Memory/SQLiteMemoryStoreTests.cs",
-      "lineNumber": 263,
+      "lineNumber": 268,
       "codeSnippet": "Task.Delay(25 * (i + 1))",
       "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-04-11T20:25:26.1800788+00:00"
-    },
-    {
-      "hash": "1305b3c2911b984b",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Actors.Tests/Memory/MemoryEvalSeedSuiteTests.cs",
-      "lineNumber": 344,
-      "codeSnippet": "Task.Delay(25 * (i + 1))",
-      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-04-11T20:25:26.1800844+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7421241+00:00"
     },
     {
       "hash": "5c3b00ebd2426d97",
       "ruleId": "SW003",
       "filePath": "src/Netclaw.Actors.Tests/Protocol/InboxWriterTests.cs",
-      "lineNumber": 26,
+      "lineNumber": 31,
       "codeSnippet": "catch\n        {\n            // best-effort cleanup\n        }",
       "message": "Empty catch block swallows exceptions without handling",
-      "baselinedAt": "2026-04-11T20:25:26.1800921+00:00"
+      "baselinedAt": "2026-05-12T17:20:55.7421299+00:00"
     }
   ]
 }

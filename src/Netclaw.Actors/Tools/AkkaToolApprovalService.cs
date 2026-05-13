@@ -27,11 +27,12 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
         TrustAudience audience,
         ToolName toolName,
         IReadOnlyList<string> patterns,
+        string? cwd,
         CancellationToken ct = default)
     {
         var actor = await _actorProvider.GetAsync(ct);
         var response = await actor.Ask<UnapprovedPatternsResponse>(
-            new GetUnapprovedPatterns(sessionId is not null ? (SessionId)sessionId : null, audience, toolName, patterns),
+            new GetUnapprovedPatterns(sessionId is not null ? (SessionId)sessionId : null, audience, toolName, patterns, cwd),
             TimeSpan.FromSeconds(5),
             ct);
 
@@ -44,11 +45,12 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
         ToolName toolName,
         IReadOnlyList<string> patterns,
         bool persistent,
+        string? cwd,
         CancellationToken ct = default)
     {
         var actor = await _actorProvider.GetAsync(ct);
         await actor.Ask<ToolApprovalRecorded>(
-            new RecordToolApproval((SessionId)sessionId, audience, toolName, patterns, persistent),
+            new RecordToolApproval((SessionId)sessionId, audience, toolName, patterns, persistent, cwd),
             TimeSpan.FromSeconds(5),
             ct);
     }

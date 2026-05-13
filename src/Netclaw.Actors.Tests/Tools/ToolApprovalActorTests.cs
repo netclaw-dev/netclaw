@@ -42,8 +42,8 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Empty(unapproved);
     }
@@ -55,7 +55,7 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Equal(["git push"], unapproved);
     }
@@ -67,10 +67,10 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
-        Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
-        Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Team, new ToolName("shell_execute"), ["git push"], ct));
+        Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
+        Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Team, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
     }
 
     [Fact]
@@ -80,10 +80,10 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
-        Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
-        Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("file_write"), ["git push"], ct));
+        Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
+        Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("file_write"), ["git push"], cwd: null, ct));
     }
 
     [Fact]
@@ -93,11 +93,11 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, cwd: null, ct);
 
         // Single-token "gh" should NOT match "gh pr" — prevents approving
         // "gh --help" from also approving "gh pr create"
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh pr"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh pr"], cwd: null, ct);
         Assert.Equal(["gh pr"], unapproved);
     }
 
@@ -108,9 +108,9 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push origin"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push origin"], cwd: null, ct);
         Assert.Equal(["git push origin"], unapproved);
     }
 
@@ -124,13 +124,14 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, cwd: null, ct);
 
         Assert.Empty(await service.GetUnapprovedPatternsAsync(
             "session-a",
             TrustAudience.Personal,
             new ToolName("shell_execute"),
             [approvedRoot],
+            cwd: null,
             ct));
     }
 
@@ -142,13 +143,14 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), [approvedRoot], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync(
             "session-a",
             TrustAudience.Personal,
             new ToolName("shell_execute"),
             [approvedRoot, otherRoot],
+            cwd: null,
             ct);
 
         Assert.Equal([expectedUnapproved], unapproved);
@@ -165,13 +167,13 @@ public sealed class ToolApprovalActorTests : TestKit
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
-            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: true, ct);
+            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: true, cwd: null, ct);
 
-            Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
+            Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
 
             var actor2 = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service2 = CreateService(actor2);
-            Assert.Empty(await service2.GetUnapprovedPatternsAsync("different-session", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
+            Assert.Empty(await service2.GetUnapprovedPatternsAsync("different-session", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
         }
         finally
         {
@@ -193,8 +195,8 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["Git Push"], persistent: false, ct);
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["Git Push"], persistent: false, cwd: null, ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         if (OperatingSystem.IsWindows())
             Assert.Empty(unapproved);
@@ -209,10 +211,10 @@ public sealed class ToolApprovalActorTests : TestKit
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
         var service = CreateService(actor);
 
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
-        Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
-        Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
+        Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
+        Assert.Equal(["git push"], await service.GetUnapprovedPatternsAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
     }
 
     [Fact]
@@ -226,13 +228,13 @@ public sealed class ToolApprovalActorTests : TestKit
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
-            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+            await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
-            Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
+            Assert.Empty(await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
 
             var actor2 = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service2 = CreateService(actor2);
-            Assert.Equal(["git push"], await service2.GetUnapprovedPatternsAsync("different-session", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct));
+            Assert.Equal(["git push"], await service2.GetUnapprovedPatternsAsync("different-session", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct));
         }
         finally
         {
@@ -248,11 +250,11 @@ public sealed class ToolApprovalActorTests : TestKit
         var service = CreateService(actor);
 
         // Parent session approves "git push"
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         // Sub-agent queries with hierarchical scope ID — should inherit parent approval
         var subAgentScope = "session-a/subagent/researcher/abc123";
-        var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Empty(unapproved);
     }
@@ -266,10 +268,10 @@ public sealed class ToolApprovalActorTests : TestKit
 
         // Sub-agent records its own approval
         var subAgentScope = "session-a/subagent/researcher/abc123";
-        await service.RecordApprovalAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], persistent: false, ct);
+        await service.RecordApprovalAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], persistent: false, cwd: null, ct);
 
         // Parent session should NOT see sub-agent's approval
-        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["curl"], cwd: null, ct);
         Assert.Equal(["curl"], unapproved);
     }
 
@@ -281,11 +283,11 @@ public sealed class ToolApprovalActorTests : TestKit
         var service = CreateService(actor);
 
         // Parent session approves "git status"
-        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], persistent: false, cwd: null, ct);
 
         // Nested sub-agent (sub-agent spawned by sub-agent) should still inherit
         var nestedScope = "session-a/subagent/orchestrator/def456/subagent/worker/ghi789";
-        var unapproved = await service.GetUnapprovedPatternsAsync(nestedScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync(nestedScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git status"], cwd: null, ct);
 
         Assert.Empty(unapproved);
     }
@@ -298,11 +300,11 @@ public sealed class ToolApprovalActorTests : TestKit
         var service = CreateService(actor);
 
         // Session B approves "git push"
-        await service.RecordApprovalAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, ct);
+        await service.RecordApprovalAsync("session-b", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         // Sub-agent of session A should NOT inherit session B's approval
         var subAgentScope = "session-a/subagent/researcher/abc123";
-        var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], ct);
+        var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Equal(["git push"], unapproved);
     }

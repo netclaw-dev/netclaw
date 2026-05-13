@@ -11,15 +11,45 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PUBLISH_DIR="/tmp/netclaw-swap-daemon"
 
+# Detect whether the daemon runs under the user's systemd. When it does,
+# `netclaw daemon stop` triggers the SIGTERM but systemd's Restart policy
+# immediately spawns a replacement, racing with the `cp` and producing
+# "Text file busy" or a silent "already running" — depending on timing.
+# In that case we drive systemd directly so the unit is fully stopped
+# (and stays stopped) until we explicitly start it again.
+is_systemd_managed() {
+    command -v systemctl >/dev/null 2>&1 \
+        && systemctl --user is-active netclaw.service >/dev/null 2>&1
+}
+
+stop_daemon() {
+    if is_systemd_managed; then
+        echo "Stopping netclaw.service via systemd..."
+        systemctl --user stop netclaw.service
+    else
+        netclaw daemon stop 2>/dev/null || true
+    fi
+}
+
+start_daemon() {
+    if command -v systemctl >/dev/null 2>&1 \
+        && systemctl --user is-enabled netclaw.service >/dev/null 2>&1; then
+        echo "Starting netclaw.service via systemd..."
+        systemctl --user start netclaw.service
+    else
+        netclaw daemon start
+    fi
+}
+
 if [[ "${1:-}" == "--restore" ]]; then
     if [[ ! -f "$BACKUP_BIN" ]]; then
         echo "No backup found at $BACKUP_BIN — nothing to restore"
         exit 1
     fi
-    netclaw daemon stop 2>/dev/null || true
+    stop_daemon
     cp "$BACKUP_BIN" "$DAEMON_BIN"
     rm "$BACKUP_BIN"
-    netclaw daemon start
+    start_daemon
     echo "Restored original daemon"
     exit 0
 fi
@@ -40,7 +70,7 @@ dotnet publish "$REPO_DIR/src/Netclaw.Daemon/" \
     -p:PublishSingleFile=true \
     -p:IncludeNativeLibrariesForSelfExtract=true \
     -o "$PUBLISH_DIR" \
-    --verbosity quiet
+    --verbosity minimal
 
 PUBLISHED="$PUBLISH_DIR/netclawd"
 if [[ ! -f "$PUBLISHED" ]]; then
@@ -58,9 +88,9 @@ if [[ $(stat -c%s "$PUBLISHED") -lt 1000000 ]]; then
 fi
 
 # Swap
-netclaw daemon stop 2>/dev/null || true
+stop_daemon
 cp "$PUBLISHED" "$DAEMON_BIN"
-netclaw daemon start
+start_daemon
 
 echo "Daemon swapped and started. Check logs with:"
 echo "  tail -f ~/.netclaw/logs/daemon-$(date +%Y-%m-%d).log"

@@ -4,17 +4,19 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Serialization;
+using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Approvals;
 
 /// <summary>
 /// Stable JSON output shape for <c>netclaw approvals list --json</c>. Uses the
-/// same audience/tool/patterns layout as <c>tool-approvals.json</c> so scripts
-/// can reuse parsers across both surfaces.
+/// same audience/tool/entries layout as <c>tool-approvals.json</c> so scripts
+/// can reuse parsers across both surfaces. Entries preserve the typed
+/// <see cref="ApprovalEntry"/> shape (<c>verb</c> + nullable <c>directory</c>).
 /// </summary>
 internal sealed class ApprovalsListView
 {
     [JsonPropertyName("audiences")]
-    public SortedDictionary<string, SortedDictionary<string, List<string>>> Audiences { get; }
+    public SortedDictionary<string, SortedDictionary<string, List<ApprovalEntry>>> Audiences { get; }
         = new(StringComparer.Ordinal);
 }

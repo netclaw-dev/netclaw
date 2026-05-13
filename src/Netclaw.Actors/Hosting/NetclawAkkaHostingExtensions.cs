@@ -187,38 +187,19 @@ public static class NetclawAkkaHostingExtensions
 
     /// <summary>
     /// Configures Google Protobuf serialization for Netclaw protocol types.
-    /// Wire format defined in <c>netclaw_messages.proto</c>; our serializer throws
-    /// for unregistered manifests to fail loudly on schema drift.
+    /// Binds <see cref="INetclawSerializableMessage"/> to
+    /// <see cref="NetclawProtobufSerializer"/>; every implementing type is routed
+    /// to the proto serializer. Types that implement the marker but lack a
+    /// manifest in <see cref="NetclawProtobufSerializer"/> throw at the first
+    /// serialize call — that loud failure is the regression signal.
     /// </summary>
     public static AkkaConfigurationBuilder WithNetclawSerialization(
         this AkkaConfigurationBuilder builder)
     {
-        var boundTypes = new[]
-        {
-            typeof(SessionId),
-            typeof(SendUserMessage),
-            typeof(SerializableChatMessage),
-            typeof(SerializableMediaReference),
-            typeof(SerializableToolCall),
-            typeof(TurnRecorded),
-            typeof(SessionTitleSet),
-            typeof(SessionCompacted),
-            typeof(SessionSnapshot),
-            typeof(TurnBroadcast),
-            typeof(CompactionBroadcast),
-            typeof(WorkingContext),
-            typeof(ReminderId),
-            typeof(ReminderDelivery),
-            typeof(ReminderSchedule),
-            typeof(ReminderPayload),
-            typeof(AdoptedContextRecorded),
-            typeof(Channels.CursorAdvanced),
-        };
-
         return builder
             .WithCustomSerializer(
                 serializerIdentifier: "netclaw-protobuf",
-                boundTypes: boundTypes,
+                boundTypes: new[] { typeof(INetclawSerializableMessage) },
                 serializerFactory: system => new NetclawProtobufSerializer(system))
             .WithStrictSerialization();
     }

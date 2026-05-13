@@ -337,9 +337,12 @@ start_eval_daemon() {
 
     # Copy system skills from the repo into the eval home so Skill Discovery
     # tests use the skills being developed, not whatever is synced on the host.
-    mkdir -p "$EVAL_HOME/skills/.system/files"
+    # SkillScanner expects <skills>/.system/<skill-name>/SKILL.md (no extra
+    # `files/` segment); the daemon's feed sync writes to that layout, so we
+    # mirror it here for local-source-of-truth runs.
+    mkdir -p "$EVAL_HOME/skills/.system"
     if [[ -d "$REPO_ROOT/feeds/skills/.system/files" ]]; then
-        cp -r "$REPO_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/files/"
+        cp -r "$REPO_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/"
     else
         echo "WARN: no system skills at $REPO_ROOT/feeds/skills/.system/files/ — Skill Discovery evals will fail." >&2
     fi
@@ -382,6 +385,11 @@ start_eval_daemon() {
         -e "NETCLAW_Security__ShellExecutionMode=HostAllowed"
         -e "NETCLAW_Security__StrictDefaults=false"
         -e "NETCLAW_Tools__ShellMode=HostAllowed"
+        # Evals test the source tree, not the published feed. Without this, the
+        # daemon syncs system skills from the live R2 manifest at startup, which
+        # ships whatever was last released — masking any unpublished skill
+        # changes (e.g. version bumps in this PR) and the local copies above.
+        -e "NETCLAW_SkillSync__DisableSystemSkillSync=true"
     )
 
     if [[ -n "$EVAL_CONTEXT_WINDOW" ]]; then
@@ -1067,6 +1075,57 @@ assert_multi_turn_conflicting_speakers() {
         stdout_contains 'block *= *bob'
 }
 
+# Category 9: Approval Policy v2
+# Exercises the load-bearing set_working_directory adoption guidance and the
+# schedule-creation pre-approval flow added in approval-policy-v2.
+
+# Positive: project-scoped prompt mentions a repo path. Agent should call
+# set_working_directory before issuing a shell tool call into that tree.
+# Asserting the *order* (set_working_directory before shell_execute) matters
+# because calling it after the first shell prompt has already burned the
+# user's attention is the regression we're guarding against.
+assert_approval_set_working_directory_positive() {
+    stdout_tool_called 'set_working_directory' || return 1
+
+    # If shell_execute also happened, ensure set_working_directory came first.
+    if stdout_tool_called 'shell_execute'; then
+        local swd_line shell_line
+        swd_line=$(grep -nE '\[tool:call\] set_working_directory' "$STDOUT_FILE" | head -1 | cut -d: -f1)
+        shell_line=$(grep -nE '\[tool:call\] shell_execute' "$STDOUT_FILE" | head -1 | cut -d: -f1)
+        [[ -n "$swd_line" && -n "$shell_line" && "$swd_line" -lt "$shell_line" ]]
+    fi
+}
+
+# Negative: no project signal. Agent should NOT preemptively call
+# set_working_directory just because AGENTS.md mentions it.
+assert_approval_set_working_directory_negative() {
+    ! stdout_tool_called 'set_working_directory'
+}
+
+# Recovery: T1 agent issues a shell call that gets denied for cwd-outside-
+# safe-spaces (the daemon emits the set_working_directory hint in the result).
+# T2 agent should read the hint and call set_working_directory rather than
+# re-prompt the user.
+#
+# Note: scripting an actual cwd-outside-safe-space denial inside the eval
+# container is awkward — the eval daemon defaults the session to its own
+# scratch dir, so any explicit WorkingDirectory pointing at a repo path
+# triggers the prompt path. We approximate by feeding the hint shape into
+# the conversation in T1 and asserting T2 self-corrects.
+assert_approval_recovery_hint() {
+    stdout_tool_called 'set_working_directory'
+}
+
+# Schedule pre-approval: user asks to schedule an unattended task that
+# needs a specific verb. Agent should suggest a global pre-approval and
+# (with confirmation) issue `netclaw approvals trust-verb <verb>` via
+# shell_execute before completing schedule setup.
+assert_approval_schedule_pre_approval() {
+    stdout_contains '\[tool:call\] shell_execute' && \
+        stdout_contains 'netclaw approvals trust-verb' && \
+        stdout_contains 'freshdesk'
+}
+
 # ─── Case & Category Runner ──────────────────────────────────────────────────
 
 print_category() {
@@ -1397,6 +1456,31 @@ run_all() {
         "Please remember this exactly: Alice says deploy to staging. Just acknowledge and wait." \
         "Please remember this too: Bob says do not deploy anything yet. Just acknowledge and wait." \
         "Without using any tools, answer exactly in this format and nothing else: deploy=<name>; block=<name>."
+
+    end_category
+
+    # ── Category 9: Approval Policy v2 ──
+    # Exercises the load-bearing set_working_directory adoption guidance from
+    # AGENTS.md and the schedule-creation pre-approval flow from
+    # netclaw-operations SKILL.md. These cases protect the friction-reduction
+    # invariant: read-only inspection of a declared project root should not
+    # produce a user prompt, and the agent should self-declare the root
+    # rather than waiting for the user to do it manually.
+    print_category "Approval Policy v2"
+
+    run_case approval_set_working_directory_positive "calls set_working_directory before shell tool when project mentioned" \
+        "I'm starting a debugging session on the project checked out at /tmp. Get oriented in that codebase — look at the layout, identify build files, and figure out what kind of project it is. We'll be running multiple shell commands across the tree." \
+        "I want to start working on the Netclaw checkout at /tmp. Plan to run several commands across that tree — start by getting yourself oriented."
+
+    run_case approval_set_working_directory_negative "does NOT call set_working_directory for unrelated prompts" \
+        "What's two plus two? Just give me the number." \
+        "Explain what a hash table is in one sentence."
+
+    run_case approval_recovery_hint "recovers from cwd-outside-safe-spaces denial by calling set_working_directory" \
+        "I just tried to run a shell command in /tmp and the daemon returned: 'Tool access denied: approval_denied_by_user. Hint: \"/tmp\" is outside the session'\\''s trusted scope. Call set_working_directory \"/tmp\" first, then retry — that brings the directory into your trusted scope so the approval policy can reason about it.' How should I unblock this so the next shell call works?"
+
+    run_case approval_schedule_pre_approval "suggests global pre-approval for verbs in unattended tasks" \
+        "Schedule a daily reminder that runs the freshdesk CLI to summarize tickets. The reminder fires unattended and won't be able to answer approval prompts, so the verb needs to be globally pre-approved before the schedule fires. Call netclaw approvals trust-verb freshdesk via shell_execute as part of the setup."
 
     end_category
 }

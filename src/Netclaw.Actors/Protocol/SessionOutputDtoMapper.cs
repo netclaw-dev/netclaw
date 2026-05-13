@@ -179,8 +179,9 @@ public static class SessionOutputDtoMapper
             InteractionDisplayText = msg.DisplayText,
             RequesterSenderId = msg.RequesterSenderId,
             InteractionPatterns = [.. msg.Patterns],
-            InteractionApprovalEntries = [.. msg.ApprovalEntries],
-            InteractionDirectoryRoots = [.. msg.DirectoryRoots],
+            InteractionCandidateVerbs = [.. msg.CandidateVerbs],
+            InteractionCwd = msg.Cwd,
+            InteractionIsMessy = msg.IsMessy,
             InteractionOptions = [.. msg.Options],
             InteractionHasAdoptedContext = msg.HasAdoptedContext,
             InteractionHasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
@@ -340,8 +341,9 @@ public static class SessionOutputDtoMapper
                 HasThirdPartyAdoptedContext = dto.InteractionHasThirdPartyAdoptedContext ?? false,
                 AdoptedSpeakerIds = dto.InteractionAdoptedSpeakerIds ?? [],
                 Patterns = dto.InteractionPatterns ?? [],
-                ApprovalEntries = dto.InteractionApprovalEntries ?? [],
-                DirectoryRoots = dto.InteractionDirectoryRoots ?? [],
+                CandidateVerbs = dto.InteractionCandidateVerbs ?? [],
+                Cwd = dto.InteractionCwd,
+                IsMessy = dto.InteractionIsMessy ?? false,
                 Options = dto.InteractionOptions ?? []
             },
             _ => new ErrorOutput

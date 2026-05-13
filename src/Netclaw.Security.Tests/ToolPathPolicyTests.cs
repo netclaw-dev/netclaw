@@ -294,4 +294,125 @@ public sealed class ToolPathPolicyTests
             Directory.Delete(safeRoot);
         }
     }
+
+    // The following tests cover the prompt-injection defense added by the
+    // approval-policy-trust-zones change (task 10.8): extending the write-
+    // and shell-deny lists to cover ~/.netclaw/config/ so an injected payload
+    // cannot instruct the agent to rewrite tool-approvals.json or
+    // hard-deny-overrides.json and grant itself global trust.
+
+    [Fact]
+    public void IsDenied_blocks_tool_approvals_json_under_config_dir()
+    {
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy([configDir]);
+
+        Assert.True(policy.IsDenied(Path.Combine(configDir, "tool-approvals.json")));
+    }
+
+    [Fact]
+    public void IsDenied_blocks_netclaw_json_under_config_dir()
+    {
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy([configDir]);
+
+        Assert.True(policy.IsDenied(Path.Combine(configDir, "netclaw.json")));
+    }
+
+    [Fact]
+    public void IsDenied_blocks_hard_deny_overrides_under_config_dir()
+    {
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy([configDir]);
+
+        Assert.True(policy.IsDenied(Path.Combine(configDir, "hard-deny-overrides.json")));
+    }
+
+    [Fact]
+    public void IsDenied_blocks_arbitrary_descendant_of_config_dir()
+    {
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy([configDir]);
+
+        Assert.True(policy.IsDenied(Path.Combine(configDir, "future", "subsystem", "settings.json")));
+    }
+
+    [Fact]
+    public void IsDenied_does_not_block_sibling_of_config_dir()
+    {
+        // boundary safety: ~/.netclaw/configbackup/ must not be denied just
+        // because its name shares a prefix with ~/.netclaw/config/.
+        var policy = new ToolPathPolicy(["/home/user/.netclaw/config"]);
+
+        Assert.False(policy.IsDenied("/home/user/.netclaw/configbackup/file.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_shell_redirect_to_config_file()
+    {
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy(deniedPaths: [configDir]);
+
+        Assert.True(policy.CommandReferencesDeniedPath(
+            $"echo {{}} > {configDir}/tool-approvals.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_tee_to_config_file()
+    {
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy(deniedPaths: [configDir]);
+
+        Assert.True(policy.CommandReferencesDeniedPath(
+            $"echo content | tee {configDir}/netclaw.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_detects_cat_of_config_file()
+    {
+        // Reading config files isn't in the readDeny list, but the shell
+        // indicator list also blocks shell access (in the daemon wiring
+        // ConfigDirectory is in shellIndicatorList too).
+        var configDir = "/home/user/.netclaw/config";
+        var policy = new ToolPathPolicy(deniedPaths: [configDir]);
+
+        Assert.True(policy.CommandReferencesDeniedPath(
+            $"cat {configDir}/tool-approvals.json"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_resolves_symlink_routed_to_config()
+    {
+        // Skip on platforms where symlinks aren't easily creatable.
+        if (Environment.OSVersion.Platform != PlatformID.Unix
+            && Environment.OSVersion.Platform != PlatformID.MacOSX)
+            return;
+
+        var configDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "config");
+        Directory.CreateDirectory(configDir);
+        File.WriteAllText(Path.Combine(configDir, "tool-approvals.json"), "{}");
+
+        var scratchDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(scratchDir);
+        var leakLink = Path.Combine(scratchDir, "leak");
+        File.CreateSymbolicLink(leakLink, Path.Combine(configDir, "tool-approvals.json"));
+
+        try
+        {
+            var policy = new ToolPathPolicy(deniedPaths: [configDir]);
+            var command = $"cat {leakLink}";
+
+            Assert.True(
+                policy.CommandReferencesDeniedPath(command),
+                $"ToolPathPolicy must resolve symlinks routed at config files; planted symlink in writable scratch dir would otherwise become a read primitive for security-critical config. Command under test: {command}");
+        }
+        finally
+        {
+            File.Delete(leakLink);
+            Directory.Delete(scratchDir);
+            File.Delete(Path.Combine(configDir, "tool-approvals.json"));
+            Directory.Delete(configDir);
+            Directory.Delete(Path.GetDirectoryName(configDir)!);
+        }
+    }
 }

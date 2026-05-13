@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json.Serialization;
+using Akka.Actor;
+using Netclaw.Actors.Serialization;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Reminders;
@@ -11,7 +13,7 @@ namespace Netclaw.Actors.Reminders;
 /// <summary>
 /// Strongly-typed reminder identity.
 /// </summary>
-public readonly record struct ReminderId(string Value)
+public readonly record struct ReminderId(string Value) : INetclawSerializableMessage
 {
     public override string ToString() => Value;
 }
@@ -44,36 +46,36 @@ public enum DeliveryKind
 /// <summary>
 /// Structured delivery target for a reminder.
 /// </summary>
-public sealed class ReminderDelivery
+public sealed record ReminderDelivery : INetclawSerializableMessage
 {
     /// <summary>
     /// How results are delivered.
     /// </summary>
-    public DeliveryKind Kind { get; set; }
+    public DeliveryKind Kind { get; init; }
 
     /// <summary>
     /// Transport identifier for Channel delivery (e.g., "slack").
     /// Null for CurrentSession and None.
     /// </summary>
-    public string? Transport { get; set; }
+    public string? Transport { get; init; }
 
     /// <summary>
     /// Canonical target address for Channel delivery (e.g., "C0123ABC").
     /// Resolved and validated at set time. Null for CurrentSession and None.
     /// </summary>
-    public string? Address { get; set; }
+    public string? Address { get; init; }
 
     /// <summary>
     /// Session ID for CurrentSession delivery. Null for Channel and None.
     /// </summary>
-    public string? SessionId { get; set; }
+    public string? SessionId { get; init; }
 
     /// <summary>
     /// Channel type of the originating session for CurrentSession delivery.
     /// Used to route DeliverTrustedSessionTurn to the correct gateway.
     /// Null for Channel and None.
     /// </summary>
-    public Channels.ChannelType? OriginChannelType { get; set; }
+    public Channels.ChannelType? OriginChannelType { get; init; }
 
     /// <summary>
     /// Gets the notification tool name for Channel delivery based on the transport.
@@ -102,43 +104,43 @@ public enum ReminderScheduleType
 /// <summary>
 /// Describes when and how a reminder fires.
 /// </summary>
-public sealed class ReminderSchedule
+public sealed record ReminderSchedule : INetclawSerializableMessage
 {
-    public ReminderScheduleType Type { get; set; }
+    public ReminderScheduleType Type { get; init; }
 
     /// <summary>
     /// For OneShot: the absolute fire time.
     /// For Interval: optional explicit first fire.
     /// For Cron: not used.
     /// </summary>
-    public long? FireAtMs { get; set; }
+    public long? FireAtMs { get; init; }
 
     public DateTimeOffset? FireAt
     {
         get => FireAtMs is not null ? DateTimeOffset.FromUnixTimeMilliseconds(FireAtMs.Value) : null;
-        set => FireAtMs = value?.ToUnixTimeMilliseconds();
+        init => FireAtMs = value?.ToUnixTimeMilliseconds();
     }
 
     /// <summary>
     /// For Interval schedules: repeat interval.
     /// </summary>
-    public long? IntervalTicks { get; set; }
+    public long? IntervalTicks { get; init; }
 
     public TimeSpan? Interval
     {
         get => IntervalTicks is not null ? TimeSpan.FromTicks(IntervalTicks.Value) : null;
-        set => IntervalTicks = value?.Ticks;
+        init => IntervalTicks = value?.Ticks;
     }
 
     /// <summary>
     /// For Cron schedules: cron expression.
     /// </summary>
-    public string? CronExpression { get; set; }
+    public string? CronExpression { get; init; }
 
     /// <summary>
     /// Original expression as entered by user (e.g. "6h", "0 */6 * * *").
     /// </summary>
-    public string? OriginalExpression { get; set; }
+    public string? OriginalExpression { get; init; }
 }
 
 /// <summary>
@@ -231,9 +233,9 @@ public sealed record ReminderDefinition
 /// <summary>
 /// Message persisted inside Akka.Reminders. Intentionally lightweight: pointer to disk definition.
 /// </summary>
-public sealed class ReminderPayload
+public sealed record ReminderPayload : INetclawSerializableMessage
 {
-    public ReminderId Id { get; set; }
+    public ReminderId Id { get; init; }
 }
 
 public enum ReminderWriteMode
@@ -257,27 +259,27 @@ public enum ReminderSaveError
 public sealed record SaveReminderCommand(
     ReminderDefinition Definition,
     ReminderWriteMode WriteMode = ReminderWriteMode.CreateOnly,
-    ReminderAudienceAuthorizationContext? Authorization = null);
+    ReminderAudienceAuthorizationContext? Authorization = null) : INoSerializationVerificationNeeded;
 
 public sealed record ReminderAudienceAuthorizationContext(
     TrustAudience? SourceAudience,
-    string? SourceDescription = null);
+    string? SourceDescription = null) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Disables a reminder and cancels any active schedule. The definition file
 /// is preserved on disk so history and configuration remain available for diagnosis.
 /// </summary>
-public sealed record CancelReminderCommand(ReminderId Id);
+public sealed record CancelReminderCommand(ReminderId Id) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Permanently deletes a reminder definition, its schedule, and history from disk.
 /// Not exposed as an LLM tool — use via CLI (<c>netclaw reminder delete</c>) or HTTP API.
 /// </summary>
-public sealed record DeleteReminderCommand(ReminderId Id);
-public sealed record DisableReminderCommand(ReminderId Id);
-public sealed record EnableReminderCommand(ReminderId Id);
-public sealed record ListRemindersCommand(bool IncludeDisabled = true);
-public sealed record GetReminderCommand(ReminderId Id);
+public sealed record DeleteReminderCommand(ReminderId Id) : INoSerializationVerificationNeeded;
+public sealed record DisableReminderCommand(ReminderId Id) : INoSerializationVerificationNeeded;
+public sealed record EnableReminderCommand(ReminderId Id) : INoSerializationVerificationNeeded;
+public sealed record ListRemindersCommand(bool IncludeDisabled = true) : INoSerializationVerificationNeeded;
+public sealed record GetReminderCommand(ReminderId Id) : INoSerializationVerificationNeeded;
 
 // ── Responses ──
 
@@ -287,20 +289,20 @@ public sealed record ReminderSavedResponse(
     bool Success,
     DateTimeOffset? NextFire,
     ReminderSaveError Error = ReminderSaveError.None,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null) : INoSerializationVerificationNeeded;
 
-public sealed record ReminderCancelledResponse(ReminderId Id, bool Found);
-public sealed record ReminderDeletedResponse(ReminderId Id, bool Found);
+public sealed record ReminderCancelledResponse(ReminderId Id, bool Found) : INoSerializationVerificationNeeded;
+public sealed record ReminderDeletedResponse(ReminderId Id, bool Found) : INoSerializationVerificationNeeded;
 
 public sealed record ReminderStateResponse(
     ReminderId Id,
     bool Found,
     bool Enabled,
     DateTimeOffset? NextFire = null,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null) : INoSerializationVerificationNeeded;
 
-public sealed record ReminderListResponse(IReadOnlyList<ReminderInfo> Reminders);
-public sealed record GetReminderResponse(ReminderInfo? Reminder);
+public sealed record ReminderListResponse(IReadOnlyList<ReminderInfo> Reminders) : INoSerializationVerificationNeeded;
+public sealed record GetReminderResponse(ReminderInfo? Reminder) : INoSerializationVerificationNeeded;
 
 public sealed record ReminderInfo(
     ReminderId Id,
@@ -314,7 +316,7 @@ public sealed record ReminderInfo(
     bool Enabled,
     string? AgentDefinitionId,
     TrustAudience? Audience,
-    DateTimeOffset? ExpiresAt = null);
+    DateTimeOffset? ExpiresAt = null) : INoSerializationVerificationNeeded;
 
 // ── Internal messages ──
 
@@ -325,7 +327,7 @@ internal sealed record ReminderExecutionCompleted(
     Guid ExecutionId,
     ReminderId Id,
     bool Success,
-    string? ErrorMessage = null);
+    string? ErrorMessage = null) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Signal emitted by the outbound channel pipeline when a reminder-sourced
@@ -347,14 +349,14 @@ internal sealed record ReminderExecutionCompleted(
 public sealed record ReminderDeliveryObserved(
     string ReminderDeliveryKey,
     Channels.ChannelType ChannelType,
-    long? ObservedAtMs = null);
+    long? ObservedAtMs = null) : INoSerializationVerificationNeeded;
 
 // ── Health query ──
 
 /// <summary>
 /// Query sent to <see cref="ReminderManagerActor"/> to obtain current health counters.
 /// </summary>
-public sealed record GetReminderHealthQuery
+public sealed record GetReminderHealthQuery : INoSerializationVerificationNeeded
 {
     public static readonly GetReminderHealthQuery Instance = new();
 }
@@ -365,7 +367,7 @@ public sealed record GetReminderHealthQuery
 public sealed record ReminderHealthResponse(
     int ScheduledCount,
     int ActiveExecutions,
-    int FailedCount);
+    int FailedCount) : INoSerializationVerificationNeeded;
 
 // ── Execution history ──
 

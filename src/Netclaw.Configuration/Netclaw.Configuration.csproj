@@ -29,6 +29,7 @@
     <EmbeddedResource Include="Schemas/**/*.json" />
     <EmbeddedResource Include="Resources/AGENTS.md" />
     <EmbeddedResource Include="Resources/AGENTS.public.md" />
+    <EmbeddedResource Include="SafeVerbs/**/*.json" />
   </ItemGroup>
 
 </Project>

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -43,30 +44,38 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
         return [toolName.Value];
     }
 
-    public IReadOnlyList<string> ExtractApprovalEntries(ToolName toolName, IDictionary<string, object?>? arguments)
+    public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
         => ExtractPatterns(toolName, arguments);
 
-    public bool IsApproved(ToolName toolName, IDictionary<string, object?>? arguments, IEnumerable<string> approvedPatterns)
-    {
-        var patterns = ExtractPatterns(toolName, arguments);
-        foreach (var pattern in patterns)
-        {
-            var matched = false;
-            foreach (var approved in approvedPatterns)
-            {
-                if (string.Equals(pattern, approved, StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = true;
-                    break;
-                }
-            }
+    public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
+        => ExtractCandidateVerbs(toolName, arguments)
+            .Select(v => new ApprovalCandidate(v, Directory: null))
+            .ToList();
 
-            if (!matched)
+    public bool IsApproved(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        IReadOnlyList<ApprovalEntry> approvedEntries,
+        string? cwd)
+    {
+        // Fail-closed when no verbs can be extracted: an empty foreach
+        // would otherwise fall through to "approved" purely because there
+        // was nothing to check.
+        var verbs = ExtractCandidateVerbs(toolName, arguments);
+        if (verbs.Count == 0)
+            return false;
+
+        foreach (var verb in verbs)
+        {
+            if (!ApprovalPatternMatching.MatchesAny(verb, approvedEntries))
                 return false;
         }
 
         return true;
     }
+
+    public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
+        => false;
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)
     {
@@ -75,9 +84,6 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
 
         return toolName.Value;
     }
-
-    public IReadOnlyList<DirectoryApprovalRoot> ExtractDirectoryRoots(ToolName toolName, IDictionary<string, object?>? arguments)
-        => [];
 
     private bool TryGetControlPlaneRelativePath(
         IDictionary<string, object?>? arguments,
@@ -101,20 +107,23 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
 
     private static bool TryGetPath(IDictionary<string, object?>? arguments, out string path)
     {
-        path = string.Empty;
-        if (arguments is null)
-            return false;
-
-        if (arguments.TryGetValue("Path", out var value) || arguments.TryGetValue("path", out value))
+        // Route through ToolArgumentHelper.GetString so JsonElement-shaped
+        // arguments (the form LLM-generated tool calls arrive in) get
+        // string-converted correctly. The direct `is string` pattern
+        // previously here silently returned false for every JsonElement
+        // value — which made GetApprovalModeKey return the non-control-plane
+        // key for control-plane writes and IsFailClosedOnPersonal fail
+        // open. ExtractShellCommand was fixed for the same shape in this
+        // PR; this matcher mirrors that fix.
+        var raw = ToolArgumentHelper.GetString(arguments, "Path");
+        if (string.IsNullOrWhiteSpace(raw))
         {
-            if (value is string s && !string.IsNullOrWhiteSpace(s))
-            {
-                path = s;
-                return true;
-            }
+            path = string.Empty;
+            return false;
         }
 
-        return false;
+        path = raw;
+        return true;
     }
 
 }

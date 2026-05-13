@@ -59,7 +59,7 @@ public enum OutputFilter
 /// resuming old sessions (reuse known ID), or tapping into active sessions.
 /// Routes through <see cref="IWithSessionId"/> to reach the correct session actor.
 /// </summary>
-public sealed record JoinSession : IWithSessionId
+public sealed record JoinSession : IWithSessionId, INoSerializationVerificationNeeded
 {
     public SessionId SessionId { get; init; }
 
@@ -79,7 +79,7 @@ public sealed record JoinSession : IWithSessionId
 /// Explicitly leave a session. Also handled automatically via DeathWatch
 /// when the subscriber terminates.
 /// </summary>
-public sealed record LeaveSession : IWithSessionId
+public sealed record LeaveSession : IWithSessionId, INoSerializationVerificationNeeded
 {
     public SessionId SessionId { get; init; }
 

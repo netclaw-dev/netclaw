@@ -1248,9 +1248,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
     }
 
-    private sealed record ThreadOutput(SessionOutput Output);
-    private sealed record OutputStreamTerminated(int Generation, Exception? Cause);
-    private sealed record ReinitializePipeline(string Reason);
+    private sealed record ThreadOutput(SessionOutput Output) : INoSerializationVerificationNeeded;
+    private sealed record OutputStreamTerminated(int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
+    private sealed record ReinitializePipeline(string Reason) : INoSerializationVerificationNeeded;
     private sealed class PendingApprovalRequest(ToolInteractionRequest request)
     {
         public ToolInteractionRequest Request { get; } = request;
@@ -1258,7 +1258,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         public SlackEventTs? PromptMessageTs { get; set; }
     }
 
-    private sealed record InitializePipeline
+    private sealed record InitializePipeline : INoSerializationVerificationNeeded
     {
         public static InitializePipeline Instance { get; } = new();
     }

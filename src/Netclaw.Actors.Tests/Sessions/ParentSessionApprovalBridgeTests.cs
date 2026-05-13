@@ -37,8 +37,8 @@ public sealed class ParentSessionApprovalBridgeTests
             "shell_execute",
             "grep timeout logs/app.log | wc -l",
             ["grep timeout logs/app.log | wc -l"],
-            ["/tmp/work/logs/"],
-            ["logs/"],
+            ["grep timeout logs/app.log"],
+            isMessy: false,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ParentApprovalDecision.ApprovedOnce, decision);
@@ -50,8 +50,7 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.True(emitted.PersistedAdoptedContext);
         Assert.Equal(["user-123", "user-456"], emitted.AdoptedSpeakerIds);
         Assert.Equal(["grep timeout logs/app.log | wc -l"], emitted.Patterns);
-        Assert.Equal(["/tmp/work/logs/"], emitted.ApprovalEntries);
-        Assert.Equal(["logs/"], emitted.DirectoryRoots);
+        Assert.Equal(["grep timeout logs/app.log"], emitted.CandidateVerbs);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, emitted.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, emitted.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways).Label);
     }
@@ -80,8 +79,8 @@ public sealed class ParentSessionApprovalBridgeTests
             "shell_execute",
             "cat logs/app.log",
             ["cat logs/app.log"],
-            ["/tmp/work/logs/"],
-            ["logs/"],
+            ["cat logs/app.log"],
+            isMessy: false,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ParentApprovalDecision.ApprovedOnce, decision);

@@ -89,7 +89,7 @@ internal sealed class ScopedFileAccessPolicy
             if (!PathUtility.IsWithinRoot(fullPath, root))
                 continue;
 
-            if (ContainsSymlinkSegment(root, fullPath))
+            if (PathUtility.ContainsSymlinkSegment(root, fullPath))
             {
                 error = $"Error: {label} trust context may not access files through symlinked paths inside the current session directory or configured roots.";
                 return false;
@@ -141,9 +141,7 @@ internal sealed class ScopedFileAccessPolicy
     }
 
     private static TrustAudience ResolveAudience(ToolExecutionContext context)
-        => SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
-            ? parsed
-            : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context.SessionId);
+        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context.Audience, context.SessionId);
 
     private static string GetAudienceLabel(TrustAudience audience) => audience switch
     {
@@ -152,42 +150,6 @@ internal sealed class ScopedFileAccessPolicy
         TrustAudience.Personal => "Personal",
         _ => "Public"
     };
-
-    private static bool ContainsSymlinkSegment(string allowedRoot, string fullPath)
-    {
-        var relativePath = Path.GetRelativePath(allowedRoot, fullPath);
-        if (string.IsNullOrWhiteSpace(relativePath) || relativePath == ".")
-            return false;
-
-        var segments = relativePath.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
-        var currentPath = allowedRoot;
-
-        foreach (var segment in segments)
-        {
-            currentPath = Path.Combine(currentPath, segment);
-            if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
-                continue;
-
-            try
-            {
-                var attributes = File.GetAttributes(currentPath);
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
-                    return true;
-            }
-            catch (IOException)
-            {
-                return true;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     internal enum AccessKind
     {

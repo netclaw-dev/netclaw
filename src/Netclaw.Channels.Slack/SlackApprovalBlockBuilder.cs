@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackApprovalBlockBuilder.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -12,34 +12,26 @@ internal static class SlackApprovalBlockBuilder
 {
     public const string ApprovalActionId = "tool_approval";
 
+    private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
+
     public static string BuildApprovalText(ToolInteractionRequest request)
     {
         var lines = new List<string>
         {
-            $":lock: *Tool approval required*",
-            $"> `{request.ToolName}`: `{request.DisplayText}`"
+            ":lock: *Tool approval required*",
+            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            BuildApproveHeader(request)
         };
 
-        if (request.Patterns.Count > 0)
+        var verbs = ResolveDisplayVerbs(request);
+        if (verbs.Count > 1)
         {
-            if (request.Patterns.Count == 1)
-            {
-                lines.Add($"Pattern: `{request.Patterns[0]}`");
-            }
-            else
-            {
-                lines.Add("Patterns:");
-                foreach (var pattern in request.Patterns)
-                    lines.Add($"  • `{pattern}`");
-            }
+            foreach (var verb in verbs)
+                lines.Add($"  • `{verb}`");
         }
 
-        if (request.DirectoryRoots.Count > 0)
-        {
-            lines.Add("Directory roots:");
-            foreach (var root in request.DirectoryRoots)
-                lines.Add($"  • `{root}`");
-        }
+        if (request.IsMessy)
+            lines.Add(ComplexCommandHint);
 
         AppendAdoptedContextSummary(lines, request);
 
@@ -63,24 +55,28 @@ internal static class SlackApprovalBlockBuilder
             {
                 Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName)}`\n*Request:* `{EscapeMarkdown(request.DisplayText)}`"),
                 Expand = true
+            },
+            new SectionBlock
+            {
+                Text = new Markdown($"*{EscapeMarkdown(BuildApproveHeader(request))}*")
             }
         };
 
-        if (request.Patterns.Count > 0)
+        var verbs = ResolveDisplayVerbs(request);
+        if (verbs.Count > 1)
         {
-            var patternLines = request.Patterns.Select(pattern => $"• `{EscapeMarkdown(pattern)}`");
+            var verbLines = verbs.Select(v => $"• `{EscapeMarkdown(v)}`");
             blocks.Add(new SectionBlock
             {
-                Text = new Markdown($"*Patterns*\n{string.Join("\n", patternLines)}")
+                Text = new Markdown(string.Join("\n", verbLines))
             });
         }
 
-        if (request.DirectoryRoots.Count > 0)
+        if (request.IsMessy)
         {
-            var rootLines = request.DirectoryRoots.Select(root => $"• `{EscapeMarkdown(root)}`");
             blocks.Add(new SectionBlock
             {
-                Text = new Markdown($"*Directory Roots*\n{string.Join("\n", rootLines)}")
+                Text = new Markdown(ComplexCommandHint)
             });
         }
 
@@ -125,13 +121,12 @@ internal static class SlackApprovalBlockBuilder
         var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
-        var decisionLabel = GetDecisionLabel(selectedKey);
 
         return string.Join("\n", new[]
         {
             $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
             $"> `{request.ToolName}`: `{request.DisplayText}`",
-            $"Decision: *{decisionLabel}*"
+            BuildResolutionLine(request, selectedKey)
         });
     }
 
@@ -143,7 +138,7 @@ internal static class SlackApprovalBlockBuilder
         var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
-        var decisionLabel = GetDecisionLabel(selectedKey);
+        var resolutionLine = BuildResolutionLine(request, selectedKey);
 
         var blocks = new List<Block>
         {
@@ -156,28 +151,10 @@ internal static class SlackApprovalBlockBuilder
                 Text = new Markdown(
                     $"*Tool:* `{EscapeMarkdown(request.ToolName)}`\n"
                     + $"*Request:* `{EscapeMarkdown(request.DisplayText)}`\n"
-                    + $"*Decision:* *{EscapeMarkdown(decisionLabel)}*"),
+                    + $"*{EscapeMarkdown(resolutionLine)}*"),
                 Expand = true
             }
         };
-
-        if (request.Patterns.Count > 0)
-        {
-            var patternLines = request.Patterns.Select(pattern => $"• `{EscapeMarkdown(pattern)}`");
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown($"*Patterns*\n{string.Join("\n", patternLines)}")
-            });
-        }
-
-        if (request.DirectoryRoots.Count > 0)
-        {
-            var rootLines = request.DirectoryRoots.Select(root => $"• `{EscapeMarkdown(root)}`");
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown($"*Directory Roots*\n{string.Join("\n", rootLines)}")
-            });
-        }
 
         if (request.HasAdoptedContext)
         {
@@ -189,6 +166,108 @@ internal static class SlackApprovalBlockBuilder
 
         return blocks;
     }
+
+    /// <summary>
+    /// Builds the prompt's header line. Single-verb invocations collapse the
+    /// verb into the header (<c>Approve git status in ~/repos/foo/?</c>);
+    /// multi-verb invocations use the generic <c>Approve in ~/repos/foo/?</c>
+    /// form and let the bullet list below name the verbs.
+    /// </summary>
+    /// <remarks>
+    /// The "in &lt;dir&gt;" portion shows the most meaningful target directory
+    /// the operator is being asked to trust. Priority order:
+    /// <list type="number">
+    /// <item>The single distinct path argument extracted across the
+    /// candidates (e.g. <c>cd /repo &amp;&amp; git status</c> shows
+    /// <c>/repo</c>).</item>
+    /// <item><c>cwd</c> if no path arguments are present.</item>
+    /// <item><c>this session</c> when the cwd is the per-session ephemeral
+    /// scratch directory — that path won't recur, so calling it out by name
+    /// would be misleading.</item>
+    /// </list>
+    /// </remarks>
+    private static string BuildApproveHeader(ToolInteractionRequest request)
+    {
+        var verbs = ResolveDisplayVerbs(request);
+        var location = ResolveHeaderLocation(request);
+
+        return verbs.Count == 1
+            ? $"Approve {verbs[0]} in {location}?"
+            : $"Approve in {location}?";
+    }
+
+    private static string ResolveHeaderLocation(ToolInteractionRequest request)
+    {
+        var distinctDirs = request.Candidates
+            .Where(c => !string.IsNullOrWhiteSpace(c.Directory))
+            .Select(c => c.Directory!)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (distinctDirs.Count == 1)
+            return distinctDirs[0];
+
+        if (distinctDirs.Count > 1)
+            return $"{distinctDirs.Count} directories";
+
+        // No path arguments — fall back to cwd, but prefer "this session" when
+        // the cwd is the session's ephemeral scratch directory so operators
+        // know an "Always here" grant would be a no-op.
+        if (string.IsNullOrWhiteSpace(request.Cwd))
+            return "(no working directory)";
+
+        return IsSessionScratchPath(request.Cwd) ? "this session" : request.Cwd;
+    }
+
+    private static bool IsSessionScratchPath(string cwd)
+    {
+        // Session directories live under "{netclaw-home}/sessions/{id}/" with
+        // {id} of the form "<channelId>_<unix-ts>_<random>" or a uuid. We use
+        // a path-segment check rather than full path equality so the helper
+        // works without access to NetclawPaths.SessionsBaseDirectory.
+        var normalized = cwd.Replace('\\', '/');
+        return normalized.Contains("/.netclaw/sessions/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Single-line resolution message replacing v1's dual <c>Patterns</c> /
+    /// <c>Directory Roots</c> sections. The format mirrors the spec's
+    /// "tool-approval-gates: Resolution message single-line format" requirement:
+    /// <list type="bullet">
+    /// <item><c>Saved: &lt;verbs&gt; in &lt;dir&gt;</c> for <c>Always here</c></item>
+    /// <item><c>Saved: &lt;verbs&gt; anywhere</c> for <c>Always anywhere</c></item>
+    /// <item><c>Saved for this chat: &lt;verbs&gt; in &lt;dir&gt;</c> for <c>This chat</c></item>
+    /// <item><c>Approved (no save)</c> for <c>Once</c></item>
+    /// <item><c>Denied</c> for <c>Deny</c></item>
+    /// </list>
+    /// </summary>
+    private static string BuildResolutionLine(ToolInteractionRequest request, string selectedKey)
+    {
+        var verbs = string.Join(", ", ResolveDisplayVerbs(request));
+        var location = ResolveHeaderLocation(request);
+
+        return selectedKey switch
+        {
+            ApprovalOptionKeys.ApproveAlways => $"Saved: {verbs} in {location}",
+            ApprovalOptionKeys.ApproveEverywhere => $"Saved: {verbs} anywhere",
+            ApprovalOptionKeys.ApproveSession => $"Saved for this chat: {verbs} in {location}",
+            ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
+            ApprovalOptionKeys.Deny => "Denied",
+            _ => "Resolved"
+        };
+    }
+
+    /// <summary>
+    /// Returns the verbs to display in the prompt body / resolution message.
+    /// Prefers <see cref="ToolInteractionRequest.CandidateVerbs"/> (the v2
+    /// matcher's verb-chain extraction); falls back to <c>Patterns</c> for
+    /// legacy callers and for messy commands where the matcher returned
+    /// nothing.
+    /// </summary>
+    private static IReadOnlyList<string> ResolveDisplayVerbs(ToolInteractionRequest request)
+        => request.CandidateVerbs.Count > 0
+            ? request.CandidateVerbs
+            : request.Patterns;
 
     private static void AppendAdoptedContextSummary(List<string> lines, ToolInteractionRequest request)
     {
@@ -220,12 +299,13 @@ internal static class SlackApprovalBlockBuilder
         => ApprovalButtonValueCodec.TryDecode(value, out callId, out selectedKey, out requesterSenderId);
 
     private static ButtonStyle GetButtonStyle(string optionKey)
-        => optionKey switch
-        {
-            ApprovalOptionKeys.Deny => ButtonStyle.Danger,
-            ApprovalOptionKeys.ApproveOnce => ButtonStyle.Primary,
-            _ => ButtonStyle.Default
-        };
+    {
+        if (ApprovalOptionKeys.IsDangerStyled(optionKey))
+            return ButtonStyle.Danger;
+        if (optionKey == ApprovalOptionKeys.ApproveOnce)
+            return ButtonStyle.Primary;
+        return ButtonStyle.Default;
+    }
 
     internal static bool IsApprovalActionId(string? actionId)
         => !string.IsNullOrWhiteSpace(actionId)
@@ -233,16 +313,6 @@ internal static class SlackApprovalBlockBuilder
 
     private static string BuildActionId(string optionKey)
         => $"{ApprovalActionId}_{optionKey}";
-
-    private static string GetDecisionLabel(string optionKey)
-        => optionKey switch
-        {
-            ApprovalOptionKeys.ApproveOnce => ApprovalOptionKeys.ApproveOnceLabel,
-            ApprovalOptionKeys.ApproveSession => ApprovalOptionKeys.ApproveSessionLabel,
-            ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
-            ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
-            _ => ApprovalOptionKeys.DenyLabel
-        };
 
     private static string EscapeMarkdown(string value)
         => value.Replace("`", "'", StringComparison.Ordinal);

@@ -28,6 +28,7 @@ using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using ShellSyntaxTree;
 using Netclaw.Providers.OAuth;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
@@ -606,8 +607,18 @@ static void ConfigureDaemonServices(
         .Get<SearchConfig>() ?? new SearchConfig();
     var searchBackend = searchConfig.Enabled ? CreateSearchBackend(searchConfig) : null;
 
+    // ConfigDirectory is hard-denied for agent writes and shell access to
+    // close the prompt-injection vector where an injected payload would
+    // instruct the agent to rewrite tool-approvals.json, hard-deny-overrides.json,
+    // or netclaw.json and grant itself global trust. Operators retain agency
+    // by editing config files outside the agent (their own editor) or via
+    // dedicated CLI commands that bypass the agent's tool-call path.
+    // Individual high-sensitivity paths (Secrets, Keys, etc.) are also listed
+    // explicitly for self-documenting intent — ConfigDirectory subsumes them
+    // but the explicit entries make the security purpose obvious to readers.
     var writeDenyList = new[]
     {
+        paths.ConfigDirectory,
         paths.SecretsPath,
         paths.KeysDirectory,
         paths.SqliteDbPath,
@@ -623,6 +634,7 @@ static void ConfigureDaemonServices(
     };
     var shellIndicatorList = new[]
     {
+        paths.ConfigDirectory,
         paths.SecretsPath,
         paths.WebhooksDirectory,
         paths.KeysDirectory,
@@ -634,8 +646,19 @@ static void ConfigureDaemonServices(
     var toolPathPolicy = new ToolPathPolicy(writeDenyList, readDenyList, shellIndicatorList);
     services.AddSingleton(toolPathPolicy);
 
-    var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns);
+    // Load operator-authored hard-deny overrides (additive only — see
+    // HardDenyOverridesLoader). Missing file → empty list and only shipped
+    // defaults apply. Malformed file → daemon refuses to start; the
+    // loader throws InvalidDataException with operator-facing context so
+    // the failure surfaces loudly rather than silently dropping rules.
+    var hardDenyOverridesLoader = new HardDenyOverridesLoader();
+    var hardDenyOverrides = hardDenyOverridesLoader.Load(paths.HardDenyOverridesPath);
+    services.AddSingleton(hardDenyOverridesLoader);
+
+    var shellCommandPolicy = new ShellCommandPolicy(toolConfig.HardDenyPatterns, hardDenyOverrides);
     services.AddSingleton(shellCommandPolicy);
+
+    services.AddShellParser();
 
     // Subagent timeout configuration
     var subAgentConfig = configuration.GetSection("SubAgents")
@@ -666,6 +689,19 @@ static void ConfigureDaemonServices(
         SchedulingEnabled: schedulingConfig.Enabled);
     var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
     var shellTrustZonePolicy = new ShellTrustZonePolicy(toolConfig, paths);
+    // Safe-verbs list: bundled per-OS defaults only — embedded resource in
+    // Netclaw.Configuration with no on-disk user override. Used by the
+    // approval gate's verb-pattern Layer to auto-allow demonstrably
+    // read-only verbs when invoked inside a trusted zone. Widening the
+    // list goes through code review and a daemon release, not a config
+    // edit, so the agent has no path to extend its own auto-pass surface
+    // at runtime.
+    var safeVerbs = SafeVerbLoader.Load();
+    services.AddSingleton(safeVerbs);
+
+    var bashParser = new BashParser();
+    services.AddSingleton<IShellParser>(bashParser);
+
     var toolAccessPolicy = new ToolAccessPolicy(
         toolConfig,
         effectivePolicyDefaults,
@@ -673,7 +709,8 @@ static void ConfigureDaemonServices(
         fileApprovalMatcher,
         toolPathPolicy,
         featureGates,
-        shellTrustZonePolicy);
+        shellTrustZonePolicy,
+        safeVerbs);
     services.AddSingleton(toolAccessPolicy);
 
     var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);

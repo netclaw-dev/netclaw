@@ -24,7 +24,7 @@ public sealed class ShellCommandPolicyTests
     {
         var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
+        Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }
 
     // ── Privilege escalation ──
@@ -40,7 +40,7 @@ public sealed class ShellCommandPolicyTests
     {
         var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
-        Assert.Equal("privilege_escalation", decision.DenyCategory);
+        Assert.Equal(DenyCategory.PrivilegeEscalation, decision.DenyCategory);
     }
 
     // ── System-destructive ──
@@ -55,7 +55,7 @@ public sealed class ShellCommandPolicyTests
     {
         var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
-        Assert.Equal("system_destructive", decision.DenyCategory);
+        Assert.Equal(DenyCategory.SystemDestructive, decision.DenyCategory);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class ShellCommandPolicyTests
     {
         var decision = _policy.Evaluate("echo hello && netclaw daemon stop");
         Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
+        Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public sealed class ShellCommandPolicyTests
     {
         var decision = _policy.Evaluate(command);
         Assert.False(decision.Allowed);
-        Assert.Equal("self_destructive", decision.DenyCategory);
+        Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
     }
 
     [Fact]
@@ -136,7 +136,7 @@ public sealed class ShellCommandPolicyTests
         var policy = new ShellCommandPolicy(additionalDenyPatterns: ["docker rm"]);
         var decision = policy.Evaluate("docker rm my-container");
         Assert.False(decision.Allowed);
-        Assert.Equal("custom_deny", decision.DenyCategory);
+        Assert.Equal(DenyCategory.CustomDeny, decision.DenyCategory);
     }
 
     [Fact]
