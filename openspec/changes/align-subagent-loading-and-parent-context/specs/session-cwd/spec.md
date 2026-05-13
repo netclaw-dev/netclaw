@@ -2,12 +2,11 @@
 
 ### Requirement: Project directory flows to spawned subagents as read-only context
 
-When a session spawns or routes execution into a subagent, the current
-`WorkingContext.ProjectDirectory` SHALL be copied into the child's immutable
-execution snapshot when it is set.
-
-This inherited value is read-only from the child. Subagent execution SHALL NOT
-mutate the parent session's `ProjectDirectory` or other `WorkingContext` state.
+The runtime SHALL copy the current `WorkingContext.ProjectDirectory` into the
+child's immutable execution snapshot when a session spawns or routes execution
+into a subagent and the directory is set. The inherited value is read-only from
+the child, and subagent execution SHALL NOT mutate the parent session's
+`ProjectDirectory` or other `WorkingContext` state.
 
 #### Scenario: Subagent inherits current project directory
 

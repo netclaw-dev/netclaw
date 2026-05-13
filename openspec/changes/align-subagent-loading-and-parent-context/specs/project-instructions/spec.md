@@ -2,10 +2,10 @@
 
 ### Requirement: Spawned subagents use inherited project instructions
 
-When a subagent execution inherits a non-null parent `project_dir`, the system
-SHALL resolve project identity files from that directory using the same
-precedence as the parent session and include the resulting project instructions
-in the subagent system prompt.
+The system SHALL resolve project identity files from the inherited parent
+`project_dir` using the same precedence as the parent session and SHALL include
+the resulting project instructions in the subagent system prompt when the
+inherited `project_dir` is non-null.
 
 #### Scenario: Subagent prompt includes inherited project instructions
 

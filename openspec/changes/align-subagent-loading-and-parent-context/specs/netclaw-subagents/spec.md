@@ -38,10 +38,10 @@ subagent executions without daemon restart.
 
 ### Requirement: Invalid reload changes fail closed
 
-When a reloaded subagent definition no longer passes loader validation, the
-runtime SHALL exclude that definition from the active registry snapshot and emit
+The runtime SHALL exclude reloaded subagent definitions that no longer pass
+loader validation from the active registry snapshot and SHALL emit
 deterministic diagnostics. The system SHALL NOT continue serving the prior
-version of that invalidated definition.
+version of an invalidated definition.
 
 #### Scenario: Invalid edit removes previously valid definition
 
