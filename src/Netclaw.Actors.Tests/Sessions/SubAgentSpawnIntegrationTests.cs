@@ -154,6 +154,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             registry,
             toolAccessPolicy,
             approvalService: null,
+            new StaticSystemPromptProvider(MainIdentityMarker),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance);
 
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, subAgentPaths));
@@ -227,6 +228,12 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         Assert.Equal(2, _clientProvider.Main.CallCount);
         Assert.Equal(1, _clientProvider.Compaction.CallCount);
+        Assert.NotNull(_recordingFileReadTool);
+        Assert.NotNull(_recordingFileReadTool!.LastContext);
+        Assert.EndsWith(
+            SessionDirectoryHelper.SanitizeSessionId(sessionId),
+            _recordingFileReadTool.LastContext!.SessionDirectory,
+            StringComparison.Ordinal);
 
         var subagentCall = Assert.Single(_clientProvider.Compaction.ReceivedMessages);
         Assert.Contains(subagentCall, m =>

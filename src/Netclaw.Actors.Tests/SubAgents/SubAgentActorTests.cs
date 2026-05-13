@@ -78,8 +78,40 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.True(fakeTool.WasCalled);
+        Assert.NotNull(fakeTool.LastContext);
         // Second LLM call returns text (tool calls only on first call)
         Assert.Contains("Response #2", result.Output);
+    }
+
+    [Fact]
+    public async Task Tool_execution_inherits_parent_session_and_project_directories()
+    {
+        var fakeTool = new FakeNetclawTool("inspect_context", "ok");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-context", "inspect_context")
+            ]
+        };
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Inspect the inherited paths.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentSessionDirectory = "/tmp/netclaw/sessions/abc",
+                ParentProjectDirectory = "/home/user/workspaces/netclaw"
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeTool.LastContext);
+        Assert.Equal("/tmp/netclaw/sessions/abc", fakeTool.LastContext!.SessionDirectory);
+        Assert.Equal("/home/user/workspaces/netclaw", fakeTool.LastContext.ProjectDirectory);
     }
 
     [Fact]

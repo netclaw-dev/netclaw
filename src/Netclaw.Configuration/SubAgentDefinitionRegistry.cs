@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Concurrent;
-
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -14,7 +12,9 @@ namespace Netclaw.Configuration;
 /// </summary>
 public sealed class SubAgentDefinitionRegistry
 {
-    private readonly ConcurrentDictionary<string, SubAgentProfile> _profiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _gate = new();
+    private Dictionary<string, SubAgentProfile> _registeredProfiles = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, SubAgentProfile> _fileProfiles = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Register a subagent profile. Rejects duplicates.
@@ -23,7 +23,44 @@ public sealed class SubAgentDefinitionRegistry
     public bool Register(SubAgentProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        return _profiles.TryAdd(profile.Name, profile);
+
+        lock (_gate)
+        {
+            if (_registeredProfiles.ContainsKey(profile.Name) || _fileProfiles.ContainsKey(profile.Name))
+                return false;
+
+            _registeredProfiles[profile.Name] = profile;
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Replace all file-loaded profiles with a fresh snapshot from disk.
+    /// Profiles that conflict with explicitly registered profiles are skipped.
+    /// </summary>
+    public IReadOnlyList<string> ReplaceFileProfiles(IEnumerable<SubAgentProfile> profiles)
+    {
+        ArgumentNullException.ThrowIfNull(profiles);
+
+        lock (_gate)
+        {
+            var next = new Dictionary<string, SubAgentProfile>(StringComparer.OrdinalIgnoreCase);
+            var conflicts = new List<string>();
+
+            foreach (var profile in profiles)
+            {
+                if (_registeredProfiles.ContainsKey(profile.Name))
+                {
+                    conflicts.Add(profile.Name);
+                    continue;
+                }
+
+                next[profile.Name] = profile;
+            }
+
+            _fileProfiles = next;
+            return conflicts;
+        }
     }
 
     /// <summary>
@@ -31,23 +68,39 @@ public sealed class SubAgentDefinitionRegistry
     /// </summary>
     public SubAgentProfile? TryGetByName(string name)
     {
-        return _profiles.TryGetValue(name, out var profile) ? profile : null;
+        lock (_gate)
+        {
+            if (_registeredProfiles.TryGetValue(name, out var registered))
+                return registered;
+
+            return _fileProfiles.TryGetValue(name, out var fileLoaded) ? fileLoaded : null;
+        }
     }
 
     /// <summary>
     /// Returns true when a profile with the given name exists.
     /// </summary>
-    public bool Contains(string name) => _profiles.ContainsKey(name);
+    public bool Contains(string name)
+    {
+        lock (_gate)
+        {
+            return _registeredProfiles.ContainsKey(name) || _fileProfiles.ContainsKey(name);
+        }
+    }
 
     /// <summary>
     /// Returns all user-facing profiles (visible to <c>spawn_agent</c> and discovery).
     /// </summary>
     public IReadOnlyList<SubAgentProfile> GetUserFacing()
     {
-        return _profiles.Values
-            .Where(p => p.Visibility == SubAgentVisibility.UserFacing)
-            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        lock (_gate)
+        {
+            return _registeredProfiles.Values
+                .Concat(_fileProfiles.Values)
+                .Where(p => p.Visibility == SubAgentVisibility.UserFacing)
+                .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
     }
 
     /// <summary>
@@ -55,13 +108,26 @@ public sealed class SubAgentDefinitionRegistry
     /// </summary>
     public IReadOnlyList<SubAgentProfile> GetAll()
     {
-        return _profiles.Values
-            .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        lock (_gate)
+        {
+            return _registeredProfiles.Values
+                .Concat(_fileProfiles.Values)
+                .OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
     }
 
     /// <summary>
     /// Returns the count of registered profiles.
     /// </summary>
-    public int Count => _profiles.Count;
+    public int Count
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _registeredProfiles.Count + _fileProfiles.Count;
+            }
+        }
+    }
 }

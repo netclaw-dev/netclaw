@@ -12,6 +12,7 @@ using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Tools;
 
@@ -30,6 +31,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
     private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
     private readonly SubAgentSpawner? _subAgentSpawner;
     private readonly SkillSyncConfig _skillSyncConfig;
+    private readonly FileSubAgentDefinitionLoader? _subAgentLoader;
     private readonly ILogger? _logger;
 
     public record Params(
@@ -47,7 +49,8 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         SubAgentDefinitionRegistry? subAgentRegistry = null,
         SubAgentSpawner? subAgentSpawner = null,
         SkillSyncConfig? skillSyncConfig = null,
-        ILogger<SkillLoadTool>? logger = null)
+        ILogger<SkillLoadTool>? logger = null,
+        FileSubAgentDefinitionLoader? subAgentLoader = null)
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
@@ -55,6 +58,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         _subAgentRegistry = subAgentRegistry;
         _subAgentSpawner = subAgentSpawner;
         _skillSyncConfig = skillSyncConfig ?? new SkillSyncConfig();
+        _subAgentLoader = subAgentLoader;
         _logger = logger;
     }
 
@@ -89,6 +93,8 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             {
                 return $"Skill '{name}' routes to subagent '{decision.RoutedSubagent}', but routed skill execution is unavailable in this runtime.";
             }
+
+            RefreshSubagentsIfNeeded();
 
             if (string.IsNullOrWhiteSpace(args.Task))
             {
@@ -176,6 +182,15 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         }
 
         return sb.ToString();
+    }
+
+    private void RefreshSubagentsIfNeeded()
+    {
+        if (_subAgentLoader is null || _subAgentRegistry is null)
+            return;
+
+        if (_subAgentLoader.RefreshIfChanged(out var profiles))
+            _subAgentRegistry.ReplaceFileProfiles(profiles);
     }
 
 }

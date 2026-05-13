@@ -708,6 +708,7 @@ public class SkillToolTests : IDisposable
             registry,
             policy,
             approvalService: null,
+            NullSystemPromptProvider.Instance,
             NullLogger<SubAgentSpawner>.Instance);
     }
 

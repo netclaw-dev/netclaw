@@ -36,6 +36,7 @@ internal static class SkillToolRegistration
         var metrics = services.GetService<ISessionMetrics>();
         var subAgentRegistry = services.GetService<SubAgentDefinitionRegistry>();
         var subAgentSpawner = services.GetService<SubAgentSpawner>();
+        var subAgentLoader = services.GetService<FileSubAgentDefinitionLoader>();
         var skillSyncConfig = services.GetService<SkillSyncConfig>();
         var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
@@ -52,6 +53,7 @@ internal static class SkillToolRegistration
             subAgentRegistry,
             subAgentSpawner,
             skillSyncConfig,
+            subAgentLoader,
             loggerFactory.CreateLogger<SkillLoadTool>());
     }
 }

@@ -35,7 +35,8 @@ public sealed record SessionToolServices(
     Skills.SkillRegistry? SkillRegistry,
     IToolApprovalService? ApprovalService = null,
     SubAgentDefinitionRegistry? SubAgentRegistry = null,
-    SubAgentSpawner? SubAgentSpawner = null);
+    SubAgentSpawner? SubAgentSpawner = null,
+    FileSubAgentDefinitionLoader? SubAgentLoader = null);
 
 /// <summary>
 /// Memory infrastructure for recall, checkpoint, and curation.

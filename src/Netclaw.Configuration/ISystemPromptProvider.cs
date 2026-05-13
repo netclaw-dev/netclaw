@@ -18,6 +18,12 @@ public interface ISystemPromptProvider
     /// <param name="audience">The trust audience for the current session.</param>
     /// <param name="projectDirectory">Optional project root for loading project-scoped identity files.</param>
     string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null);
+
+    /// <summary>
+    /// Get only the project-scoped identity content for a project directory.
+    /// Returns null when no project instructions are available for the audience.
+    /// </summary>
+    string? GetProjectInstructions(TrustAudience audience, string? projectDirectory);
 }
 
 /// <summary>
@@ -73,6 +79,8 @@ public sealed class StaticSystemPromptProvider : ISystemPromptProvider
     }
 
     public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => _prompt;
+
+    public string? GetProjectInstructions(TrustAudience audience, string? projectDirectory) => null;
 }
 
 /// <summary>
@@ -83,6 +91,8 @@ public sealed class NullSystemPromptProvider : ISystemPromptProvider
     public static readonly NullSystemPromptProvider Instance = new();
 
     public string GetSystemPrompt(TrustAudience audience, string? projectDirectory = null) => string.Empty;
+
+    public string? GetProjectInstructions(TrustAudience audience, string? projectDirectory) => null;
 }
 
 /// <summary>
@@ -179,7 +189,7 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
         if (audience != TrustAudience.Public)
         {
             tooling = TryReadFile(_paths.ToolingPath) ?? TryReadFile(_paths.UserPreferencesPath);
-            projectInstructions = TryReadProjectIdentityFile(projectDirectory);
+            projectInstructions = GetProjectInstructions(audience, projectDirectory);
         }
 
         return SystemPromptAssembler.Assemble(
@@ -187,6 +197,14 @@ public sealed class FileSystemPromptProvider : ISystemPromptProvider
             agents: agents,
             tooling: tooling,
             projectInstructions: projectInstructions);
+    }
+
+    public string? GetProjectInstructions(TrustAudience audience, string? projectDirectory)
+    {
+        if (audience == TrustAudience.Public)
+            return null;
+
+        return TryReadProjectIdentityFile(projectDirectory);
     }
 
     /// <summary>

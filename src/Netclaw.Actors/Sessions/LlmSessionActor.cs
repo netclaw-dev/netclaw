@@ -153,6 +153,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly Skills.SkillRegistry? _skillRegistry;
     private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
     private readonly SubAgentSpawner? _subAgentSpawner;
+    private readonly FileSubAgentDefinitionLoader? _subAgentLoader;
 
     // Memory recall state (transient — reset at turn boundaries and compaction)
     private readonly SessionRecallManager _recallManager = new();
@@ -198,6 +199,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _skillRegistry = tools?.SkillRegistry;
         _subAgentRegistry = tools?.SubAgentRegistry;
         _subAgentSpawner = tools?.SubAgentSpawner;
+        _subAgentLoader = tools?.SubAgentLoader;
         _toolExecutor = tools?.ToolExecutor;
         _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
@@ -1666,6 +1668,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             bgJobManager = mgr;
 
         _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
+            _state.WorkingContext.ProjectDirectory,
             approvalChannel: _approvalChannel,
             emitApprovalRequest: request => self.Tell(request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
@@ -2622,6 +2625,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return true;
         }
 
+        RefreshSubagentsIfNeeded();
+
         var profile = _subAgentRegistry.TryGetByName(routedSubagent);
         if (profile is null)
         {
@@ -2714,6 +2719,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Audience = _currentTurnSource is null ? null : _currentTurnSource.Audience.ToWireValue(),
                 Boundary = _currentTurnSource?.Boundary,
                 ChannelType = _currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue(),
+                ProjectDirectory = _state.WorkingContext.ProjectDirectory,
                 SupportsInteractiveApproval = false,
             };
 
@@ -2753,6 +2759,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             self.Tell(new RoutedSkillExecutionFailed(skill.Name, profile.Name, ex.Message));
         }
+    }
+
+    private void RefreshSubagentsIfNeeded()
+    {
+        if (_subAgentLoader is null || _subAgentRegistry is null)
+            return;
+
+        if (_subAgentLoader.RefreshIfChanged(out var profiles))
+            _subAgentRegistry.ReplaceFileProfiles(profiles);
     }
 
     private void HandleRoutedSkillExecutionCompleted(RoutedSkillExecutionCompleted msg)

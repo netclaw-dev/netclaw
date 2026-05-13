@@ -117,4 +117,19 @@ public class SubAgentDefinitionRegistryTests
         Assert.Equal("alpha-agent", userFacing[0].Name);
         Assert.Equal("zebra-agent", userFacing[1].Name);
     }
+
+    [Fact]
+    public void ReplaceFileProfiles_replaces_only_file_backed_entries()
+    {
+        var registry = new SubAgentDefinitionRegistry();
+        registry.Register(CreateProfile("internal-platform-agent", SubAgentVisibility.Internal));
+
+        registry.ReplaceFileProfiles([CreateProfile("file-agent-a"), CreateProfile("file-agent-b")]);
+        registry.ReplaceFileProfiles([CreateProfile("file-agent-b")]);
+
+        var all = registry.GetAll();
+        Assert.Contains(all, p => p.Name == "internal-platform-agent");
+        Assert.DoesNotContain(all, p => p.Name == "file-agent-a");
+        Assert.Contains(all, p => p.Name == "file-agent-b");
+    }
 }

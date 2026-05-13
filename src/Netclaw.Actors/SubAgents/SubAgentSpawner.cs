@@ -25,6 +25,7 @@ public sealed class SubAgentSpawner
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolAccessPolicy _toolAccessPolicy;
     private readonly IToolApprovalService? _approvalService;
+    private readonly ISystemPromptProvider _promptProvider;
     private readonly ILogger<SubAgentSpawner> _logger;
 
     public SubAgentSpawner(
@@ -32,12 +33,14 @@ public sealed class SubAgentSpawner
         ToolRegistry toolRegistry,
         ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService,
+        ISystemPromptProvider promptProvider,
         ILogger<SubAgentSpawner> logger)
     {
         _chatClientProvider = chatClientProvider;
         _toolRegistry = toolRegistry;
         _toolAccessPolicy = toolAccessPolicy;
         _approvalService = approvalService;
+        _promptProvider = promptProvider;
         _logger = logger;
     }
 
@@ -85,7 +88,8 @@ public sealed class SubAgentSpawner
             SystemPrompt = AppendSystemPromptOverlay(profile.SystemPrompt, systemPromptOverlay),
             Tools = tools,
             ModelRole = profile.ModelRole,
-            EmitStructuredFindings = profile.EmitStructuredFindings
+            EmitStructuredFindings = profile.EmitStructuredFindings,
+            ProjectInstructions = ResolveProjectInstructions(context)
         };
 
         var runId = Guid.NewGuid().ToString("N");
@@ -123,6 +127,8 @@ public sealed class SubAgentSpawner
                     Audience = context.Audience,
                     Boundary = context.Boundary,
                     ChannelType = context.ChannelType,
+                    ParentSessionDirectory = context.SessionDirectory,
+                    ParentProjectDirectory = context.ProjectDirectory,
                     Cancellation = ct,
                     ApprovalBridge = context.ApprovalBridge
                 },
@@ -241,5 +247,14 @@ public sealed class SubAgentSpawner
             "\n\n",
             "[Skill Overlay]\n",
             overlay.Trim());
+    }
+
+    private string? ResolveProjectInstructions(ToolExecutionContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.ProjectDirectory))
+            return null;
+
+        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
+        return _promptProvider.GetProjectInstructions(audience, context.ProjectDirectory);
     }
 }

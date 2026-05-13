@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.SubAgents;
@@ -63,7 +62,7 @@ internal sealed class ToolIndexUpdater : IHostedService
         LoadFileBasedAgents();
 
         // Register spawn_agent tool now that all agents and the spawner are available.
-        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig));
+        _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig, _agentLoader));
 
         // Write catalogs after all tools are registered.
         _shadowCatalogWriter.WriteCatalogs();
@@ -83,73 +82,23 @@ internal sealed class ToolIndexUpdater : IHostedService
     private void LoadFileBasedAgents()
     {
         var profiles = _agentLoader.LoadAll();
-        var loaded = 0;
-        foreach (var profile in profiles)
+        var conflicts = _subAgentRegistry.ReplaceFileProfiles(profiles);
+
+        foreach (var conflict in conflicts)
         {
-            if (_subAgentRegistry.Register(profile))
-            {
-                loaded++;
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Agent '{Name}' from file conflicts with an existing registration — skipping",
-                    profile.Name);
-            }
+            _logger.LogWarning(
+                "Agent '{Name}' from file conflicts with an existing registration — skipping",
+                conflict);
         }
 
-        if (loaded > 0)
-            _logger.LogInformation("Loaded {Count} file-based agent definition(s)", loaded);
+        if (profiles.Count > 0)
+            _logger.LogInformation("Loaded {Count} file-based agent definition(s)", profiles.Count - conflicts.Count);
     }
 
     private void UpdateSubAgentDiscovery()
     {
         var agents = _subAgentRegistry.GetUserFacing();
-        if (agents.Count == 0)
-        {
-            var allowedTools = string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools());
-            var emptyState = new StringBuilder();
-            emptyState.AppendLine("[available-subagents — use spawn_agent to delegate]");
-            emptyState.AppendLine();
-            emptyState.AppendLine("No user-facing subagents are currently registered.");
-            emptyState.AppendLine($"Agents directory: {_paths.AgentsDirectory}");
-            emptyState.AppendLine($"Allowed tools for user-facing agents: {allowedTools}");
-            emptyState.AppendLine();
-            emptyState.AppendLine("To add one: create an agent definition at <agents-directory>/<name>.md and reload the daemon.");
-            emptyState.AppendLine("Then call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`.");
-
-            _subAgentDiscoveryLayer.Update(emptyState.ToString());
-            _logger.LogWarning(
-                "Subagent discovery layer updated with empty-state guidance (agentsDirectory={AgentsDirectory}, allowedTools={AllowedTools})",
-                _paths.AgentsDirectory,
-                allowedTools);
-            return;
-        }
-
-        var sb = new StringBuilder();
-        sb.AppendLine("[available-subagents — use spawn_agent to delegate]");
-        sb.AppendLine();
-
-        foreach (var agent in agents)
-        {
-            sb.AppendLine($"## {agent.Name}");
-            sb.AppendLine($"{agent.Description}");
-            sb.Append("Tools: ");
-            sb.AppendLine(string.Join(", ", agent.ToolNames));
-            sb.AppendLine($"Timeout: {agent.TimeoutSeconds}s");
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("## How to delegate");
-        sb.AppendLine("Call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`.");
-        sb.AppendLine();
-        sb.AppendLine("- `task` is what the subagent should do — be concrete and bounded.");
-        sb.AppendLine("- `context` is optional per-invocation background (workspace details, the user's broader goal,");
-        sb.AppendLine("  facts the subagent would otherwise have to rediscover). Do NOT duplicate the agent's built-in");
-        sb.AppendLine("  instructions — use this for THIS invocation's situation.");
-        sb.AppendLine("- Subagents run autonomously with their own tools and return a synthesized result, not a transcript.");
-
-        _subAgentDiscoveryLayer.Update(sb.ToString());
+        _subAgentDiscoveryLayer.Update(SubAgentDiscoveryContextLayer.BuildIndex(agents, _paths.AgentsDirectory));
         _logger.LogInformation("Subagent discovery layer updated ({Count} agents)", agents.Count);
     }
 

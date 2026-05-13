@@ -27,6 +27,7 @@ internal sealed class FakeNetclawTool : INetclawTool
 
     public bool WasCalled { get; private set; }
     public IDictionary<string, object?>? LastArguments { get; private set; }
+    public ToolExecutionContext? LastContext { get; private set; }
 
     public AITool ToAITool() => AIFunctionFactory.Create(() => _result, name: Name, description: Description);
 
@@ -35,5 +36,11 @@ internal sealed class FakeNetclawTool : INetclawTool
         WasCalled = true;
         LastArguments = arguments;
         return Task.FromResult(_result);
+    }
+
+    public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
+    {
+        LastContext = context;
+        return ExecuteAsync(arguments, ct);
     }
 }

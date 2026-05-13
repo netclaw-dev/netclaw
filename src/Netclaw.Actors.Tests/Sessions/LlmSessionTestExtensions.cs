@@ -49,7 +49,8 @@ internal static class LlmSessionTestExtensions
                 sp.GetService<SkillRegistry>(),
                 sp.GetService<IToolApprovalService>(),
                 sp.GetService<SubAgentDefinitionRegistry>(),
-                sp.GetService<SubAgentSpawner>()));
+                sp.GetService<SubAgentSpawner>(),
+                sp.GetService<FileSubAgentDefinitionLoader>()));
         }
 
         return services;

@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.2.0"
 ---
 
 # Subagent Authoring
@@ -75,7 +75,7 @@ The markdown body below the closing `---` must also be non-empty.
 
 | Field | Default | Notes |
 |------|---------|-------|
-| `tools` | (inherit all) | List of tool names. When omitted, the subagent inherits all session tools including MCP tools. When specified, acts as a whitelist to limit access. |
+| `tools` | (attempt all, then filter) | List of tool names. When omitted, the runtime starts from all registered tools, then filters user-facing agents through the safe allowlist. When specified, it acts as a whitelist before the same filter is applied. |
 | `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values fall back to `Compaction`. |
 | `timeoutSeconds` | `60` | Wall-clock timeout for subagent execution. |
 | `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values fall back to `user-facing`. |
@@ -88,33 +88,47 @@ Unknown fields are ignored.
 ```markdown
 ---
 name: notion-planner
-description: Automates daily planning workflow in Notion
+description: Summarizes local daily planning notes for the parent session
 timeoutSeconds: 120
+tools: [file_read]
 ---
 
-You are a planning assistant that works with Notion.
+You are a planning assistant that reviews daily planning notes.
 
 ## Goal
 
-Create and update daily plans in the user's Notion workspace.
+Summarize the latest planning notes and highlight next actions.
 
 ## Guidelines
 
-- Use Notion MCP tools to search, fetch, and create/update pages
-- If you encounter connectivity issues, report them clearly
+- Use file_read to inspect local planning notes and related reference files
+- If a referenced file is missing, report that clearly
 - Follow the user's existing plan format and structure
 ```
 
-This agent inherits all session tools (including Notion MCP tools) because no
-`tools` field is specified.
+This agent does not automatically inherit every parent-session tool. User-facing
+subagents are filtered to the safe allowlist (`attach_file`, `file_read`,
+`web_fetch`, `web_search`) even when `tools` is omitted.
 
 ## Fail-loud loader behavior
 
-At startup, invalid files are skipped with warnings. Common rejection reasons:
+On the next turn or subagent lookup, invalid files are skipped with warnings.
+Common rejection reasons:
 - missing or unparseable YAML frontmatter
 - missing required fields (`name`, `description`)
 - empty markdown body
 - duplicate `name` across files (first file in stable sorted order wins)
+
+If you edit a previously valid file into an invalid state, the runtime drops it
+from the active subagent catalog on the next reload instead of serving the stale
+last-known-good definition.
+
+## Inherited parent context
+
+Spawned subagents inherit the parent session's `session_dir` and current
+`project_dir` as read-only grounding. The child can use those paths for file
+resolution and project instruction loading, but it does not mutate the parent
+session's working context.
 
 Non-`.md` files in `~/.netclaw/agents` are ignored.
 
@@ -134,9 +148,9 @@ with real user-facing subagent definitions.
 ## Verification checklist
 
 After creating or editing a subagent file:
-1. restart `netclawd` (subagent files are loaded at startup)
+1. save the file and trigger the next turn or subagent lookup
 2. confirm the agent appears in `[available-subagents]`
-3. run a small `spawn_agent` task to verify tools and output
+3. run a small `spawn_agent` task to verify tools, inherited context, and output
 4. if missing, check daemon logs for the rejection reason
 
 If the user has no agent files yet, `netclaw init` seeds starter definitions.

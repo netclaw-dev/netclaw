@@ -46,6 +46,7 @@ internal static class SessionToolExecutionPipeline
         IActorRef self,
         Action<SubAgentOutput> emitSubAgentOutput,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
+        string? projectDir = null,
         IApprovalChannel? approvalChannel = null,
         Action<ToolInteractionRequest>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
@@ -68,6 +69,7 @@ internal static class SessionToolExecutionPipeline
                 maxInlineToolResultChars,
                 emitSubAgentOutput,
                 spawnChildActor,
+                projectDir,
                 timeout,
                 CancellationToken.None,
                 approvalChannel,
@@ -118,6 +120,7 @@ internal static class SessionToolExecutionPipeline
         int maxInlineToolResultChars,
         Action<SubAgentOutput> emitSubAgentOutput,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
+        string? projectDir,
         TimeSpan timeout,
         CancellationToken ct,
         IApprovalChannel? approvalChannel = null,
@@ -139,7 +142,7 @@ internal static class SessionToolExecutionPipeline
 
         var sw = Stopwatch.StartNew();
         string resultText;
-        var context = BuildToolExecutionContext(sessionId, source, sessionDir, spawnChildActor);
+        var context = BuildToolExecutionContext(sessionId, source, sessionDir, spawnChildActor, projectDir);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
         if (approvalChannel is not null && emitApprovalRequest is not null)
         {
@@ -610,12 +613,14 @@ internal static class SessionToolExecutionPipeline
         SessionId sessionId,
         MessageSource? source,
         string sessionDir,
-        Func<object, string, CancellationToken, Task<object>> spawnChildActor)
+        Func<object, string, CancellationToken, Task<object>> spawnChildActor,
+        string? projectDir)
     {
         var context = new ToolExecutionContext(sessionId.Value, sessionDir);
         context.Audience = source is null ? null : source.Audience.ToWireValue();
         context.Boundary = source?.Boundary;
         context.ChannelType = source is null ? null : source.ChannelType.ToWireValue();
+        context.ProjectDirectory = projectDir;
         context.SupportsInteractiveApproval = source?.ChannelType.SupportsInteractiveApproval();
         context.SpawnChildActor = spawnChildActor;
         return context;

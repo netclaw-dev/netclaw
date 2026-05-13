@@ -168,7 +168,7 @@ findings into clear, well-organized summaries.
 |-------|----------|---------|-------------|
 | `name` | Yes | — | Unique identifier. Used in `spawn_agent(agent: "<name>")`. Duplicate names across files are rejected with a warning. |
 | `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
-| `tools` | No | (inherit all) | List of tool names. When omitted, inherits all session tools including MCP tools. When specified, acts as a whitelist to limit access. |
+| `tools` | No | (attempt all, then filter) | List of tool names. When omitted, the runtime starts from all registered tools, then filters user-facing agents through the safe allowlist. When specified, it acts as a whitelist before the same user-facing filter is applied. |
 | `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
 | `timeoutSeconds` | No | `60` | Wall-clock timeout in seconds. |
 | `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
@@ -181,16 +181,15 @@ written.
 
 ### Loader behavior (fail loud)
 
-At daemon startup, `FileSubAgentDefinitionLoader` scans `~/.netclaw/agents/*.md`
-and logs a specific warning for every file it rejects. A rejection does not
-stop the scan — other valid files in the same directory still load. Rejection
+On the next turn or subagent lookup, `FileSubAgentDefinitionLoader` rescans
+`~/.netclaw/agents/*.md` and logs a specific warning for every file it rejects.
+A rejection does not stop the scan — other valid files in the same directory
+still load. Rejection
 reasons:
 
 - Missing or unparseable YAML frontmatter
-- Missing required field (`name`, `description`, or `tools`)
+- Missing required field (`name` or `description`)
 - Empty body (system prompt)
-- Empty `tools` list
-- One or more tools not in the user-facing allowlist
 - Duplicate `name` across files (the alphabetically-first file wins)
 
 Non-`.md` files in the agents directory (`stray.json`, `README.txt`, etc.) are
@@ -211,13 +210,21 @@ ignored at the glob layer and never logged.
 
 ### Tool access
 
-When `tools` is omitted from the frontmatter, the subagent inherits all session
-tools including MCP tools. This is the recommended default — it matches Claude
-Code's agent format and lets subagents use whatever capabilities the session has.
+When `tools` is omitted from the frontmatter, the runtime starts from all
+registered tools and then filters user-facing subagents through the safe
+allowlist (`attach_file`, `file_read`, `web_fetch`, `web_search`). This keeps
+file-authored subagents read-oriented even if the parent session has broader
+tool access.
 
 When `tools` is specified, it acts as a whitelist limiting which tools the
-subagent can access. Use this when you want to restrict a subagent to specific
-capabilities (e.g., read-only access via `tools: [file_read, web_search]`).
+subagent can access before the same user-facing allowlist is applied. Use this
+when you want to restrict a subagent to specific capabilities (e.g., read-only
+access via `tools: [file_read, web_search]`).
+
+Spawned subagents inherit the parent session's `session_dir` and current
+`project_dir` as read-only grounding. That means file tools resolve against the
+same session directory snapshot, and project-scoped instructions are loaded from
+the inherited project root for future runs.
 
 ## Built-in agents
 
@@ -227,8 +234,8 @@ definitions — you can edit or delete them.
 **research-assistant** — Deep web research with search and citation.
 Tools: `web_search`, `web_fetch`, `file_read`, `attach_file`. Timeout: 120s.
 
-**code-analyst** — Analyze code, run commands, and review files.
-Tools: (inherits all). Timeout: 120s.
+**code-analyst** — Analyze code and review files.
+Tools: filtered to the user-facing safe set when loaded from disk. Timeout: 120s.
 
 **summarizer** — Summarize documents and content concisely.
 Tools: `file_read`. Timeout: 60s.
@@ -257,14 +264,17 @@ parent session should do next.
 - Cite file paths with line numbers when referencing specific content.
 ```
 
-Restart the daemon. The agent loads at startup after MCP servers connect (so
-MCP tool names are resolvable) and appears in the `[available-subagents]`
-discovery block.
+Save the file. The next turn or subagent lookup reloads the on-disk definitions
+and refreshes the `[available-subagents]` discovery block.
 
 If a tool name in your frontmatter doesn't match any registered tool, or falls
 outside the user-facing allowlist, the agent is skipped with a specific
 warning in the daemon log naming both the file and the disallowed tool — look
 there first when a new agent "doesn't show up."
+
+If you edit a previously valid agent into an invalid state, the runtime drops it
+from the active catalog on the next reload instead of serving the stale last
+known-good version.
 
 ## Limitations
 

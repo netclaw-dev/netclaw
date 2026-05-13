@@ -63,6 +63,12 @@ public sealed class ToolExecutionContext
         SessionDirectory = sessionDirectory;
     }
 
+    /// <summary>
+    /// Parent session's current project directory when subagent execution is spawned.
+    /// Read-only execution grounding; child runs must not mutate parent state.
+    /// </summary>
+    public string? ProjectDirectory { get; set; }
+
     public string? Audience { get; set; }
 
     public string? Boundary { get; set; }

@@ -104,10 +104,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var scopeId = !string.IsNullOrWhiteSpace(msg.SessionScopeId)
                 ? msg.SessionScopeId!
                 : $"subagent/{_definition.Name}/{Guid.NewGuid():N}";
-            _toolExecutionContext = new ToolExecutionContext(scopeId, null);
+            _toolExecutionContext = new ToolExecutionContext(scopeId, msg.ParentSessionDirectory);
             _toolExecutionContext.Audience = msg.Audience ?? TrustAudience.Personal.ToWireValue();
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
+            _toolExecutionContext.ProjectDirectory = msg.ParentProjectDirectory;
             _toolExecutionContext.SupportsInteractiveApproval = _approvalBridge is not null;
             _executionCts = new CancellationTokenSource();
             var self = Self; // Capture before callback — Self requires active actor context
@@ -119,7 +120,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // Build initial conversation: system prompt (from file, verbatim) + task as user message.
             // If the caller supplied runtime context, prefix it onto the user message so the
             // system prompt stays reproducible across invocations.
-            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, _definition.SystemPrompt));
+            _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildSystemPrompt(_definition)));
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildUserMessage(msg.RuntimeContext, msg.Task)));
 
             _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, timeout={Timeout})",
@@ -494,11 +495,20 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Boundary = source.Boundary,
             RequestedTimeoutSeconds = source.RequestedTimeoutSeconds,
             ChannelType = source.ChannelType,
+            ProjectDirectory = source.ProjectDirectory,
             SupportsInteractiveApproval = source.SupportsInteractiveApproval,
             OnSubAgentActivity = source.OnSubAgentActivity,
             SpawnChildActor = source.SpawnChildActor,
             ApprovalBridge = source.ApprovalBridge
         };
+
+    private static string BuildSystemPrompt(SubAgentDefinition definition)
+    {
+        if (string.IsNullOrWhiteSpace(definition.ProjectInstructions))
+            return definition.SystemPrompt;
+
+        return SystemPromptAssembler.Assemble(agents: definition.SystemPrompt, projectInstructions: definition.ProjectInstructions);
+    }
 
     /// <summary>Singleton timeout marker message.</summary>
     private sealed class SubAgentTimeout

@@ -135,6 +135,11 @@ subagent would otherwise have to rediscover. Use it to specialize a
 general-purpose subagent for the current invocation instead of authoring
 a whole new agent file. Do not duplicate the agent's built-in instructions.
 
+**Live reload and grounding:** File-defined subagents under `~/.netclaw/agents`
+reload automatically on the next turn or subagent lookup. Invalid edits fail
+closed — the broken agent disappears until fixed. Spawned subagents inherit the
+parent session's `session_dir` and current `project_dir` as read-only grounding.
+
 **Parallelization tip:** When researching multiple independent topics, spawn
 separate subagents for each — they run concurrently and reduce total wait time.
 

@@ -299,6 +299,60 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
         Assert.DoesNotContain(_logger.Warnings, w => w.Contains("stray.json", StringComparison.Ordinal));
         Assert.DoesNotContain(_logger.Warnings, w => w.Contains("readme.txt", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void RefreshIfChanged_detects_valid_edits_and_reloads_profiles()
+    {
+        var path = WriteAgent("reloadable.md", """
+            ---
+            name: reloadable
+            description: First description
+            tools: [file_read]
+            ---
+
+            First body.
+            """);
+
+        var first = _loader.LoadAll();
+        var initial = Assert.Single(first);
+        Assert.Equal("First description", initial.Description);
+
+        File.WriteAllText(path, """
+            ---
+            name: reloadable
+            description: Updated description
+            tools: [file_read]
+            ---
+
+            Updated body.
+            """);
+
+        Assert.True(_loader.RefreshIfChanged(out var refreshed));
+        var updated = Assert.Single(refreshed);
+        Assert.Equal("Updated description", updated.Description);
+        Assert.Contains("Updated body.", updated.SystemPrompt);
+    }
+
+    [Fact]
+    public void RefreshIfChanged_detects_deletes_and_returns_empty_snapshot()
+    {
+        var path = WriteAgent("temporary.md", """
+            ---
+            name: temporary
+            description: Temporary agent
+            tools: [file_read]
+            ---
+
+            body
+            """);
+
+        Assert.Single(_loader.LoadAll());
+
+        File.Delete(path);
+
+        Assert.True(_loader.RefreshIfChanged(out var refreshed));
+        Assert.Empty(refreshed);
+    }
 }
 
 /// <summary>

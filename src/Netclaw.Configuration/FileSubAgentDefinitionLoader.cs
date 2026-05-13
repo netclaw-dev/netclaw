@@ -16,8 +16,12 @@ namespace Netclaw.Configuration;
 /// </summary>
 public sealed class FileSubAgentDefinitionLoader
 {
+    private sealed record LoadSnapshot(string Fingerprint, IReadOnlyList<SubAgentProfile> Profiles);
+
     private readonly string _agentsDirectory;
     private readonly ILogger<FileSubAgentDefinitionLoader> _logger;
+    private readonly object _snapshotGate = new();
+    private LoadSnapshot? _lastSnapshot;
 
     public FileSubAgentDefinitionLoader(NetclawPaths paths, ILogger<FileSubAgentDefinitionLoader> logger)
     {
@@ -31,6 +35,44 @@ public sealed class FileSubAgentDefinitionLoader
     /// Duplicate <c>name</c> values across files are rejected for all but the first occurrence.
     /// </summary>
     public IReadOnlyList<SubAgentProfile> LoadAll()
+    {
+        return LoadCurrentSnapshot().Profiles;
+    }
+
+    public bool RefreshIfChanged(out IReadOnlyList<SubAgentProfile> profiles)
+    {
+        var currentFingerprint = ComputeDirectoryFingerprint();
+
+        lock (_snapshotGate)
+        {
+            if (_lastSnapshot is not null && string.Equals(_lastSnapshot.Fingerprint, currentFingerprint, StringComparison.Ordinal))
+            {
+                profiles = _lastSnapshot.Profiles;
+                return false;
+            }
+        }
+
+        var snapshot = LoadCurrentSnapshot();
+        profiles = snapshot.Profiles;
+        return true;
+    }
+
+    private LoadSnapshot LoadCurrentSnapshot()
+    {
+        var fingerprint = ComputeDirectoryFingerprint();
+
+        lock (_snapshotGate)
+        {
+            if (_lastSnapshot is not null && string.Equals(_lastSnapshot.Fingerprint, fingerprint, StringComparison.Ordinal))
+                return _lastSnapshot;
+
+            var profiles = LoadProfilesFromDisk();
+            _lastSnapshot = new LoadSnapshot(fingerprint, profiles);
+            return _lastSnapshot;
+        }
+    }
+
+    private IReadOnlyList<SubAgentProfile> LoadProfilesFromDisk()
     {
         if (!Directory.Exists(_agentsDirectory))
         {
@@ -48,7 +90,6 @@ public sealed class FileSubAgentDefinitionLoader
         var results = new List<SubAgentProfile>();
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // Enumerate files in a stable order so duplicate-name diagnostics are deterministic.
         foreach (var filePath in files.OrderBy(p => p, StringComparer.Ordinal))
         {
             var profile = TryParse(filePath);
@@ -71,6 +112,22 @@ public sealed class FileSubAgentDefinitionLoader
         }
 
         return results;
+    }
+
+    private string ComputeDirectoryFingerprint()
+    {
+        if (!Directory.Exists(_agentsDirectory))
+            return "missing";
+
+        var files = Directory.GetFiles(_agentsDirectory, "*.md")
+            .OrderBy(p => p, StringComparer.Ordinal)
+            .Select(path =>
+            {
+                var info = new FileInfo(path);
+                return $"{path}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+            });
+
+        return string.Join(";", files);
     }
 
     private SubAgentProfile? TryParse(string filePath)
