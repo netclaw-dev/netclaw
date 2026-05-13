@@ -50,7 +50,7 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
         return _index;
     }
 
-    public static string BuildIndex(IReadOnlyList<SubAgentProfile> agents, string agentsDirectory)
+    internal static string BuildIndex(IReadOnlyList<SubAgentProfile> agents, string agentsDirectory)
     {
         if (agents.Count == 0)
         {
@@ -102,11 +102,8 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
         if (_loader is null || _registry is null || string.IsNullOrWhiteSpace(_agentsDirectory))
             return;
 
-        var changed = _loader.RefreshIfChanged(out var profiles);
-        if (changed)
-            _registry.ReplaceFileProfiles(profiles);
-
-        if (string.IsNullOrWhiteSpace(_index) || changed)
+        var changed = _loader.SyncInto(_registry);
+        if (changed || string.IsNullOrWhiteSpace(_index))
             _index = BuildIndex(_registry.GetUserFacing(), _agentsDirectory);
     }
 }

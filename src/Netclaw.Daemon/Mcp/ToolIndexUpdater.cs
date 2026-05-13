@@ -23,7 +23,6 @@ internal sealed class ToolIndexUpdater : IHostedService
     private readonly McpShadowCatalogWriter _shadowCatalogWriter;
     private readonly ToolRegistry _toolRegistry;
     private readonly MemoryIndexContextLayer _memoryIndexLayer;
-    private readonly SubAgentDiscoveryContextLayer _subAgentDiscoveryLayer;
     private readonly SubAgentDefinitionRegistry _subAgentRegistry;
     private readonly FileSubAgentDefinitionLoader _agentLoader;
     private readonly SubAgentSpawner _subAgentSpawner;
@@ -35,7 +34,6 @@ internal sealed class ToolIndexUpdater : IHostedService
         McpShadowCatalogWriter shadowCatalogWriter,
         ToolRegistry toolRegistry,
         MemoryIndexContextLayer memoryIndexLayer,
-        SubAgentDiscoveryContextLayer subAgentDiscoveryLayer,
         SubAgentDefinitionRegistry subAgentRegistry,
         FileSubAgentDefinitionLoader agentLoader,
         SubAgentSpawner subAgentSpawner,
@@ -46,7 +44,6 @@ internal sealed class ToolIndexUpdater : IHostedService
         _shadowCatalogWriter = shadowCatalogWriter;
         _toolRegistry = toolRegistry;
         _memoryIndexLayer = memoryIndexLayer;
-        _subAgentDiscoveryLayer = subAgentDiscoveryLayer;
         _subAgentRegistry = subAgentRegistry;
         _agentLoader = agentLoader;
         _subAgentSpawner = subAgentSpawner;
@@ -56,23 +53,16 @@ internal sealed class ToolIndexUpdater : IHostedService
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        var state = ResolveMemoryState();
-
-        // Load file-based agent definitions (after MCP tools are registered).
         LoadFileBasedAgents();
 
-        // Register spawn_agent tool now that all agents and the spawner are available.
         _toolRegistry.Register(new SpawnAgentTool(_subAgentRegistry, _subAgentSpawner, _paths, _subAgentConfig, _agentLoader));
 
-        // Write catalogs after all tools are registered.
         _shadowCatalogWriter.WriteCatalogs();
         _logger.LogInformation("Tool index updated ({ToolCount} registrations)", _toolRegistry.GetAllRegistrations().Count);
 
+        var state = ResolveMemoryState();
         _memoryIndexLayer.Update(state);
         _logger.LogInformation("Memory context layer updated (state: {State})", state);
-
-        // Update subagent discovery context layer.
-        UpdateSubAgentDiscovery();
 
         return Task.CompletedTask;
     }
@@ -93,13 +83,6 @@ internal sealed class ToolIndexUpdater : IHostedService
 
         if (profiles.Count > 0)
             _logger.LogInformation("Loaded {Count} file-based agent definition(s)", profiles.Count - conflicts.Count);
-    }
-
-    private void UpdateSubAgentDiscovery()
-    {
-        var agents = _subAgentRegistry.GetUserFacing();
-        _subAgentDiscoveryLayer.Update(SubAgentDiscoveryContextLayer.BuildIndex(agents, _paths.AgentsDirectory));
-        _logger.LogInformation("Subagent discovery layer updated ({Count} agents)", agents.Count);
     }
 
     private static MemoryContextState ResolveMemoryState() => MemoryContextState.SqlitePrimary;

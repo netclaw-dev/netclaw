@@ -2696,7 +2696,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return true;
         }
 
-        RefreshSubagentsIfNeeded();
+        _subAgentLoader?.SyncInto(_subAgentRegistry);
 
         var profile = _subAgentRegistry.TryGetByName(routedSubagent);
         if (profile is null)
@@ -2830,15 +2830,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             self.Tell(new RoutedSkillExecutionFailed(skill.Name, profile.Name, ex.Message));
         }
-    }
-
-    private void RefreshSubagentsIfNeeded()
-    {
-        if (_subAgentLoader is null || _subAgentRegistry is null)
-            return;
-
-        if (_subAgentLoader.RefreshIfChanged(out var profiles))
-            _subAgentRegistry.ReplaceFileProfiles(profiles);
     }
 
     private void HandleRoutedSkillExecutionCompleted(RoutedSkillExecutionCompleted msg)

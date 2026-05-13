@@ -66,7 +66,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         if (string.IsNullOrWhiteSpace(args.Task))
             return "Error: 'task' parameter is required.";
 
-        RefreshSubagentsIfNeeded();
+        _loader?.SyncInto(_registry);
 
         var profile = _registry.TryGetByName(args.Agent);
         if (profile is null || profile.Visibility != SubAgentVisibility.UserFacing)
@@ -84,14 +84,5 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         return result.Success
             ? result.Output
             : $"Subagent '{args.Agent}' failed: {result.Output}";
-    }
-
-    private void RefreshSubagentsIfNeeded()
-    {
-        if (_loader is null)
-            return;
-
-        if (_loader.RefreshIfChanged(out var profiles))
-            _registry.ReplaceFileProfiles(profiles);
     }
 }

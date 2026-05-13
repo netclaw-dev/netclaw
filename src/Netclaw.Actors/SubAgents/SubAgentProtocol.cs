@@ -83,8 +83,8 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     public string? ParentSessionDirectory { get; init; }
 
     /// <summary>
-     /// Parent session's project directory snapshot when the subagent was spawned.
-     /// </summary>
+    /// Parent session's project directory snapshot when the subagent was spawned.
+    /// </summary>
     public string? ParentProjectDirectory { get; init; }
 
     /// <summary>

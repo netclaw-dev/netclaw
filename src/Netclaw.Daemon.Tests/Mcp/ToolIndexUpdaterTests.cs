@@ -25,9 +25,9 @@ public sealed class ToolIndexUpdaterTests
 
         var registry = new ToolRegistry();
         var memoryLayer = new MemoryIndexContextLayer();
-        var subAgentLayer = new SubAgentDiscoveryContextLayer();
         var subAgentRegistry = new SubAgentDefinitionRegistry();
         var loader = new FileSubAgentDefinitionLoader(paths, NullLogger<FileSubAgentDefinitionLoader>.Instance);
+        var subAgentLayer = new SubAgentDiscoveryContextLayer(new SubAgentConfig(), subAgentRegistry, loader, paths);
         var writer = new McpShadowCatalogWriter(paths, registry, NullLogger<McpShadowCatalogWriter>.Instance);
 
         var updater = new ToolIndexUpdater(
@@ -35,7 +35,6 @@ public sealed class ToolIndexUpdaterTests
             writer,
             registry,
             memoryLayer,
-            subAgentLayer,
             subAgentRegistry,
             loader,
             subAgentSpawner: null!,
@@ -78,7 +77,6 @@ public sealed class ToolIndexUpdaterTests
             "search"));
 
         var memoryLayer = new MemoryIndexContextLayer();
-        var subAgentLayer = new SubAgentDiscoveryContextLayer(new SubAgentConfig { Enabled = false });
         var toolIndexLayer = new ToolIndexContextLayer(registry, policy);
         var subAgentRegistry = new SubAgentDefinitionRegistry();
         var loader = new FileSubAgentDefinitionLoader(paths, NullLogger<FileSubAgentDefinitionLoader>.Instance);
@@ -89,7 +87,6 @@ public sealed class ToolIndexUpdaterTests
             writer,
             registry,
             memoryLayer,
-            subAgentLayer,
             subAgentRegistry,
             loader,
             subAgentSpawner: null!,

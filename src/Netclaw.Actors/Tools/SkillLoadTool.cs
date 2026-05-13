@@ -94,7 +94,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
                 return $"Skill '{name}' routes to subagent '{decision.RoutedSubagent}', but routed skill execution is unavailable in this runtime.";
             }
 
-            RefreshSubagentsIfNeeded();
+            _subAgentLoader?.SyncInto(_subAgentRegistry);
 
             if (string.IsNullOrWhiteSpace(args.Task))
             {
@@ -183,14 +183,4 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
         return sb.ToString();
     }
-
-    private void RefreshSubagentsIfNeeded()
-    {
-        if (_subAgentLoader is null || _subAgentRegistry is null)
-            return;
-
-        if (_subAgentLoader.RefreshIfChanged(out var profiles))
-            _subAgentRegistry.ReplaceFileProfiles(profiles);
-    }
-
 }
