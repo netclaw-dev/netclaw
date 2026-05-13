@@ -88,16 +88,24 @@ public static class ToolApprovalEntryComparer
     }
 
     /// <summary>
-    /// Returns <paramref name="entry"/> with its directory normalized via
-    /// <see cref="NormalizeDirectory"/>. Used by the store at write time so
-    /// the on-disk file never accumulates trailing-slash variants of the same
-    /// logical entry.
+    /// Returns <paramref name="entry"/> with its verb trimmed and its
+    /// directory normalized via <see cref="NormalizeDirectory"/>. Used by
+    /// the store at write time so the on-disk file never accumulates
+    /// trailing-slash directory variants or whitespace-padded verbs of the
+    /// same logical entry — both shapes would silently never match a real
+    /// candidate at the gate.
     /// </summary>
     public static ApprovalEntry Normalize(ApprovalEntry entry)
     {
-        var normalized = NormalizeDirectory(entry.Directory);
-        if (string.Equals(normalized, entry.Directory, StringComparison.Ordinal))
+        var trimmedVerb = entry.Verb?.Trim() ?? string.Empty;
+        var normalizedDir = NormalizeDirectory(entry.Directory);
+
+        var verbChanged = !string.Equals(trimmedVerb, entry.Verb, StringComparison.Ordinal);
+        var dirChanged = !string.Equals(normalizedDir, entry.Directory, StringComparison.Ordinal);
+
+        if (!verbChanged && !dirChanged)
             return entry;
-        return entry with { Directory = normalized };
+
+        return entry with { Verb = trimmedVerb, Directory = normalizedDir };
     }
 }

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Serialization;
 
 namespace Netclaw.Configuration;
@@ -18,6 +19,16 @@ namespace Netclaw.Configuration;
 /// directory roots, and bash fragments mingled in one list) are not
 /// migrated — see <see cref="ToolApprovalStore.Load"/>.
 /// </summary>
+/// <remarks>
+/// Record-synthesized <c>Equals</c>/<c>GetHashCode</c> use default string
+/// equality (case-sensitive Ordinal) which diverges from the canonical
+/// approval comparison on Windows (OrdinalIgnoreCase) and does not normalize
+/// trailing path separators. Use
+/// <see cref="ToolApprovalEntryComparer.Equals(ApprovalEntry, ApprovalEntry)"/>
+/// when comparing entries for approval-store semantics; do not rely on the
+/// record's built-in equality (e.g. <c>HashSet&lt;ApprovalEntry&gt;</c>,
+/// <c>Enumerable.Distinct()</c>) for that purpose.
+/// </remarks>
 public sealed record ApprovalEntry
 {
     /// <summary>
@@ -54,9 +65,9 @@ public sealed record ApprovalEntry
     /// shape so callers can surface the parse failure as a user error rather
     /// than a silent best-effort match.
     /// </summary>
-    public static bool TryParseScope(string input, out ApprovalEntry entry, out string error)
+    public static bool TryParseScope(string input, [NotNullWhen(true)] out ApprovalEntry? entry, out string error)
     {
-        entry = new ApprovalEntry { Verb = string.Empty };
+        entry = null;
         error = string.Empty;
 
         const string AnywhereSuffix = " anywhere";

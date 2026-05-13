@@ -16,10 +16,10 @@ namespace Netclaw.Security;
 /// </summary>
 public static class ApprovalPatternMatching
 {
-    // Case-sensitivity rules live in Netclaw.Configuration so the operator CLI
-    // and the daemon gate use exactly the same comparer — see
-    // ToolApprovalEntryComparer for the rationale.
-    private static StringComparison ApprovalEntryComparison => ToolApprovalEntryComparer.Comparison;
+    // Verb equality routes through ToolApprovalEntryComparer.Equals so the
+    // operator CLI and the daemon gate stay in lock-step on case rules. See
+    // ToolApprovalEntryComparer for the rationale (POSIX is case-sensitive
+    // for $PATH lookups; Windows is not).
 
     /// <summary>
     /// Returns true when <paramref name="approvedEntries"/> contains an entry
@@ -48,9 +48,15 @@ public static class ApprovalPatternMatching
     {
         var effectiveDirectory = ResolveEffectiveDirectory(candidateDirectory, cwd);
 
+        // Lazily computed once per call so the candidate's Path.GetFullPath
+        // canonicalization isn't repeated for every folder-scoped entry
+        // whose verb happens to match. Wrapped in try/catch below because
+        // GetFullPath can throw on malformed input.
+        string? normalizedCandidate = null;
+
         foreach (var entry in approvedEntries)
         {
-            if (!string.Equals(entry.Verb, candidateVerb, ApprovalEntryComparison))
+            if (!ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb))
                 continue;
 
             // Global wildcard: matches any candidate by definition.
@@ -63,7 +69,9 @@ public static class ApprovalPatternMatching
 
             try
             {
-                if (!PathUtility.IsWithinRoot(effectiveDirectory, entry.Directory))
+                normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
+
+                if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
                     continue;
 
                 if (PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory))
@@ -124,31 +132,12 @@ public static class ApprovalPatternMatching
     {
         foreach (var approved in approvedEntries)
         {
-            if (string.Equals(approved.Verb, candidate, ApprovalEntryComparison))
+            if (ToolApprovalEntryComparer.Equals(approved.Verb, candidate))
                 return true;
         }
 
         return false;
     }
-
-    /// <summary>
-    /// Verbs that produce stdout-only side effects when used without
-    /// redirects. A candidate clause whose verb is in this set, has no path
-    /// argument, and has no redirect operator is authorized for the current
-    /// call but SHALL NOT be persisted — recording every literal echo as a
-    /// global wildcard adds noise that doesn't help future matching.
-    /// </summary>
-    /// <remarks>
-    /// Conservative on purpose. <c>eval</c>, <c>command</c>, <c>exec</c>, and
-    /// other reflective builtins are NOT here because they execute their
-    /// arguments. <c>pwd</c> is a candidate to add but rarely appears in
-    /// compound commands so the value is low. Adding entries here is a
-    /// security-relevant change reviewed alongside the safe-verb list.
-    /// </remarks>
-    private static readonly HashSet<string> SideEffectOnlyVerbs = new(StringComparer.Ordinal)
-    {
-        "echo", "printf", ":", "true", "false"
-    };
 
     /// <summary>
     /// Returns true when this candidate is a pure side-effect clause that
@@ -159,11 +148,21 @@ public static class ApprovalPatternMatching
     /// <see cref="ShellTokenizer.ExtractFirstPathArgument"/>, so a candidate
     /// with a non-null Directory is never considered pure side effect.
     /// </summary>
+    /// <remarks>
+    /// The side-effect verb set
+    /// (<see cref="ShellTokenizer.SingleTokenSideEffectVerbs"/>) is shared
+    /// with the verb-chain short-circuit so both paths agree on which
+    /// verbs collapse to depth 1 and which ones skip persistence.
+    /// Conservative on purpose. <c>eval</c>, <c>command</c>, <c>exec</c>,
+    /// and other reflective builtins are NOT in the set because they
+    /// execute their arguments. Adding entries there is a
+    /// security-relevant change reviewed alongside the safe-verb list.
+    /// </remarks>
     public static bool IsPureSideEffect(ApprovalCandidate candidate)
     {
         if (candidate.Directory is not null)
             return false;
 
-        return SideEffectOnlyVerbs.Contains(candidate.Verb);
+        return ShellTokenizer.SingleTokenSideEffectVerbs.Contains(candidate.Verb);
     }
 }

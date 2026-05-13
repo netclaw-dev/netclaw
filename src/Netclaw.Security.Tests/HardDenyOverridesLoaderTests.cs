@@ -62,7 +62,7 @@ public sealed class HardDenyOverridesLoaderTests : IDisposable
         Assert.Single(rules);
         Assert.Equal(["docker", "rm"], rules[0].Verb);
         Assert.Equal("local_policy", rules[0].Reason);
-        Assert.Equal("custom_deny", rules[0].Category);
+        Assert.Equal(DenyCategory.CustomDeny, rules[0].Category);
     }
 
     [Fact]

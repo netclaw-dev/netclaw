@@ -122,9 +122,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             }
             else
             {
-                var audience = SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
-                    ? parsed
-                    : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
+                var audience = SecurityPolicyDefaults.ResolveAudienceWithFallback(
+                    context?.Audience, context?.SessionId);
 
                 // Pure side-effect candidates (echo "X" with no path/redirect,
                 // bash :, true/false) are not persisted on Always-here clicks
@@ -203,20 +202,15 @@ public sealed class DispatchingToolExecutor : IToolExecutor
             && !string.Equals(context.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
             return false;
 
-        // Messy commands (bash control-flow, unbalanced quotes/brackets)
-        // have no extractable verb-chain patterns, so the user prompt only
-        // offers Once+Deny. ApprovedOnce on a messy command MUST bypass on
-        // the tool-name match alone — there are no patterns to compare on
-        // either side. Without this branch, clicking Once on a complex
-        // command lands the retry into AuthorizeCoreAsync, hits the empty-
-        // patterns guard below, and throws ToolApprovalRequiredException
-        // (surfacing as "I encountered an error executing a tool"). The
-        // per-retry cleanup at SessionToolExecutionPipeline.cs:467-475
-        // still clears OneTimeApprovedToolName afterward, so the messy
-        // bypass cannot be reused for subsequent calls.
-        if (approvalContext.IsMessy
-            && !string.IsNullOrEmpty(context.OneTimeApprovedToolName)
-            && string.Equals(context.OneTimeApprovedToolName, toolCall.Name, StringComparison.Ordinal))
+        // By this point: either OneTimeApprovedToolName is empty (no
+        // bypass active), or it matched toolCall.Name above. Messy commands
+        // have no extractable patterns, so an active per-tool ApprovedOnce
+        // bypass is the only signal we can use — without this branch a
+        // retry would hit the empty-patterns guard below and throw
+        // ToolApprovalRequiredException. The pipeline clears
+        // OneTimeApprovedToolName after the retry, so the bypass cannot
+        // leak into a subsequent call.
+        if (approvalContext.IsMessy && !string.IsNullOrEmpty(context.OneTimeApprovedToolName))
             return true;
 
         if (context.OneTimeApprovedPatterns.Count == 0)

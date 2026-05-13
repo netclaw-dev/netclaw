@@ -553,8 +553,8 @@ internal static class SessionToolExecutionPipeline
         string? approvalDecision = null,
         string? approvalPattern = null)
     {
-        var command = ToolArgumentHelper.GetString(tc.Arguments ?? new Dictionary<string, object?>(), "Command");
-        var workingDirectory = ToolArgumentHelper.GetString(tc.Arguments ?? new Dictionary<string, object?>(), "WorkingDirectory");
+        var command = ToolArgumentHelper.GetString(tc.Arguments, "Command");
+        var workingDirectory = ToolArgumentHelper.GetString(tc.Arguments, "WorkingDirectory");
 
         if (string.IsNullOrWhiteSpace(command))
         {

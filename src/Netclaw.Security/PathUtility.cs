@@ -51,8 +51,16 @@ public static class PathUtility
     /// Uses platform-appropriate case sensitivity.
     /// </summary>
     public static bool IsWithinRoot(string candidate, string root)
+        => IsNormalizedWithinRoot(Normalize(candidate), root);
+
+    /// <summary>
+    /// Like <see cref="IsWithinRoot"/> but assumes <paramref name="normalizedCandidate"/>
+    /// has already been canonicalized via <see cref="Normalize"/>. Use on hot
+    /// paths that compare many roots against the same candidate to avoid
+    /// re-running <c>Path.GetFullPath</c> on the candidate per iteration.
+    /// </summary>
+    public static bool IsNormalizedWithinRoot(string normalizedCandidate, string root)
     {
-        var normalizedCandidate = Normalize(candidate);
         var normalizedRoot = Normalize(root);
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
@@ -66,6 +74,30 @@ public static class PathUtility
 
         var boundary = normalizedCandidate[normalizedRoot.Length];
         return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="a"/> and <paramref name="b"/> resolve
+    /// to the same canonical filesystem path under the platform's casing
+    /// rules. Both inputs are passed through <see cref="Normalize"/> first.
+    /// Swallows <see cref="ArgumentException"/>, <see cref="NotSupportedException"/>,
+    /// and <see cref="System.Security.SecurityException"/> (returning false) so
+    /// callers can compare untrusted or partially-formed paths without
+    /// wrapping the call in a try/catch.
+    /// </summary>
+    public static bool AreEquivalentPaths(string a, string b)
+    {
+        try
+        {
+            var comparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            return string.Equals(Normalize(a), Normalize(b), comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.Security.SecurityException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -128,10 +160,19 @@ public static class PathUtility
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(home))
+        if (string.IsNullOrWhiteSpace(home))
+            return expanded;
+
+        // Skip the three substring scans entirely when no env-var sigil is
+        // present — the typical absolute-path candidate has neither.
+        if (expanded.Contains('$', StringComparison.Ordinal))
         {
             expanded = expanded.Replace("$HOME", home, StringComparison.OrdinalIgnoreCase);
             expanded = expanded.Replace("${HOME}", home, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (expanded.Contains('%', StringComparison.Ordinal))
+        {
             expanded = expanded.Replace("%USERPROFILE%", home, StringComparison.OrdinalIgnoreCase);
         }
 

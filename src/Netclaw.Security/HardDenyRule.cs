@@ -3,9 +3,72 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Netclaw.Security;
+
+/// <summary>
+/// Telemetry / log routing bucket for a deny decision. Wire format is
+/// snake_case (<c>self_destructive</c>) so existing operator JSON files
+/// and downstream log/metric labels keep working unchanged.
+/// </summary>
+/// <remarks>
+/// The <see cref="DenyCategoryConverter"/> maps unrecognized wire values
+/// to <see cref="Unknown"/> instead of throwing — operators can introduce
+/// new category strings in their overrides without breaking the loader,
+/// and forward-compat is preserved if shipped defaults later add new
+/// categories.
+/// </remarks>
+[JsonConverter(typeof(DenyCategoryConverter))]
+public enum DenyCategory
+{
+    Unknown,
+    CustomDeny,
+    SelfDestructive,
+    SystemDestructive,
+    PrivilegeEscalation,
+}
+
+public static class DenyCategoryExtensions
+{
+    /// <summary>
+    /// Returns the snake_case wire-format name surfaced in JSON files,
+    /// log lines, and metric labels.
+    /// </summary>
+    public static string ToWireName(this DenyCategory category) => category switch
+    {
+        DenyCategory.CustomDeny => "custom_deny",
+        DenyCategory.SelfDestructive => "self_destructive",
+        DenyCategory.SystemDestructive => "system_destructive",
+        DenyCategory.PrivilegeEscalation => "privilege_escalation",
+        _ => "unknown",
+    };
+
+    /// <summary>
+    /// Parses a wire-format category name. Empty/null is treated as
+    /// <see cref="DenyCategory.CustomDeny"/> (the operator-rule default);
+    /// unrecognized non-empty strings return <see cref="DenyCategory.Unknown"/>.
+    /// </summary>
+    public static DenyCategory FromWireName(string? wire) => wire switch
+    {
+        null or "" => DenyCategory.CustomDeny,
+        "custom_deny" => DenyCategory.CustomDeny,
+        "self_destructive" => DenyCategory.SelfDestructive,
+        "system_destructive" => DenyCategory.SystemDestructive,
+        "privilege_escalation" => DenyCategory.PrivilegeEscalation,
+        _ => DenyCategory.Unknown,
+    };
+}
+
+internal sealed class DenyCategoryConverter : JsonConverter<DenyCategory>
+{
+    public override DenyCategory Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => DenyCategoryExtensions.FromWireName(reader.GetString());
+
+    public override void Write(Utf8JsonWriter writer, DenyCategory value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToWireName());
+}
 
 /// <summary>
 /// Operator-authored hard-deny rule loaded from
@@ -81,12 +144,15 @@ public sealed class HardDenyRule
     public required string Reason { get; set; }
 
     /// <summary>
-    /// Telemetry / log category. Defaults to <c>custom_deny</c> for operator
-    /// overrides; shipped defaults populate this with their own categories
-    /// (<c>self_destructive</c>, <c>system_destructive</c>, etc.).
+    /// Telemetry / log category. Defaults to
+    /// <see cref="DenyCategory.CustomDeny"/> for operator overrides; shipped
+    /// defaults populate this with <see cref="DenyCategory.SelfDestructive"/>
+    /// or <see cref="DenyCategory.SystemDestructive"/>. Unrecognized wire
+    /// values deserialize to <see cref="DenyCategory.Unknown"/> rather than
+    /// throwing so forward-compat additions don't break the loader.
     /// </summary>
     [JsonPropertyName("category")]
-    public string Category { get; set; } = "custom_deny";
+    public DenyCategory Category { get; set; } = DenyCategory.CustomDeny;
 
     /// <summary>
     /// Documentation flag for <see cref="RawText"/> rules indicating the

@@ -120,11 +120,9 @@ internal abstract class ShellApprovalSemanticsBase : IShellApprovalSemantics
         // instead of `grep`, `echo done` instead of `echo`. The
         // post-check restores the v2 invariant for these verb
         // families.
-        var firstSpace = greedy.IndexOf(' ', StringComparison.Ordinal);
-        var firstToken = firstSpace < 0 ? greedy : greedy[..firstSpace];
-        if (ShellTokenizer.PathAwareVerbs.Contains(firstToken)
-            || ShellTokenizer.SingleTokenSideEffectVerbs.Contains(firstToken))
-            return firstToken;
+        var shortCircuited = ShellTokenizer.ApplyVerbShortCircuit(greedy);
+        if (!string.Equals(shortCircuited, greedy, StringComparison.Ordinal))
+            return shortCircuited;
 
         // Honor the explicit maxDepth cap as a hard upper bound so
         // callers asking for fewer tokens still get them. Default
@@ -176,45 +174,10 @@ internal abstract class ShellApprovalSemanticsBase : IShellApprovalSemantics
             if (trimmed.StartsWith('-'))
                 continue;
             if (ShellTokenizer.IsPathToken(trimmed))
-                return ApplyFileParentRule(trimmed);
+                return ShellTokenizer.ApplyFileParentRule(trimmed);
         }
 
         return null;
-    }
-
-    /// <summary>
-    /// When the extracted path looks like a file (has an extension on its
-    /// last component), return the parent directory so persisted approvals
-    /// scope to the folder rather than a single file. Pure string operation,
-    /// no filesystem syscall.
-    /// </summary>
-    private static string? ApplyFileParentRule(string token)
-    {
-        if (string.IsNullOrEmpty(token))
-            return token;
-
-        // Path.HasExtension is the deterministic heuristic; dot-prefixed
-        // dotfiles like ~/.bashrc don't return an extension via this API
-        // (the leading dot is treated as part of the basename), which is
-        // the right behavior for our use case — scope cat ~/.bashrc to ~/.
-        var hasExtension = Path.HasExtension(token);
-        if (!hasExtension && !LooksLikeDotfile(token))
-            return token;
-
-        var parent = Path.GetDirectoryName(token);
-        // GetDirectoryName returns "" for a bare filename and the literal
-        // separator for root-level files. Fall back to the token unchanged
-        // when we can't sensibly compute a parent.
-        if (string.IsNullOrEmpty(parent))
-            return token;
-
-        return parent;
-    }
-
-    private static bool LooksLikeDotfile(string token)
-    {
-        var basename = Path.GetFileName(token);
-        return basename.Length > 1 && basename[0] == '.';
     }
 
     public string NormalizeApprovalUnit(string command, string? workingDirectory)

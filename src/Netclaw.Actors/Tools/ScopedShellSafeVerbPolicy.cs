@@ -134,7 +134,5 @@ internal sealed class ScopedShellSafeVerbPolicy
     }
 
     private static TrustAudience ResolveAudience(ToolExecutionContext context)
-        => SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsed)
-            ? parsed
-            : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context.SessionId);
+        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context.Audience, context.SessionId);
 }

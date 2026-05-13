@@ -19,10 +19,10 @@ public enum ApprovalsManagerState
 
 public sealed record ApprovalDisplayItem(
     TrustAudience Audience,
-    string AudienceWire,
     string ToolName,
     ApprovalEntry Entry)
 {
+    public string AudienceWire => Audience.ToWireValue();
     public string DisplayText => Entry.FormatScope();
 }
 
@@ -73,7 +73,7 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
                     .OrderBy(static e => e.Verb, StringComparer.Ordinal)
                     .ThenBy(static e => e.Directory ?? string.Empty, StringComparer.Ordinal))
                 {
-                    DisplayApprovals.Add(new ApprovalDisplayItem(audience, audienceKey, toolName, entry));
+                    DisplayApprovals.Add(new ApprovalDisplayItem(audience, toolName, entry));
                 }
             }
         }

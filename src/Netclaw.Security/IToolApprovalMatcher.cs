@@ -207,7 +207,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (!ReferenceEquals(clause, groupHead))
                 continue;  // pipe-tail clauses fold into the group head
 
-            var verb = ApplyVerbShortCircuit(clause.Verb.Joined);
+            var verb = ShellTokenizer.ApplyVerbShortCircuit(clause.Verb.Joined);
             if (string.IsNullOrEmpty(verb))
                 continue;
 
@@ -227,26 +227,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return candidates;
-    }
-
-    private static string ApplyVerbShortCircuit(string? rawVerb)
-    {
-        if (string.IsNullOrEmpty(rawVerb))
-            return string.Empty;
-
-        // Path-aware verbs (cat, grep, find, ls, ...) and single-token
-        // side-effect verbs (echo, printf, ...) collapse to depth 1 so
-        // call-specific positional arguments don't bake into the persisted
-        // verb chain. Mirrors ShellApprovalSemanticsBase.ExtractVerbChain
-        // — both paths must apply the same short-circuit to stay
-        // consistent across POSIX BashParser and Windows legacy code.
-        var firstSpace = rawVerb.IndexOf(' ', StringComparison.Ordinal);
-        var firstToken = firstSpace < 0 ? rawVerb : rawVerb[..firstSpace];
-        if (ShellTokenizer.PathAwareVerbs.Contains(firstToken)
-            || ShellTokenizer.SingleTokenSideEffectVerbs.Contains(firstToken))
-            return firstToken;
-
-        return rawVerb;
     }
 
     private static string? ResolveClauseDirectory(ShellSyntaxTree.Clause clause, bool isSideEffectVerb)
@@ -278,7 +258,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (ShellTokenizer.IsPathToken(raw))
             {
                 var canonical = !string.IsNullOrEmpty(arg.Resolved) ? arg.Resolved : raw;
-                return ApplyFileParentRule(canonical);
+                return ShellTokenizer.ApplyFileParentRule(canonical);
             }
         }
 
@@ -295,43 +275,19 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return cwdAttribution?.Resolved;
     }
 
-    private static string? ApplyFileParentRule(string token)
-    {
-        // File path with extension: scope to the parent directory so
-        // persisted approvals match the folder, not a single file. Mirrors
-        // ShellApprovalSemanticsBase.ApplyFileParentRule — the BashParser
-        // path must produce identical (verb, directory) tuples for the
-        // same command so prompt-time and retry-time candidates compare
-        // equal.
-        if (string.IsNullOrEmpty(token))
-            return token;
-
-        var hasExtension = Path.HasExtension(token);
-        if (!hasExtension && !LooksLikeDotfile(token))
-            return token;
-
-        var parent = Path.GetDirectoryName(token);
-        if (string.IsNullOrEmpty(parent))
-            return token;
-
-        return parent;
-    }
-
-    private static bool LooksLikeDotfile(string token)
-    {
-        var basename = Path.GetFileName(token);
-        return basename.Length > 1 && basename[0] == '.';
-    }
-
     public bool IsApproved(
         ToolName toolName,
         IDictionary<string, object?>? arguments,
         IReadOnlyList<ApprovalEntry> approvedEntries,
         string? cwd)
     {
+        // Fail-closed on a missing/empty Command argument: a malformed
+        // shell invocation cannot be "already approved" — the agent must
+        // round-trip through the gate so the operator sees what was
+        // attempted.
         var command = GetCommand(arguments);
         if (string.IsNullOrWhiteSpace(command))
-            return true; // empty command, nothing to approve
+            return false;
 
         // Messy commands cannot be auto-approved: the matcher cannot extract a
         // candidate verb-chain to evaluate against the persisted store, so
@@ -340,9 +296,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (ShellTokenizer.IsMessyCompoundCommand(command))
             return false;
 
+        // Fail-closed on a parser miss: BashParser swallows exceptions and
+        // unparseable results return an empty candidate list. Treating that
+        // as "approved" would silently auto-allow any command our parser
+        // regresses on. Force the gate instead.
         var candidates = ExtractCandidates(toolName, arguments);
         if (candidates.Count == 0)
-            return true;
+            return false;
 
         foreach (var candidate in candidates)
         {
@@ -368,10 +328,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         => GetCommand(arguments) ?? "(empty command)";
 
     private static string? GetCommand(IDictionary<string, object?>? arguments)
-        => arguments is null ? null : ToolArgumentHelper.GetString(arguments, "Command");
+        => ToolArgumentHelper.GetString(arguments, "Command");
 
     private static string? GetWorkingDirectory(IDictionary<string, object?>? arguments)
-        => arguments is null ? null : ToolArgumentHelper.GetString(arguments, "WorkingDirectory");
+        => ToolArgumentHelper.GetString(arguments, "WorkingDirectory");
 
     private static void TraverseApprovalUnits(string command, Action<string> visitUnit)
     {

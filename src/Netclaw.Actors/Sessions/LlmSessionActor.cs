@@ -3282,23 +3282,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// matches the session's ephemeral scratch dir.
     /// </summary>
     private static bool IsSessionScratchDirectory(string effectiveDirectory, string sessionDirectory)
-    {
-        try
-        {
-            var fullA = Path.GetFullPath(effectiveDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fullB = Path.GetFullPath(sessionDirectory)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var comparison = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            return string.Equals(fullA, fullB, comparison);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
+        => PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory);
 
     private void PersistAdoptedContextIfNeeded(MessageSource? source)
     {

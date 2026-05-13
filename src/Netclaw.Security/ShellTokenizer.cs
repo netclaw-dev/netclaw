@@ -42,10 +42,11 @@ public static class ShellTokenizer
     /// <summary>
     /// Verbs that are stdout-only side effects without redirects. The verb-
     /// chain extractor caps at one token for these so <c>echo done</c>
-    /// resolves to verb <c>echo</c> (matching the side-effect skip list)
-    /// rather than the 2-token chain <c>echo done</c>. Mirrors the skip
-    /// list in <c>ApprovalPatternMatching.SideEffectOnlyVerbs</c>; keep
-    /// the two in sync — both are security-relevant defaults.
+    /// resolves to verb <c>echo</c> rather than the 2-token chain
+    /// <c>echo done</c>. Consumed by both the verb-chain short-circuit
+    /// (<see cref="ApplyVerbShortCircuit"/>) and the pure-side-effect
+    /// skip-on-persist rule (<c>ApprovalPatternMatching.IsPureSideEffect</c>);
+    /// keeping a single source of truth prevents the two paths from drifting.
     /// </summary>
     internal static readonly HashSet<string> SingleTokenSideEffectVerbs = new(StringComparer.Ordinal)
     {
@@ -345,4 +346,63 @@ public static class ShellTokenizer
         return token.Trim().TrimStart(';', '|', '&').TrimEnd(';', '|', '&');
     }
 
+    /// <summary>
+    /// When the extracted path looks like a file (has an extension on its
+    /// last component, or is a dotfile basename), return the parent
+    /// directory so persisted approvals scope to the folder rather than a
+    /// single file. Pure string operation, no filesystem syscall.
+    /// </summary>
+    /// <remarks>
+    /// Path.HasExtension is the deterministic heuristic; dot-prefixed
+    /// dotfiles like ~/.bashrc don't return an extension via this API
+    /// (the leading dot is treated as part of the basename), so
+    /// <see cref="LooksLikeDotfile"/> is the secondary check for that
+    /// shape.
+    /// </remarks>
+    internal static string? ApplyFileParentRule(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return token;
+
+        var hasExtension = Path.HasExtension(token);
+        if (!hasExtension && !LooksLikeDotfile(token))
+            return token;
+
+        var parent = Path.GetDirectoryName(token);
+        // GetDirectoryName returns "" for a bare filename and the literal
+        // separator for root-level files. Fall back to the token unchanged
+        // when we can't sensibly compute a parent.
+        if (string.IsNullOrEmpty(parent))
+            return token;
+
+        return parent;
+    }
+
+    internal static bool LooksLikeDotfile(string token)
+    {
+        var basename = Path.GetFileName(token);
+        return basename.Length > 1 && basename[0] == '.';
+    }
+
+    /// <summary>
+    /// Caps a verb chain at depth 1 when the first token is a path-aware
+    /// verb (cat, grep, find, ls, ...) or a single-token side-effect verb
+    /// (echo, printf, ...). This prevents call-specific positional
+    /// arguments — search patterns, file targets — from baking into
+    /// persisted approval keys, so <c>grep secret /etc/passwd</c> and
+    /// <c>grep "TODO" file.cs</c> both persist as the verb <c>grep</c>.
+    /// </summary>
+    internal static string ApplyVerbShortCircuit(string? rawVerb)
+    {
+        if (string.IsNullOrEmpty(rawVerb))
+            return string.Empty;
+
+        var firstSpace = rawVerb.IndexOf(' ', StringComparison.Ordinal);
+        var firstToken = firstSpace < 0 ? rawVerb : rawVerb[..firstSpace];
+        if (PathAwareVerbs.Contains(firstToken)
+            || SingleTokenSideEffectVerbs.Contains(firstToken))
+            return firstToken;
+
+        return rawVerb;
+    }
 }

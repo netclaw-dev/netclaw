@@ -47,7 +47,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private IReminderClient? _client;
 
-    private readonly HashSet<Guid> _activeExecutionIds = [];
+    private readonly ActiveExecutionTracker _activeExecutions = new();
     private readonly Queue<ReminderId> _deferredQueue = new();
     private readonly Dictionary<ReminderId, int> _failureCounts = [];
 
@@ -520,6 +520,14 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         _log.Info("Reminder fired: id='{0}', title='{1}', schedule_type={2}",
             reminderId.Value, definition.Title, definition.Schedule.Type);
 
+        if (_activeExecutions.IsExecuting(reminderId))
+        {
+            _log.Warning("reminder_skipped_duplicate_execution reminder_id={0} title={1}",
+                reminderId.Value, definition.Title);
+            await _client!.AckAsync(envelope);
+            return;
+        }
+
         // Cron reminders are implemented as recurring single-shot schedules.
         if (definition.Schedule.Type == ReminderScheduleType.Cron)
         {
@@ -532,7 +540,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         var isCurrentSessionDelivery = definition.Delivery.Kind == DeliveryKind.CurrentSession;
 
-        if (_activeExecutionIds.Count >= MaxConcurrentExecutions)
+        if (_activeExecutions.Count >= MaxConcurrentExecutions)
         {
             _log.Info("Concurrency limit reached ({0}), deferring reminder '{1}'",
                 MaxConcurrentExecutions, reminderId.Value);
@@ -561,7 +569,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private async Task HandleExecutionCompletedAsync(ReminderExecutionCompleted completed)
     {
-        if (!_activeExecutionIds.Remove(completed.ExecutionId))
+        if (!_activeExecutions.Remove(completed.Id))
             return;
 
         var definition = _definitionStore.Get(completed.Id);
@@ -715,7 +723,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private void StartExecution(ReminderDefinition definition, ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         var executionId = Guid.NewGuid();
-        _activeExecutionIds.Add(executionId);
+        _activeExecutions.Add(new ReminderId(definition.Id));
 
         var actorName = $"exec-{SanitizeActorName(definition.Id)}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}";
         var executionActor = Context.ActorOf(
@@ -735,12 +743,19 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
     private async Task ProcessDeferredQueueAsync()
     {
-        while (_deferredQueue.Count > 0 && _activeExecutionIds.Count < MaxConcurrentExecutions)
+        while (_deferredQueue.Count > 0 && _activeExecutions.Count < MaxConcurrentExecutions)
         {
             var nextId = _deferredQueue.Dequeue();
             var definition = _definitionStore.Get(nextId);
             if (definition is null || !definition.Enabled)
                 continue;
+
+            if (_activeExecutions.IsExecuting(nextId))
+            {
+                _log.Warning("reminder_skipped_duplicate_execution reminder_id={0} title={1} source=deferred_queue",
+                    nextId.Value, definition.Title);
+                continue;
+            }
 
             var now = _timeProvider.GetUtcNow();
             if (definition.Schedule.Type is not ReminderScheduleType.OneShot
@@ -918,7 +933,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         var scheduledCount = _definitionStore.List().Count(d => d.Enabled);
         Sender.Tell(new ReminderHealthResponse(
             scheduledCount,
-            _activeExecutionIds.Count,
+            _activeExecutions.Count,
             _failureCounts.Count));
     }
 

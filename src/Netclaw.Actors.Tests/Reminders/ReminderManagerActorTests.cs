@@ -833,6 +833,47 @@ public class ReminderManagerActorTests : TestKit
         }
     }
 
+    [Fact]
+    public async Task Second_fire_of_executing_reminder_is_skipped_as_duplicate()
+    {
+        var manager = await GetManagerAsync();
+
+        // NeverReplyGateway accepts the turn but never sends CommandAck —
+        // this keeps the first execution actor alive (its Ask is pending)
+        // so the reminder ID stays in _activeExecutions when the second
+        // envelope arrives.
+        var deliveryProbe = CreateTestProbe("delivery-probe");
+        var slowGateway = Sys.ActorOf(
+            Props.Create(() => new NeverReplyGateway(deliveryProbe.Ref)),
+            "never-reply-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(slowGateway);
+
+        var definition = CreateCurrentSessionDefinition("dup-guard-test", deliveryRequired: false);
+        _definitionStore.Save(definition);
+
+        var envelope1 = CreateEnvelope(definition.Id);
+        var envelope2 = CreateEnvelope(definition.Id);
+
+        // Both envelopes go into the actor's mailbox before either is processed,
+        // so the second always arrives while the first execution is still in flight.
+        manager.Tell(envelope1);
+        manager.Tell(envelope2);
+
+        // Exactly one delivery should reach the gateway.
+        await deliveryProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await deliveryProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+
+        // Health reflects one active execution — the duplicate was dropped, not queued.
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(1, health.ActiveExecutions);
+
+        // No failure alert — duplicate skip is silent from an alert standpoint.
+        Assert.DoesNotContain(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderExecutionFailed && a.Source == definition.Id);
+    }
+
     /// <summary>
     /// Test-only gateway stub: handles <see cref="DeliverTrustedSessionTurn"/>
     /// by forwarding to a probe for assertions and immediately replying
@@ -849,6 +890,19 @@ public class ReminderManagerActorTests : TestKit
                 probe.Tell(msg);
                 Sender.Tell(CommandAck.For(msg.SessionId));
             });
+        }
+    }
+
+    /// <summary>
+    /// Accepts <see cref="DeliverTrustedSessionTurn"/> messages and forwards them
+    /// to a probe, but never replies to <c>Sender</c>. Keeps the execution actor's
+    /// gateway Ask pending indefinitely so the reminder stays in _activeExecutions.
+    /// </summary>
+    private sealed class NeverReplyGateway : ReceiveActor
+    {
+        public NeverReplyGateway(IActorRef probe)
+        {
+            Receive<DeliverTrustedSessionTurn>(msg => probe.Tell(msg));
         }
     }
 

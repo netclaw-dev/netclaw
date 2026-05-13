@@ -135,7 +135,7 @@ internal static class ApprovalsCommand
 
                 if (store.RemoveApproval(audience, toolName, lookup))
                 {
-                    writer.WriteLine($"Removed '{opts.Pattern}' from {audienceKey} / {toolName}.");
+                    writer.WriteLine($"Removed '{lookup.FormatScope()}' from {audienceKey} / {toolName}.");
                     removedAny = true;
                 }
             }
@@ -155,22 +155,32 @@ internal static class ApprovalsCommand
         if (TryParseTrustVerbFlags(args, writer) is not { } opts)
             return 1;
 
+        // Reject shapes the user might confuse with the scope-label syntax
+        // accepted by `revoke <pattern>`. Accepting "git anywhere" or
+        // "git in /repo" here would silently persist a verb token containing
+        // a space — the gate would never match a real candidate, and the
+        // user would see no error.
+        if (opts.Verb.Contains(" anywhere", StringComparison.Ordinal)
+            || opts.Verb.Contains(" in ", StringComparison.Ordinal)
+            || opts.Verb.StartsWith('-'))
+        {
+            writer.WriteLine($"Error: '{opts.Verb}' is not a verb. Pass just the executable name (e.g. 'git push').");
+            writer.WriteLine("For scope labels (e.g. 'git push anywhere') use 'netclaw approvals revoke' or edit");
+            writer.WriteLine("the persisted tool-approvals.json directly.");
+            return 1;
+        }
+
         var store = new ToolApprovalStore(paths.ToolApprovalsPath);
         WarnIfQuarantined(store, writer);
 
         var entry = new ApprovalEntry { Verb = opts.Verb, Directory = null };
+        var audienceWire = opts.Audience.ToWireValue();
 
-        var existing = store.GetApprovedEntries(opts.Audience, opts.Tool);
-        var alreadyTrusted = existing.Any(e => ToolApprovalEntryComparer.Equals(e, entry));
+        if (store.AddApproval(opts.Audience, opts.Tool, entry))
+            writer.WriteLine($"Trusted '{entry.FormatScope()}' for {audienceWire} / {opts.Tool}.");
+        else
+            writer.WriteLine($"No changes: '{entry.FormatScope()}' is already trusted for {audienceWire} / {opts.Tool}.");
 
-        if (alreadyTrusted)
-        {
-            writer.WriteLine($"No changes: '{opts.Verb} anywhere' is already trusted for {opts.Audience.ToWireValue()} / {opts.Tool}.");
-            return 0;
-        }
-
-        store.AddApproval(opts.Audience, opts.Tool, entry);
-        writer.WriteLine($"Trusted '{opts.Verb} anywhere' for {opts.Audience.ToWireValue()} / {opts.Tool}.");
         return 0;
     }
 

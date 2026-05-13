@@ -24,18 +24,10 @@ namespace Netclaw.Actors.Reminders;
 internal sealed class ReminderExecutionActor : ReceiveActor
 {
     /// <summary>
-    /// Per-execution timeout that forces a stuck reminder turn to terminate.
-    /// Netclaw-specific — no Akka.Reminders equivalent.
-    /// </summary>
-    internal const int ExecutionTimeoutSeconds = 300;
-
-    /// <summary>
     /// How long CurrentSession reminders with <c>DeliveryRequired=true</c>
     /// wait for outbound delivery observation after session <see cref="CommandAck"/>.
-    /// Matches <see cref="ExecutionTimeoutSeconds"/> — a delivery-required reminder
-    /// should be allowed the full execution window for the LLM to produce output.
     /// </summary>
-    internal static TimeSpan DeliveryObservedTimeout = TimeSpan.FromSeconds(ExecutionTimeoutSeconds);
+    internal static TimeSpan DeliveryObservedTimeout = TimeSpan.FromHours(1);
 
     private readonly Guid _executionId;
     private readonly ReminderDefinition _definition;
@@ -96,18 +88,9 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                         _executionId, _definition.Id, tool, callId);
             });
 
-        Context.SetReceiveTimeout(TimeSpan.FromSeconds(ExecutionTimeoutSeconds));
-
         Receive<ExecutionOutput>(HandleOutput);
         Receive<ExecutionStarted>(_ => { });
         Receive<ReminderDeliveryObserved>(HandleDeliveryObserved);
-        Receive<ReceiveTimeout>(_ =>
-        {
-            var elapsed = (int)(_timeProvider.GetUtcNow() - _dispatchedAt).TotalSeconds;
-            _log.Warning(
-                $"ReminderExecution Timeout: execution_id={_executionId} reminder_id={_definition.Id} title={_definition.Title} dispatched_at={_dispatchedAt} elapsed_s={elapsed}");
-            ReportAndStop(false, "Execution timed out");
-        });
     }
 
     protected override void PreStart()

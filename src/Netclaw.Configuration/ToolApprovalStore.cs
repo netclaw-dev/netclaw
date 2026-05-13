@@ -34,6 +34,19 @@ public sealed class ToolApprovalStore
     private readonly string _filePath;
     private readonly object _lock = new();
 
+    // Cache state guarded by _lock. `_cachedData` is the live in-memory
+    // instance returned to callers; writers (AddApproval, RemoveApproval,
+    // RemoveAllForTool) mutate it under the lock and then Save() refreshes
+    // the mtime/size to keep it authoritative. External writes (CLI, TUI in
+    // a separate process) invalidate the cache via the mtime+size check at
+    // the top of Load(); same-process writes that don't change size within
+    // the filesystem's mtime resolution are caught by the internal version
+    // counter bumped on every Save.
+    private ToolApprovalData? _cachedData;
+    private DateTime _cachedMtime;
+    private long _cachedSize;
+    private int _internalVersion;
+
     /// <summary>
     /// Path to the malformed-file quarantine sibling, used when the file
     /// cannot be parsed as JSON at all. Distinct from
@@ -54,7 +67,12 @@ public sealed class ToolApprovalStore
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Operator-editable file: tolerate JSON5-ish niceties so a stray
+        // comment or trailing comma doesn't trigger the malformed-quarantine
+        // path and silently drop every grant.
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true
     };
 
     public ToolApprovalStore(string filePath)
@@ -63,45 +81,80 @@ public sealed class ToolApprovalStore
     }
 
     /// <summary>
-    /// Loads all persistent approvals from disk. Returns an empty store when
-    /// the file does not exist, parses as JSON but lacks
-    /// <c>"version": 2</c> (the file is moved aside to
-    /// <see cref="V1QuarantinePath"/>), or fails to parse as JSON at all (the
-    /// file is moved aside to <see cref="MalformedQuarantinePath"/>).
+    /// Loads all persistent approvals. Returns an empty store when the file
+    /// does not exist, parses as JSON but lacks <c>"version": 2</c> (the file
+    /// is moved aside to <see cref="V1QuarantinePath"/>), or fails to parse
+    /// as JSON at all (the file is moved aside to
+    /// <see cref="MalformedQuarantinePath"/>).
     /// </summary>
+    /// <remarks>
+    /// The result is cached and reused while the file's last-write time and
+    /// size are unchanged so per-tool-call gate evaluations don't pay the
+    /// disk-read + JSON-parse cost. Same-process writes via
+    /// <see cref="AddApproval"/> and friends mutate the cached instance
+    /// under the lock and Save refreshes the cache metadata, so live
+    /// approvals are visible on the next Load without re-reading the file.
+    /// Cross-process writes (CLI <c>netclaw approvals add</c>, TUI revokes)
+    /// are detected by the mtime+size check and trigger a fresh read.
+    ///
+    /// Callers SHOULD NOT mutate the returned <see cref="ToolApprovalData"/>
+    /// outside the store's lock — the store hands back its live instance to
+    /// keep the hot read path allocation-free.
+    /// </remarks>
     public ToolApprovalData Load()
     {
         lock (_lock)
         {
             if (!File.Exists(_filePath))
-                return new ToolApprovalData();
-
-            var json = File.ReadAllText(_filePath);
-
-            // Two-step parse so we can distinguish three failure modes:
-            //   (1) unparseable JSON → quarantine to .invalid
-            //   (2) parseable JSON but wrong schema version → quarantine to .v1.bak
-            //   (3) parseable v2 JSON with deserialization error → quarantine to .invalid
-            // Step 1 looks at the version field via JsonDocument; step 2 binds
-            // the strongly-typed model only after the version gate passes.
-            try
             {
-                using var document = JsonDocument.Parse(json);
-                if (!IsCurrentSchema(document.RootElement))
-                {
-                    QuarantineV1File();
-                    return new ToolApprovalData();
-                }
-            }
-            catch (JsonException ex)
-            {
-                QuarantineMalformedFile(ex);
+                _cachedData = null;
                 return new ToolApprovalData();
             }
 
+            // Capture metadata up front: if LoadFromDisk quarantines the file
+            // (malformed JSON, wrong schema) it gets moved aside and a later
+            // FileInfo lookup would throw FileNotFoundException. The captured
+            // metadata becomes the cache key for the quarantine-empty result
+            // we return — harmless because the next Load() observes
+            // File.Exists == false and skips the cache check entirely.
+            var info = new FileInfo(_filePath);
+            var mtime = info.LastWriteTimeUtc;
+            var size = info.Length;
+
+            if (_cachedData is not null && mtime == _cachedMtime && size == _cachedSize)
+                return _cachedData;
+
+            var data = LoadFromDisk();
+            _cachedData = data;
+            _cachedMtime = mtime;
+            _cachedSize = size;
+            return data;
+        }
+    }
+
+    private ToolApprovalData LoadFromDisk()
+    {
+        var json = File.ReadAllText(_filePath);
+
+        // Parse once via JsonDocument so we can both (a) check schema version
+        // on the root element and (b) deserialize the typed model from the
+        // already-parsed DOM via RootElement.Deserialize. Three failure modes
+        // are distinguished:
+        //   (1) unparseable JSON → quarantine to .invalid
+        //   (2) parseable JSON but wrong schema version → quarantine to .v1.bak
+        //   (3) parseable v2 JSON with deserialization error → quarantine to .invalid
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            if (!IsCurrentSchema(document.RootElement))
+            {
+                QuarantineV1File();
+                return new ToolApprovalData();
+            }
+
             try
             {
-                return JsonSerializer.Deserialize<ToolApprovalData>(json, JsonOptions)
+                return document.RootElement.Deserialize<ToolApprovalData>(JsonOptions)
                     ?? new ToolApprovalData();
             }
             catch (JsonException ex)
@@ -109,6 +162,11 @@ public sealed class ToolApprovalStore
                 QuarantineMalformedFile(ex);
                 return new ToolApprovalData();
             }
+        }
+        catch (JsonException ex)
+        {
+            QuarantineMalformedFile(ex);
+            return new ToolApprovalData();
         }
     }
 
@@ -160,13 +218,20 @@ public sealed class ToolApprovalStore
 
     /// <summary>
     /// Adds an approved <see cref="ApprovalEntry"/> for a tool in the given
-    /// audience. The directory portion is normalized before storage so the
-    /// on-disk file never accumulates trailing-slash variants of the same
-    /// logical entry. Idempotent: an entry equal under
+    /// audience. The verb and directory are normalized before storage so the
+    /// on-disk file never accumulates whitespace-padded verbs or
+    /// trailing-slash directory variants of the same logical entry.
+    /// Idempotent: an entry equal under
     /// <see cref="ToolApprovalEntryComparer.Equals(ApprovalEntry, ApprovalEntry)"/>
-    /// is silently dropped.
+    /// is left in place and not appended.
     /// </summary>
-    public void AddApproval(TrustAudience audience, string toolName, ApprovalEntry entry)
+    /// <returns>
+    /// <c>true</c> when a new entry was appended; <c>false</c> when an
+    /// equivalent entry was already present. Callers can use this to surface
+    /// "new vs already-trusted" feedback without re-implementing the
+    /// duplicate check.
+    /// </returns>
+    public bool AddApproval(TrustAudience audience, string toolName, ApprovalEntry entry)
     {
         var normalized = ToolApprovalEntryComparer.Normalize(entry);
 
@@ -190,11 +255,12 @@ public sealed class ToolApprovalStore
             foreach (var existing in entries)
             {
                 if (ToolApprovalEntryComparer.Equals(existing, normalized))
-                    return;
+                    return false;
             }
 
             entries.Add(normalized);
             Save(data);
+            return true;
         }
     }
 
@@ -319,10 +385,6 @@ public sealed class ToolApprovalStore
 
     private void Save(ToolApprovalData data)
     {
-        // Always emit current schema version on write, even if Load returned
-        // a default-constructed data object whose Version is also already 2.
-        // Centralizing the write keeps the contract obvious and resilient to
-        // future default-value changes on the data model.
         data.Version = CurrentSchemaVersion;
 
         var dir = Path.GetDirectoryName(_filePath);
@@ -331,6 +393,18 @@ public sealed class ToolApprovalStore
 
         var json = JsonSerializer.Serialize(data, JsonOptions);
         File.WriteAllText(_filePath, json);
+
+        // Refresh cache from the file we just wrote: the in-memory `data` is
+        // already authoritative (callers mutated it under the lock) so keep it
+        // cached and just sync the metadata. Bumping `_internalVersion`
+        // guarantees that a same-process write within the filesystem's mtime
+        // resolution still invalidates against any hypothetical concurrent
+        // reader holding stale (mtime,size) markers.
+        var info = new FileInfo(_filePath);
+        _cachedData = data;
+        _cachedMtime = info.LastWriteTimeUtc;
+        _cachedSize = info.Length;
+        _internalVersion++;
     }
 }
 

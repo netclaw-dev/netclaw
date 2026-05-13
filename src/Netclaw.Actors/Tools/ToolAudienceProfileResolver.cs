@@ -149,9 +149,7 @@ internal sealed class ToolAudienceProfileResolver
     }
 
     private static TrustAudience ResolveAudience(ToolExecutionContext? context)
-        => SecurityPolicyDefaults.TryParseAudience(context?.Audience, out var parsed)
-            ? parsed
-            : SecurityPolicyDefaults.ResolveAudienceFromSessionId(context?.SessionId);
+        => SecurityPolicyDefaults.ResolveAudienceWithFallback(context?.Audience, context?.SessionId);
 
     private static bool IsMcpServerAllowed(McpServerName serverName, ToolAudienceProfile profile)
     {

@@ -27,7 +27,7 @@ namespace Netclaw.Configuration;
 /// </summary>
 public sealed class SafeVerbList
 {
-    public static readonly SafeVerbList Empty = new(new HashSet<string>(StringComparer.Ordinal));
+    public static readonly SafeVerbList Empty = new(new HashSet<string>(ToolApprovalEntryComparer.Comparer));
 
     private readonly HashSet<string> _verbs;
 
