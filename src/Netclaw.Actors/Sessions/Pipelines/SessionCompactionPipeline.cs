@@ -202,22 +202,44 @@ internal static class SessionCompactionPipeline
     }
 
     /// <summary>
-    /// Naive token estimation: total character count / 4.
-    /// Includes the system prompt (if present) plus all compacted messages.
+    /// Naive token estimation: total character count / 4. Includes the system
+    /// prompt (if present), text content, tool-call arguments, and media-payload
+    /// inflation across all messages. Media is estimated as <c>fileSize * 4 / 3</c>
+    /// chars (base64 inflation) and contributes to the token count even though
+    /// the bytes are stored as references on disk — at LLM-call time
+    /// <see cref="ChatMessageConverter.ToAiMessages"/> loads them as
+    /// <c>DataContent</c> and the provider base64-serializes them into the JSON
+    /// payload. The accumulator is <see cref="long"/> to handle multi-megabyte
+    /// images without int overflow.
     /// </summary>
     public static int EstimateTokens(
         List<SerializableChatMessage> messages,
         SerializableChatMessage? systemPrompt)
     {
-        var totalChars = 0;
+        var totalChars = 0L;
         if (systemPrompt is not null)
+        {
             totalChars += systemPrompt.Content?.Length ?? 0;
+            totalChars += EstimateMediaChars(systemPrompt);
+        }
         foreach (var msg in messages)
         {
             totalChars += msg.Content?.Length ?? 0;
             foreach (var tc in msg.ToolCalls)
                 totalChars += tc.ArgumentsJson?.Length ?? 0;
+            totalChars += EstimateMediaChars(msg);
         }
-        return totalChars / 4;
+        return (int)(totalChars / 4);
+    }
+
+    private static long EstimateMediaChars(SerializableChatMessage msg)
+    {
+        var total = 0L;
+        foreach (var media in msg.MediaReferences)
+        {
+            // base64 inflates raw bytes by 4/3
+            total += media.FileSizeBytes * 4 / 3;
+        }
+        return total;
     }
 }

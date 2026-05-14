@@ -229,13 +229,15 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-recovery");
 
-        // First mention — triggers backfill
+        // First mention with a TS later than any history item — the actor
+        // materializes, runs one-shot hydration (fetchCount: 0 → 1), enqueues
+        // a backfill, then processes the live inbound on top.
         gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
-            EventId: new SlackEventId("C_RECOVERY:4000.1"),
+            EventId: new SlackEventId("C_RECOVERY:4000.5"),
             ChannelId: new SlackChannelId("C_RECOVERY"),
             ThreadTs: new SlackThreadTs("4000.0"),
-            EventTs: new SlackEventTs("4000.1"),
+            EventTs: new SlackEventTs("4000.5"),
             UserId: new SlackUserId("U_USER"),
             BotId: null,
             Text: "<@UBOT> first message",
@@ -245,18 +247,20 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.True(_chatClient.CallCount >= 1, "Expected first LLM call");
+            Assert.True(_chatClient.CallCount >= 1, "Expected at least one LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(1, fetchCount);
 
-        // Second message in the same thread fetches again, but only for the unsynced gap.
+        // Second mention in the same thread MUST NOT re-fetch history — under
+        // the post-fix design, hydration runs once per actor lifecycle, and
+        // live inbounds go through a fetch-free path.
         gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
-            EventId: new SlackEventId("C_RECOVERY:4000.2"),
+            EventId: new SlackEventId("C_RECOVERY:4000.6"),
             ChannelId: new SlackChannelId("C_RECOVERY"),
             ThreadTs: new SlackThreadTs("4000.0"),
-            EventTs: new SlackEventTs("4000.2"),
+            EventTs: new SlackEventTs("4000.6"),
             UserId: new SlackUserId("U_USER"),
             BotId: null,
             Text: "<@UBOT> follow up",
@@ -264,25 +268,28 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Hidden: false,
             IsDirectMessage: false));
 
+        // Verify fetch count holds at 1 even after the second live inbound.
+        // AwaitAssertAsync repeatedly re-asserts; if a stray fetch fires it
+        // will increment the counter and break the assertion.
         await AwaitAssertAsync(() =>
         {
-            Assert.True(_chatClient.CallCount >= 2, "Expected second LLM call");
-        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(2, fetchCount);
+            Assert.Equal(1, fetchCount);
+        }, duration: TimeSpan.FromSeconds(2), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(gateway);
         Sys.Stop(gateway);
         await ExpectTerminatedAsync(gateway, cancellationToken: TestContext.Current.CancellationToken);
 
-        // Simulate relaunch/offline recovery: a new gateway runtime should hydrate once again.
+        // Simulate relaunch/offline recovery: a new gateway runtime materializes
+        // a fresh binding actor which must run hydration once on its own
+        // lifecycle (fetchCount: 1 → 2).
         var relaunchedGateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-recovery-relaunched");
         relaunchedGateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
-            EventId: new SlackEventId("C_RECOVERY:4000.3"),
+            EventId: new SlackEventId("C_RECOVERY:4000.7"),
             ChannelId: new SlackChannelId("C_RECOVERY"),
             ThreadTs: new SlackThreadTs("4000.0"),
-            EventTs: new SlackEventTs("4000.3"),
+            EventTs: new SlackEventTs("4000.7"),
             UserId: new SlackUserId("U_USER"),
             BotId: null,
             Text: "<@UBOT> after restart",
@@ -292,17 +299,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.True(_chatClient.CallCount >= 3, "Expected third LLM call after relaunch");
+            Assert.Equal(2, fetchCount);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.Equal(3, fetchCount);
-
-        var recoveredMessages = _chatClient.Calls[^1];
-        var recoveredLastUser = recoveredMessages.Last(m => m.Role == AiChatRole.User);
-        var recoveredUserText = string.Join("", recoveredLastUser.Contents.OfType<TextContent>().Select(t => t.Text));
-        Assert.Contains("[adopted-context]", recoveredUserText, StringComparison.Ordinal);
-        Assert.Contains("I think it's the new query", recoveredUserText, StringComparison.Ordinal);
-        Assert.Contains("after restart", recoveredUserText);
     }
 
     [Fact]
@@ -685,10 +683,22 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Hidden: false,
             IsDirectMessage: false));
 
+        // Wait for at least one LLM call (hydration backfill or the live
+        // inbound). The actor materializes, runs one-shot hydration, then
+        // processes the stashed live inbound.
         await AwaitAssertAsync(() =>
         {
-            Assert.Equal(1, _chatClient.CallCount);
+            Assert.True(_chatClient.CallCount >= 1, $"Expected ≥1 LLM call, got {_chatClient.CallCount}");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Allow the live inbound to be processed too — pending cursor will
+        // advance past 6000.5, making 6000.4 stale.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_chatClient.CallCount >= 2, $"Expected backfill + live = ≥2 LLM calls, got {_chatClient.CallCount}");
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var callsBeforeStale = _chatClient.CallCount;
 
         gateway.Tell(new SlackInboundMessage(
             Kind: SlackInboundKind.AppMention,
@@ -703,10 +713,13 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Hidden: false,
             IsDirectMessage: false));
 
+        // The stale event must be dropped — call count must not increase.
+        // AwaitAssertAsync repeatedly re-asserts during the duration; if the
+        // count rises, the assertion fails on retry and the test fails.
         await AwaitAssertAsync(() =>
         {
-            Assert.Equal(1, _chatClient.CallCount);
-        }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(callsBeforeStale, _chatClient.CallCount);
+        }, duration: TimeSpan.FromSeconds(2), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -805,9 +818,26 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
-        var messages = _chatClient.LastMessages!;
-        var user = Assert.Single(messages, m => m.Role == AiChatRole.User);
+        // Locate the hydration backfill call — the one that carries the
+        // adopted-context projection (which is where the historical docx
+        // rejection note lives under the public-channel attachment policy).
+        // Under the post-fix design the backfill is its own LLM call; the
+        // subsequent live inbound is a plain message without adopted context.
+        var backfillCall = _chatClient.Calls
+            .Select((messages, idx) => (messages, idx))
+            .FirstOrDefault(c =>
+            {
+                var lastUser = c.messages.LastOrDefault(m => m.Role == AiChatRole.User);
+                if (lastUser is null) return false;
+                var text = string.Join("", lastUser.Contents.OfType<TextContent>().Select(t => t.Text));
+                return text.Contains("[adopted-context]", StringComparison.Ordinal);
+            }).messages;
 
+        Assert.NotNull(backfillCall);
+        var user = Assert.Single(backfillCall, m => m.Role == AiChatRole.User);
+
+        // The docx must not be forwarded as DataContent — public-channel
+        // attachment policy rejects it.
         Assert.Empty(user.Contents.OfType<DataContent>());
 
         var mergedText = string.Join("", user.Contents.OfType<TextContent>().Select(t => t.Text));

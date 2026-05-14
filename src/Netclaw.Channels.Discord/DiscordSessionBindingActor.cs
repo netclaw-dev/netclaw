@@ -83,6 +83,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "discord-session");
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
+        // After journal replay completes, queue a one-shot hydration. The
+        // self-tell lands in the mailbox after InitializePipeline (from
+        // PreStart), so the actor finishes pipeline init first, then
+        // transitions into Hydrating and processes PerformHydration.
+        Recover<RecoveryCompleted>(_ => Self.Tell(PerformHydration.Instance));
 
         Initializing();
     }
@@ -139,8 +144,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             try
             {
                 await EnsureInitializedAsync();
-                Become(Active);
-                Stash.UnstashAll();
+                Become(Hydrating);
+                // Do NOT UnstashAll here. PerformHydration is already in the
+                // mailbox (sent from the RecoveryCompleted handler) and will be
+                // processed next by the Hydrating behavior. Stashed live
+                // inbounds stay stashed until Hydrating transitions to Active.
             }
             catch (Exception ex)
             {
@@ -154,6 +162,28 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             if (msg is not InitializePipeline)
                 Stash.Stash();
         });
+    }
+
+    private void Hydrating()
+    {
+        CommandAsync<PerformHydration>(async _ =>
+        {
+            try
+            {
+                await PerformOneShotHydrationAsync();
+            }
+            catch (Exception ex)
+            {
+                _log.Warning(ex, "Thread history hydration threw; continuing without backfill");
+            }
+            finally
+            {
+                Become(Active);
+                Stash.UnstashAll();
+            }
+        });
+
+        CommandAny(_ => Stash.Stash());
     }
 
     private void Active()
@@ -287,11 +317,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (liveContents.Count == 0)
             return;
 
-        var (mergedContents, backfillDetectorUnavailable, adoptedSpeakerIds, projection, adoptedEntries) = await BuildInputContentsAsync(message, liveContents, inboundCts.Token);
-
-        if (backfillDetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
+        // Live inbound path is fetch-free. Thread history is hydrated exactly
+        // once per actor lifetime in PerformOneShotHydrationAsync (driven by
+        // the RecoveryCompleted handler), so by the time we get here the
+        // session already has the historical context it needs.
         var input = new ChannelInput
         {
             SenderId = message.SenderId.Value,
@@ -301,15 +330,9 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             Principal = message.Principal,
             Provenance = message.Provenance,
-            Contents = mergedContents,
+            Contents = liveContents,
             ReceivedAt = message.ReceivedAt,
-            ExecutableText = message.Text,
-            HasThirdPartyAdoptedContext = adoptedSpeakerIds.Any(id => !string.Equals(id, message.SenderId.Value, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = adoptedSpeakerIds,
-            AdoptedContextProjection = projection,
-            AdoptedContextLowerBound = _cursorSnowflake?.ToString(),
-            AdoptedContextUpperBound = message.EventId.Value,
-            AdoptedContextEntries = adoptedEntries
+            ExecutableText = message.Text
         };
 
         try
@@ -336,42 +359,56 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task<(IReadOnlyList<AIContent> Contents, bool BackfillDetectorUnavailable, IReadOnlyList<string> AdoptedSpeakerIds, string? Projection, IReadOnlyList<ChannelInput.AdoptedContextEntry> AdoptedEntries)> BuildInputContentsAsync(
-        DiscordThreadInbound message,
-        List<AIContent> liveContents,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// One-shot thread history hydration. Runs once per actor lifetime, in the
+    /// Hydrating behavior immediately after pipeline initialization. Fetches
+    /// thread history, computes the gap relative to the recovered cursor, and
+    /// if there is an authorized message in the gap, synthesizes one backfill
+    /// <see cref="ChannelInput"/> using that message as the trigger and older
+    /// gap messages as adopted context. Hands the synthesized input to the
+    /// session pipeline through the normal input-queue path.
+    /// </summary>
+    private async Task PerformOneShotHydrationAsync()
     {
         if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return (liveContents, false, [], null, []);
+            return;
+
+        using var cts = new CancellationTokenSource(InboundProcessingTimeout);
 
         IReadOnlyList<ChannelInput> history;
         try
         {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
+            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cts.Token);
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Thread history fetch failed for session {0}", _sessionId.Value);
-            return (liveContents, false, [], null, []);
+            _log.Warning(ex, "Thread history fetch failed for session {SessionId}", _sessionId.Value);
+            return;
         }
 
         if (history.Count == 0)
-            return (liveContents, false, [], null, []);
+        {
+            _log.Info(
+                "Thread history hydration: empty thread, no backfill cursor={Cursor} session={Session}",
+                _cursorSnowflake?.ToString() ?? "none", _sessionId.Value);
+            return;
+        }
 
         var cursor = _cursorSnowflake;
-
-        // Phase 1: filter by cursor bounds (cheap, sync).
         var candidates = new List<ChannelInput>(history.Count);
         foreach (var item in history)
         {
             if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
                 continue;
 
-            // Keep the cursor message itself during fresh-runtime hydration.
-            // If the daemon restarts while a turn is still in-flight, the
-            // session actor may recover with no completed turns even though the
-            // cursor already advanced to the last inbound user message.
-            if (cursor is { } c && itemSnowflake < c)
+            // Strict: only include messages newer than the cursor. PR #733's
+            // "cursor advances only on TurnCompleted" guarantees that
+            // snowflake == cursor means the session already has that message
+            // persisted — re-including it here on a restart hydration would
+            // duplicate it. The in-flight-crash case is handled too: a turn
+            // that didn't complete leaves the cursor un-advanced, so the
+            // message has snowflake > cursor and is correctly included in the gap.
+            if (cursor is { } c && itemSnowflake <= c)
                 continue;
 
             candidates.Add(item);
@@ -380,20 +417,17 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (candidates.Count == 0)
         {
             _log.Info(
-                "Thread history hydrated fetched={FetchedCount} gapCount=0 cursor={Cursor} session={Session}",
+                "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor} session={Session}",
                 history.Count, cursor?.ToString() ?? "none", _sessionId.Value);
-            return (liveContents, false, [], null, []);
+            return;
         }
 
-        // Phase 2: classify candidates in parallel for prompt injection risk.
         var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
+            candidates.Select(c => ClassifyGapMessageAsync(c, cts.Token)));
 
-        // Phase 3: assemble gap preserving chronological order.
-        var safe = new List<AdoptedContextMessage>(candidates.Count);
+        var gap = new List<AdoptedContextMessage>(candidates.Count);
         var blockedForRisk = 0;
         var detectorUnavailable = false;
-
         for (var i = 0; i < candidates.Count; i++)
         {
             switch (classifications[i].Outcome)
@@ -403,7 +437,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                         || _dependencies.Options.AllowedUserIds.Contains(candidates[i].SenderId, StringComparer.Ordinal)
                         ? AdoptedMessageAuthority.Authorized
                         : AdoptedMessageAuthority.Pending;
-                    safe.Add(new AdoptedContextMessage(candidates[i], authority));
+                    gap.Add(new AdoptedContextMessage(candidates[i], authority));
                     break;
 
                 case ClassificationOutcome.Block:
@@ -423,20 +457,103 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
 
         _log.Info(
-            "Thread history hydrated fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
-            history.Count, candidates.Count, safe.Count, blockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
+            "Thread history hydration fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
+            history.Count, candidates.Count, gap.Count, blockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
 
-        if (safe.Count == 0)
-            return (liveContents, detectorUnavailable, [], null, []);
+        if (detectorUnavailable)
+            await SafeReplyAsync(BackfillDetectorWarning);
 
-        var merged = MergeHistoryWithLiveContents(safe, liveContents, message);
+        if (gap.Count == 0)
+            return;
 
-        return (
-            merged.Contents,
-            detectorUnavailable,
-            merged.SpeakerIds,
-            merged.Projection,
-            merged.Entries);
+        // Locate the most recent authorized message in the gap — it plays the
+        // role of the "current authorized message" that adopted-context normally
+        // anchors around. Without one we have no authorized trigger to enqueue;
+        // we transition to Active and let the next live authorized inbound be
+        // the trigger.
+        AdoptedContextMessage? trigger = null;
+        for (var i = gap.Count - 1; i >= 0; i--)
+        {
+            if (gap[i].AuthorityAtInclusion == AdoptedMessageAuthority.Authorized)
+            {
+                trigger = gap[i];
+                break;
+            }
+        }
+
+        if (trigger is null)
+        {
+            _log.Info("Thread history hydration: no authorized message in gap; deferring backfill to next live inbound session={Session}", _sessionId.Value);
+            return;
+        }
+
+        var adoptedContext = new List<AdoptedContextMessage>();
+        foreach (var item in gap)
+        {
+            if (ReferenceEquals(item, trigger))
+                break;
+            adoptedContext.Add(item);
+        }
+
+        var triggerInput = trigger.Input;
+        var triggerSenderId = triggerInput.SenderId;
+        var triggerSnowflake = TryParseSnowflake(triggerInput.MessageId ?? string.Empty);
+
+        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
+            adoptedContext,
+            triggerInput.Contents,
+            triggerSenderId,
+            triggerInput.ReceivedAt);
+
+        var backfillInput = triggerInput with
+        {
+            Contents = merged.Contents,
+            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(id => !string.Equals(id, triggerSenderId, StringComparison.Ordinal)),
+            AdoptedSpeakerIds = merged.SpeakerIds,
+            AdoptedContextProjection = merged.Projection,
+            AdoptedContextLowerBound = cursor?.ToString(),
+            AdoptedContextUpperBound = triggerInput.MessageId,
+            AdoptedContextEntries = merged.Entries
+        };
+
+        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
+        {
+            _log.Info("Skipping hydration backfill enqueue while restart drain is active: {Reason}", ingressClosedReason);
+            return;
+        }
+
+        var writer = _handle.InputQueue;
+        if (writer is null)
+        {
+            _log.Warning("Discord input queue is not initialized; skipping hydration backfill");
+            return;
+        }
+
+        try
+        {
+            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+            writeCts.CancelAfter(TimeSpan.FromSeconds(10));
+            await writer.WriteAsync(backfillInput, writeCts.Token);
+
+            if (triggerSnowflake is { } sn)
+            {
+                if (_pendingCursorSnowflake is not { } pending || sn > pending)
+                    _pendingCursorSnowflake = sn;
+            }
+
+            _log.Info(
+                "discord_hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
+                triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
+            ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
+        }
+        catch (OperationCanceledException ex)
+        {
+            _log.Warning(ex, "Timed out enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
+        }
+        catch (ChannelClosedException ex)
+        {
+            _log.Warning(ex, "Input queue closed while enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
+        }
     }
 
     private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
@@ -449,16 +566,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         return PromptClassifier.ClassifyAsync(
             _promptInjectionDetector, text, "discord-backfill", _log, cancellationToken);
     }
-
-    private static AdoptedContextMergeResult MergeHistoryWithLiveContents(
-        IReadOnlyList<AdoptedContextMessage> history,
-        IReadOnlyList<AIContent> liveContents,
-        DiscordThreadInbound message)
-        => AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            history,
-            liveContents,
-            message.SenderId.Value,
-            message.ReceivedAt);
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message, string selectedKey)
     {
@@ -1171,6 +1278,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private sealed record InitializePipeline
     {
         public static readonly InitializePipeline Instance = new();
+    }
+
+    private sealed record PerformHydration
+    {
+        public static readonly PerformHydration Instance = new();
     }
 
     private sealed record OutputReceived(SessionOutput Output);

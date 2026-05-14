@@ -53,6 +53,15 @@ public sealed record SerializableMediaReference : INetclawSerializableMessage
 
     /// <summary>Content modality as integer for wire safety (maps to <see cref="MediaModality"/>).</summary>
     public int Modality { get; init; }
+
+    /// <summary>
+    /// Raw file size in bytes. Used by compaction token estimation to account
+    /// for base64-encoded media payloads at LLM-call time without reading
+    /// files from disk. Zero for records persisted before this field was
+    /// added — proto3 default — which causes legacy records to under-count
+    /// the same way they did before this field existed (no regression).
+    /// </summary>
+    public long FileSizeBytes { get; init; }
 }
 
 /// <summary>

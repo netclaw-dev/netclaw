@@ -233,6 +233,10 @@ public class ChatMessageConverterTests
         Assert.Equal("image/png", msg.MediaReferences[0].MimeType);
         Assert.Equal((int)MediaModality.Image, msg.MediaReferences[0].Modality);
         Assert.EndsWith(".png", msg.MediaReferences[0].RelativePath);
+        // FileSizeBytes is populated at write time so compaction's token
+        // estimator can account for base64-encoded media payload size without
+        // touching disk.
+        Assert.Equal(imageBytes.Length, msg.MediaReferences[0].FileSizeBytes);
 
         // Verify file was written to disk
         var filePath = Path.Combine(tempDir.Path, "media", msg.MediaReferences[0].RelativePath);

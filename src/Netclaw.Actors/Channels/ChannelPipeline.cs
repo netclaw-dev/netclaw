@@ -359,7 +359,8 @@ public sealed class SessionPipeline : ISessionPipeline
                 {
                     RelativePath = fileName,
                     MimeType = mimeType,
-                    Modality = (int)ChatMessageConverter.MimeToModality(mimeType)
+                    Modality = (int)ChatMessageConverter.MimeToModality(mimeType),
+                    FileSizeBytes = bytes.Length
                 });
             }
         }

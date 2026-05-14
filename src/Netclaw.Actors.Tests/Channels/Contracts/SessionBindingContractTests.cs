@@ -717,15 +717,23 @@ public abstract class SessionBindingContractTests : TestKit
     }
 
     // --- Thread Hydration ---
+    //
+    // Hydration runs exactly once per actor lifetime, on a self-told
+    // PerformHydration message scheduled from the RecoveryCompleted handler.
+    // The backfill (if any) is enqueued as its own ChannelInput. Live inbound
+    // events after hydration go through a fetch-free path and never carry
+    // historical adopted-context. This prevents the duplicate-image bug where
+    // every inbound during an in-flight turn was re-emitting the same gap
+    // messages and re-loading their attachments.
 
     [Fact]
-    public async Task Thread_history_merged_on_first_inbound()
+    public async Task Hydration_emits_backfill_at_startup_with_adopted_context()
     {
         if (!SupportsThreadHydration) return;
 
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-hydration-merge");
+        var sid = new SessionId("session-hydration-startup-backfill");
         var historyFetcher = new RecordingThreadHistoryFetcher();
         historyFetcher.SetHistory(CreateHistoryItems(2));
 
@@ -735,43 +743,40 @@ public abstract class SessionBindingContractTests : TestKit
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
-        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
         await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
 
-        actor.Tell(CreateHydrationTriggerInboundMessage("live message", "user-1"), TestActor);
-
+        // No live inbound sent — backfill must be enqueued purely from the
+        // RecoveryCompleted-driven hydration.
         await AwaitAssertAsync(() =>
         {
             Assert.Equal(1, historyFetcher.FetchCount);
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
-            Assert.Equal("live message", input.ExecutableText);
             Assert.True(input.HasAdoptedContext);
-            Assert.True(input.HasThirdPartyAdoptedContext);
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));
             Assert.Contains("[adopted-context]", textContent, StringComparison.Ordinal);
             Assert.Contains("[current-authorized-message", textContent, StringComparison.Ordinal);
-            Assert.Contains("live message", textContent);
         }, cancellationToken: ct);
     }
 
     [Fact]
-    public async Task Thread_history_keeps_slash_like_text_out_of_executable_content()
+    public async Task Hydration_backfill_keeps_slash_like_text_in_adopted_projection()
     {
         if (!SupportsThreadHydration) return;
 
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-hydration-executable-split");
+        var sid = new SessionId("session-hydration-slash-text");
         var historyFetcher = new RecordingThreadHistoryFetcher();
-        var historyItem = Assert.Single(CreateHistoryItems(1));
+        var items = CreateHistoryItems(2);
+        // Older item carries slash-command-like text. Trigger is the more
+        // recent authorized item (last in the list).
         historyFetcher.SetHistory(
         [
-            historyItem with
-            {
-                Contents = [new TextContent("/opsx-sync")]
-            }
+            items[0] with { Contents = [new TextContent("/opsx-sync")] },
+            items[1]
         ]);
 
         var pipeline = new RecordingSessionPipeline(_ =>
@@ -780,28 +785,27 @@ public abstract class SessionBindingContractTests : TestKit
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
-        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
         await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
-
-        actor.Tell(CreateHydrationTriggerInboundMessage("tell me what they said", "user-1"), TestActor);
 
         await AwaitAssertAsync(() =>
         {
             Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
-            Assert.Equal("tell me what they said", input.ExecutableText);
             Assert.True(input.HasAdoptedContext);
-            Assert.True(input.HasThirdPartyAdoptedContext);
 
+            // The slash text from the older gap message lives inside the
+            // adopted-context projection. It must not become the trigger's
+            // ExecutableText, which would risk re-executing it.
+            Assert.NotEqual("/opsx-sync", input.ExecutableText);
             var textContent = string.Join("\n", input.Contents
                 .OfType<TextContent>()
                 .Select(t => t.Text));
             Assert.Contains("/opsx-sync", textContent, StringComparison.Ordinal);
-            Assert.Contains("tell me what they said", textContent, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
 
     [Fact]
-    public async Task Self_only_thread_history_sets_adopted_context_without_third_party_flag()
+    public async Task Hydration_backfill_marks_self_only_history_without_third_party_flag()
     {
         if (!SupportsThreadHydration) return;
 
@@ -809,13 +813,14 @@ public abstract class SessionBindingContractTests : TestKit
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-hydration-self-only");
         var historyFetcher = new RecordingThreadHistoryFetcher();
-        var historyItem = Assert.Single(CreateHistoryItems(1));
+        // Two history items, both from the same authorized user. The trigger
+        // (most recent) and the adopted-context entry share a sender, so the
+        // third-party flag must stay false.
+        var items = CreateHistoryItems(2);
         historyFetcher.SetHistory(
         [
-            historyItem with
-            {
-                SenderId = "user-1"
-            }
+            items[0] with { SenderId = "user-1" },
+            items[1] with { SenderId = "user-1" }
         ]);
 
         var pipeline = new RecordingSessionPipeline(_ =>
@@ -824,10 +829,8 @@ public abstract class SessionBindingContractTests : TestKit
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
-        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
         await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
-
-        actor.Tell(CreateHydrationTriggerInboundMessage("summarize what I said", "user-1"), TestActor);
 
         await AwaitAssertAsync(() =>
         {
@@ -839,21 +842,194 @@ public abstract class SessionBindingContractTests : TestKit
     }
 
     [Fact]
-    public async Task Thread_history_fetched_for_each_authorized_inbound()
+    public async Task Thread_history_fetched_at_most_once_per_actor_lifetime()
     {
         if (!SupportsThreadHydration) return;
 
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-hydration-oneshot");
+        var sid = new SessionId("session-hydration-once-only");
         var historyFetcher = new RecordingThreadHistoryFetcher();
         historyFetcher.SetHistory(CreateHistoryItems(1));
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "first reply" },
+            new TextOutput { SessionId = sid, Text = "reply" },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        // Hydration runs once at startup.
+        await AwaitAssertAsync(() => Assert.Equal(1, historyFetcher.FetchCount), cancellationToken: ct);
+
+        // Subsequent live inbounds must not re-trigger hydration. This is the
+        // core invariant that prevents the duplicate-image bug: in-flight
+        // turns and concurrent inbounds never re-derive historical content
+        // from the channel's history API.
+        actor.Tell(CreateHydrationTriggerInboundMessage("first live", "user-1"), TestActor);
+        actor.Tell(CreateHydrationTriggerInboundMessage("second live", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 3),
+            cancellationToken: ct);
+
+        Assert.Equal(1, historyFetcher.FetchCount);
+    }
+
+    [Fact]
+    public async Task Inbounds_arriving_during_hydration_are_stashed_and_unstash_after()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-stash");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(Array.Empty<ChannelInput>());
+        historyFetcher.InstallGate();
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        // Wait until hydration's fetcher call is in flight (blocked on the
+        // gate). At this point the actor is provably in Hydrating behavior.
+        await historyFetcher.FetchCalledTask.WaitAsync(ct);
+
+        actor.Tell(CreateHydrationTriggerInboundMessage("stashed live", "user-1"), TestActor);
+
+        // No-timing assertion: the actor is in Hydrating and the fetcher is
+        // blocked, so the only way CapturedInputs could be non-empty is if
+        // the inbound was incorrectly processed bypassing the stash. We've
+        // already proved the actor is in Hydrating (fetcher was called),
+        // so a one-shot assertion is sufficient.
+        Assert.Empty(pipeline.CapturedInputs);
+
+        // Release the fetcher gate. Hydration completes (empty history → no
+        // backfill), behavior switches to Active, and the stashed inbound
+        // is unstashed and processed.
+        historyFetcher.ReleaseGate();
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(pipeline.CapturedInputs);
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.Equal("stashed live", input.ExecutableText);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Hydration_re_runs_after_supervised_restart()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-restart");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(Array.Empty<ChannelInput>());
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.Equal(1, historyFetcher.FetchCount), cancellationToken: ct);
+
+        await actor.GracefulStop(TimeSpan.FromSeconds(5));
+
+        var pipeline2 = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply 2" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 2 }
+        ]);
+        CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline2.CapturedOptions), cancellationToken: ct);
+
+        // A fresh actor lifecycle must re-run hydration. The fetch counter
+        // is shared across both actor instances on the same RecordingThreadHistoryFetcher.
+        await AwaitAssertAsync(() => Assert.Equal(2, historyFetcher.FetchCount), cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Image_in_history_flows_through_at_most_once_across_multiple_inbounds()
+    {
+        // Direct regression test for the duplicate-image compaction bug.
+        // Under the pre-fix design, every live inbound re-fetched thread
+        // history and re-emitted any in-flight message's DataContent, so the
+        // same image accumulated into history N times — destroying session
+        // compaction budget. The fix: hydration runs once at actor startup,
+        // and live inbounds never re-fetch history. The image flows through
+        // exactly once.
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-image-flows-once");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        var baseItem = Assert.Single(CreateHistoryItems(1));
+        historyFetcher.SetHistory(
+        [
+            baseItem with
+            {
+                Contents = [.. baseItem.Contents, new DataContent(imageBytes, "image/png")]
+            }
+        ]);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        // Wait for hydration backfill to land.
+        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 1),
+            cancellationToken: ct);
+
+        // Send three live inbounds in quick succession — the kind of scenario
+        // that produced 8 image copies under the pre-fix design.
+        actor.Tell(CreateHydrationTriggerInboundMessage("live 1", "user-1"), TestActor);
+        actor.Tell(CreateHydrationTriggerInboundMessage("live 2", "user-1"), TestActor);
+        actor.Tell(CreateHydrationTriggerInboundMessage("live 3", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 4),
+            cancellationToken: ct);
+
+        var dataContentCount = pipeline.CapturedInputs
+            .Sum(input => input.Contents.OfType<DataContent>().Count());
+        Assert.Equal(1, dataContentCount);
+    }
+
+    [Fact]
+    public async Task Cursor_does_not_advance_on_non_completed_turn_outcome()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-cursor-not-completed");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(Array.Empty<ChannelInput>());
+
+        // First lifecycle: live inbound arrives, turn outcome is Failed.
+        // Cursor must NOT advance (PR #733 amnesia fix).
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "partial" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1, Outcome = TurnOutcome.Failed }
+        ], reactive: true);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
         await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
@@ -862,17 +1038,81 @@ public abstract class SessionBindingContractTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            Assert.Equal(1, historyFetcher.FetchCount);
             Assert.True(pipeline.CapturedInputs.Count >= 1);
+            Assert.Contains(GetPostedTexts(), t => t.Contains("partial"));
         }, cancellationToken: ct);
 
-        actor.Tell(CreateHydrationTriggerInboundMessage("second live", "user-1"), TestActor);
+        await actor.GracefulStop(TimeSpan.FromSeconds(5));
+
+        // Second lifecycle: history contains TWO items with snowflakes/ts
+        // earlier than the first-live inbound's. If the cursor had advanced
+        // on Failed, the second lifecycle's hydration would skip both items.
+        // Because the cursor stayed put, both stay in the gap and produce
+        // a backfill ChannelInput (older item wrapped as adopted context for
+        // the newer item, which acts as the synthesized trigger).
+        historyFetcher.SetHistory(CreateHistoryItems(2));
+        historyFetcher.ResetFetchCount();
+
+        var pipeline2 = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply 2" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 2, Outcome = TurnOutcome.Completed }
+        ]);
+
+        CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline2.CapturedOptions), cancellationToken: ct);
 
         await AwaitAssertAsync(() =>
-            Assert.True(pipeline.CapturedInputs.Count >= 2),
+        {
+            Assert.Equal(1, historyFetcher.FetchCount);
+            // The backfill produced from the un-advanced cursor includes the
+            // older history item as adopted context, proving the cursor never
+            // advanced on the failed turn.
+            Assert.True(pipeline2.CapturedInputs.TryPeek(out var input));
+            Assert.True(input.HasAdoptedContext);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Live_inbound_after_hydration_is_plain_without_adopted_context()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hydration-plain-live");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(CreateHistoryItems(1));
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline.CapturedOptions), cancellationToken: ct);
+
+        // Wait for hydration backfill to land.
+        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 1),
             cancellationToken: ct);
 
-        Assert.Equal(2, historyFetcher.FetchCount);
+        actor.Tell(CreateHydrationTriggerInboundMessage("live after hydration", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            // Live input lives at index 1 (backfill is index 0).
+            Assert.True(pipeline.CapturedInputs.Count >= 2);
+            var inputs = pipeline.CapturedInputs.ToArray();
+            var live = inputs[^1];
+            Assert.Equal("live after hydration", live.ExecutableText);
+            Assert.False(live.HasAdoptedContext);
+            Assert.False(live.HasThirdPartyAdoptedContext);
+            var liveText = string.Join("\n", live.Contents
+                .OfType<TextContent>()
+                .Select(t => t.Text));
+            Assert.DoesNotContain("[adopted-context]", liveText, StringComparison.Ordinal);
+        }, cancellationToken: ct);
     }
 
     [Fact]
@@ -1037,6 +1277,73 @@ public abstract class SessionBindingContractTests : TestKit
             // than all history item IDs (900... range vs 1000... range).
             Assert.DoesNotContain("history message 0", text);
         }, cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// Regression test for the daemon-restart duplicate-message bug.
+    /// After a supervised restart where the cursor has advanced to the same ts
+    /// as a message still returned by the thread history fetcher, the second
+    /// hydration must NOT re-emit that message. Otherwise the session ends up
+    /// with the message persisted twice — once from the first lifecycle's
+    /// backfill, and once from the second lifecycle's restart hydration —
+    /// which is the path that reintroduced the duplicate-image overflow
+    /// (D0AC6CKBK5K/1778728886.944599) after the daemon was restarted to
+    /// swap the fallback model.
+    /// </summary>
+    [Fact]
+    public async Task Hydration_after_restart_does_not_re_emit_message_at_cursor_position()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-restart-no-dupe-at-cursor");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(CreateHistoryItems(1));
+
+        var turnNumber = 0;
+        var pipeline1 = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = $"reply {Interlocked.Increment(ref turnNumber)}" },
+            new TurnCompleted { SessionId = sid, TurnNumber = turnNumber, Outcome = TurnOutcome.Completed }
+        ], reactive: true);
+
+        var actor1 = CreateBindingActorWithHydration(sid, pipeline1, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline1.CapturedOptions), cancellationToken: ct);
+
+        // First lifecycle: hydration treats the single history item as the
+        // trigger, enqueues one backfill input, and the actor's _pendingCursorTs
+        // is set to that item's ts.
+        await AwaitAssertAsync(() => Assert.True(pipeline1.CapturedInputs.Count >= 1),
+            cancellationToken: ct);
+
+        // Wait for TurnCompleted — this advances the cursor to the trigger's ts.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(GetPostedTexts(), p => p.Contains("reply"));
+        }, cancellationToken: ct);
+
+        ClearPostedTexts();
+        await actor1.GracefulStop(TimeSpan.FromSeconds(5));
+
+        // Simulate daemon restart with the same persistent identity (journal
+        // recovers _cursorTs). The history fetcher still returns the same item
+        // because Slack/Discord don't forget messages between our restarts.
+        historyFetcher.ResetFetchCount();
+        var pipeline2 = new RecordingSessionPipeline(_ => []);
+
+        CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
+        await AwaitAssertAsync(() => Assert.NotNull(pipeline2.CapturedOptions), cancellationToken: ct);
+        await AwaitAssertAsync(() => Assert.Equal(1, historyFetcher.FetchCount),
+            cancellationToken: ct);
+
+        // The cursor is exactly at the history item's ts. A correct gap filter
+        // excludes it (it's already in the session's persisted history). A
+        // buggy filter that admits ts == cursor re-emits the message a second
+        // time, doubling its contents (text + any attachments) in the session.
+        // Assert nothing was enqueued.
+        await AwaitAssertAsync(() => Assert.Empty(pipeline2.CapturedInputs),
+            cancellationToken: ct);
     }
 
 }

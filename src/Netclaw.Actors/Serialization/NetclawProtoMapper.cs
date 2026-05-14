@@ -56,14 +56,16 @@ internal static class NetclawProtoMapper
     {
         RelativePath = r.RelativePath,
         MimeType = r.MimeType,
-        Modality = r.Modality
+        Modality = r.Modality,
+        FileSizeBytes = r.FileSizeBytes
     };
 
     internal static SerializableMediaReference FromProto(Proto.SerializableMediaReferenceProto proto) => new()
     {
         RelativePath = proto.RelativePath,
         MimeType = proto.MimeType,
-        Modality = proto.Modality
+        Modality = proto.Modality,
+        FileSizeBytes = proto.FileSizeBytes
     };
 
     // ── SerializableToolCall ──

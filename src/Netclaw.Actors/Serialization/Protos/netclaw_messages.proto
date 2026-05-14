@@ -55,6 +55,9 @@ message SerializableMediaReferenceProto {
   string relative_path = 1;
   string mime_type = 2;
   int32 modality = 3;
+  // Raw file size in bytes. Zero for records persisted before this field
+  // was added — see SerializableMediaReference.FileSizeBytes.
+  int64 file_size_bytes = 4;
 }
 
 message SerializableToolCallProto {

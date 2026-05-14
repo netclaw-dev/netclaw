@@ -184,7 +184,8 @@ public static class ChatMessageConverter
         {
             RelativePath = fileName,
             MimeType = mimeType,
-            Modality = (int)modality
+            Modality = (int)modality,
+            FileSizeBytes = bytes.Length
         };
     }
 
