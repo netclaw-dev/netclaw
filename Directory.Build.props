@@ -8,28 +8,78 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.17.2</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.17.2 — Session stability fixes, MCP reconnection, and schema packaging
+    <VersionPrefix>0.18.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.18.0 — Directory-scoped approvals, sub-agent reloads, vLLM support, channel reliability, and security hardening
+
+**Features**
+
+* **Directory-scoped shell command approval patterns** — approve a shell command rooted at a parent directory and it automatically applies to all subdirectories, eliminating redundant prompts. Approval entries now use a `(verb, directory)` model with proper path hierarchy. ([#896](https://github.com/netclaw-dev/netclaw/pull/896))
+
+* **`netclaw approvals` CLI** — new CLI subcommand for listing, revoking, and managing shell command approvals with a TUI interface. Closes [#921](https://github.com/netclaw-dev/netclaw/issues/921). ([#927](https://github.com/netclaw-dev/netclaw/pull/927))
+
+* **vLLM-aware capability resolver + timings split** — the provider system now detects vLLM endpoints and resolves capabilities accordingly, with separate prompt/decode timing metrics. ([#619](https://github.com/netclaw-dev/netclaw/pull/619), [#986](https://github.com/netclaw-dev/netclaw/pull/986))
+
+* **File-based sub-agent hot reload** — file-defined sub-agents under `~/.netclaw/agents/` now reload automatically when modified, and spawned sub-agents inherit parent session context (session_dir, project_dir). Invalid edits fail closed. ([#984](https://github.com/netclaw-dev/netclaw/pull/984))
+
+* **Serialization marker interface + test-time verification** — new `ISerializableMessage` marker interface with compile-time and test-time verification to catch unregistered serialization types early. Closes [#961](https://github.com/netclaw-dev/netclaw/issues/961). ([#978](https://github.com/netclaw-dev/netclaw/pull/978))
+
+* **SearXNG backend hardening** — improved SearXNG search with custom User-Agent, 429 retry logic, configurable timeouts, and 403 detection. ([#914](https://github.com/netclaw-dev/netclaw/pull/914))
+
+* **Container/proxy exposure mode relaxation** — daemon no longer rejects `https` exposure mode when bound to loopback, supporting TLS-termination-at-proxy topologies. ([#864](https://github.com/netclaw-dev/netclaw/pull/864))
 
 **Bug Fixes**
 
-* Fixed binding actor stream crashes on shutdown — SignalR, Slack, and Discord binding actors now drain their Akka.Streams pipeline before stopping, eliminating `AbruptTerminationException` / `StreamDetachedException` crash logs on graceful shutdown and idle timeout. ([#895](https://github.com/netclaw-dev/netclaw/pull/895))
+* **Button approvals route by SessionId** — approval button clicks now route via the deterministic session actor path instead of the per-thread binding's in-memory lookup, fixing silently-dropped approvals when channel adapters passivate. Closes [#979](https://github.com/netclaw-dev/netclaw/issues/979). ([#982](https://github.com/netclaw-dev/netclaw/pull/982))
 
-* Fixed thinking-only LLM responses being classified as empty — the empty response guard now checks `TextReasoningContent` in addition to `TextContent`, so models that emit thinking tokens without text (e.g., Qwen 3) are no longer incorrectly retried with a nudge. ([#895](https://github.com/netclaw-dev/netclaw/pull/895))
+* **Thread history hydration** — bot messages from thread history now hydrate only once per actor lifetime, with media properly accounted for in compaction size calculations. ([#990](https://github.com/netclaw-dev/netclaw/pull/990))
 
-* Fixed dropped tool calls from llama.cpp-compatible providers — `OpenAiCompatibleChatClient` now emits accumulated tool calls when `finish_reason` is `"stop"`, not just `"tool_calls"`. ([#895](https://github.com/netclaw-dev/netclaw/pull/895))
+* **Passivation race fix** — sessions now use a post-snapshot grace window to close the passivation race condition where messages could be lost during shutdown. ([#985](https://github.com/netclaw-dev/netclaw/pull/985))
 
-* Fixed `netclaw doctor` schema validation failing on `Search.Backend` — schema now matches wire format (`duckduckgo`, `brave`, `searxng`). ([#894](https://github.com/netclaw-dev/netclaw/pull/894))
+* **ModelReference modality schema alignment** — config schema now matches scalar binding for `ModelReference.Modality`. ([#988](https://github.com/netclaw-dev/netclaw/pull/988), [#989](https://github.com/netclaw-dev/netclaw/pull/989))
 
-* Embedded config schema as assembly resource so `netclaw doctor` works in all distribution formats. ([#894](https://github.com/netclaw-dev/netclaw/pull/894))
+* **Reminder execution fixes** — removed spurious 5-minute execution timeout that was killing long-running reminders, and prevented duplicate concurrent execution of the same reminder. ([#970](https://github.com/netclaw-dev/netclaw/pull/970))
 
-* Added `CursorAdvanced` serialization bindings for Slack and Discord binding actors. Closes [#887](https://github.com/netclaw-dev/netclaw/issues/887). ([#890](https://github.com/netclaw-dev/netclaw/pull/890))
+* **Config watcher atomic-replace handling** — file system watcher now handles atomic-replace writes (Renamed events) from editors like VS Code. Closes [#959](https://github.com/netclaw-dev/netclaw/issues/959). ([#960](https://github.com/netclaw-dev/netclaw/pull/960))
 
-* MCP servers that become unreachable no longer stay permanently stuck — new `McpReconnectionService` with exponential backoff. ([#884](https://github.com/netclaw-dev/netclaw/pull/884))
+* **Thread history backfill** — bot messages are now included in thread history backfill, and hydration happens only at thread root. ([#954](https://github.com/netclaw-dev/netclaw/pull/954), [#958](https://github.com/netclaw-dev/netclaw/pull/958))
 
-**Documentation**
+* **Memory provenance** — adopted-context provenance is now separated from third-party memory policy. ([#952](https://github.com/netclaw-dev/netclaw/pull/952))
 
-* Refocused README on end-user content with Docker quickstart, netclaw.dev links, and Discord link. ([#888](https://github.com/netclaw-dev/netclaw/pull/888))</PackageReleaseNotes>
+* **`netclaw doctor` warning suppression** — no longer warns about explicitly-configured Personal posture and tool profile. ([#950](https://github.com/netclaw-dev/netclaw/pull/950))
+
+* **Systemd PATH fix** — systemd unit now bakes PATH so the shell tool can resolve the `netclaw` CLI. ([#948](https://github.com/netclaw-dev/netclaw/pull/948))
+
+* **Thinking-only retry guard** — three-layer SSE/middleware/actor diagnostics prevent retries on thinking-only responses, plus `RollingFileLogger` Debug-level fix. ([#947](https://github.com/netclaw-dev/netclaw/pull/947))
+
+* **Watchdog two-phase timeout** — watchdog now consumes `prompt_progress` keepalives from llama.cpp and uses a two-phase timeout to prevent false-positive watchdog kills. ([#946](https://github.com/netclaw-dev/netclaw/pull/946))
+
+* **MCP personal mode defaults** — personal mode now defaults all tools to Auto and the toggle grants all tools properly. ([#942](https://github.com/netclaw-dev/netclaw/pull/942), [#943](https://github.com/netclaw-dev/netclaw/pull/943))
+
+* **Approval button label truncation** — button labels are now truncated to fit Slack/Discord character limits. Closes [#931](https://github.com/netclaw-dev/netclaw/issues/931). ([#937](https://github.com/netclaw-dev/netclaw/pull/937))
+
+* **DailyStatsActor SQLite DDL cleanup** — removed SQLite DDL from `PreStart`, and wizard poll-timeout now surfaces crash logs. Closes [#925](https://github.com/netclaw-dev/netclaw/issues/925). ([#938](https://github.com/netclaw-dev/netclaw/pull/938))
+
+* **Session diagnostics logging** — all session diagnostics now route into a single session log file, with sidecar `IChatClient` calls wrapped in `SessionDiagnosticsContext`. ([#916](https://github.com/netclaw-dev/netclaw/pull/916), [#926](https://github.com/netclaw-dev/netclaw/pull/926))
+
+* **TUI context window display** — status bar now uses daemon-reported context window size. ([#906](https://github.com/netclaw-dev/netclaw/pull/906), [#913](https://github.com/netclaw-dev/netclaw/pull/913))
+
+* **Wizard Personal posture fix** — init wizard with Personal posture no longer silently disables all features. ([#907](https://github.com/netclaw-dev/netclaw/pull/907))
+
+**Security**
+
+* **Filesystem root tilde expansion** — `~` and `$HOME` in configured filesystem roots are now properly expanded. ([#975](https://github.com/netclaw-dev/netclaw/pull/975))
+
+* **Skill scanner NoOp for system skills** — swapped skill content scanner to NoOp to unblock system skills from loading. ([#976](https://github.com/netclaw-dev/netclaw/pull/976), [#977](https://github.com/netclaw-dev/netclaw/pull/977))
+
+* **Non-loopback Daemon.Host rejection** — Local exposure mode now rejects non-loopback `Daemon.Host` values. ([#901](https://github.com/netclaw-dev/netclaw/pull/901))
+
+* **Reverted trust-zones** — stayed on the simpler `(verb, directory) ApprovalEntry` model instead of the trust-zone approach. ([#962](https://github.com/netclaw-dev/netclaw/pull/962))
+
+**Dependencies**
+
+* Bumped `Microsoft.SourceLink.GitHub` from 10.0.203 to 10.0.300. ([#983](https://github.com/netclaw-dev/netclaw/pull/983))
+* Bumped Microsoft platform/AI packages and added Dependabot groups. ([#980](https://github.com/netclaw-dev/netclaw/pull/980))
+* Bumped `Netclaw.SkillClient` from 0.2.1 to 0.3.0. ([#936](https://github.com/netclaw-dev/netclaw/pull/936))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
