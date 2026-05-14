@@ -110,19 +110,10 @@ public sealed class SessionLogActorTests : TestKit
             await ExpectTerminatedAsync(dispatcher1, cancellationToken: TestContext.Current.CancellationToken);
 
             var dispatcher2 = SpawnDispatcher(Sys, basePath, timeProvider);
+            dispatcher2.Tell(new TextOutput { SessionId = sessionId, Text = "second" }, ActorRefs.NoSender);
 
-            // Spin the send inside AwaitAssertAsync so each polling iteration
-            // re-Tells "second". On Windows the SessionLogActor's AppendLine
-            // can throw IOException (SHARING_VIOLATION) after the previous
-            // dispatcher's writer closed but before AV / kernel handle
-            // cleanup completes — the actor's existing catch-and-Debug-log
-            // contract drops the message in that case. Re-sending each
-            // iteration keeps trying until a write lands. Multiple landed
-            // writes are fine; Assert.Contains is duplicate-tolerant.
             await AwaitAssertAsync(async () =>
             {
-                dispatcher2.Tell(new TextOutput { SessionId = sessionId, Text = "second" }, ActorRefs.NoSender);
-
                 var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
                 Assert.True(File.Exists(logFile));
                 Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logFile)!, "*.log", SearchOption.TopDirectoryOnly));

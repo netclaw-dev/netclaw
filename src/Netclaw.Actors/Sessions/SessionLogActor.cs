@@ -64,7 +64,10 @@ public sealed class SessionLogActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Debug(ex, "Failed to write user message log entry for {SessionId}", _sessionId.Value);
+            // AppendLine retries transient IO failures internally; reaching this
+            // catch means the audit line was lost. Audit-trail loss is a real
+            // production fault — log loudly, not at Debug.
+            _log.Warning(ex, "Dropped user message audit line for {SessionId}", _sessionId.Value);
         }
     }
 
@@ -102,7 +105,7 @@ public sealed class SessionLogActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Debug(ex, "Failed to write session log entry for {SessionId}", _sessionId.Value);
+            _log.Warning(ex, "Dropped session log audit line for {SessionId}", _sessionId.Value);
         }
     }
 
@@ -114,7 +117,7 @@ public sealed class SessionLogActor : ReceiveActor
         }
         catch (Exception ex)
         {
-            _log.Debug(ex, "Failed to write diagnostic log entry for {SessionId}", _sessionId.Value);
+            _log.Warning(ex, "Dropped diagnostic audit line for {SessionId}", _sessionId.Value);
         }
     }
 
