@@ -64,6 +64,27 @@ public sealed class SlackThreadHistoryFetcherTests
     }
 
     [Fact]
+    public async Task Hydrated_channel_input_carries_resolved_historical_audience()
+    {
+        // Regression: the fetcher previously omitted Audience on the produced
+        // ChannelInput, so hydration-driven backfill on a fresh DM fell back to
+        // the channel pipeline's DefaultAudience (Public) and silently denied
+        // shell_execute with tool_not_allowed_for_audience_profile even when
+        // the operator had `dm: personal` configured.
+        _options.ChannelAudiences["dm"] = "personal";
+
+        _replies.Set("D1", "1000.0", null, new ConversationMessagesResponse
+        {
+            Messages = [new MessageEvent { Ts = "1000.0", User = "U1", Text = "first DM message" }]
+        });
+
+        var result = await CreateFetcher().FetchThreadHistoryAsync(new SessionId("D1/1000.0"), TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Equal(TrustAudience.Personal, item.Audience);
+    }
+
+    [Fact]
     public async Task Includes_bot_authored_root_for_proactive_post_bootstrap()
     {
         // Proactive-post case: the bot opened the thread. The thread root

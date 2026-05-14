@@ -402,6 +402,43 @@ public sealed class DiscordThreadHistoryFetcherTests
         Assert.DoesNotContain(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "agent's reply turn (in transcript)"));
     }
 
+    [Fact]
+    public async Task Hydrated_channel_input_carries_resolved_historical_audience()
+    {
+        // Locks in the invariant that the Slack twin regressed on: the fetcher
+        // MUST propagate the resolved historical audience to the produced
+        // ChannelInput so hydration-driven backfill doesn't silently fall back
+        // to the channel pipeline's DefaultAudience.
+        var options = new DiscordChannelOptions
+        {
+            AllowDirectMessages = true,
+            ChannelAudiences = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dm"] = "personal"
+            }
+        };
+
+        var fetcher = CreateFetcher(
+            (_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>(
+            [
+                new DiscordThreadHistoryFetcher.HistoricalMessage(
+                    MessageId: "100000000000000010",
+                    SenderId: "user-10",
+                    IsBot: false,
+                    Text: "first DM message",
+                    Timestamp: TimeProvider.System.GetUtcNow(),
+                    Attachments: [])
+            ]),
+            options: options);
+
+        var result = await fetcher.FetchThreadHistoryAsync(
+            new SessionId("100000000000000010/100000000000000010"),
+            TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Equal(TrustAudience.Personal, item.Audience);
+    }
+
     private static DiscordThreadHistoryFetcher CreateFetcher(
         DiscordThreadHistoryFetcher.MessageFetcher? messageFetcher = null,
         HttpMessageHandler? handler = null,

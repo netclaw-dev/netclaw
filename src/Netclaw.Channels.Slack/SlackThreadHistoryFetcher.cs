@@ -262,6 +262,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             SenderId = senderId,
             ChannelId = channelId.Value,
             MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
+            Audience = audience,
             Contents = contents,
             ReceivedAt = receivedAt
         };
