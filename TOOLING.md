@@ -27,6 +27,37 @@
 | `scripts/Add-FileHeaders.ps1 -Verify` | CI: check all files have headers (exit 1 if missing) |
 | `scripts/Add-FileHeaders.ps1 -WhatIf` | Preview which files need headers |
 
+## Interactive CLI Smoke Tests (Tape Harness)
+
+A VHS-driven smoke harness exercises the interactive Termina TUI surface
+that `scripts/smoke/check.sh` cannot reach (Spectre-style prompts,
+wizard flows, model/provider/webhook TUIs). Tape bodies live at
+`tests/smoke-interactive/tapes/<name>.tape`; sibling assertion scripts at
+`tests/smoke-interactive/assertions/<name>.sh` validate the artefacts
+each tape produced. The same scripts run in CI (inside the Smoke
+Sandbox job) and locally — agents working on TUI code SHOULD run the
+harness before declaring a change done.
+
+| Command | Purpose |
+|---------|---------|
+| `./scripts/smoke/run-tapes.sh light` | PR-gating subset; auto brings the smoke compose stack up and tears down |
+| `./scripts/smoke/run-tapes.sh full` | Full nightly suite (placeholder: identical to light until backfilled) |
+| `./scripts/smoke/run-tapes.sh <tape-name>` | Single tape, e.g. `init-wizard` |
+| `./scripts/smoke/run-tapes.sh <tape-name> --keep-stack` | Leave the compose stack running between iterations |
+| `./scripts/smoke/run-tapes.sh <tape-name> --no-up --keep-stack` | Re-run against an already-running stack (fastest inner loop) |
+| `./scripts/smoke/install-vhs.sh` | Idempotent VHS install (Linux/x86_64 only; macOS/Windows install manually) |
+
+When a tape fails, `smoke-logs/tapes/<name>/` collects: a debug GIF of the
+last frame, the combined tape file, container logs, and a tarball of
+the produced `NETCLAW_HOME`. CI uploads the same directory as a job
+artefact.
+
+**Authoring conventions are in `tests/smoke-interactive/tapes/README.md`**
+— the short version: `Wait+Screen /pattern/` only (no `Sleep`), 1400×800
+default surface, no `Screenshot` directives, pair every non-trivial tape
+with an assertion script that re-validates `netclaw doctor` and the
+relevant `--json` output.
+
 ## Source Control and CI Signals
 
 - `git` repository with active `dev` branch

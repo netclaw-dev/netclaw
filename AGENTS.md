@@ -173,6 +173,21 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
   - Use Akka.TestKit's `AwaitAssertAsync` for polling assertions on async state.
   - `Task.Delay` in fake/mock services to simulate latency is acceptable only in
     the fake itself, never in test orchestration logic.
+- **TUI / Termina changes MUST be validated with the interactive tape
+  harness** before being marked done. xUnit cannot drive Spectre-style
+  prompts and `scripts/smoke/check.sh` only covers the HTTP/JSON surface,
+  so a Termina change that breaks the wizard, model picker, provider
+  picker, or any other prompt flow will pass every other gate. Run:
+
+  ```bash
+  ./scripts/smoke/run-tapes.sh light --keep-stack    # all PR-gating tapes
+  ./scripts/smoke/run-tapes.sh init-wizard --no-up --keep-stack   # one tape, fastest loop
+  ```
+
+  See `TOOLING.md` § Interactive CLI Smoke Tests for the full set of
+  commands and `tests/smoke-interactive/tapes/README.md` for tape
+  authoring conventions (no `Sleep`, anchor every step, pair with an
+  assertion).
 
 ## Post-Code Quality Check
 
@@ -262,6 +277,9 @@ Done means all of the following are true:
 - system skills updated if a mapped feature area was changed (see table above)
 - eval suite passes for changes to identity, skills, memory, or tools (see
   Eval Suite section)
+- interactive tape harness passes for changes to Termina TUI surfaces
+  (init wizard, model/provider/webhook pickers, chat page) — see
+  Testing Guidelines and `TOOLING.md` § Interactive CLI Smoke Tests
 
 ## Agent Guidance: dotnet-skills
 
