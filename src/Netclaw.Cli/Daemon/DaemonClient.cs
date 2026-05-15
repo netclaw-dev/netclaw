@@ -257,9 +257,10 @@ public sealed class DaemonClient : IAsyncDisposable
         return await EnsureSessionInternalAsync(channelType, cancellationToken);
     }
 
-    public async Task SendAsync(ChannelInput input, CancellationToken cancellationToken = default)
+    public async Task SendAsync(string text, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(input);
+        if (string.IsNullOrWhiteSpace(text))
+            throw new InvalidOperationException("Only non-empty text messages are currently supported.");
 
         // Hold the session gate while reading _sessionId to prevent reading
         // a stale value during a concurrent EnsureSessionInternalAsync call
@@ -279,10 +280,9 @@ public sealed class DaemonClient : IAsyncDisposable
             _sessionGate.Release();
         }
 
-        var text = input.Contents.OfType<TextContent>().Select(x => x.Text).FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(text))
-            throw new InvalidOperationException("Only non-empty text messages are currently supported.");
-
+        // The daemon derives the session's trust context server-side from the
+        // authenticated SignalR principal — the client only supplies message
+        // text, never trust fields.
         await _connection.InvokeCoreAsync(
             "SendMessage",
             [sessionId, text],

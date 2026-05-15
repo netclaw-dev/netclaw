@@ -254,6 +254,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
+            Boundary = SecurityPolicyDefaults.TeamBoundary,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -305,6 +306,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory) : ISessionPipeline
     {
         public SessionPipelineOptions? CapturedOptions { get; private set; }
+        public ChannelInput? CapturedInput { get; private set; }
 
         public Task<MaterializedSession> CreateAsync(
             SessionId sessionId,
@@ -316,13 +318,13 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
             var killSwitch = KillSwitches.Shared($"scripted-{sessionId.Value}");
 
-            var input = Sink.Ignore<ChannelInput>()
+            var captureInputSink = Sink.ForEach<ChannelInput>(ci => CapturedInput = ci)
                 .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
 
             var output = Source.From(outputFactory(sessionId).ToList())
                 .Via(killSwitch.Flow<SessionOutput>());
 
-            return Task.FromResult(new MaterializedSession(input, output, killSwitch));
+            return Task.FromResult(new MaterializedSession(captureInputSink, output, killSwitch));
         }
 
         public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
@@ -351,34 +353,14 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotNull(pipeline.CapturedOptions);
-        Assert.Equal(TrustAudience.Personal, pipeline.CapturedOptions!.DefaultAudience);
+        Assert.NotNull(pipeline.CapturedInput);
+        Assert.Equal(TrustAudience.Personal, pipeline.CapturedInput!.Audience);
     }
 
-    [Fact]
-    public async Task Execution_fails_when_definition_audience_missing()
-    {
-        var pipeline = new ScriptedSessionPipeline(sessionId =>
-        [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
-        ]);
-
-        var definition = CreateDefinition("audience-fallback") with
-        {
-            DeliveryInstructions = string.Empty,
-            Audience = null
-        };
-        var probe = CreateTestProbe();
-        Sys.ActorOf(
-            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
-            "exec-audience-fallback");
-
-        var completed = await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.False(completed.Success);
-        Assert.Contains("missing a persisted execution audience", completed.ErrorMessage);
-        Assert.Null(pipeline.CapturedOptions);
-    }
+    // Note: Execution_fails_when_definition_audience_missing was removed in issue #994.
+    // Audience is now required TrustAudience (non-nullable), so the missing-audience
+    // failure path no longer exists in ReminderExecutionActor. The type system enforces
+    // that every ReminderDefinition carries an explicit Audience at construction time.
 
     [Fact]
     public async Task Execution_uses_stored_audience_directly()
@@ -400,8 +382,33 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotNull(pipeline.CapturedOptions);
-        Assert.Equal(TrustAudience.Team, pipeline.CapturedOptions!.DefaultAudience);
+        Assert.NotNull(pipeline.CapturedInput);
+        Assert.Equal(TrustAudience.Team, pipeline.CapturedInput!.Audience);
+    }
+
+    [Fact]
+    public async Task Execution_uses_persisted_boundary_for_non_current_session_reminders()
+    {
+        var pipeline = new ScriptedSessionPipeline(sessionId =>
+        [
+            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+        ]);
+
+        var definition = CreateDefinition("boundary-preserved") with
+        {
+            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            DeliveryInstructions = string.Empty
+        };
+        var probe = CreateTestProbe();
+        Sys.ActorOf(
+            Props.Create(() => new ParentProxy(probe.Ref, definition, pipeline, _historyStore)),
+            "exec-boundary-preserved");
+
+        await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(pipeline.CapturedInput);
+        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, pipeline.CapturedInput!.Boundary);
     }
 
     // ── History integration tests ─────────────────────────────────────────────

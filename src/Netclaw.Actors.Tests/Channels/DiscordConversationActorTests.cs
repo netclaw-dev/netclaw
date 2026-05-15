@@ -458,6 +458,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
             Paths: TestDiscordGatewayDeps.NewTestPaths(),
             BotUserId: botUserId,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance,
             SessionPropsFactory: sessionPropsFactory);
     }
 
@@ -493,9 +494,8 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
         Audience = TrustAudience.Team,
         Boundary = "trusted-instance",
         Principal = PrincipalClassification.TrustedInternal,
-        Provenance = new SourceProvenance
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
         {
-            TransportAuthenticity = TransportAuthenticity.Verified,
             SourceKind = "reminder"
         },
         ReminderId = "rem-1"

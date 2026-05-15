@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -309,7 +310,8 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
             Paths: _paths,
             BotUserId: new DiscordUserId("UBOT"),
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
     }
 
     private sealed class FailingContentScanner : IContentScanner

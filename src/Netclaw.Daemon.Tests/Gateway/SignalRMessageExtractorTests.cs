@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
 
@@ -22,7 +23,11 @@ public sealed class SignalRMessageExtractorTests
     private static readonly MessageSource EmptySource = new()
     {
         ChannelType = ChannelType.SignalR,
-        SenderId = "test"
+        SenderId = "test",
+        Audience = TrustAudience.Public,
+        Boundary = SecurityPolicyDefaults.PublicBoundary,
+        Principal = PrincipalClassification.UntrustedExternal,
+        Provenance = new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public)
     };
 
     [Fact]

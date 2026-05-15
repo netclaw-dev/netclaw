@@ -5,6 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Persistence;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Reminders;
@@ -27,10 +30,14 @@ public sealed class ReminderDefinitionStore
     private readonly string _directory;
     private readonly object _sync = new();
     private readonly List<DroppedInvalidReminderDefinition> _droppedInvalidDefinitions = [];
+    private readonly Dictionary<string, RejectedLegacyReminderDefinition> _rejectedLegacyDefinitions =
+        new(StringComparer.Ordinal);
+    private readonly ILogger _logger;
 
-    public ReminderDefinitionStore(NetclawPaths paths)
+    public ReminderDefinitionStore(NetclawPaths paths, ILogger<ReminderDefinitionStore>? logger = null)
     {
         _directory = paths.RemindersDirectory;
+        _logger = logger ?? NullLogger<ReminderDefinitionStore>.Instance;
         Directory.CreateDirectory(_directory);
         PruneInvalidDefinitions();
     }
@@ -47,6 +54,23 @@ public sealed class ReminderDefinitionStore
 
             var snapshot = _droppedInvalidDefinitions.ToArray();
             _droppedInvalidDefinitions.Clear();
+            return snapshot;
+        }
+    }
+
+    /// <summary>
+    /// Returns and clears reminder definitions rejected because they predate the
+    /// required trust-field schema.
+    /// </summary>
+    public IReadOnlyList<RejectedLegacyReminderDefinition> ConsumeRejectedLegacyDefinitions()
+    {
+        lock (_sync)
+        {
+            if (_rejectedLegacyDefinitions.Count == 0)
+                return [];
+
+            var snapshot = _rejectedLegacyDefinitions.Values.ToArray();
+            _rejectedLegacyDefinitions.Clear();
             return snapshot;
         }
     }
@@ -177,11 +201,35 @@ public sealed class ReminderDefinitionStore
         }
     }
 
-    private static ReadResult TryReadDefinition(string path)
+    private void RecordRejectedLegacyDefinition(string path, string reason)
+    {
+        var reminderId = DecodeReminderIdFromPath(path);
+        _rejectedLegacyDefinitions[reminderId] = new RejectedLegacyReminderDefinition(reminderId, reason);
+    }
+
+    private ReadResult TryReadDefinition(string path)
     {
         try
         {
             var text = File.ReadAllText(path);
+            // A pre-#994 reminder document with no persisted trust context cannot
+            // be run safely. Reject it loudly without coercing a substitute
+            // audience, and keep the file — it is operator-authored data, not
+            // corrupt JSON, so the operator can repair or remove it.
+            var missingTrustFields = LegacyTrustFieldGuard.MissingTrustFields(text);
+            if (missingTrustFields.Count > 0)
+            {
+                var fields = string.Join(", ", missingTrustFields);
+                _logger.LogError(
+                    "Reminder document {Path} predates issue #994 and is missing required "
+                    + "trust field(s): {MissingFields}. The reminder will not be loaded or "
+                    + "scheduled — a reminder with no persisted audience cannot be run safely. "
+                    + "Recreate the reminder or remove the file.",
+                    path, fields);
+                RecordRejectedLegacyDefinition(path, $"missing trust field(s): {fields}");
+                return new ReadResult(null, $"missing trust field(s): {fields}", ShouldDelete: false);
+            }
+
             var definition = JsonSerializer.Deserialize<ReminderDefinition>(text, JsonOptions);
             if (definition is null || string.IsNullOrWhiteSpace(definition.Id))
             {
@@ -211,3 +259,4 @@ public sealed class ReminderDefinitionStore
 }
 
 public sealed record DroppedInvalidReminderDefinition(string ReminderId, string Reason);
+public sealed record RejectedLegacyReminderDefinition(string ReminderId, string Reason);

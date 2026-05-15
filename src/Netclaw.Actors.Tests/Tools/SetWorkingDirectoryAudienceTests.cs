@@ -66,7 +66,7 @@ public sealed class SetWorkingDirectoryAudienceTests
     private static ToolExecutionContext CreateContext(TrustAudience audience)
         => new ToolExecutionContext("slack/thread-1", null)
         {
-            Audience = audience.ToWireValue(),
+            Audience = audience,
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             ChannelType = "slack"
         };

@@ -10,4 +10,8 @@
     <PackageReference Include="Microsoft.Extensions.AI.Abstractions" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+  </ItemGroup>
+
 </Project>

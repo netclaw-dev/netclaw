@@ -155,7 +155,7 @@ public class BackgroundJobIntegrationTests : TestKit
         };
         var context = new ToolExecutionContext("C0123ABC/1712000000.000001", "/tmp")
         {
-            Audience = TrustAudience.Personal.ToString(),
+            Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.PersonalBoundary
         };
 

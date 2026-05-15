@@ -30,6 +30,7 @@ public enum AlertType
     ReminderExecutionFailed,
     ReminderAutoDisabled,
     ReminderSchemaDropped,
+    BackgroundJobSchemaDropped,
     WebhookReceived,
     WebhookRouteInvalid,
     DaemonStarted,

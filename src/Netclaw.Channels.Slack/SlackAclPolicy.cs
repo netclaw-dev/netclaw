@@ -51,10 +51,10 @@ public static class SlackAclPolicy
         return ChannelAclDecision.Allow(
             audience,
             principal,
-            new SourceProvenance
+            new SourceProvenance(
+                TransportAuthenticity.Verified,
+                PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                PayloadTaint = PayloadTaint.Public,
                 SourceKind = "slack",
                 SourceScope = message.ChannelId.Value
             });

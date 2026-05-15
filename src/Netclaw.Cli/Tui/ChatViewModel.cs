@@ -168,12 +168,7 @@ public partial class ChatViewModel : ReactiveViewModel
         {
             await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
 
-            await _daemonClient.SendAsync(new ChannelInput
-            {
-                SenderId = "local-user",
-                Contents = [new TextContent(text)],
-                ReceivedAt = _timeProvider.GetUtcNow()
-            });
+            await _daemonClient.SendAsync(text);
         }
         catch (Exception ex)
         {
@@ -328,12 +323,7 @@ public partial class ChatViewModel : ReactiveViewModel
         while (_pendingMessages.Count > 0)
         {
             var pending = _pendingMessages.Dequeue();
-            await _daemonClient.SendAsync(new ChannelInput
-            {
-                SenderId = "local-user",
-                Contents = [new TextContent(pending)],
-                ReceivedAt = _timeProvider.GetUtcNow()
-            });
+            await _daemonClient.SendAsync(pending);
         }
 
         // Auto-send hidden trigger message (e.g., onboarding interview prompt).
@@ -345,12 +335,7 @@ public partial class ChatViewModel : ReactiveViewModel
             IsGenerating.Value = true;
             StatusMessage.Value = "Generating...";
             RequestRedraw();
-            await _daemonClient.SendAsync(new ChannelInput
-            {
-                SenderId = "system-init",
-                Contents = [new TextContent(trigger)],
-                ReceivedAt = _timeProvider.GetUtcNow()
-            });
+            await _daemonClient.SendAsync(trigger);
             return;
         }
 

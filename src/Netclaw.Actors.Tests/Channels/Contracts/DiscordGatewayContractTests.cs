@@ -47,6 +47,7 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
             Paths: TestDiscordGatewayDeps.NewTestPaths(),
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance,
             SessionPropsFactory: (sid, chId, replyId, threadId, rootId, d) =>
                 Props.Create(() => new ForwardActor(TestActor)));
 

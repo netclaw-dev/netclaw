@@ -118,8 +118,8 @@ public sealed record BackgroundJobDefinition
     public long? CompletedAtMs { get; init; }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
-    public TrustAudience Audience { get; init; } = TrustAudience.Personal;
-    public string Boundary { get; init; } = SecurityPolicyDefaults.PersonalBoundary;
+    public required TrustAudience Audience { get; init; }
+    public required string Boundary { get; init; }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public Channels.ChannelType OriginChannelType { get; init; }

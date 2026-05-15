@@ -32,9 +32,38 @@ internal static class ProviderCommand
             "list" => Task.FromResult(RunList(paths, registry, writer)),
             "add" => RunAddAsync(args, paths, registry, writer),
             "remove" => Task.FromResult(RunRemove(args, paths, writer)),
+            "rename" => Task.FromResult(RunRename(args, paths, writer)),
             "help" or "-h" or "--help" => Task.FromResult(WriteHelp(registry, writer)),
             _ => Task.FromResult(WriteHelp(registry, writer))
         };
+    }
+
+    private static int RunRename(string[] args, NetclawPaths paths, TextWriter writer)
+    {
+        if (args.Length < 4)
+        {
+            writer.WriteLine("Usage: netclaw provider rename <old-name> <new-name>");
+            return 1;
+        }
+
+        var oldName = args[2];
+        var newName = args[3];
+
+        var result = ProviderRenamer.Rename(paths, oldName, newName);
+        if (!result.Success)
+        {
+            writer.WriteLine($"Error: {result.ErrorMessage}");
+            return 1;
+        }
+
+        writer.WriteLine($"Renamed provider '{oldName}' to '{newName}'.");
+
+        if (result.ReassignedModelRoles.Count > 0)
+        {
+            writer.WriteLine($"Reassigned model role(s): {string.Join(", ", result.ReassignedModelRoles)}.");
+        }
+
+        return 0;
     }
 
     private static int RunList(NetclawPaths paths, ProviderDescriptorRegistry registry, TextWriter writer)
@@ -381,14 +410,23 @@ internal static class ProviderCommand
     /// Check which model roles reference the given provider name.
     /// </summary>
     internal static List<string> GetReferencingModelRoles(string providerName, NetclawPaths paths)
+        => GetReferencingModelRoleEntries(providerName, paths).Select(e => e.Role).ToList();
+
+    /// <summary>
+    /// Like <see cref="GetReferencingModelRoles"/> but also returns each role's current
+    /// <c>ModelId</c> so callers can build a fully copy-pasteable
+    /// <c>netclaw model set</c> command in their guidance output.
+    /// </summary>
+    internal static List<(string Role, string ModelId)> GetReferencingModelRoleEntries(
+        string providerName, NetclawPaths paths)
     {
-        var roles = new List<string>();
+        var entries = new List<(string, string)>();
         if (!File.Exists(paths.NetclawConfigPath))
-            return roles;
+            return entries;
 
         using var doc = JsonDocument.Parse(File.ReadAllText(paths.NetclawConfigPath));
         if (!doc.RootElement.TryGetProperty("Models", out var models))
-            return roles;
+            return entries;
 
         foreach (var roleName in new[] { "Main", "Fallback", "Compaction" })
         {
@@ -396,11 +434,14 @@ internal static class ProviderCommand
                 role.TryGetProperty("Provider", out var provider) &&
                 string.Equals(provider.GetString(), providerName, StringComparison.OrdinalIgnoreCase))
             {
-                roles.Add(roleName);
+                var modelId = role.TryGetProperty("ModelId", out var mid)
+                    ? mid.GetString() ?? "<model-id>"
+                    : "<model-id>";
+                entries.Add((roleName, modelId));
             }
         }
 
-        return roles;
+        return entries;
     }
 
     private static void WriteProviderGuidance(IProviderDescriptor descriptor, TextWriter writer)
@@ -431,9 +472,10 @@ internal static class ProviderCommand
         writer.WriteLine("Usage: netclaw provider <subcommand>");
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
-        writer.WriteLine("  list                         List configured providers");
-        writer.WriteLine("  add <name> <type> [options]   Add a provider");
-        writer.WriteLine("  remove <name>                Remove a provider");
+        writer.WriteLine("  list                              List configured providers");
+        writer.WriteLine("  add <name> <type> [options]       Add a provider");
+        writer.WriteLine("  rename <old-name> <new-name>      Rename a provider (config key only)");
+        writer.WriteLine("  remove <name>                     Remove a provider");
         writer.WriteLine();
         writer.WriteLine("Run `netclaw provider` (no subcommand) for interactive TUI management.");
         writer.WriteLine();
@@ -448,6 +490,7 @@ internal static class ProviderCommand
         writer.WriteLine("  netclaw provider add my-ollama ollama --endpoint http://my-gpu-server:11434");
         writer.WriteLine("  netclaw provider add my-anthropic anthropic --api-key sk-ant-...");
         writer.WriteLine("  netclaw provider add my-openai openai --auth oauth-device");
+        writer.WriteLine("  netclaw provider rename my-ollama lab-a100");
         writer.WriteLine("  netclaw provider remove my-ollama");
         return 0;
     }

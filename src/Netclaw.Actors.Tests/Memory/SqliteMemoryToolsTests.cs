@@ -105,7 +105,7 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
                 ["Query"] = "stir trek hotel",
                 ["Limit"] = 5
             },
-            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Personal },
             CancellationToken.None);
 
         Assert.Contains("Conference destination", result);
@@ -149,7 +149,7 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
         var tool = new SqliteGetMemoriesTool(_store, _timeProvider);
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Ids"] = "rec:rec-stale" },
-            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Personal },
             CancellationToken.None);
 
         Assert.Contains("class=evidence", result);
@@ -196,7 +196,7 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
                 ["Query"] = "stir trek parking",
                 ["Limit"] = 5
             },
-            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Personal },
             CancellationToken.None);
 
         var debug = await tool.ExecuteAsync(
@@ -206,7 +206,7 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
                 ["Limit"] = 5,
                 ["IncludeStale"] = true
             },
-            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Personal },
             CancellationToken.None);
 
         Assert.Equal("No memories found.", normal);
@@ -269,7 +269,7 @@ public sealed class SqliteMemoryToolsTests : IAsyncDisposable
         var tool = new SqliteGetMemoriesTool(_store);
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["Ids"] = "doc:doc-team,doc:doc-personal" },
-            new ToolExecutionContext("slack/thread-1", sessionDirectory: null),
+            new ToolExecutionContext("slack/thread-1", sessionDirectory: null) { Audience = TrustAudience.Team },
             CancellationToken.None);
 
         Assert.Contains("Repository name", result);

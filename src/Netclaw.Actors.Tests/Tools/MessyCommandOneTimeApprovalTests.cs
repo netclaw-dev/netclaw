@@ -98,7 +98,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
 
         var context = new ToolExecutionContext("signalr/thread-1", null)
         {
-            Audience = TrustAudience.Personal.ToWireValue(),
+            Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             ChannelType = "signalr",
             SupportsInteractiveApproval = true

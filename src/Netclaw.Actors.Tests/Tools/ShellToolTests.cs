@@ -63,6 +63,7 @@ public class ShellToolTests
         var args = ToolInput.Create("Command", "sleep 2");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
+            Audience = TrustAudience.Personal,
             RequestedTimeoutSeconds = 3
         };
 
@@ -123,7 +124,7 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { ProjectDirectory = projectDir };
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = projectDir };
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -146,7 +147,7 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir);
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal };
             // ProjectDirectory not set
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
@@ -173,7 +174,7 @@ public class ShellToolTests
         Directory.CreateDirectory(sessionDir);
         try
         {
-            var context = new ToolExecutionContext("session-1", sessionDir) { ProjectDirectory = projectDir };
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = projectDir };
             var args = ToolInput.Create(
                 "Command", OperatingSystem.IsWindows() ? "cd" : "pwd",
                 "WorkingDirectory", explicitDir);
@@ -203,7 +204,7 @@ public class ShellToolTests
             // assert the resolved cwd is the session dir, not whatever
             // Environment.CurrentDirectory happens to be — proving the
             // ProcessStartInfo default-fall-through is gone.
-            var context = new ToolExecutionContext("session-1", sessionDir);
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal };
             var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);

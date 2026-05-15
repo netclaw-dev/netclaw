@@ -2787,7 +2787,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             var context = new ToolExecutionContext(_sessionId.Value, GetSessionDirectory())
             {
-                Audience = _currentTurnSource is null ? null : _currentTurnSource.Audience.ToWireValue(),
+                // No active turn source carries no trust context — fall closed.
+                Audience = _currentTurnSource?.Audience ?? TrustAudience.Public,
                 Boundary = _currentTurnSource?.Boundary,
                 ChannelType = _currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue(),
                 ProjectDirectory = _state.WorkingContext.ProjectDirectory,

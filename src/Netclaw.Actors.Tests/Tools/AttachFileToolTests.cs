@@ -27,7 +27,7 @@ public class AttachFileToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "report.png");
         await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", filePath);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -46,7 +46,7 @@ public class AttachFileToolTests : IDisposable
 
         try
         {
-            var context = new ToolExecutionContext("test-session", _dir.Path);
+            var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
             var args = ToolInput.Create("Path", outsidePath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -63,7 +63,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Dotdot_traversal_is_rejected()
     {
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", Path.Combine(_dir.Path, "..", "..", "etc", "passwd"));
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -76,7 +76,7 @@ public class AttachFileToolTests : IDisposable
     public async Task Missing_file_returns_error()
     {
         var filePath = Path.Combine(_dir.Path, "nonexistent.png");
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", filePath);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -88,7 +88,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Empty_path_returns_error()
     {
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", "");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -99,7 +99,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task No_session_directory_returns_error()
     {
-        var context = new ToolExecutionContext("test-session", null);
+        var context = new ToolExecutionContext("test-session", null) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", "/tmp/anything.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -114,7 +114,7 @@ public class AttachFileToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "abc123.png");
         await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", filePath, "DisplayName", "My Custom Report.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -130,7 +130,7 @@ public class AttachFileToolTests : IDisposable
         var filePath = Path.Combine(_dir.Path, "chart.png");
         await File.WriteAllBytesAsync(filePath, [0x89, 0x50, 0x4E, 0x47], TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", filePath);
 
         await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -144,7 +144,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Failed_attach_does_not_populate_file_attachments()
     {
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", Path.Combine(_dir.Path, "nonexistent.png"));
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -161,7 +161,7 @@ public class AttachFileToolTests : IDisposable
         var outsideFile = Path.Combine(outsideDir, "secret.txt");
         await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
 
-        var context = new ToolExecutionContext("test-session", _dir.Path);
+        var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Path", outsideFile);
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -183,7 +183,7 @@ public class AttachFileToolTests : IDisposable
         {
             File.CreateSymbolicLink(symlinkPath, outsideFile);
 
-            var context = new ToolExecutionContext("test-session", _dir.Path);
+            var context = new ToolExecutionContext("test-session", _dir.Path) { Audience = TrustAudience.Personal };
             var args = ToolInput.Create("Path", symlinkPath);
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
@@ -219,7 +219,7 @@ public class AttachFileToolTests : IDisposable
 
         var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
         {
-            Audience = TrustAudience.Personal.ToWireValue(),
+            Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             ChannelType = "signalr"
         };
@@ -248,7 +248,7 @@ public class AttachFileToolTests : IDisposable
 
         var context = new ToolExecutionContext("slack/thread-1", sessionDir)
         {
-            Audience = TrustAudience.Public.ToWireValue(),
+            Audience = TrustAudience.Public,
             Boundary = SecurityPolicyDefaults.PublicBoundary,
             ChannelType = "slack"
         };
@@ -280,7 +280,7 @@ public class AttachFileToolTests : IDisposable
 
             var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
             {
-                Audience = TrustAudience.Personal.ToWireValue(),
+                Audience = TrustAudience.Personal,
                 Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
                 ChannelType = "signalr"
             };

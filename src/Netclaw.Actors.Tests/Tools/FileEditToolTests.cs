@@ -156,7 +156,7 @@ public class FileEditToolTests : IDisposable
     private ToolExecutionContext CreatePersonalContext()
         => new("signalr/thread-1", _sessionDir)
         {
-            Audience = TrustAudience.Personal.ToWireValue(),
+            Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             ChannelType = "signalr"
         };
@@ -164,7 +164,7 @@ public class FileEditToolTests : IDisposable
     private ToolExecutionContext CreatePublicContext()
         => new("slack/thread-1", _sessionDir)
         {
-            Audience = TrustAudience.Public.ToWireValue(),
+            Audience = TrustAudience.Public,
             Boundary = SecurityPolicyDefaults.PublicBoundary,
             ChannelType = "slack"
         };

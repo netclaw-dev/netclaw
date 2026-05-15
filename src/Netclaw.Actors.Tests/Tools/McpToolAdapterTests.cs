@@ -7,6 +7,7 @@ using Netclaw.Tests.Utilities;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -102,7 +103,7 @@ public class McpToolAdapterTests
         var invoker = new RecordingMcpToolInvoker("scoped-result");
         var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
 
-        var context = new ToolExecutionContext("chan/thread", null);
+        var context = new ToolExecutionContext("chan/thread", null) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("Url", "https://example.com");
 
         var result = await adapter.ExecuteAsync(args, context, CancellationToken.None);
@@ -124,7 +125,7 @@ public class McpToolAdapterTests
         };
         var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
 
-        var context = new ToolExecutionContext("chan/thread", null);
+        var context = new ToolExecutionContext("chan/thread", null) { Audience = TrustAudience.Personal };
         var result = await adapter.ExecuteAsync(ToolInput.Empty(), context, CancellationToken.None);
 
         Assert.StartsWith("Error:", result);
@@ -665,7 +666,7 @@ public class McpSchemaSanitizerTests
         var fakeTool = AIFunctionFactory.Create((Func<string>)FakeFunc, "search_memories");
         var adapter = new McpToolAdapter(fakeTool, "memorizer", "search_memories", invoker: invoker);
 
-        var context = new ToolExecutionContext("chan/thread", null);
+        var context = new ToolExecutionContext("chan/thread", null) { Audience = TrustAudience.Personal };
         var args = ToolInput.Create("query", "Akka.NET", "_rationale", "looking up docs", "_timeout_seconds", 30);
 
         await adapter.ExecuteAsync(args, context, CancellationToken.None);

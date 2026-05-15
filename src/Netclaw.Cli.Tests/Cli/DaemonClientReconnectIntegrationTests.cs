@@ -9,7 +9,6 @@ using R3;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
@@ -63,12 +62,7 @@ public sealed class DaemonClientReconnectIntegrationTests
 
         try
         {
-            await client.SendAsync(new ChannelInput
-            {
-                SenderId = "test",
-                Contents = [new TextContent("drop")],
-                ReceivedAt = DateTimeOffset.UtcNow
-            }, TestContext.Current.CancellationToken);
+            await client.SendAsync("drop", TestContext.Current.CancellationToken);
         }
         catch (Exception ex)
         {
@@ -81,12 +75,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         var ensured = await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, ensured);
 
-        await client.SendAsync(new ChannelInput
-        {
-            SenderId = "test",
-            Contents = [new TextContent("after")],
-            ReceivedAt = DateTimeOffset.UtcNow
-        }, TestContext.Current.CancellationToken);
+        await client.SendAsync("after", TestContext.Current.CancellationToken);
 
         await WaitFor(reconnectedOutput.Task, TimeSpan.FromSeconds(5));
     }
@@ -146,12 +135,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         });
 
         await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
-        await client.SendAsync(new ChannelInput
-        {
-            SenderId = "test",
-            Contents = [new TextContent("first")],
-            ReceivedAt = DateTimeOffset.UtcNow
-        }, TestContext.Current.CancellationToken);
+        await client.SendAsync("first", TestContext.Current.CancellationToken);
 
         await WaitFor(firstResponseReceived.Task, TimeSpan.FromSeconds(5));
 
@@ -173,12 +157,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         await WaitFor(reconnectedAfterRestart.Task, TimeSpan.FromSeconds(15));
 
         await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
-        await client.SendAsync(new ChannelInput
-        {
-            SenderId = "test",
-            Contents = [new TextContent("second")],
-            ReceivedAt = DateTimeOffset.UtcNow
-        }, TestContext.Current.CancellationToken);
+        await client.SendAsync("second", TestContext.Current.CancellationToken);
 
         await WaitFor(secondResponseReceived.Task, TimeSpan.FromSeconds(10));
 

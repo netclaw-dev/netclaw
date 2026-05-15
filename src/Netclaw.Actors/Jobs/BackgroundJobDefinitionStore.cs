@@ -5,6 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Persistence;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Jobs;
@@ -23,11 +26,52 @@ public sealed class BackgroundJobDefinitionStore
 
     private readonly string _directory;
     private readonly object _sync = new();
+    private readonly Dictionary<string, RejectedLegacyBackgroundJobDefinition> _rejectedLegacyDefinitions =
+        new(StringComparer.Ordinal);
+    private readonly ILogger _logger;
 
-    public BackgroundJobDefinitionStore(NetclawPaths paths)
+    public BackgroundJobDefinitionStore(NetclawPaths paths, ILogger<BackgroundJobDefinitionStore>? logger = null)
     {
         _directory = paths.JobsDirectory;
+        _logger = logger ?? NullLogger<BackgroundJobDefinitionStore>.Instance;
         Directory.CreateDirectory(_directory);
+    }
+
+    private BackgroundJobDefinition? Deserialize(string text, string path)
+    {
+        // A pre-#994 job document with no persisted trust context cannot be run
+        // safely — its trust tier is unknown. Reject it loudly rather than
+        // coerce a substitute audience.
+        var missing = LegacyTrustFieldGuard.MissingTrustFields(text);
+        if (missing.Count > 0)
+        {
+            RecordRejectedLegacyDefinition(path, $"missing trust field(s): {string.Join(", ", missing)}");
+            _logger.LogError(
+                "Background job document {Path} predates issue #994 and is missing required "
+                + "trust field(s): {MissingFields}. The job will not be loaded — a job with no "
+                + "persisted audience cannot be run safely. Recreate the job or remove the file.",
+                path, string.Join(", ", missing));
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+    }
+
+    /// <summary>
+    /// Returns and clears background job definitions rejected because they
+    /// predate the required trust-field schema.
+    /// </summary>
+    public IReadOnlyList<RejectedLegacyBackgroundJobDefinition> ConsumeRejectedLegacyDefinitions()
+    {
+        lock (_sync)
+        {
+            if (_rejectedLegacyDefinitions.Count == 0)
+                return [];
+
+            var snapshot = _rejectedLegacyDefinitions.Values.ToArray();
+            _rejectedLegacyDefinitions.Clear();
+            return snapshot;
+        }
     }
 
     public BackgroundJobDefinition? Get(BackgroundJobId id)
@@ -41,7 +85,7 @@ public sealed class BackgroundJobDefinitionStore
             try
             {
                 var text = File.ReadAllText(path);
-                return JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+                return Deserialize(text, path);
             }
             catch
             {
@@ -63,7 +107,7 @@ public sealed class BackgroundJobDefinitionStore
                 try
                 {
                     var text = File.ReadAllText(file);
-                    var def = JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+                    var def = Deserialize(text, file);
                     if (def is not null && !string.IsNullOrWhiteSpace(def.Id))
                         list.Add(def);
                 }
@@ -125,4 +169,28 @@ public sealed class BackgroundJobDefinitionStore
         var encoded = Uri.EscapeDataString(id.Value);
         return Path.Combine(_directory, $"{encoded}.json");
     }
+
+    private void RecordRejectedLegacyDefinition(string path, string reason)
+    {
+        var jobId = DecodeJobIdFromPath(path);
+        _rejectedLegacyDefinitions[jobId] = new RejectedLegacyBackgroundJobDefinition(jobId, reason);
+    }
+
+    private static string DecodeJobIdFromPath(string path)
+    {
+        var encoded = Path.GetFileNameWithoutExtension(path);
+        if (string.IsNullOrWhiteSpace(encoded))
+            return "unknown";
+
+        try
+        {
+            return Uri.UnescapeDataString(encoded);
+        }
+        catch
+        {
+            return encoded;
+        }
+    }
 }
+
+public sealed record RejectedLegacyBackgroundJobDefinition(string JobId, string Reason);

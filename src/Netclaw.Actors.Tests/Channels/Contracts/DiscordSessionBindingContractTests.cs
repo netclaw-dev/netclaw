@@ -76,9 +76,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             SenderId: new DiscordUserId(senderId),
             Audience: TrustAudience.Team,
             Principal: PrincipalClassification.UntrustedExternal,
-            Provenance: new SourceProvenance
+            Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
                 SourceKind = "discord"
             },
             Text: text,
@@ -129,7 +128,11 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
                 ChannelId = "ch-test",
                 MessageId = (900_000_000_000_000_000UL + (ulong)i).ToString(),
                 Contents = [new Microsoft.Extensions.AI.TextContent($"history message {i}")],
-                ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-count + i)
+                ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-count + i),
+                Audience = TrustAudience.Team,
+                Boundary = SecurityPolicyDefaults.PublicBoundary,
+                Principal = PrincipalClassification.UntrustedExternal,
+                Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             });
         }
 
@@ -151,9 +154,8 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             SenderId: new DiscordUserId(senderId),
             Audience: TrustAudience.Team,
             Principal: PrincipalClassification.UntrustedExternal,
-            Provenance: new SourceProvenance
+            Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
                 SourceKind = "discord"
             },
             Text: text,

@@ -1,8 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MessageSourceFactoryTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -18,59 +19,48 @@ public sealed class MessageSourceFactoryTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider) { }
 
-    [Fact]
-    public void Create_uses_strict_pipeline_defaults_when_input_has_no_hints()
-    {
-        var input = new ChannelInput
+    private static ChannelInput BuildInput(
+        TrustAudience audience = TrustAudience.Public,
+        string? boundary = null,
+        PrincipalClassification principal = PrincipalClassification.UntrustedExternal,
+        SourceProvenance? provenance = null,
+        string? reminderId = null,
+        IActorRef? ackTarget = null,
+        bool hasThirdParty = false,
+        IReadOnlyList<string>? adoptedSpeakerIds = null)
+        => new()
         {
             SenderId = "user-1",
+            Audience = audience,
+            Boundary = boundary ?? SecurityPolicyDefaults.PublicBoundary,
+            Principal = principal,
+            Provenance = provenance
+                ?? new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public),
             Contents = [new TextContent("hello")],
-            ReceivedAt = DateTimeOffset.UtcNow
+            ReceivedAt = DateTimeOffset.UtcNow,
+            ReminderId = reminderId,
+            AckTarget = ackTarget,
+            HasThirdPartyAdoptedContext = hasThirdParty,
+            AdoptedSpeakerIds = adoptedSpeakerIds ?? [],
         };
-
-        var options = new SessionPipelineOptions
-        {
-            ChannelType = ChannelType.Slack
-        };
-
-        var result = MessageSourceFactory.Create(input, options, "turn-1");
-
-        Assert.Equal(TrustAudience.Public, result.Audience);
-        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, result.Boundary);
-        Assert.Equal(PrincipalClassification.UntrustedExternal, result.Principal);
-        Assert.Equal(TransportAuthenticity.Unverified, result.Provenance.TransportAuthenticity);
-        Assert.Equal(PayloadTaint.Public, result.Provenance.PayloadTaint);
-    }
 
     [Fact]
-    public void Create_prefers_explicit_input_hints_over_pipeline_defaults()
+    public void Create_copies_trust_context_verbatim_from_ChannelInput()
     {
-        var input = new ChannelInput
-        {
-            SenderId = "user-1",
-            Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
-            Principal = PrincipalClassification.TrustedInternal,
-            Provenance = new SourceProvenance
+        var input = BuildInput(
+            audience: TrustAudience.Team,
+            boundary: SecurityPolicyDefaults.TeamBoundary,
+            principal: PrincipalClassification.TrustedInternal,
+            provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                PayloadTaint = PayloadTaint.Community,
                 SourceKind = "slack"
-            },
-            Contents = [new TextContent("hello")],
-            ReceivedAt = DateTimeOffset.UtcNow
-        };
+            });
 
-        var options = new SessionPipelineOptions
-        {
-            ChannelType = ChannelType.Slack,
-            DefaultAudience = TrustAudience.Public,
-            DefaultPrincipal = PrincipalClassification.UntrustedExternal,
-            DefaultProvenance = SourceProvenance.StrictDefault()
-        };
+        var result = MessageSourceFactory.Create(
+            input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
 
-        var result = MessageSourceFactory.Create(input, options, "turn-1");
-
+        // The factory is a pure mapper — trust context is whatever the adapter
+        // stamped on the ChannelInput, never a pipeline-synthesized default.
         Assert.Equal(TrustAudience.Team, result.Audience);
         Assert.Equal(SecurityPolicyDefaults.TeamBoundary, result.Boundary);
         Assert.Equal(PrincipalClassification.TrustedInternal, result.Principal);
@@ -82,16 +72,8 @@ public sealed class MessageSourceFactoryTests : TestKit
     [Fact]
     public void Create_propagates_null_ReminderId_and_AckTarget_by_default()
     {
-        var input = new ChannelInput
-        {
-            SenderId = "user-1",
-            Contents = [new TextContent("hello")],
-            ReceivedAt = DateTimeOffset.UtcNow
-        };
-
-        var options = new SessionPipelineOptions { ChannelType = ChannelType.Slack };
-
-        var result = MessageSourceFactory.Create(input, options, "turn-1");
+        var result = MessageSourceFactory.Create(
+            BuildInput(), new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
 
         Assert.Null(result.ReminderId);
         Assert.Null(result.AckTarget);
@@ -102,18 +84,12 @@ public sealed class MessageSourceFactoryTests : TestKit
     {
         var probe = CreateTestProbe("ack-probe");
 
-        var input = new ChannelInput
-        {
-            SenderId = "reminder-system",
-            Contents = [new TextContent("check PR")],
-            ReceivedAt = DateTimeOffset.UtcNow,
-            ReminderId = "check-pr:1712000000000",
-            AckTarget = probe.Ref
-        };
+        var input = BuildInput(
+            reminderId: "check-pr:1712000000000",
+            ackTarget: probe.Ref);
 
-        var options = new SessionPipelineOptions { ChannelType = ChannelType.Slack };
-
-        var result = MessageSourceFactory.Create(input, options, "turn-1");
+        var result = MessageSourceFactory.Create(
+            input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
 
         Assert.Equal("check-pr:1712000000000", result.ReminderId);
         Assert.Same(probe.Ref, result.AckTarget);
@@ -122,16 +98,10 @@ public sealed class MessageSourceFactoryTests : TestKit
     [Fact]
     public void Create_propagates_self_only_adopted_context_without_third_party_flag()
     {
-        var input = new ChannelInput
-        {
-            SenderId = "user-1",
-            Contents = [new TextContent("hello")],
-            ReceivedAt = DateTimeOffset.UtcNow,
-            HasThirdPartyAdoptedContext = false,
-            AdoptedSpeakerIds = ["user-1"]
-        };
+        var input = BuildInput(hasThirdParty: false, adoptedSpeakerIds: ["user-1"]);
 
-        var result = MessageSourceFactory.Create(input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
+        var result = MessageSourceFactory.Create(
+            input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
 
         Assert.True(result.HasAdoptedContext);
         Assert.False(result.HasThirdPartyAdoptedContext);
@@ -141,16 +111,10 @@ public sealed class MessageSourceFactoryTests : TestKit
     [Fact]
     public void Create_propagates_third_party_adopted_context_flag()
     {
-        var input = new ChannelInput
-        {
-            SenderId = "user-1",
-            Contents = [new TextContent("hello")],
-            ReceivedAt = DateTimeOffset.UtcNow,
-            HasThirdPartyAdoptedContext = true,
-            AdoptedSpeakerIds = ["user-1", "user-2"]
-        };
+        var input = BuildInput(hasThirdParty: true, adoptedSpeakerIds: ["user-1", "user-2"]);
 
-        var result = MessageSourceFactory.Create(input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
+        var result = MessageSourceFactory.Create(
+            input, new SessionPipelineOptions { ChannelType = ChannelType.Slack }, "turn-1");
 
         Assert.True(result.HasAdoptedContext);
         Assert.True(result.HasThirdPartyAdoptedContext);

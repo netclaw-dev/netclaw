@@ -44,6 +44,13 @@ catch (Exception ex)
     WriteCrashLog(ex);
     throw;
 }
+finally
+{
+    // Emit any buffered update notice now that the mode handler has returned
+    // (and any TUI has torn down its alt screen). Writing the notice from the
+    // background task directly would corrupt an active TUI mid-render.
+    UpdateCommand.EmitPendingNoticeIfReady();
+}
 
 static async Task RunAsync(string[] args)
 {
@@ -74,10 +81,10 @@ static async Task RunAsync(string[] args)
             break;
     }
 
-    // Fire-and-forget update check for non-TUI modes only.
-    // TUI modes (chat, sessions, headless, init) must not run background checks
-    // that write to Console, as it corrupts the terminal UI.
-    if (mode is not ("chat" or "sessions" or "headless" or "init"))
+    // Kick off the update check in the background. The notice is buffered
+    // and emitted by EmitPendingNoticeIfReady in Main's finally — safe for
+    // every mode including TUIs, because we only print after the mode
+    // handler returns and the alt screen has been torn down.
     {
         var backgroundUpdateConfig = BuildCliConfig();
         var backgroundDaemonConfig = DaemonConfig.BindFromConfiguration(backgroundUpdateConfig.GetSection("Daemon"));

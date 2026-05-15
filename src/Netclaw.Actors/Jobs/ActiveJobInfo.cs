@@ -21,7 +21,7 @@ public sealed record ActiveJobInfo
 
     public required long StartedAtMs { get; init; }
 
-    public TrustAudience Audience { get; init; } = TrustAudience.Personal;
+    public required TrustAudience Audience { get; init; }
 
-    public string Boundary { get; init; } = SecurityPolicyDefaults.PersonalBoundary;
+    public required string Boundary { get; init; }
 }

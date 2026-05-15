@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Microsoft.Extensions.AI;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.SubAgents;
@@ -71,7 +72,12 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     /// </summary>
     public string? SessionScopeId { get; init; }
 
-    public string? Audience { get; init; }
+    /// <summary>
+    /// Trust audience inherited from the spawning session. A parsed
+    /// <see cref="TrustAudience"/> — the sub-agent actor rejects a spawn with no
+    /// audience rather than defaulting it.
+    /// </summary>
+    public TrustAudience? Audience { get; init; }
 
     public string? Boundary { get; init; }
 

@@ -212,7 +212,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
-            Audience = "team",
+            Audience = TrustAudience.Team,
             Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
             ChannelType = "slack"
         };
@@ -258,7 +258,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
-            Audience = "team",
+            Audience = TrustAudience.Team,
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             ChannelType = "discord"
         };
@@ -300,7 +300,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("webhook/delivery-1", null)
         {
-            Audience = "personal",
+            Audience = TrustAudience.Personal,
             ChannelType = "webhook"
         };
 
@@ -327,7 +327,7 @@ public class SetReminderToolTests : TestKit
         // Session id present but ChannelType is null — pre-v0.16 context
         // shape or an unusual caller. Fail loud, do not silently persist a
         // headless reminder that would drop on the floor at fire time.
-        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null);
+        var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null) { Audience = TrustAudience.Personal };
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -367,7 +367,9 @@ public class SetReminderToolTests : TestKit
         Assert.Null(cmd.Definition.Delivery.SessionId);
         Assert.Null(cmd.Definition.Delivery.OriginChannelType);
         Assert.Null(cmd.Definition.Delivery.Address);
-        Assert.Null(cmd.Definition.Boundary);
+        // Boundary is now required non-nullable (#994): when no source context is present,
+        // the tool fills it with the fail-closed PublicBoundary default.
+        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
@@ -419,7 +421,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
-            Audience = "personal",
+            Audience = TrustAudience.Personal,
             ChannelType = "slack"
         };
 
@@ -441,6 +443,46 @@ public class SetReminderToolTests : TestKit
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TrustAudience.Personal, cmd.Definition.Audience);
         Assert.Equal(TrustAudience.Personal, cmd.Authorization?.SourceAudience);
+
+        probe.Reply(new ReminderSavedResponse(
+            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));
+
+        await execution;
+    }
+
+    [Fact]
+    public async Task Downscoped_audience_rewrites_boundary_to_requested_audience_scope()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
+        var context = new ToolExecutionContext("signalr/thread-1", null)
+        {
+            Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            ChannelType = "signalr"
+        };
+
+        var execution = Task.Run(async () =>
+        {
+            var result = await tool.ExecuteAsync(new Dictionary<string, object?>
+            {
+                ["Id"] = "downscope-boundary",
+                ["Name"] = "downscope-boundary",
+                ["Prompt"] = "check status",
+                ["ScheduleType"] = "once",
+                ["Schedule"] = "30m",
+                ["Audience"] = "public",
+                ["DeliveryKind"] = "none"
+            }, context);
+            return result;
+        });
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TrustAudience.Public, cmd.Definition.Audience);
+        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
             new ReminderId(cmd.Definition.Id),
@@ -480,7 +522,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
-            Audience = "team",
+            Audience = TrustAudience.Team,
             ChannelType = "slack"
         };
 
@@ -499,7 +541,9 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Null(cmd.Definition.Audience);
+        // Audience is now required non-nullable (#994): when not specified in tool args,
+        // the tool fills it from the source context audience before sending the command.
+        Assert.Equal(TrustAudience.Team, cmd.Definition.Audience);
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
@@ -511,30 +555,9 @@ public class SetReminderToolTests : TestKit
         await execution;
     }
 
-    [Fact]
-    public async Task Rejects_invalid_source_audience_context()
-    {
-        var probe = CreateTestProbe();
-        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
-        var context = new ToolExecutionContext("slack/thread-1", null)
-        {
-            Audience = "superadmin",
-            ChannelType = "slack"
-        };
-
-        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
-        {
-            ["Id"] = "bad-source-audience",
-            ["Name"] = "bad-source-audience",
-            ["Prompt"] = "Test",
-            ["ScheduleType"] = "once",
-            ["Schedule"] = "1h",
-            ["DeliveryKind"] = "current_session"
-        }, context, TestContext.Current.CancellationToken);
-
-        Assert.Contains("Invalid source audience", result);
-        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
-    }
+    // Rejects_invalid_source_audience_context was deleted: source audience is now a parsed
+    // TrustAudience? on ToolExecutionContext — wire-string parse failure is rejected upstream,
+    // so there is no "invalid source audience" path reachable inside SetReminderTool.
 
     [Fact]
     public async Task Manager_validation_failure_returns_error_prefix()
@@ -543,7 +566,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
-            Audience = "team",
+            Audience = TrustAudience.Team,
             ChannelType = "slack"
         };
 
@@ -585,7 +608,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
-            Audience = "public",
+            Audience = TrustAudience.Public,
             ChannelType = "discord"
         };
 
@@ -748,7 +771,7 @@ public class SetReminderToolTests : TestKit
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
-            Audience = "team",
+            Audience = TrustAudience.Team,
             ChannelType = "slack"
         };
 

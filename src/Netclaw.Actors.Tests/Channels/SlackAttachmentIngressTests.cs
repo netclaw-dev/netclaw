@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -140,7 +141,8 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
             AudienceProfiles: profiles,
             ModelCapabilities: Host.Services.GetRequiredService<ModelCapabilities>(),
             Paths: _paths,
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         return Sys.ActorOf(SlackGatewayActor.CreateProps(deps), gatewayName);
     }

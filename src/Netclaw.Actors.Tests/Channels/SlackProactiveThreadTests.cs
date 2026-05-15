@@ -594,7 +594,8 @@ public sealed class SlackProactiveThreadActorTests(ITestOutputHelper output) : T
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: TestSlackGatewayDeps.NewTestPaths(),
             ConversationPropsFactory: conversationPropsFactory,
-            ThreadPropsFactory: threadPropsFactory);
+            ThreadPropsFactory: threadPropsFactory,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
     }
 
     private static SlackInboundMessage CreateAppMention(

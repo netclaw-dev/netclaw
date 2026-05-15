@@ -17,6 +17,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Protocol;
@@ -136,7 +137,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill");
 
@@ -226,7 +228,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: countingFetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-recovery");
 
@@ -485,7 +488,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-bot-exclude");
 
@@ -594,7 +598,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-proactive-root");
 
@@ -667,7 +672,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-stale-ordering");
 
@@ -797,7 +803,8 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: profiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill-public-doc");
 

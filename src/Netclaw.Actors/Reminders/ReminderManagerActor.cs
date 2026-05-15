@@ -97,6 +97,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         }
 
         EmitDroppedInvalidDefinitionAlerts();
+        EmitRejectedLegacyDefinitionAlerts();
 
         Self.Tell(ReconcileReminders.Instance);
     }
@@ -122,6 +123,32 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }));
 
         _log.Warning("Dropped {0} invalid reminder definition(s) during startup: {1}", dropped.Count, droppedIds);
+    }
+
+    private void EmitRejectedLegacyDefinitionAlerts()
+    {
+        var rejected = _definitionStore.ConsumeRejectedLegacyDefinitions();
+        if (rejected.Count == 0)
+            return;
+
+        var rejectedIds = string.Join(", ", rejected.Select(x => x.ReminderId));
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "reminder.schema.legacy_rejected",
+            AlertType.ReminderSchemaDropped,
+            $"Rejected {rejected.Count} legacy reminder definition(s) missing trust fields during startup. Repair or recreate reminder IDs: {rejectedIds}.",
+            AlertSeverity.Warning,
+            source: "startup",
+            context: new Dictionary<string, string>
+            {
+                ["rejectedCount"] = rejected.Count.ToString(),
+                ["rejectedIds"] = rejectedIds
+            }));
+
+        _log.Warning(
+            "Rejected {0} legacy reminder definition(s) missing trust fields during startup: {1}",
+            rejected.Count,
+            rejectedIds);
     }
 
     private async Task HandleSaveAsync(SaveReminderCommand cmd)
@@ -199,17 +226,23 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        var effectiveAudience = authorization.EffectiveAudience ?? TrustAudience.Public;
-        var effectiveBoundary = ResolveReminderBoundary(
-            cmd.Definition.Boundary,
-            cmd.Definition.Delivery.OriginChannelType,
-            effectiveAudience);
+        // Non-null on the success path — IsSuccess was checked above, and a
+        // successful ReminderAudienceAuthorizationResult always carries an audience.
+        var effectiveAudience = authorization.EffectiveAudience!.Value;
+        var boundaryValidation = ValidateRequestedBoundary(cmd.Definition.Boundary, effectiveAudience);
+        if (!boundaryValidation.IsSuccess)
+        {
+            replyTo.Tell(ValidationFailure(id, title, boundaryValidation.ErrorMessage!));
+            return;
+        }
+
+        var effectiveBoundary = boundaryValidation.NormalizedBoundary!;
 
         var normalized = cmd.Definition with
         {
             Id = id.Value,
             Title = title,
-            Audience = authorization.EffectiveAudience,
+            Audience = effectiveAudience,
             Boundary = effectiveBoundary,
             CreatedBy = string.IsNullOrWhiteSpace(cmd.Definition.CreatedBy)
                 ? "system"
@@ -289,7 +322,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     }
 
     private static ReminderAudienceAuthorizationResult ValidateRequestedAudience(
-        TrustAudience? requestedAudience,
+        TrustAudience requestedAudience,
         ReminderAudienceAuthorizationContext? authorization)
     {
         if (authorization?.SourceAudience is not { } sourceAudience)
@@ -298,7 +331,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                 "Reminder audience authorization context is required.");
         }
 
-        var effectiveAudience = requestedAudience ?? sourceAudience;
+        var effectiveAudience = requestedAudience;
         if (effectiveAudience > sourceAudience)
         {
             var sourceDescription = string.IsNullOrWhiteSpace(authorization.SourceDescription)
@@ -312,13 +345,26 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         return ReminderAudienceAuthorizationResult.Success(effectiveAudience);
     }
 
-    private static string ResolveReminderBoundary(
+    private static ReminderBoundaryValidationResult ValidateRequestedBoundary(
         string? requestedBoundary,
-        ChannelType? originChannelType,
         TrustAudience effectiveAudience)
     {
-        var channelType = (originChannelType ?? ChannelType.Reminder).ToWireValue();
-        return SecurityPolicyDefaults.ResolveBoundary(requestedBoundary, channelType, effectiveAudience);
+        if (string.IsNullOrWhiteSpace(requestedBoundary))
+            return ReminderBoundaryValidationResult.Fail("Reminder boundary is required.");
+
+        if (!SecurityPolicyDefaults.TryNormalizeBoundary(requestedBoundary, out var normalizedBoundary))
+        {
+            return ReminderBoundaryValidationResult.Fail(
+                $"Reminder boundary '{requestedBoundary}' is not a recognized trust boundary.");
+        }
+
+        if (!SecurityPolicyDefaults.IsBoundaryCompatibleWithAudience(normalizedBoundary, effectiveAudience))
+        {
+            return ReminderBoundaryValidationResult.Fail(
+                $"Reminder boundary '{normalizedBoundary}' is not allowed for audience '{effectiveAudience.ToWireValue()}'.");
+        }
+
+        return ReminderBoundaryValidationResult.Success(normalizedBoundary);
     }
 
     private async Task HandleCancelAsync(CancelReminderCommand cmd)
@@ -957,6 +1003,15 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             => new(true, effectiveAudience, null);
 
         public static ReminderAudienceAuthorizationResult Fail(string errorMessage)
+            => new(false, null, errorMessage);
+    }
+
+    private sealed record ReminderBoundaryValidationResult(bool IsSuccess, string? NormalizedBoundary, string? ErrorMessage) : INoSerializationVerificationNeeded
+    {
+        public static ReminderBoundaryValidationResult Success(string normalizedBoundary)
+            => new(true, normalizedBoundary, null);
+
+        public static ReminderBoundaryValidationResult Fail(string errorMessage)
             => new(false, null, errorMessage);
     }
 

@@ -29,7 +29,9 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     private readonly BackgroundJobDefinitionStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly IOperationalNotificationSink _notificationSink;
     private readonly ILoggingAdapter _log;
+    private bool _startupSchemaAlertsEmitted;
 
     private readonly HashSet<string> _activeJobIds = [];
     private readonly Queue<string> _deferredQueue = new();
@@ -37,10 +39,12 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
     public BackgroundJobManagerActor(
         BackgroundJobDefinitionStore store,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IOperationalNotificationSink? notificationSink = null)
     {
         _store = store;
         _timeProvider = timeProvider;
+        _notificationSink = notificationSink ?? NullNotificationSink.Instance;
         _log = Context.GetLogger();
 
         ReceiveAsync<StartBackgroundJob>(HandleStartAsync);
@@ -213,6 +217,12 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private void HandleReconcile()
     {
         var persisted = _store.List();
+        if (!_startupSchemaAlertsEmitted)
+        {
+            EmitRejectedLegacyDefinitionAlerts();
+            _startupSchemaAlertsEmitted = true;
+        }
+
         var reconciled = 0;
 
         foreach (var def in persisted)
@@ -237,6 +247,32 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         if (reconciled > 0)
             _log.Info("Background job startup reconciliation: marked {0} orphaned job(s) as lost", reconciled);
+    }
+
+    private void EmitRejectedLegacyDefinitionAlerts()
+    {
+        var rejected = _store.ConsumeRejectedLegacyDefinitions();
+        if (rejected.Count == 0)
+            return;
+
+        var rejectedIds = string.Join(", ", rejected.Select(x => x.JobId));
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "background-job.schema.legacy_rejected",
+            AlertType.BackgroundJobSchemaDropped,
+            $"Rejected {rejected.Count} legacy background job definition(s) missing trust fields during startup. Repair or recreate job IDs: {rejectedIds}.",
+            AlertSeverity.Warning,
+            source: "startup",
+            context: new Dictionary<string, string>
+            {
+                ["rejectedCount"] = rejected.Count.ToString(),
+                ["rejectedIds"] = rejectedIds
+            }));
+
+        _log.Warning(
+            "Rejected {0} legacy background job definition(s) missing trust fields during startup: {1}",
+            rejected.Count,
+            rejectedIds);
     }
 
     private void SpawnExecution(BackgroundJobDefinition definition)
@@ -284,10 +320,10 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             Audience = def.Audience,
             Boundary = def.Boundary,
             Principal = PrincipalClassification.VerifiedAutomation,
-            Provenance = new SourceProvenance
+            Provenance = new SourceProvenance(
+                TransportAuthenticity.LocalProcess,
+                PayloadTaint.Trusted)
             {
-                TransportAuthenticity = TransportAuthenticity.LocalProcess,
-                PayloadTaint = PayloadTaint.Trusted,
                 SourceKind = SourceKind
             },
             ReceivedAt = _timeProvider.GetUtcNow(),

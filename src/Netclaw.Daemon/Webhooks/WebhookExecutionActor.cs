@@ -72,22 +72,13 @@ internal sealed class WebhookExecutionActor : ReceiveActor
         try
         {
             var self = Self;
+            var routeAudience = _invocation.Route.Config.Audience;
             var inputQueue = await _handle.InitializeWithQueueAsync(
                 Context,
                 _invocation.SessionId,
                 new SessionPipelineOptions
                 {
                     ChannelType = ChannelType.Webhook,
-                    DefaultAudience = _invocation.Route.Config.Audience,
-                    DefaultBoundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(_invocation.Route.Config.Audience),
-                    DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
-                    DefaultProvenance = new SourceProvenance
-                    {
-                        TransportAuthenticity = TransportAuthenticity.Verified,
-                        PayloadTaint = ToPayloadTaint(_invocation.Route.Config.Audience),
-                        SourceKind = _invocation.EventType ?? _invocation.Route.Name,
-                        SourceScope = _invocation.Route.Name
-                    },
                     Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls,
                     PromptOverlay = _invocation.Route.BuildPromptOverlay()
                 },
@@ -97,6 +88,16 @@ internal sealed class WebhookExecutionActor : ReceiveActor
             {
                 SenderId = $"webhook:{_invocation.Route.Name}",
                 ChannelId = _invocation.Route.Name,
+                Audience = routeAudience,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(routeAudience),
+                Principal = PrincipalClassification.VerifiedAutomation,
+                Provenance = new SourceProvenance(
+                    TransportAuthenticity.Verified,
+                    ToPayloadTaint(routeAudience))
+                {
+                    SourceKind = _invocation.EventType ?? _invocation.Route.Name,
+                    SourceScope = _invocation.Route.Name
+                },
                 Contents = [new TextContent(WebhookPayloadFormatter.Format(_invocation))],
                 ReceivedAt = _invocation.ReceivedAt
             });

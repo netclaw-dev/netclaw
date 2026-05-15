@@ -144,4 +144,59 @@ public class BackgroundJobManagerActorTests : TestKit
             return Task.CompletedTask;
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
     }
+
+    [Fact]
+    public async Task StartupReconciliation_EmitsAlert_ForLegacyJobMissingTrustFields()
+    {
+        const string jobId = "legacy-job-alert";
+        var filePath = Path.Combine(_dir.Path, "jobs", $"{Uri.EscapeDataString(jobId)}.json");
+        File.WriteAllText(filePath, $$"""
+            {
+              "id": "{{jobId}}",
+              "command": "echo hello",
+              "sessionId": "test/thread",
+              "rationale": "legacy job",
+              "status": "Pending",
+              "timeoutSeconds": 60,
+              "startedAtMs": 0
+            }
+            """);
+
+        var paths = new NetclawPaths(_dir.Path);
+        var store = new BackgroundJobDefinitionStore(paths);
+        var sink = new RecordingNotificationSink();
+
+        Sys.ActorOf(
+            Props.Create(() => new BackgroundJobManagerActor(store, TimeProvider.System, sink)),
+            "legacy-job-alert-manager");
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(sink.Alerts, alert =>
+                alert.Category == AlertType.BackgroundJobSchemaDropped
+                && alert.Summary.Contains(jobId, StringComparison.Ordinal));
+            return Task.CompletedTask;
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private sealed class RecordingNotificationSink : IOperationalNotificationSink
+    {
+        private readonly object _sync = new();
+        private readonly List<OperationalAlert> _alerts = [];
+
+        public IReadOnlyList<OperationalAlert> Alerts
+        {
+            get
+            {
+                lock (_sync)
+                    return _alerts.ToArray();
+            }
+        }
+
+        public void Emit(OperationalAlert alert)
+        {
+            lock (_sync)
+                _alerts.Add(alert);
+        }
+    }
 }

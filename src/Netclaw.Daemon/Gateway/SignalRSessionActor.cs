@@ -58,16 +58,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
     private SessionPipelineOptions BuildOptions() => new()
     {
-        ChannelType = _channelType,
-        DefaultAudience = TrustAudience.Personal,
-        DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
-        DefaultPrincipal = PrincipalClassification.Operator,
-        DefaultProvenance = new SourceProvenance
-        {
-            TransportAuthenticity = TransportAuthenticity.LocalProcess,
-            PayloadTaint = PayloadTaint.Trusted,
-            SourceKind = "signalr"
-        }
+        ChannelType = _channelType
     };
 
     private void Initializing()

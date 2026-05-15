@@ -74,7 +74,11 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _replyClient = replyClient;
         _ingressGate = ingressGate;
         _contentScanner = contentScanner;
-        _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
+        // Fail loud rather than substituting a no-op detector — a no-op reports
+        // every input as safe, silently disabling injection scanning. A null
+        // here means broken DI wiring.
+        _promptInjectionDetector = promptInjectionDetector
+            ?? throw new ArgumentNullException(nameof(promptInjectionDetector));
         _httpClientFactory = httpClientFactory;
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;

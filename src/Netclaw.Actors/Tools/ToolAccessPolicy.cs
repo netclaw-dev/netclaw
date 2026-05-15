@@ -550,7 +550,7 @@ public sealed class ToolAccessPolicy
         => SecurityPolicyDefaults.ResolveAudienceWithFallback(context?.Audience, context?.SessionId);
 
     private static ToolExecutionContext CreateContext(TrustAudience audience)
-        => new(null, null) { Audience = audience.ToWireValue() };
+        => new(null, null) { Audience = audience };
 
     private static bool IsShellTool(ToolRegistration registration)
         => registration.GrantCategory == "shell" || IsShellTool(registration.Tool);

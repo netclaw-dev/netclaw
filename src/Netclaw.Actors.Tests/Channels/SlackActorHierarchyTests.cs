@@ -284,7 +284,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: TestSlackGatewayDeps.NewTestPaths(),
             ConversationPropsFactory: conversationPropsFactory,
-            ThreadPropsFactory: threadPropsFactory);
+            ThreadPropsFactory: threadPropsFactory,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
     }
 
     private static SlackInboundMessage CreateMessage(
@@ -435,10 +436,8 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         Audience = TrustAudience.Personal,
         Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
         Principal = PrincipalClassification.VerifiedAutomation,
-        Provenance = new SourceProvenance
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
         {
-            TransportAuthenticity = TransportAuthenticity.LocalProcess,
-            PayloadTaint = PayloadTaint.Trusted,
             SourceKind = "reminder"
         },
         ReceivedAt = DateTimeOffset.UtcNow,

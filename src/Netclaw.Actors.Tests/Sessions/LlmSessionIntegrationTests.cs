@@ -135,10 +135,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 Audience = TrustAudience.Public,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Public),
                 Principal = PrincipalClassification.VerifiedAutomation,
-                Provenance = new SourceProvenance
+                Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
                 {
-                    TransportAuthenticity = TransportAuthenticity.Verified,
-                    PayloadTaint = PayloadTaint.Public,
                     SourceKind = "issues"
                 },
                 ReceivedAt = _timeProvider.GetUtcNow()
@@ -188,10 +186,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 Audience = TrustAudience.Team,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Team),
                 Principal = PrincipalClassification.TrustedInternal,
-                Provenance = new SourceProvenance
+                Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
                 {
-                    TransportAuthenticity = TransportAuthenticity.Verified,
-                    PayloadTaint = PayloadTaint.Trusted,
                     SourceKind = "slack"
                 },
                 ReceivedAt = _timeProvider.GetUtcNow()
@@ -1747,10 +1743,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Audience = TrustAudience.Personal,
         Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
         Principal = PrincipalClassification.VerifiedAutomation,
-        Provenance = new SourceProvenance
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
         {
-            TransportAuthenticity = TransportAuthenticity.LocalProcess,
-            PayloadTaint = PayloadTaint.Trusted,
             SourceKind = "reminder"
         },
         ReceivedAt = _timeProvider.GetUtcNow(),

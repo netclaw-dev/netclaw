@@ -224,11 +224,12 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             ChannelId = channelId.Value,
             MessageId = message.MessageId,
             Audience = audience,
+            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
             Principal = PrincipalClassification.UntrustedExternal,
-            Provenance = new SourceProvenance
+            Provenance = new SourceProvenance(
+                TransportAuthenticity.Verified,
+                PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                PayloadTaint = PayloadTaint.Public,
                 SourceKind = "discord",
                 SourceScope = threadChannelId.ToString()
             },

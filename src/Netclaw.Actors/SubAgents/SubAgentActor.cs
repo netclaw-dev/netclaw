@@ -104,8 +104,28 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var scopeId = !string.IsNullOrWhiteSpace(msg.SessionScopeId)
                 ? msg.SessionScopeId!
                 : $"subagent/{_definition.Name}/{Guid.NewGuid():N}";
-            _toolExecutionContext = new ToolExecutionContext(scopeId, msg.ParentSessionDirectory);
-            _toolExecutionContext.Audience = msg.Audience ?? TrustAudience.Personal.ToWireValue();
+            // A sub-agent inherits the spawning session's audience. A spawn with no
+            // audience is a programming error — defaulting to Personal would
+            // silently grant the sub-agent broader trust than its parent. Fail the
+            // run immediately with a result so the caller fails fast, rather than
+            // throwing (which crashes the actor and makes the caller wait out the
+            // Ask timeout).
+            if (msg.Audience is not { } subAgentAudience)
+            {
+                _log.Error(
+                    "SubAgent [{AgentName}] spawn rejected: RunSubAgent carried no trust audience.",
+                    _definition.Name);
+                Complete(
+                    success: false,
+                    "Sub-agent spawn failed: no trust audience was provided. A sub-agent "
+                    + "must inherit the spawning session's audience.");
+                return;
+            }
+
+            _toolExecutionContext = new ToolExecutionContext(scopeId, msg.ParentSessionDirectory)
+            {
+                Audience = subAgentAudience,
+            };
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
             _toolExecutionContext.ProjectDirectory = msg.ParentProjectDirectory;

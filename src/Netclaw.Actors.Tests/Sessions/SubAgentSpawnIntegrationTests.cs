@@ -288,7 +288,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "/ops-route check daemon health"
+            Content = "/ops-route check daemon health",
+            Source = BuildPersonalSource()
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         var text = await ExpectTextOutputAsync(subscriber, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -505,7 +506,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(2, _clientProvider.Compaction.CallCount);
         Assert.NotNull(_recordingFileReadTool);
         Assert.True(_recordingFileReadTool!.WasCalled);
-        Assert.Equal(TrustAudience.Team.ToWireValue(), _recordingFileReadTool.LastContext?.Audience);
+        Assert.Equal(TrustAudience.Team, _recordingFileReadTool.LastContext?.Audience);
         Assert.Equal(source.Boundary, _recordingFileReadTool.LastContext?.Boundary);
     }
 
@@ -517,6 +518,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             SenderId = "test-user",
             Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromChannelType(ChannelType.Tui.ToWireValue(), TrustAudience.Personal),
+            Principal = PrincipalClassification.Operator,
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
             ReceivedAt = DateTimeOffset.UtcNow
         };
     }
@@ -529,6 +532,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             SenderId = "reminder-executor",
             Audience = TrustAudience.Team,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromChannelType(ChannelType.Reminder.ToWireValue(), TrustAudience.Team),
+            Principal = PrincipalClassification.VerifiedAutomation,
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted),
             ReceivedAt = DateTimeOffset.UtcNow,
             ReminderId = reminderId
         };

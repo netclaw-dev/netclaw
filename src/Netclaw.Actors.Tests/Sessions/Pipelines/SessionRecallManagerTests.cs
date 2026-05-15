@@ -23,7 +23,9 @@ public class SessionRecallManagerTests
             ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary
+            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Principal = PrincipalClassification.UntrustedExternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };
         var state = SessionState.Empty.AddUserMessage("Tell me a secret");
 
@@ -48,7 +50,9 @@ public class SessionRecallManagerTests
             ChannelType = ChannelType.Tui,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = SecurityPolicyDefaults.PersonalBoundary,
+            Principal = PrincipalClassification.UntrustedExternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };
         var state = SessionState.Empty.AddUserMessage("Search for memories");
 
@@ -74,7 +78,9 @@ public class SessionRecallManagerTests
             ChannelType = ChannelType.Tui,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = SecurityPolicyDefaults.PersonalBoundary,
+            Principal = PrincipalClassification.UntrustedExternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };
         var state = SessionState.Empty.AddUserMessage("What do you remember about the project?");
 

@@ -7,11 +7,13 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -87,7 +89,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         await SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor, toolCalls,
             new SessionId("test/background"),
-            source: null,
+            source: TestMessageSource(),
             auditLogger: null,
             timeProvider: TimeProvider.System,
             sessionDir: Path.GetTempPath(),
@@ -135,7 +137,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         await SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor, toolCalls,
             new SessionId("test/background-dir"),
-            source: null,
+            source: TestMessageSource(),
             auditLogger: null,
             timeProvider: TimeProvider.System,
             sessionDir: Path.GetTempPath(),
@@ -240,6 +242,19 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             TimeSpan.FromMilliseconds(200),
             cancellationToken: TestContext.Current.CancellationToken);
     }
+
+    // Background-job submission now requires a trust context — source cannot be null.
+    // This factory produces a minimal Personal-audience source for tests that route
+    // to the background job manager and don't need to assert on trust-context values.
+    private static MessageSource TestMessageSource() => new()
+    {
+        ChannelType = ChannelType.Tui,
+        SenderId = "test-user",
+        Audience = TrustAudience.Personal,
+        Boundary = SecurityPolicyDefaults.PersonalBoundary,
+        Principal = PrincipalClassification.TrustedInternal,
+        Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+    };
 
     private sealed class EchoExecutor : IToolExecutor
     {

@@ -43,11 +43,10 @@ public sealed class TrustContextDeriverTests
             ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Public,
+            Boundary = SecurityPolicyDefaults.PublicBoundary,
             Principal = PrincipalClassification.TrustedInternal,
-            Provenance = new SourceProvenance
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                PayloadTaint = PayloadTaint.Public,
                 SourceKind = "slack"
             },
             ReceivedAt = DateTimeOffset.UtcNow
@@ -71,11 +70,10 @@ public sealed class TrustContextDeriverTests
             ChannelType = ChannelType.SignalR,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.PersonalBoundary,
             Principal = PrincipalClassification.Operator,
-            Provenance = new SourceProvenance
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
             {
-                TransportAuthenticity = TransportAuthenticity.LocalProcess,
-                PayloadTaint = PayloadTaint.Trusted,
                 SourceKind = "signalr"
             },
             ReceivedAt = DateTimeOffset.UtcNow
@@ -100,11 +98,10 @@ public sealed class TrustContextDeriverTests
             ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Team,
+            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
             Principal = PrincipalClassification.TrustedInternal,
-            Provenance = new SourceProvenance
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                PayloadTaint = PayloadTaint.Community,
                 SourceKind = "slack"
             },
             ReceivedAt = DateTimeOffset.UtcNow

@@ -212,21 +212,26 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             audience = parsedAudience;
         }
 
-        TrustAudience? sourceAudience = null;
-        if (!string.IsNullOrWhiteSpace(context.Audience))
-        {
-            if (!SecurityPolicyDefaults.TryParseAudience(context.Audience, out var parsedSourceAudience))
-                return $"Error: Invalid source audience '{context.Audience}' in tool execution context.";
-
-            sourceAudience = parsedSourceAudience;
-        }
+        // Audience is already parsed on the execution context — no wire-string
+        // parse, no parse-failure fallback.
+        var sourceAudience = context.Audience;
+        var effectiveRequestedAudience = audience ?? sourceAudience;
 
         string? boundary = null;
         if (!string.IsNullOrWhiteSpace(context.Boundary))
             boundary = context.Boundary.Trim();
 
-        if (string.IsNullOrWhiteSpace(boundary) && sourceAudience is { } resolvedSourceAudience)
-            boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(resolvedSourceAudience);
+        // When a reminder explicitly downscopes its audience, it must not carry
+        // over the creating session's broader boundary. Recompute the boundary
+        // from the requested audience instead.
+        if (audience is { } explicitAudience && explicitAudience != sourceAudience)
+        {
+            boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(explicitAudience);
+        }
+        else if (string.IsNullOrWhiteSpace(boundary))
+        {
+            boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(effectiveRequestedAudience);
+        }
 
         DateTimeOffset? expiresAt = null;
         if (!string.IsNullOrWhiteSpace(args.ExpiresIn))
@@ -249,8 +254,11 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             Delivery = delivery,
             DeliveryRequired = args.DeliveryRequired,
             DeliveryInstructions = args.DeliveryInstructions,
-            Audience = audience,
-            Boundary = boundary,
+            // Draft trust context — ReminderManagerActor re-resolves and
+            // re-authorizes Audience/Boundary before persisting. Prefer the
+            // explicitly requested audience, then the creating session's.
+            Audience = effectiveRequestedAudience,
+            Boundary = boundary ?? SecurityPolicyDefaults.PublicBoundary,
             Enabled = true,
             ExpiresAt = expiresAt,
             CreatedBy = "llm-tool",

@@ -353,8 +353,17 @@ internal static class UpdateCommand
     }
 
     /// <summary>
-    /// Quick background update check for CLI startup.
-    /// Prints a one-line notification if an update is available.
+    /// Holds the result of the most recent background update check so the
+    /// notice can be emitted at a safe time (after a TUI exits, after a CLI
+    /// command finishes writing its own output), instead of from inside the
+    /// background task itself — which would corrupt any running TUI.
+    /// </summary>
+    private static string? _pendingNotice;
+
+    /// <summary>
+    /// Quick background update check for CLI startup. Stores a one-line
+    /// notification in a static buffer if an update is available; emitted by
+    /// <see cref="EmitPendingNoticeIfReady"/> when the program is about to exit.
     /// </summary>
     internal static async Task BackgroundUpdateCheckAsync(bool selfUpdateDisabled = false)
     {
@@ -370,13 +379,30 @@ internal static class UpdateCommand
                 var hint = selfUpdateDisabled
                     ? "pull a newer container image to upgrade"
                     : "run 'netclaw update'";
-                Console.Error.WriteLine(
-                    $"Update available: v{result.CurrentVersion} → v{result.LatestVersion} — {hint}");
+                _pendingNotice =
+                    $"Update available: v{result.CurrentVersion} → v{result.LatestVersion} — {hint}";
             }
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"warn: background update check failed: {ex.Message}");
+            // A failed background check must never write to stderr mid-TUI;
+            // Debug.WriteLine is a no-op in Release and bypasses the alt-screen.
+            System.Diagnostics.Debug.WriteLine(
+                $"background update check failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Emit the buffered update notice (if the background check completed
+    /// and an update is available) to stderr. Safe to call from anywhere —
+    /// no-op if the check is still in flight or no update was found.
+    /// Intended to run after the mode handler returns, when any TUI has
+    /// already torn down its alt screen.
+    /// </summary>
+    internal static void EmitPendingNoticeIfReady()
+    {
+        var notice = Interlocked.Exchange(ref _pendingNotice, null);
+        if (notice is not null)
+            Console.Error.WriteLine(notice);
     }
 }

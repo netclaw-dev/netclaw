@@ -117,6 +117,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
 
     private static ToolExecutionContext BuildManualToolContext() => new(sessionId: null, sessionDirectory: null)
     {
+        Audience = TrustAudience.Personal,
         ChannelType = "manual"
     };
 

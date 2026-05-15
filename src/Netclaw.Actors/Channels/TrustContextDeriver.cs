@@ -47,7 +47,10 @@ public sealed class TrustContextDeriver
         var sourceAudience = source?.Audience ?? _defaults.Audience;
         var boundary = source?.Boundary ?? SecurityPolicyDefaults.ResolveBoundaryFromAudience(sourceAudience);
         var principal = source?.Principal ?? PrincipalClassification.UntrustedExternal;
-        var provenance = source?.Provenance ?? SourceProvenance.StrictDefault();
+        // Fail-closed conservative provenance when the turn has no source at all
+        // (Unverified transport, Public taint) — the most restrictive markers.
+        var provenance = source?.Provenance
+            ?? new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public);
 
         var effectiveAudience = Narrowest(_defaults.Audience, sourceAudience);
         var downgradeReason = (string?)null;

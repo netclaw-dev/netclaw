@@ -79,7 +79,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
         var tool = new SqliteGetMemoriesTool(_store, logger: NullLogger<SqliteGetMemoriesTool>.Instance);
         var context = new ToolExecutionContext("signalr/thread-1", null)
         {
-            Audience = TrustAudience.Public.ToWireValue(),
+            Audience = TrustAudience.Public,
             Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary
         };
 
@@ -99,7 +99,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
         var tool = new SqliteStoreMemoryTool(sink, NullLogger<SqliteStoreMemoryTool>.Instance);
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
-            Audience = TrustAudience.Personal.ToWireValue(),
+            Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.PersonalBoundary
         };
 

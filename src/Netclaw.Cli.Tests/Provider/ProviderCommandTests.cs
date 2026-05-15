@@ -282,6 +282,102 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.Equal(DateTimeOffset.Parse(expiry), providers["my-openai"].OAuthTokenExpiry!.Value);
     }
 
+    [Fact]
+    public async Task Rename_CascadesToModelRoles()
+    {
+        // End-to-end testing surfaced that the old "config-key-only" behavior
+        // left dangling Models.*.Provider references and forced users to fix
+        // each role by hand. Rename now cascades to any role that points at
+        // the old name in the same atomic write.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-compatible"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://localhost:8000"
+                }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "openai-compatible",
+                    ["ModelId"] = "Qwen/Qwen3.6-35B-A3B-FP8"
+                }
+            }
+        });
+
+        await ProviderCommand.RunAsync(
+            ["provider", "rename", "openai-compatible", "my-test-provider"],
+            _paths,
+            output: _output);
+
+        var output = _output.ToString();
+        Assert.Contains("Renamed provider 'openai-compatible' to 'my-test-provider'.", output);
+        Assert.Contains("Reassigned model role(s): Main", output);
+
+        // Config file: Models.Main.Provider now points at the new name.
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = doc.RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("my-test-provider", main.GetProperty("Provider").GetString());
+        Assert.Equal("Qwen/Qwen3.6-35B-A3B-FP8", main.GetProperty("ModelId").GetString());
+    }
+
+    [Fact]
+    public async Task Rename_WithNoModelRefs_ReportsRenameOnly()
+    {
+        // A clean rename with no model roles referencing the provider should
+        // not print any "Reassigned …" follow-up — that's noise.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            }
+        });
+
+        await ProviderCommand.RunAsync(
+            ["provider", "rename", "my-vllm", "lab-a100"],
+            _paths,
+            output: _output);
+
+        var output = _output.ToString();
+        Assert.Contains("Renamed provider 'my-vllm' to 'lab-a100'.", output);
+        Assert.DoesNotContain("Reassigned", output);
+    }
+
+    [Fact]
+    public void GetReferencingModelRoleEntries_ReturnsRoleAndModelId()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-vllm",
+                    ["ModelId"] = "Qwen/Qwen3-30B"
+                },
+                ["Fallback"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "my-ollama",
+                    ["ModelId"] = "qwen3:30b"
+                }
+            }
+        });
+
+        var entries = ProviderCommand.GetReferencingModelRoleEntries("my-vllm", _paths);
+
+        Assert.Single(entries);
+        Assert.Equal("Main", entries[0].Role);
+        Assert.Equal("Qwen/Qwen3-30B", entries[0].ModelId);
+    }
+
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,

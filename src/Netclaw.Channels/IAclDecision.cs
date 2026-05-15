@@ -29,7 +29,10 @@ public sealed record ChannelAclDecision(
         reason,
         TrustAudience.Public,
         PrincipalClassification.UntrustedExternal,
-        SourceProvenance.StrictDefault());
+        // Fail-closed conservative provenance on the deny path: Unverified
+        // transport, Public taint. A denied decision never grants access, so
+        // these markers are a sentinel, not a trust input.
+        new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public));
 
     public static ChannelAclDecision Allow(
         TrustAudience audience,

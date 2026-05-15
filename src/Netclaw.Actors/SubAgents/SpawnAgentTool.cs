@@ -56,7 +56,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         // Defense-in-depth: block subagent spawning for Public audience or when subagent subsystem is disabled
-        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
+        var audience = context.Audience;
         if (audience == TrustAudience.Public || !_subAgentConfig.Enabled)
             return "Error: This tool is not available.";
 

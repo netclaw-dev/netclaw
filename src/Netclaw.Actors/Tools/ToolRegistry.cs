@@ -272,7 +272,7 @@ public sealed class ToolRegistry
     }
 
     private static ToolExecutionContext CreateContext(TrustAudience audience)
-        => new(null, null) { Audience = audience.ToWireValue() };
+        => new(null, null) { Audience = audience };
 
     private static string DescribeServerCapability(string serverName, IReadOnlyList<McpToolAdapter> tools)
     {

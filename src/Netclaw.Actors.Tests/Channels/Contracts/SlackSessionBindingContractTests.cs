@@ -58,9 +58,8 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             SenderId: senderId,
             Audience: TrustAudience.Team,
             Principal: PrincipalClassification.UntrustedExternal,
-            Provenance: new SourceProvenance
+            Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
                 SourceKind = "slack"
             },
             Text: text,
@@ -119,7 +118,11 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
                 ChannelId = "C-test",
                 MessageId = $"C-test:{900 + i}.1",
                 Contents = [new TextContent($"history message {i}")],
-                ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-(count - i))
+                ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-(count - i)),
+                Audience = TrustAudience.Team,
+                Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+                Principal = PrincipalClassification.UntrustedExternal,
+                Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             });
         }
         return items;

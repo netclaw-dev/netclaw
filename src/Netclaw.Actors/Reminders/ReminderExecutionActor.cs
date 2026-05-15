@@ -117,8 +117,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 : new SessionId($"reminder/{_definition.Id}/{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}");
 
             _sessionIdValue = sessionId.Value;
-            if (_definition.Audience is not { } audience)
-                throw new InvalidOperationException($"Reminder '{_definition.Id}' is missing a persisted execution audience.");
+            var audience = _definition.Audience;
+            var boundary = GetPersistedBoundaryOrThrow();
 
             _log.Info(
                 $"ReminderExecution Initialized: execution_id={_executionId} reminder_id={_definition.Id} session_id={sessionId.Value} audience={audience} source=stored-definition");
@@ -130,15 +130,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 new SessionPipelineOptions
                 {
                     ChannelType = Channels.ChannelType.Reminder,
-                    DefaultAudience = audience,
-                    DefaultBoundary = SecurityPolicyDefaults.LocalDaemonBoundary,
-                    DefaultPrincipal = PrincipalClassification.VerifiedAutomation,
-                    DefaultProvenance = new SourceProvenance
-                    {
-                        TransportAuthenticity = TransportAuthenticity.LocalProcess,
-                        PayloadTaint = PayloadTaint.Trusted,
-                        SourceKind = "reminder"
-                    },
                     Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls
                 },
                 output => self.Tell(new ExecutionOutput(output)));
@@ -149,6 +140,15 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             {
                 SenderId = "reminder-system",
                 ChannelId = _definition.Delivery.Address,
+                Audience = audience,
+                Boundary = boundary,
+                Principal = PrincipalClassification.VerifiedAutomation,
+                Provenance = new SourceProvenance(
+                    TransportAuthenticity.LocalProcess,
+                    PayloadTaint.Trusted)
+                {
+                    SourceKind = "reminder"
+                },
                 Contents = [new TextContent(prompt)],
                 ReceivedAt = _timeProvider.GetUtcNow()
             });
@@ -179,8 +179,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             _sessionIdValue = sessionId.Value;
             var originChannelType = _definition.Delivery.OriginChannelType!.Value;
 
-            if (_definition.Audience is not { } audience)
-                throw new InvalidOperationException($"Reminder '{_definition.Id}' is missing a persisted execution audience.");
+            var audience = _definition.Audience;
+            var boundary = GetPersistedBoundaryOrThrow();
 
             var reminderDeliveryKey = $"{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}";
 
@@ -195,16 +195,12 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 MessageId = reminderDeliveryKey,
                 TurnId = reminderDeliveryKey,
                 Audience = audience,
-                Boundary = _definition.Boundary
-                    ?? SecurityPolicyDefaults.ResolveBoundary(
-                        boundary: null,
-                        channelType: originChannelType.ToWireValue(),
-                        audience: audience),
+                Boundary = boundary,
                 Principal = PrincipalClassification.VerifiedAutomation,
-                Provenance = new SourceProvenance
+                Provenance = new SourceProvenance(
+                    TransportAuthenticity.LocalProcess,
+                    PayloadTaint.Trusted)
                 {
-                    TransportAuthenticity = TransportAuthenticity.LocalProcess,
-                    PayloadTaint = PayloadTaint.Trusted,
                     SourceKind = "reminder"
                 },
                 ReceivedAt = _dispatchedAt,
@@ -343,6 +339,17 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             ChannelType.SignalR => registry.TryGet<SignalRGatewayActorKey>(out var signalr2) ? signalr2 : null,
             _ => null
         };
+    }
+
+    private string GetPersistedBoundaryOrThrow()
+    {
+        if (!SecurityPolicyDefaults.TryNormalizeBoundary(_definition.Boundary, out var normalizedBoundary))
+        {
+            throw new InvalidOperationException(
+                $"Reminder '{_definition.Id}' has invalid persisted trust boundary '{_definition.Boundary}'.");
+        }
+
+        return normalizedBoundary;
     }
 
     private static string BuildPrompt(ReminderDefinition definition)

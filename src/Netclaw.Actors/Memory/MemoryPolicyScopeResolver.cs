@@ -9,7 +9,7 @@ namespace Netclaw.Actors.Memory;
 
 internal static class MemoryPolicyScopeResolver
 {
-    public static TrustAudience ResolveAudience(string? configuredAudience, string? sessionId)
+    public static TrustAudience ResolveAudience(TrustAudience? configuredAudience, string? sessionId)
         => SecurityPolicyDefaults.ResolveAudienceWithFallback(configuredAudience, sessionId);
 
     // Boundary is stored for future cross-trust-boundary federation but is

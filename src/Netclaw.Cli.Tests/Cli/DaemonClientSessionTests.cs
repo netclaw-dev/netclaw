@@ -48,12 +48,7 @@ public sealed class DaemonClientSessionTests
         Assert.Equal(originalSessionId, resumedSessionId);
 
         // Verify the session is functional — can send and receive messages
-        await client2.SendAsync(new Netclaw.Actors.Channels.ChannelInput
-        {
-            SenderId = "test",
-            Contents = [new Microsoft.Extensions.AI.TextContent("hello-resumed")],
-            ReceivedAt = DateTimeOffset.UtcNow
-        }, TestContext.Current.CancellationToken);
+        await client2.SendAsync("hello-resumed", TestContext.Current.CancellationToken);
 
         await outputReceived.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }

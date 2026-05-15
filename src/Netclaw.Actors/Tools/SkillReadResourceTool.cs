@@ -52,7 +52,7 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         // Defense-in-depth: block skill resource reading for Public audience or when skills subsystem is disabled
-        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
+        var audience = context.Audience;
         if (audience == TrustAudience.Public || !_skillSyncConfig.Enabled)
             return "Error: This tool is not available.";
 

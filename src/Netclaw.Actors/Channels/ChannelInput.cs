@@ -40,27 +40,28 @@ public sealed record ChannelInput
     public string? MessageId { get; init; }
 
     /// <summary>
-    /// Optional source audience hint carried from the inbound adapter.
-    /// When omitted, the channel pipeline applies strict defaults.
+    /// Source audience for this message. The inbound adapter resolves this
+    /// explicitly — the channel pipeline never synthesizes a default.
     /// </summary>
-    public TrustAudience? Audience { get; init; }
+    public required TrustAudience Audience { get; init; }
 
     /// <summary>
-    /// Optional trust boundary hint carried from the inbound adapter.
-    /// When omitted, the channel pipeline applies adapter defaults.
+    /// Trust boundary for this message. The inbound adapter supplies this
+    /// explicitly — the channel pipeline never synthesizes a default.
     /// </summary>
-    public string? Boundary { get; init; }
+    public required string Boundary { get; init; }
 
     /// <summary>
-    /// Optional principal classification for the sender.
-    /// When omitted, the channel pipeline applies strict defaults.
+    /// Principal classification for the sender. The inbound adapter supplies
+    /// this explicitly — the channel pipeline never synthesizes a default.
     /// </summary>
-    public PrincipalClassification? Principal { get; init; }
+    public required PrincipalClassification Principal { get; init; }
 
     /// <summary>
-    /// Provenance markers that distinguish transport verification from content taint.
+    /// Provenance markers that distinguish transport verification from content
+    /// taint. The inbound adapter supplies this explicitly.
     /// </summary>
-    public SourceProvenance? Provenance { get; init; }
+    public required SourceProvenance Provenance { get; init; }
 
     /// <summary>
     /// Message content. Supports text (<see cref="TextContent"/>),

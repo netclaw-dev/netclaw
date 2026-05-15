@@ -50,7 +50,9 @@ public sealed class BackgroundJobSessionStateTests
             JobId = "abc123",
             Command = "make build",
             Rationale = "building project",
-            StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Audience = TrustAudience.Public,
+            Boundary = SecurityPolicyDefaults.PublicBoundary
         };
 
         var state = SessionState.Empty.TrackBackgroundJob(jobKey, info);
@@ -81,7 +83,9 @@ public sealed class BackgroundJobSessionStateTests
             JobId = "def456",
             Command = "make test",
             Rationale = "running tests",
-            StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+            StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            Audience = TrustAudience.Public,
+            Boundary = SecurityPolicyDefaults.PublicBoundary
         };
 
         var state = SessionState.Empty.TrackBackgroundJob(jobKey, info);

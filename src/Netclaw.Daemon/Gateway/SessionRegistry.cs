@@ -234,10 +234,10 @@ public sealed class SessionRegistry
             Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
             Principal = identity.Principal,
-            Provenance = new SourceProvenance
+            Provenance = new SourceProvenance(
+                identity.Transport,
+                PayloadTaint.Trusted)
             {
-                TransportAuthenticity = identity.Transport,
-                PayloadTaint = PayloadTaint.Trusted,
                 SourceKind = "signalr"
             },
             Contents = [new TextContent(text)],

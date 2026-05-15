@@ -65,7 +65,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         _channelId = channelId;
         _threadTs = threadTs;
         _dependencies = dependencies;
-        _promptInjectionDetector = dependencies.PromptInjectionDetector ?? new NullPromptInjectionDetector();
+        // Fail loud rather than substituting a no-op detector — a no-op reports
+        // every input as safe, silently disabling injection scanning. A null
+        // here means broken gateway wiring.
+        _promptInjectionDetector = dependencies.PromptInjectionDetector
+            ?? throw new InvalidOperationException(
+                "SlackGatewayDependencies.PromptInjectionDetector is not wired; "
+                + "prompt-injection scanning cannot be silently disabled.");
         _handle = new SessionPipelineHandle(dependencies.Pipeline, Context.GetLogger(), "slack-thread");
         _log = Context.GetLogger()
             .WithContext("Adapter", "slack")
@@ -693,15 +699,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private SessionPipelineOptions BuildOptions() => new()
     {
         ChannelType = Actors.Channels.ChannelType.Slack,
-        DefaultAudience = TrustAudience.Public,
-        DefaultBoundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
-        DefaultPrincipal = PrincipalClassification.UntrustedExternal,
-        DefaultProvenance = new SourceProvenance
-        {
-            TransportAuthenticity = TransportAuthenticity.Verified,
-            PayloadTaint = PayloadTaint.Public,
-            SourceKind = "slack"
-        },
         Filter = OutputFilter.Text | OutputFilter.Files
     };
 
@@ -739,6 +736,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ChannelId = _channelId.Value,
             MessageId = triggeringMessage.EventId.Value,
             Audience = triggeringMessage.Audience,
+            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
             Principal = triggeringMessage.Principal,
             Provenance = triggeringMessage.Provenance,
             Contents = liveContents,

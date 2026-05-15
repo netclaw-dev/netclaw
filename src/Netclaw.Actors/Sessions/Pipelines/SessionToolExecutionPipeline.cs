@@ -568,17 +568,24 @@ internal static class SessionToolExecutionPipeline
             return new ToolCallResult(message, [], [], []);
         }
 
+        // A background job inherits the submitting turn's trust context. There is
+        // no safe default — defaulting a missing source to Personal would silently
+        // escalate the job's audience. A null source here is a programming error.
+        if (source is null)
+            throw new InvalidOperationException(
+                "Background-job submission requires a turn source; trust context cannot be defaulted.");
+
         var startCmd = new StartBackgroundJob
         {
             Command = command,
             WorkingDirectory = workingDirectory,
             SessionId = sessionId,
             Rationale = meta.Rationale ?? "background shell execution",
-            Audience = source?.Audience ?? TrustAudience.Personal,
-            Boundary = source?.Boundary ?? SecurityPolicyDefaults.PersonalBoundary,
-            OriginChannelType = source?.ChannelType ?? ChannelType.Tui,
+            Audience = source.Audience,
+            Boundary = source.Boundary,
+            OriginChannelType = source.ChannelType,
             TimeoutSeconds = timeoutSeconds,
-            SenderId = source?.SenderId
+            SenderId = source.SenderId
         };
 
         try
@@ -638,8 +645,13 @@ internal static class SessionToolExecutionPipeline
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         string? projectDirectory)
     {
-        var context = new ToolExecutionContext(sessionId.Value, sessionDir);
-        context.Audience = source is null ? null : source.Audience.ToWireValue();
+        // A turn with no source carries no trust context — fall closed to the
+        // most-restrictive audience. The default is resolved once, here, so every
+        // downstream tool gate reads a guaranteed audience.
+        var context = new ToolExecutionContext(sessionId.Value, sessionDir)
+        {
+            Audience = source?.Audience ?? TrustAudience.Public,
+        };
         context.Boundary = source?.Boundary;
         context.ChannelType = source is null ? null : source.ChannelType.ToWireValue();
         context.SupportsInteractiveApproval = source?.ChannelType.SupportsInteractiveApproval();

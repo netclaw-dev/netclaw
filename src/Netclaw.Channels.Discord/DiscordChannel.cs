@@ -59,7 +59,11 @@ public sealed class DiscordChannel : IChannel
         _gatewayClient = gatewayClient;
         _replyClient = replyClient;
         _contentScanner = contentScanner;
-        _promptInjectionDetector = promptInjectionDetector ?? new NullPromptInjectionDetector();
+        // Fail loud rather than substituting a no-op detector — a no-op reports
+        // every input as safe, silently disabling injection scanning. A null
+        // here means broken DI wiring.
+        _promptInjectionDetector = promptInjectionDetector
+            ?? throw new ArgumentNullException(nameof(promptInjectionDetector));
         _httpClientFactory = httpClientFactory;
         _threadHistoryFetcher = threadHistoryFetcher;
         _notificationSink = notificationSink;

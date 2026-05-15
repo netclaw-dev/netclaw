@@ -400,7 +400,9 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
             ? "Project Constraint"
             : "Project Fact";
 
-        var stmtAudience = MemoryPolicyScopeResolver.ResolveAudience(audience, sessionId: null);
+        TrustAudience? parsedAudience =
+            SecurityPolicyDefaults.TryParseAudience(audience, out var a) ? a : null;
+        var stmtAudience = MemoryPolicyScopeResolver.ResolveAudience(parsedAudience, sessionId: null);
         candidate = new MemoryCheckpointCandidate(
             Kind: MemoryKind.Document,
             MemoryClass: MemoryClass.DurableFact,

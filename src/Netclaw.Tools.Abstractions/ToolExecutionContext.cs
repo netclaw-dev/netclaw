@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
+
 namespace Netclaw.Tools;
 
 /// <summary>
@@ -51,7 +53,10 @@ public sealed record SubAgentFinding
 /// </summary>
 public sealed class ToolExecutionContext
 {
-    public static readonly ToolExecutionContext Empty = new(null, null);
+    // Context-less sentinel for tools invoked outside a session. It carries the
+    // most-restrictive audience — a tool with no trust context can only run at
+    // the lowest privilege.
+    public static readonly ToolExecutionContext Empty = new(null, null) { Audience = TrustAudience.Public };
     private static readonly IReadOnlySet<string> EmptyApprovedPatternSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private List<FileAttachmentInfo>? _fileAttachments;
@@ -63,7 +68,14 @@ public sealed class ToolExecutionContext
         SessionDirectory = sessionDirectory;
     }
 
-    public string? Audience { get; set; }
+    /// <summary>
+    /// Parsed trust audience for this tool call. Required and non-nullable, so a
+    /// tool gate reads it directly with no missing-audience fallback. The default
+    /// is resolved once, where the context is built; the context-less
+    /// <see cref="Empty"/> sentinel carries the most-restrictive
+    /// <see cref="TrustAudience.Public"/>.
+    /// </summary>
+    public required TrustAudience Audience { get; init; }
 
     public string? Boundary { get; set; }
 

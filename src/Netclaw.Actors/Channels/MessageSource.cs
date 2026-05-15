@@ -54,23 +54,23 @@ public sealed record MessageSource
     /// Effective source audience attached to the inbound message before any runtime
     /// trust-context derivation occurs.
     /// </summary>
-    public TrustAudience Audience { get; init; } = TrustAudience.Public;
+    public required TrustAudience Audience { get; init; }
 
     /// <summary>
     /// Runtime-owned security boundary used to partition durable memory and other
     /// reusable state across trust domains.
     /// </summary>
-    public string Boundary { get; init; } = SecurityPolicyDefaults.PublicBoundary;
+    public required string Boundary { get; init; }
 
     /// <summary>
     /// Principal classification hint for the inbound sender.
     /// </summary>
-    public PrincipalClassification Principal { get; init; } = PrincipalClassification.UntrustedExternal;
+    public required PrincipalClassification Principal { get; init; }
 
     /// <summary>
     /// Provenance markers used to separate transport authenticity from payload taint.
     /// </summary>
-    public SourceProvenance Provenance { get; init; } = SourceProvenance.StrictDefault();
+    public required SourceProvenance Provenance { get; init; }
 
     /// <summary>
     /// When the message was received by the channel.

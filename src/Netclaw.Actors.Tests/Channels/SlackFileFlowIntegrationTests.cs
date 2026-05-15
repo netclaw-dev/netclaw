@@ -20,6 +20,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Actors.Tests.Sessions;
 using Netclaw.Channels.Slack;
@@ -135,7 +136,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: _paths,
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-file-test");
 
@@ -218,7 +220,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: _paths,
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-mention-test");
 
@@ -290,7 +293,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: _paths,
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-fileshare-test");
 
@@ -410,7 +414,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-error-turn-test");
 
@@ -463,7 +468,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-post-timeout-test");
 
@@ -538,7 +544,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-delivery-feedback-test");
 
@@ -612,7 +619,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/8000.1"),
@@ -671,7 +679,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9000.1"),
@@ -734,7 +743,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9050.1"),
@@ -756,7 +766,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             SenderId: "U123",
             Audience: TrustAudience.Personal,
             Principal: PrincipalClassification.Operator,
-            Provenance: SourceProvenance.StrictDefault(),
+            Provenance: new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public),
             Text: "a",
             ReceivedAt: TimeProvider.System.GetUtcNow()));
 
@@ -824,7 +834,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9055.1"),
@@ -895,7 +906,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9060.1"),
@@ -966,7 +978,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9061.1"),
@@ -1033,7 +1046,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9100.1"),
@@ -1095,7 +1109,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9200.1"),
@@ -1158,7 +1173,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadHistoryFetcher: EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths);
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var actor = Sys.ActorOf(SlackThreadBindingActor.CreateProps(
             new SessionId("D7/9300.1"),
@@ -1208,7 +1224,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: _paths,
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-real-scanner-test");
 
@@ -1269,7 +1286,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
             Paths: _paths,
-            HttpClient: httpClient);
+            HttpClient: httpClient,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-failing-scanner-test");
 

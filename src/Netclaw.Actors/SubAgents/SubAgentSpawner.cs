@@ -254,7 +254,6 @@ public sealed class SubAgentSpawner
         if (string.IsNullOrWhiteSpace(context.ProjectDirectory))
             return null;
 
-        var audience = SecurityPolicyDefaults.ParseAudienceOrPublic(context.Audience);
-        return _promptProvider.GetProjectInstructions(audience, context.ProjectDirectory);
+        return _promptProvider.GetProjectInstructions(context.Audience, context.ProjectDirectory);
     }
 }

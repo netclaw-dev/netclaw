@@ -45,10 +45,10 @@ public static class DiscordAclPolicy
         return ChannelAclDecision.Allow(
             audience,
             principal,
-            new SourceProvenance
+            new SourceProvenance(
+                TransportAuthenticity.Verified,
+                PayloadTaint.Public)
             {
-                TransportAuthenticity = TransportAuthenticity.Verified,
-                PayloadTaint = PayloadTaint.Public,
                 SourceKind = "discord",
                 SourceScope = message.ChannelId.Value
             });

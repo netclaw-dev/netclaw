@@ -62,14 +62,14 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
     private ToolExecutionContext PersonalContext(string? projectDir = null, string? sessionDir = null)
         => new("session-1", sessionDir ?? _sessionDir)
         {
-            Audience = TrustAudience.Personal.ToWireValue(),
+            Audience = TrustAudience.Personal,
             ProjectDirectory = projectDir
         };
 
     private ToolExecutionContext PublicContext(string? projectDir = null)
         => new("session-1", _sessionDir)
         {
-            Audience = TrustAudience.Public.ToWireValue(),
+            Audience = TrustAudience.Public,
             ProjectDirectory = projectDir
         };
 

@@ -36,6 +36,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     private SelectionListNode<string>? _authList;
     private TextInputNode? _apiKeyInput;
     private TextInputNode? _endpointInput;
+    private TextInputNode? _nameInput;
+    private TextInputNode? _renameInput;
     private SelectionListNode<string>? _confirmList;
 
     private IFocusable? _lastFocusedList;
@@ -87,6 +89,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 ProviderManagerState.Loading => BuildLoadingView(),
                 ProviderManagerState.List => BuildProviderListView(),
                 ProviderManagerState.AddSelectType => BuildAddSelectTypeView(),
+                ProviderManagerState.AddName => BuildAddNameView(),
                 ProviderManagerState.AddSelectAuth => BuildAddAuthView(),
                 ProviderManagerState.AddCredentials => BuildCredentialsView(),
                 ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
@@ -94,6 +97,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 ProviderManagerState.AddValidating => BuildValidatingView(),
                 ProviderManagerState.AddComplete => BuildAddCompleteView(),
                 ProviderManagerState.Details => BuildDetailsView(),
+                ProviderManagerState.RenameProvider => BuildRenameView(),
                 ProviderManagerState.FixCredentials => BuildFixCredentialsView(),
                 ProviderManagerState.RemoveConfirm => BuildRemoveConfirmView(),
                 _ => Layouts.Empty()
@@ -126,10 +130,16 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private LayoutNode BuildStatusBar()
     {
-        return ViewModel.StatusMessage
-            .Select(msg => (ILayoutNode)(string.IsNullOrWhiteSpace(msg)
-                ? Layouts.Empty()
-                : new TextNode($"  {msg}").WithForeground(Color.Green)))
+        // Combine StatusMessage (success/green) with ErrorMessage (error/red).
+        // ErrorMessage wins when both are set so the user sees the latest
+        // validation feedback immediately.
+        return ViewModel.ErrorMessage
+            .CombineLatest(ViewModel.StatusMessage, (err, status) => (err, status))
+            .Select(t => (ILayoutNode)(!string.IsNullOrWhiteSpace(t.err)
+                ? new TextNode($"  {t.err}").WithForeground(Color.Red)
+                : !string.IsNullOrWhiteSpace(t.status)
+                    ? new TextNode($"  {t.status}").WithForeground(Color.Green)
+                    : Layouts.Empty()))
             .AsLayout()
             .Height(1);
     }
@@ -147,8 +157,12 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit",
                     ProviderManagerState.AddSelectType =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddName =>
+                        " [Enter] Continue  [Esc] Cancel  [Ctrl+Q] Quit",
                     ProviderManagerState.Details =>
-                        " [K] Update key  [R] Remove  [V] Re-validate  [Esc] Back  [Ctrl+Q] Quit",
+                        " [K] Update key  [N] Rename  [R] Remove  [V] Re-validate  [Esc] Back  [Ctrl+Q] Quit",
+                    ProviderManagerState.RenameProvider =>
+                        " [Enter] Confirm rename  [Esc] Cancel  [Ctrl+Q] Quit",
                     ProviderManagerState.RemoveConfirm =>
                         " [Enter] Confirm  [Esc] Cancel  [Ctrl+Q] Quit",
                     ProviderManagerState.AddComplete =>
@@ -287,6 +301,58 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode("  Select provider type to add:").WithForeground(Color.White))
             .WithChild(_providerList);
+    }
+
+    private ILayoutNode BuildAddNameView()
+    {
+        var providerType = ViewModel.NewProviderType ?? "unknown";
+        var descriptor = ViewModel.Registry.Get(providerType);
+
+        var children = Layouts.Vertical();
+        children.WithChild(new TextNode("  Name your provider").WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode($"  Type: {descriptor.DisplayName}").WithForeground(Color.White));
+        children.WithChild(new TextNode("").Height(1));
+
+        _nameInput = new TextInputNode().WithPlaceholder($"my-{providerType}");
+        _nameInput.Text = ViewModel.NewProviderName ?? string.Empty;
+        // Termina's Text setter leaves the cursor at position 0. Synthesize
+        // End so the user can immediately edit the suffix instead of having
+        // their first keystroke insert before the pre-filled name.
+        _nameInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        _nameInput.OnFocused();
+        _lastFocusedInput = _nameInput;
+
+        _nameInput.Submitted
+            .Subscribe(text =>
+            {
+                if (ViewModel.TrySetNewProviderName(text, out var error))
+                {
+                    ViewModel.ErrorMessage.Value = "";
+                    ViewModel.AdvanceAfterName();
+                }
+                else
+                {
+                    ViewModel.ErrorMessage.Value = error;
+                    ViewModel.RequestRedraw();
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(new PanelNode()
+            .WithTitle("Name")
+            .WithBorder(BorderStyle.Rounded)
+            .WithBorderColor(Color.Gray)
+            .WithContent(_nameInput)
+            .Height(3));
+
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode("  This is how the provider appears in `netclaw provider list`")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("  and how model roles reference it. Press [Enter] to continue.")
+            .WithForeground(Color.Gray));
+
+        return children;
     }
 
     private ILayoutNode BuildAddAuthView()
@@ -573,6 +639,46 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .WithChild(new TextNode($"    Models:   {modelCount} discovered").WithForeground(Color.White));
     }
 
+    private ILayoutNode BuildRenameView()
+    {
+        var item = ViewModel.DetailProvider;
+        if (item is null)
+            return Layouts.Empty();
+
+        var children = Layouts.Vertical();
+        children.WithChild(new TextNode($"  Rename '{item.ConfiguredName}' ({item.DisplayName})")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+
+        _renameInput = new TextInputNode().WithPlaceholder(item.ConfiguredName ?? "");
+        _renameInput.Text = ViewModel.RenameNewName ?? item.ConfiguredName ?? string.Empty;
+        // Termina's Text setter leaves the cursor at position 0. Synthesize
+        // End so the user can immediately edit the suffix instead of having
+        // their first keystroke insert before the pre-filled name.
+        _renameInput.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+        _renameInput.OnFocused();
+        _lastFocusedInput = _renameInput;
+
+        _renameInput.Submitted
+            .Subscribe(text => ViewModel.ConfirmRename(text))
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(new PanelNode()
+            .WithTitle("New name")
+            .WithBorder(BorderStyle.Rounded)
+            .WithBorderColor(Color.Gray)
+            .WithContent(_renameInput)
+            .Height(3));
+
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode("  Renames the provider and cascades the change to any model")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("  role(s) that reference it. Restart the daemon for changes to take effect.")
+            .WithForeground(Color.Gray));
+
+        return children;
+    }
+
     private ILayoutNode BuildFixCredentialsView()
     {
         var item = ViewModel.DetailProvider;
@@ -757,6 +863,9 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 case ConsoleKey.K:
                     if (ViewModel.DetailProvider is not null)
                         ViewModel.StartFixCredentials(ViewModel.DetailProvider);
+                    return;
+                case ConsoleKey.N:
+                    ViewModel.StartRename();
                     return;
                 case ConsoleKey.R:
                     ViewModel.StartRemove();

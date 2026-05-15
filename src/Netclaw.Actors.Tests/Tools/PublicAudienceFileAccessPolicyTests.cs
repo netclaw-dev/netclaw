@@ -131,7 +131,7 @@ public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
     private ToolExecutionContext CreateContext(TrustAudience audience)
         => new("test/session-1", _sessionDir)
         {
-            Audience = audience.ToWireValue(),
+            Audience = audience,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
             ChannelType = audience == TrustAudience.Personal ? "signalr" : "slack"
         };

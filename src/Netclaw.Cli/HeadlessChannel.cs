@@ -143,12 +143,7 @@ public sealed class HeadlessChannel : IChannel
 
             _promptSentTicks = Stopwatch.GetTimestamp();
 
-            await _daemonClient.SendAsync(new Netclaw.Actors.Channels.ChannelInput
-            {
-                SenderId = "local-user",
-                Contents = [new TextContent(_prompt)],
-                ReceivedAt = _timeProvider.GetUtcNow()
-            }, stopping);
+            await _daemonClient.SendAsync(_prompt, stopping);
 
             _logger.LogInformation("Headless session started: {SessionId} (log: {LogPath})", sessionId, logPath);
 

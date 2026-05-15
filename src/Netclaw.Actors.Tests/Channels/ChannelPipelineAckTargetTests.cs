@@ -91,7 +91,11 @@ public sealed class ChannelPipelineAckTargetTests : TestKit
         Contents = [new TextContent("hello")],
         ReceivedAt = DateTimeOffset.UtcNow,
         ReminderId = reminderId,
-        AckTarget = ackTarget
+        AckTarget = ackTarget,
+        Audience = TrustAudience.Public,
+        Boundary = SecurityPolicyDefaults.PublicBoundary,
+        Principal = PrincipalClassification.UntrustedExternal,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
     };
 
     private static SendUserMessage BuildCommand(ChannelInput input)

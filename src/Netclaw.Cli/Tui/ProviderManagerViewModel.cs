@@ -24,6 +24,7 @@ public enum ProviderManagerState
     Loading,
     List,
     AddSelectType,
+    AddName,
     AddSelectAuth,
     AddCredentials,
     AddOAuthDeviceFlow,
@@ -31,6 +32,7 @@ public enum ProviderManagerState
     AddValidating,
     AddComplete,
     Details,
+    RenameProvider,
     FixCredentials,
     RemoveConfirm
 }
@@ -80,6 +82,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
     public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
+    public ReactiveProperty<string> ErrorMessage { get; } = new("");
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
@@ -123,6 +126,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     // ── Remove flow state ──
     public string? RemoveProviderName { get; set; }
     public List<string> RemoveBlockingRoles { get; } = [];
+
+    // ── Rename flow state ──
+    public string? RenameNewName { get; set; }
 
     /// <summary>
     /// Completes when the provider probe finishes. Used for testing.
@@ -335,7 +341,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Start the add flow for a specific provider type (skips type selection).
+    /// Start the add flow for a specific provider type. Enters the
+    /// <see cref="ProviderManagerState.AddName"/> step first so the user
+    /// can confirm or override the auto-generated provider name before
+    /// any credential entry happens.
     /// </summary>
     public void StartAddForType(string type)
     {
@@ -343,7 +352,22 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NewProviderType = type;
         NewProviderName = GenerateProviderName(type);
 
-        var descriptor = _registry.Get(type);
+        CurrentState.Value = ProviderManagerState.AddName;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Advance past the <see cref="ProviderManagerState.AddName"/> step into
+    /// the auth/credentials portion of the add flow. Routes to
+    /// <see cref="ProviderManagerState.AddCredentials"/> directly for
+    /// endpoint-only providers (where there's nothing to authenticate),
+    /// otherwise to <see cref="ProviderManagerState.AddSelectAuth"/>.
+    /// </summary>
+    public void AdvanceAfterName()
+    {
+        if (NewProviderType is null) return;
+
+        var descriptor = _registry.Get(NewProviderType);
         if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
         {
             NewAuthMethod = AuthMethod.None;
@@ -355,6 +379,46 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
 
         NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Validate and apply a user-supplied provider name. Returns true on
+    /// success (sets <see cref="NewProviderName"/> to the trimmed input).
+    /// Returns false and populates <paramref name="error"/> on rejection.
+    /// </summary>
+    /// <remarks>
+    /// Validation matches the existing collision check in
+    /// <see cref="GenerateProviderName"/> (case-insensitive comparison against
+    /// other configured providers). The config schema treats Providers as
+    /// open-keyed (additionalProperties: true with no propertyNames pattern),
+    /// so we don't enforce slug rules here — just non-empty and unique.
+    /// </remarks>
+    public bool TrySetNewProviderName(string? proposed, out string error)
+    {
+        var trimmed = proposed?.Trim() ?? string.Empty;
+
+        // Persist the candidate on both success and failure so a redraw
+        // triggered by ErrorMessage doesn't wipe out the user's input.
+        NewProviderName = trimmed;
+
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            error = "Provider name cannot be empty.";
+            return false;
+        }
+
+        foreach (var existing in DisplayProviders)
+        {
+            if (existing.ConfiguredName is not null &&
+                string.Equals(existing.ConfiguredName, trimmed, StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"A provider named '{existing.ConfiguredName}' already exists.";
+                return false;
+            }
+        }
+
+        error = string.Empty;
+        return true;
     }
 
     /// <summary>
@@ -567,6 +631,84 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Begin a rename of the currently displayed Details provider.
+    /// Pre-fills <see cref="RenameNewName"/> with the existing configured name.
+    /// </summary>
+    public void StartRename()
+    {
+        if (DetailProvider is not { IsConfigured: true, ConfiguredName: not null })
+            return;
+
+        RenameNewName = DetailProvider.ConfiguredName;
+        ErrorMessage.Value = "";
+        CurrentState.Value = ProviderManagerState.RenameProvider;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Apply the proposed rename. Validates and delegates the key swap to
+    /// <see cref="Provider.ProviderRenamer"/>. On success, refreshes the
+    /// provider list and returns to it. On failure, sets
+    /// <see cref="ErrorMessage"/> and stays on the rename page.
+    /// </summary>
+    public void ConfirmRename(string? proposed)
+    {
+        if (DetailProvider is not { ConfiguredName: { } oldName })
+            return;
+
+        var trimmed = proposed?.Trim() ?? string.Empty;
+
+        // Persist the candidate so a redraw triggered by ErrorMessage doesn't
+        // wipe out the user's input on the validation-failure path below.
+        RenameNewName = trimmed;
+
+        // Exact match is a no-op so the user can re-confirm without writing.
+        // Case-only edits (e.g. "my-vllm" → "My-Vllm") fall through to the
+        // renamer, which rewrites the key in place.
+        if (string.Equals(trimmed, oldName, StringComparison.Ordinal))
+        {
+            RenameNewName = null;
+            CurrentState.Value = ProviderManagerState.Details;
+            NotifyStateChanged();
+            return;
+        }
+
+        var result = Provider.ProviderRenamer.Rename(_paths, oldName, trimmed);
+        if (!result.Success)
+        {
+            ErrorMessage.Value = result.ErrorMessage ?? "Rename failed.";
+            RequestRedraw();
+            return;
+        }
+
+        StatusMessage.Value = result.ReassignedModelRoles.Count > 0
+            ? $"Renamed '{oldName}' to '{trimmed}'. Reassigned model role(s): {string.Join(", ", result.ReassignedModelRoles)}. Restart daemon for changes to take effect."
+            : $"Renamed '{oldName}' to '{trimmed}'. Restart daemon for changes to take effect.";
+
+        RenameNewName = null;
+        DetailProvider = null;
+        RefreshAndProbeAll();
+    }
+
+    /// <summary>
+    /// Cancel an in-progress rename and return to the Details view.
+    /// </summary>
+    public void CancelRename()
+    {
+        RenameNewName = null;
+        ErrorMessage.Value = "";
+        if (DetailProvider is not null)
+        {
+            CurrentState.Value = ProviderManagerState.Details;
+            NotifyStateChanged();
+        }
+        else
+        {
+            GoBackToList();
+        }
+    }
+
+    /// <summary>
     /// Re-probe the detail provider inline from the Details state.
     /// </summary>
     public void RevalidateDetailProvider()
@@ -626,7 +768,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         FixEndpoint = null;
         RemoveProviderName = null;
         RemoveBlockingRoles.Clear();
+        RenameNewName = null;
         StatusMessage.Value = "";
+        ErrorMessage.Value = "";
         CurrentState.Value = ProviderManagerState.List;
         NotifyStateChanged();
     }
@@ -636,6 +780,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         switch (CurrentState.Value)
         {
             case ProviderManagerState.AddSelectType:
+                GoBackToList();
+                break;
+            case ProviderManagerState.AddName:
                 GoBackToList();
                 break;
             case ProviderManagerState.AddSelectAuth:
@@ -676,6 +823,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 break;
             case ProviderManagerState.RemoveConfirm:
                 GoBackToList();
+                break;
+            case ProviderManagerState.RenameProvider:
+                CancelRename();
                 break;
             default:
                 Shutdown();
@@ -900,6 +1050,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         OAuth.Dispose();
         CurrentState.Dispose();
         StatusMessage.Dispose();
+        ErrorMessage.Dispose();
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
