@@ -22,19 +22,14 @@ permissions:
   contents: read
 
 jobs:
-  smoke:
-    name: Smoke Sandbox
+  # Build the smoke image once and share it via an artifact. The two
+  # smoke jobs below load the image and run in parallel against their
+  # own copy of the compose stack, so a flake or failure in one layer
+  # (REST/JSON vs interactive TUI) does not mask the other.
+  build-image:
+    name: Build smoke image
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    env:
-      PROJECT_NAME: netclaw-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-      SMOKE_OLLAMA_MODEL: qwen2:0.5b
-      SMOKE_BUILD: 0
-      INIT_TIMEOUT_SECONDS: 1200
-      START_TIMEOUT_SECONDS: 180
-      STEP_TIMEOUT_SECONDS: 120
-      STOP_TIMEOUT_SECONDS: 120
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -68,6 +63,45 @@ jobs:
           build-args: |
             NETCLAW_VERSION=local
 
+      - name: Save image to tarball
+        run: docker save netclaw-smoke:local | gzip > /tmp/netclaw-smoke.tar.gz
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: netclaw-smoke-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/netclaw-smoke.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  smoke-rest:
+    name: Smoke Sandbox (REST/JSON)
+    needs: build-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      PROJECT_NAME: netclaw-smoke-rest-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_OLLAMA_MODEL: qwen2:0.5b
+      SMOKE_BUILD: 0
+      INIT_TIMEOUT_SECONDS: 1200
+      START_TIMEOUT_SECONDS: 180
+      STEP_TIMEOUT_SECONDS: 120
+      STOP_TIMEOUT_SECONDS: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: netclaw-smoke-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp
+
+      - name: Load image
+        run: gunzip < /tmp/netclaw-smoke.tar.gz | docker load
+
       - name: Start smoke sandbox
         run: bash scripts/smoke/up.sh
 
@@ -76,16 +110,6 @@ jobs:
           mkdir -p smoke-logs
           set -o pipefail
           bash scripts/smoke/check.sh 2>&1 | tee smoke-logs/check.log
-
-      - name: Install vhs (for interactive tapes)
-        run: bash scripts/smoke/install-vhs.sh
-
-      - name: Run interactive tapes (light)
-        run: |
-          mkdir -p smoke-logs
-          set -o pipefail
-          bash scripts/smoke/run-tapes.sh light --no-up --keep-stack 2>&1 \
-            | tee smoke-logs/tapes.log
 
       - name: Collect smoke logs
         if: always()
@@ -97,7 +121,64 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: smoke-logs-rest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-logs
+          if-no-files-found: warn
+
+      - name: Tear down smoke sandbox
+        if: always()
+        run: |
+          SMOKE_REMOVE_VOLUMES=1 bash scripts/smoke/down.sh
+
+  smoke-interactive:
+    name: Smoke Sandbox (Interactive Tapes)
+    needs: build-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      PROJECT_NAME: netclaw-smoke-tape-${{ github.run_id }}-${{ github.run_attempt }}
+      SMOKE_OLLAMA_MODEL: qwen2:0.5b
+      SMOKE_BUILD: 0
+      INIT_TIMEOUT_SECONDS: 1200
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: netclaw-smoke-image-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp
+
+      - name: Load image
+        run: gunzip < /tmp/netclaw-smoke.tar.gz | docker load
+
+      - name: Install vhs
+        run: bash scripts/smoke/install-vhs.sh
+
+      - name: Run interactive tapes (light)
+        # --keep-stack so the post-step `collect-logs` runs against a
+        # still-up stack on failure; the explicit teardown step below
+        # always closes the stack out.
+        run: |
+          mkdir -p smoke-logs
+          set -o pipefail
+          bash scripts/smoke/run-tapes.sh light --keep-stack 2>&1 \
+            | tee smoke-logs/tapes.log
+
+      - name: Collect smoke logs
+        if: always()
+        run: |
+          mkdir -p smoke-logs
+          bash scripts/smoke/collect-logs.sh smoke-logs || true
+
+      - name: Upload tape logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-logs-tapes-${{ github.run_id }}-${{ github.run_attempt }}
           path: smoke-logs
           if-no-files-found: warn
 
