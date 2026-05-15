@@ -78,6 +78,34 @@ public sealed class ApprovalsManagerPageTests : IDisposable
     }
 
     [Fact]
+    public async Task LongList_FillsTerminalHeight_AndShowsScrollbar()
+    {
+        // Seed far more entries than the stock SelectionListNode's 10-row cap.
+        for (var i = 0; i < 120; i++)
+            _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb($"cmd{i:D3}"));
+
+        var (terminal, app, _) = CreateHeadlessApp(out var input);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+        var visible = Enumerable.Range(0, 120)
+            .Count(i => screen.Contains($"cmd{i:D3}", StringComparison.Ordinal));
+
+        // A 40-row VirtualTerminal has room for ~30 list rows once panel chrome,
+        // header, status bar, and key bindings are subtracted. The pre-fix bug
+        // capped this at 10 regardless of terminal size (issues #1 and #3).
+        Assert.True(visible > 20,
+            $"Expected the list to fill the terminal (>20 rows); only {visible} visible. Screen:\n{terminal}");
+
+        // The overflow scrollbar track must be present so the user can see
+        // there are more results below the fold (issue #2).
+        Assert.Contains('░', screen);
+    }
+
+    [Fact]
     public async Task PressingR_OnSelection_TransitionsToConfirmAndRevokesOnEnter()
     {
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
