@@ -18,7 +18,7 @@ public interface IToolApprovalService
     /// rather than only the process cwd.
     /// </summary>
     Task<ToolApprovalCheckResult> CheckApprovalAsync(
-        string? sessionId,
+        ToolApprovalSessionId? sessionId,
         TrustAudience audience,
         ToolName toolName,
         IReadOnlyList<ApprovalCandidate> candidates,
@@ -34,7 +34,7 @@ public interface IToolApprovalService
     /// for tools whose approvals are not directory-anchored.
     /// </summary>
     Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
-        string? sessionId,
+        ToolApprovalSessionId? sessionId,
         TrustAudience audience,
         ToolName toolName,
         IReadOnlyList<string> patterns,
@@ -42,13 +42,25 @@ public interface IToolApprovalService
         CancellationToken ct = default);
 
     Task RecordApprovalAsync(
-        string sessionId,
+        ToolApprovalSessionId sessionId,
         TrustAudience audience,
         ToolName toolName,
         IReadOnlyList<string> patterns,
         bool persistent,
         string? cwd,
         CancellationToken ct = default);
+}
+
+/// <summary>
+/// Approval-service session identity. Kept in the security layer because
+/// <c>Netclaw.Security</c> cannot depend on actor protocol types without
+/// creating a project-reference cycle.
+/// </summary>
+public readonly record struct ToolApprovalSessionId(string Value)
+{
+    public static explicit operator ToolApprovalSessionId(string value) => new(value);
+
+    public override string ToString() => Value;
 }
 
 public sealed record ToolApprovalCheckResult(

@@ -154,7 +154,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 else
                 {
                     var approvalCheck = await _approvalService.CheckApprovalAsync(
-                        context?.SessionId,
+                        ToApprovalSessionId(context?.SessionId),
                         audience,
                         new ToolName(toolCall.Name),
                         candidatesForCheck,
@@ -202,6 +202,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
     private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
         => string.Join(", ", matches.Select(match => $"{match.Pattern} [{match.Source}: {match.Scope}]"));
+
+    private static ToolApprovalSessionId? ToApprovalSessionId(string? sessionId)
+        => sessionId is null ? null : (ToolApprovalSessionId)sessionId;
 
     private static bool IsOneTimeApprovalSatisfied(
         ToolExecutionContext context,
