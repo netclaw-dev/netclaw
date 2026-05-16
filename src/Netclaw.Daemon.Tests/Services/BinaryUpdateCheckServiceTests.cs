@@ -295,6 +295,14 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
                             Url = "https://releases.netclaw.dev/0.2.0/netclaw-0.2.0-win-x64.zip",
                             Sha256 = "ghi789",
                             SizeBytes = 55_000_000
+                        },
+                        new BinaryAsset
+                        {
+                            Component = "netclaw",
+                            Rid = "osx-arm64",
+                            Url = "https://releases.netclaw.dev/0.2.0/netclaw-0.2.0-osx-arm64.tar.gz",
+                            Sha256 = "jkl012",
+                            SizeBytes = 52_000_000
                         }
                     ]
                 }
@@ -304,8 +312,9 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
         var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0");
 
         Assert.True(result.IsUpdateAvailable);
-        // The matching count depends on the current RID at test runtime
-        // On Linux CI, we'll get linux-x64 matches; on Windows, win-x64 matches
+        // The matching count depends on the current RID at test runtime; the
+        // manifest carries an asset for every RID the CI matrix runs on
+        // (linux-x64, win-x64, osx-arm64).
         Assert.True(result.MatchingAssets.Count > 0);
     }
 
