@@ -116,28 +116,40 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             var outputBuilder = new StringBuilder();
             var errorBuilder = new StringBuilder();
 
-            try
+            // A redirected child holds the stdout/stderr pipe write-ends open, so the
+            // reads below only reach EOF once the process exits. Cancelling a token
+            // cannot interrupt a blocked pipe read — killing the process is what
+            // closes the pipes. Drive the kill off the *linked* token so it fires for
+            // BOTH our own timeout and the caller's cancellation (the session
+            // pipeline's per-tool deadline, which in practice trips first), then let
+            // the reads drain to EOF.
+            await using (linkedCts.Token.Register(static p =>
             {
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(linkedCts.Token);
-                var stderrTask = process.StandardError.ReadToEndAsync(linkedCts.Token);
+                try
+                {
+                    ((Process)p!).Kill(entireProcessTree: true);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Process already exited between cancellation and kill — expected TOCTOU race
+                    Debug.WriteLine("Process already exited during cancellation cleanup");
+                }
+            }, process))
+            {
+                var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+                var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
                 outputBuilder.Append(await stdoutTask);
                 errorBuilder.Append(await stderrTask);
 
-                await process.WaitForExitAsync(linkedCts.Token);
+                await process.WaitForExitAsync(CancellationToken.None);
             }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+
+            if (linkedCts.IsCancellationRequested)
             {
-                try
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Process already exited between timeout detection and kill — expected TOCTOU race
-                    System.Diagnostics.Debug.WriteLine("Process already exited during timeout cleanup");
-                }
-                return $"Error: Command timed out after {effectiveTimeoutSeconds} seconds.";
+                return timeoutCts.IsCancellationRequested
+                    ? $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."
+                    : "Error: Command cancelled.";
             }
 
             var result = new StringBuilder();

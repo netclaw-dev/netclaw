@@ -32,6 +32,7 @@ using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
+using Termina;
 using Termina.Diagnostics;
 using Termina.Hosting;
 
@@ -206,7 +207,7 @@ static async Task RunAsync(string[] args)
             });
 
             var initApp = builder.Build();
-            await initApp.RunAsync();
+            await RunTerminaHostAsync(initApp);
             return;
         }
 
@@ -437,7 +438,7 @@ static async Task RunAsync(string[] args)
             });
 
             var statsApp = builder.Build();
-            await statsApp.RunAsync();
+            await RunTerminaHostAsync(statsApp);
             return;
         }
 
@@ -646,7 +647,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/mcp-tools", t =>
                 t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -704,7 +705,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/provider", t =>
                 t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -733,7 +734,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/model", t =>
                 t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -762,7 +763,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/approvals", t =>
                 t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -786,7 +787,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/reminder", t =>
                 t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -1027,12 +1028,43 @@ static async Task RunAsync(string[] args)
     }
 
     var app = webBuilder.Build();
-    await app.RunAsync();
+
+    // chat/sessions register a Termina UI (carries TerminaApplication in DI);
+    // headless does not. Guard the TUI hosts for a real terminal; the headless
+    // host streams to stdout and runs fine without one.
+    if (app.Services.GetService<TerminaApplication>() is not null)
+        await RunTerminaHostAsync(app);
+    else
+        await app.RunAsync();
 }
 
 static void WriteCrashLog(Exception ex)
 {
     CrashLogWriter.Write(ex, "CLI");
+}
+
+// Canonical launch path for every Termina-backed host. Resolving
+// TerminaApplication is the strongly-typed proof that this host drives an
+// interactive terminal UI (every Termina command registers it via AddTermina);
+// it also fails loudly if a caller wired a "Termina command" without AddTermina.
+static async Task RunTerminaHostAsync(IHost host)
+{
+    _ = host.Services.GetRequiredService<TerminaApplication>();
+
+    // A Termina UI is unusable without a real terminal. When stdin is redirected
+    // (piped, or spawned by shell_execute) Termina would launch but never receive
+    // a quit key — an un-killable subprocess. Fail fast instead.
+    if (Console.IsInputRedirected)
+    {
+        Console.Error.WriteLine(
+            "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
+        Console.Error.WriteLine(
+            "Non-interactive alternatives: 'netclaw sessions --once [--json]' or 'netclaw chat -p \"...\"'.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    await host.RunAsync();
 }
 
 static void WriteDaemonResult(DaemonResult result)

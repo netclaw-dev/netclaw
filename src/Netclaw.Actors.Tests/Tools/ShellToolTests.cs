@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -70,6 +71,52 @@ public class ShellToolTests
         var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
 
         Assert.Contains("Exit code: 0", result);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_kills_process_tree()
+    {
+        // Reproduces the session-pipeline path: a long internal timeout, with
+        // cancellation arriving via the *outer* ct (the pipeline's per-tool
+        // deadline). The shell must still kill the spawned process — otherwise
+        // the cancellation escapes and the subprocess is orphaned.
+        var pidFile = Path.Combine(Path.GetTempPath(), $"shelltool-pid-{Guid.NewGuid():N}");
+        var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 100 });
+        var args = ToolInput.Create("Command", $"echo $$ > '{pidFile}'; sleep 120");
+        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Personal,
+            RequestedTimeoutSeconds = 100
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
+        try
+        {
+            var result = await tool.ExecuteAsync(args, context, cts.Token);
+
+            Assert.Contains("cancelled", result);
+
+            var pid = int.Parse(File.ReadAllText(pidFile).Trim());
+            Assert.False(IsProcessAlive(pid), "shell process tree should be killed on cancellation");
+        }
+        finally
+        {
+            if (File.Exists(pidFile))
+                File.Delete(pidFile);
+        }
+    }
+
+    private static bool IsProcessAlive(int pid)
+    {
+        try
+        {
+            using var p = Process.GetProcessById(pid);
+            return !p.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     [Fact]
