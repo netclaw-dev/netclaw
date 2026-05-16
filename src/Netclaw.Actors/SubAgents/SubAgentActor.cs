@@ -243,7 +243,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         // so a sub-agent whose model is actively responding is never killed.
         Receive<SubAgentLlmActivity>(_ =>
         {
-            _currentPhase = SubAgentHeartbeatPhase.LlmStreaming;
+            // _currentPhase is already LlmStreaming — FireLlmCall set it before
+            // this call's stream began.
             if (!_anyContentStreamedThisCall)
             {
                 _anyContentStreamedThisCall = true;

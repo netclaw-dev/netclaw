@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -105,7 +106,8 @@ public sealed class SubAgentSpawner
 
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
-        var timeoutBudget = BuildTimeoutBudget(context, subAgentTimeout);
+        var wiring = context.SubAgentWiring as SubAgentExecutionWiring;
+        var timeoutBudget = BuildTimeoutBudget(wiring, subAgentTimeout);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
@@ -125,9 +127,9 @@ public sealed class SubAgentSpawner
                     RuntimeContext = runtimeContext,
                     Timeout = timeoutBudget.AbsoluteBackstop,
                     TimeoutBudget = timeoutBudget,
-                    HeartbeatSink = context.SubAgentHeartbeatSink as IActorRef,
+                    HeartbeatSink = wiring?.HeartbeatSink,
                     RunId = runId,
-                    ParentWatchdogOpId = context.SubAgentParentWatchdogOpId,
+                    ParentWatchdogOpId = wiring?.ParentWatchdogOpId ?? 0,
                     SessionScopeId = subAgentScopeId,
                     Audience = context.Audience,
                     Boundary = context.Boundary,
@@ -247,24 +249,20 @@ public sealed class SubAgentSpawner
 
     /// <summary>
     /// Build the sub-agent's timeout budget: inactivity budgets inherited from the
-    /// parent session (carried on the context), plus the per-profile absolute
-    /// backstop. When the inactivity budgets are absent (spawned outside a
-    /// session) the budget collapses to a flat timeout.
+    /// parent session (carried on the wiring), plus the per-profile absolute
+    /// backstop. When there is no wiring (spawned outside a session) the budget
+    /// collapses to a flat timeout.
     /// </summary>
-    private static SubAgentTimeoutBudget BuildTimeoutBudget(ToolExecutionContext context, TimeSpan backstop)
-        => (context.SubAgentPrefillTimeout,
-            context.SubAgentFirstTokenTimeout,
-            context.SubAgentToolExecutionTimeout) switch
-        {
-            ({ } prefill, { } firstToken, { } toolExec) => new SubAgentTimeoutBudget
+    private static SubAgentTimeoutBudget BuildTimeoutBudget(SubAgentExecutionWiring? wiring, TimeSpan backstop)
+        => wiring is null
+            ? SubAgentTimeoutBudget.FromLegacyTimeout(backstop)
+            : new SubAgentTimeoutBudget
             {
-                PrefillTimeout = prefill,
-                FirstTokenTimeout = firstToken,
-                ToolExecutionTimeout = toolExec,
+                PrefillTimeout = wiring.PrefillTimeout,
+                FirstTokenTimeout = wiring.FirstTokenTimeout,
+                ToolExecutionTimeout = wiring.ToolExecutionTimeout,
                 AbsoluteBackstop = backstop
-            },
-            _ => SubAgentTimeoutBudget.FromLegacyTimeout(backstop)
-        };
+            };
 
     private static string AppendSystemPromptOverlay(string basePrompt, string? overlay)
     {

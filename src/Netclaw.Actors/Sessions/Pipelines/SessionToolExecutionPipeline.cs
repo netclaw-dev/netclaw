@@ -163,14 +163,7 @@ internal static class SessionToolExecutionPipeline
         string resultText;
         var context = BuildToolExecutionContext(sessionId, source, sessionDir, spawnChildActor, projectDirectory);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
-        if (subAgentWiring is { } wiring)
-        {
-            context.SubAgentHeartbeatSink = wiring.HeartbeatSink;
-            context.SubAgentParentWatchdogOpId = wiring.ParentWatchdogOpId;
-            context.SubAgentPrefillTimeout = wiring.PrefillTimeout;
-            context.SubAgentFirstTokenTimeout = wiring.FirstTokenTimeout;
-            context.SubAgentToolExecutionTimeout = wiring.ToolExecutionTimeout;
-        }
+        context.SubAgentWiring = subAgentWiring;
         if (approvalChannel is not null && emitApprovalRequest is not null)
         {
             context.ApprovalBridge = new ParentSessionApprovalBridge(

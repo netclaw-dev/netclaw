@@ -83,12 +83,12 @@ internal sealed class ProcessingWatchdog
     /// </summary>
     public void RefreshIfCurrent(string expectedOperation, long expectedOpId, TimeSpan timeout, ITimerScheduler timers)
     {
-        if (_operationName != expectedOperation || _operationId != expectedOpId)
+        if (!IsCurrentOperation(expectedOperation, expectedOpId))
             return;
 
         timers.StartSingleTimer(
             TimerKey,
-            new ProcessingWatchdogExpired(_operationId, _operationName),
+            new ProcessingWatchdogExpired(_operationId, expectedOperation),
             timeout);
     }
 
