@@ -36,11 +36,11 @@
 
 ## 3. Pass 6 — `required`-keyword pass (4+ props)
 
-- [ ] 3.1 Apply the `required` keyword to the logically-required properties of
+- [x] 3.1 Apply the `required` keyword to the logically-required properties of
   `ToolAuditEntry` (`Netclaw.Actors/Tools/IToolExecutor.cs`) and any other
   record the audit confirms still uses bare `init` for 4+ required properties.
-- [ ] 3.2 Fix construction-site compiler errors and update affected tests.
-- [ ] 3.3 Verify Pass 6: build clean, tests green, slopwatch clean, file
+- [x] 3.2 Fix construction-site compiler errors and update affected tests.
+- [x] 3.3 Verify Pass 6: build clean, tests green, slopwatch clean, file
   headers verified.
 
 ## 4. Pass 7b — Wrap-with-existing cleanups
