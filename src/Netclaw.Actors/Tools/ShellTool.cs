@@ -116,29 +116,44 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             var outputBuilder = new StringBuilder();
             var errorBuilder = new StringBuilder();
 
+            // Start draining both pipes up front: a chatty child can deadlock if
+            // one pipe buffer fills while we wait on the other. The reads take
+            // CancellationToken.None deliberately — a redirected child holds the
+            // pipe write-ends open, so a blocked pipe read cannot be interrupted
+            // by a token; killing the process is what closes the pipes.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+            var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+
             try
             {
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(linkedCts.Token);
-                var stderrTask = process.StandardError.ReadToEndAsync(linkedCts.Token);
-
-                outputBuilder.Append(await stdoutTask);
-                errorBuilder.Append(await stderrTask);
-
+                // WaitForExitAsync waits on the process-exit event, not a pipe
+                // read, so it honors the token — and a process that exits cleanly
+                // completes it normally even if the deadline trips a moment later,
+                // so a finished command is never mislabelled as a timeout.
                 await process.WaitForExitAsync(linkedCts.Token);
             }
-            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
+            catch (OperationCanceledException)
             {
                 try
                 {
                     process.Kill(entireProcessTree: true);
                 }
-                catch (InvalidOperationException)
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
                 {
-                    // Process already exited between timeout detection and kill — expected TOCTOU race
-                    System.Diagnostics.Debug.WriteLine("Process already exited during timeout cleanup");
+                    // Already exited (TOCTOU race), or the OS refused the kill.
+                    Debug.WriteLine($"shell_execute: process kill skipped — {ex.Message}");
                 }
-                return $"Error: Command timed out after {effectiveTimeoutSeconds} seconds.";
+
+                // The kill closes the pipes, so the reads now drain to EOF.
+                await Task.WhenAll(stdoutTask, stderrTask);
+
+                return timeoutCts.IsCancellationRequested
+                    ? $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."
+                    : "Error: Command cancelled.";
             }
+
+            outputBuilder.Append(await stdoutTask);
+            errorBuilder.Append(await stderrTask);
 
             var result = new StringBuilder();
             if (outputBuilder.Length > 0)
