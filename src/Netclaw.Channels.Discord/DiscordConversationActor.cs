@@ -47,6 +47,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         Receive<DiscordGatewayMessage>(HandleGatewayMessage);
         Receive<DiscordGatewayInteraction>(HandleGatewayInteraction);
         Receive<DeliverTrustedSessionTurn>(HandleTrustedSessionTurn);
+        Receive<StartProactiveThread>(HandleProactiveThread);
         Receive<Terminated>(HandleTerminated);
     }
 
@@ -246,6 +247,36 @@ internal sealed class DiscordConversationActor : ReceiveActor
         _log.Debug(
             "Routing DeliverTrustedSessionTurn session={Session} channel={Channel} threadOrMessage={ThreadOrMessage}",
             message.SessionId.Value, parsedChannelId.Value, threadOrMessageId.Value);
+        sessionBinding.Forward(message);
+    }
+
+    private void HandleProactiveThread(StartProactiveThread message)
+    {
+        if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
+        {
+            _log.Info("Rejected proactive thread for session {0}: ingress closed", message.SessionId.Value);
+            Sender.Tell(new Status.Failure(new InvalidOperationException(closedReason)));
+            return;
+        }
+
+        // Defense-in-depth: re-validate the channel ACL even though the tool
+        // already checked it before posting.
+        if (!DiscordAclPolicy.IsAllowedChannel(message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
+        {
+            _log.Warning("Rejected proactive thread for disallowed channel {0}", message.ChannelId.Value);
+            Sender.Tell(new Status.Failure(new InvalidOperationException(
+                $"Channel {message.ChannelId.Value} is not in the allowed channels list.")));
+            return;
+        }
+
+        var sessionBinding = GetOrCreateSessionBinding(
+            message.SessionId,
+            message.ChannelId,
+            message.ReplyChannelId,
+            message.ThreadOrMessageId,
+            rootMessageId: null);
+
+        _log.Debug("Routing proactive thread setup to session binding {0}", message.SessionId.Value);
         sessionBinding.Forward(message);
     }
 
