@@ -116,41 +116,44 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             var outputBuilder = new StringBuilder();
             var errorBuilder = new StringBuilder();
 
-            // A redirected child holds the stdout/stderr pipe write-ends open, so the
-            // reads below only reach EOF once the process exits. Cancelling a token
-            // cannot interrupt a blocked pipe read — killing the process is what
-            // closes the pipes. Drive the kill off the *linked* token so it fires for
-            // BOTH our own timeout and the caller's cancellation (the session
-            // pipeline's per-tool deadline, which in practice trips first), then let
-            // the reads drain to EOF.
-            await using (linkedCts.Token.Register(static p =>
+            // Start draining both pipes up front: a chatty child can deadlock if
+            // one pipe buffer fills while we wait on the other. The reads take
+            // CancellationToken.None deliberately — a redirected child holds the
+            // pipe write-ends open, so a blocked pipe read cannot be interrupted
+            // by a token; killing the process is what closes the pipes.
+            var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+            var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+
+            try
+            {
+                // WaitForExitAsync waits on the process-exit event, not a pipe
+                // read, so it honors the token — and a process that exits cleanly
+                // completes it normally even if the deadline trips a moment later,
+                // so a finished command is never mislabelled as a timeout.
+                await process.WaitForExitAsync(linkedCts.Token);
+            }
+            catch (OperationCanceledException)
             {
                 try
                 {
-                    ((Process)p!).Kill(entireProcessTree: true);
+                    process.Kill(entireProcessTree: true);
                 }
-                catch (InvalidOperationException)
+                catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
                 {
-                    // Process already exited between cancellation and kill — expected TOCTOU race
-                    Debug.WriteLine("Process already exited during cancellation cleanup");
+                    // Already exited (TOCTOU race), or the OS refused the kill.
+                    Debug.WriteLine($"shell_execute: process kill skipped — {ex.Message}");
                 }
-            }, process))
-            {
-                var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-                var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
-                outputBuilder.Append(await stdoutTask);
-                errorBuilder.Append(await stderrTask);
+                // The kill closes the pipes, so the reads now drain to EOF.
+                await Task.WhenAll(stdoutTask, stderrTask);
 
-                await process.WaitForExitAsync(CancellationToken.None);
-            }
-
-            if (linkedCts.IsCancellationRequested)
-            {
                 return timeoutCts.IsCancellationRequested
                     ? $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."
                     : "Error: Command cancelled.";
             }
+
+            outputBuilder.Append(await stdoutTask);
+            errorBuilder.Append(await stderrTask);
 
             var result = new StringBuilder();
             if (outputBuilder.Length > 0)

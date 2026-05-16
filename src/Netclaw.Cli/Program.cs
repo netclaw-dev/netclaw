@@ -1028,14 +1028,7 @@ static async Task RunAsync(string[] args)
     }
 
     var app = webBuilder.Build();
-
-    // chat/sessions register a Termina UI (carries TerminaApplication in DI);
-    // headless does not. Guard the TUI hosts for a real terminal; the headless
-    // host streams to stdout and runs fine without one.
-    if (app.Services.GetService<TerminaApplication>() is not null)
-        await RunTerminaHostAsync(app);
-    else
-        await app.RunAsync();
+    await RunTerminaHostAsync(app);
 }
 
 static void WriteCrashLog(Exception ex)
@@ -1043,18 +1036,14 @@ static void WriteCrashLog(Exception ex)
     CrashLogWriter.Write(ex, "CLI");
 }
 
-// Canonical launch path for every Termina-backed host. Resolving
-// TerminaApplication is the strongly-typed proof that this host drives an
-// interactive terminal UI (every Termina command registers it via AddTermina);
-// it also fails loudly if a caller wired a "Termina command" without AddTermina.
+// Canonical launch path for CLI hosts. A host that registered a Termina UI (via
+// AddTermina, which also registers TerminaApplication) drives an interactive
+// terminal: spawned by shell_execute or fed piped stdin it would render but
+// never receive a quit key — an un-killable subprocess. Fail fast in that case.
+// Non-Termina hosts (headless mode) carry no TerminaApplication and run unguarded.
 static async Task RunTerminaHostAsync(IHost host)
 {
-    _ = host.Services.GetRequiredService<TerminaApplication>();
-
-    // A Termina UI is unusable without a real terminal. When stdin is redirected
-    // (piped, or spawned by shell_execute) Termina would launch but never receive
-    // a quit key — an un-killable subprocess. Fail fast instead.
-    if (Console.IsInputRedirected)
+    if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
     {
         Console.Error.WriteLine(
             "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
