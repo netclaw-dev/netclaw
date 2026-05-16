@@ -19,7 +19,7 @@ public sealed record MessageSource
 {
     public sealed record AdoptedContextEntry(
         string MessageId,
-        string SenderId,
+        Protocol.SenderId SenderId,
         DateTimeOffset Timestamp,
         string AuthorityAtInclusion);
 
@@ -31,7 +31,7 @@ public sealed record MessageSource
     /// <summary>
     /// Identity of the sender within the channel (e.g. Slack user ID, "local-user").
     /// </summary>
-    public required string SenderId { get; init; }
+    public required Protocol.SenderId SenderId { get; init; }
 
     /// <summary>
     /// Optional channel-specific identifier (e.g. Slack channel ID).

@@ -19,7 +19,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
     private readonly IApprovalChannel _channel;
     private readonly Action<ToolInteractionRequest> _emitRequest;
     private readonly SessionId _sessionId;
-    private readonly string? _requesterSenderId;
+    private readonly SenderId? _requesterSenderId;
     private readonly PrincipalClassification? _requesterPrincipal;
     private readonly bool _hasAdoptedContext;
     private readonly bool _hasThirdPartyAdoptedContext;
@@ -29,7 +29,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         IApprovalChannel channel,
         Action<ToolInteractionRequest> emitRequest,
         SessionId sessionId,
-        string? requesterSenderId,
+        SenderId? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
         bool hasAdoptedContext,
         bool hasThirdPartyAdoptedContext,

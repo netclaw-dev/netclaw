@@ -241,7 +241,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             Source: new MessageSource
             {
                 ChannelType = ChannelType.Discord,
-                SenderId = "system",
+                SenderId = new SenderId("system"),
                 MessageId = "reminder-1",
                 Audience = TrustAudience.Team,
                 Boundary = TrustBoundary.TrustedInstance,
@@ -275,7 +275,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             Source: new MessageSource
             {
                 ChannelType = ChannelType.Discord,
-                SenderId = "system",
+                SenderId = new SenderId("system"),
                 MessageId = "reminder-1",
                 Audience = TrustAudience.Team,
                 Boundary = TrustBoundary.TrustedInstance,

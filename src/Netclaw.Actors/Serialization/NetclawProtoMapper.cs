@@ -253,7 +253,7 @@ internal static class NetclawProtoMapper
             ProjectionPersisted = r.ProjectionPersisted
         };
         if (r.AuthorizerSenderId is not null)
-            proto.AuthorizerSenderId = r.AuthorizerSenderId;
+            proto.AuthorizerSenderId = r.AuthorizerSenderId.Value.Value;
         if (r.LowerBound is not null)
             proto.LowerBound = r.LowerBound;
         if (r.UpperBound is not null)
@@ -273,7 +273,7 @@ internal static class NetclawProtoMapper
         return new SessionSnapshot.AdoptedContextSnapshotRecord
         {
             AuthorizedMessageId = proto.AuthorizedMessageId,
-            AuthorizerSenderId = proto.HasAuthorizerSenderId ? proto.AuthorizerSenderId : null,
+            AuthorizerSenderId = proto.HasAuthorizerSenderId ? new SenderId(proto.AuthorizerSenderId) : null,
             LowerBound = proto.HasLowerBound ? proto.LowerBound : null,
             UpperBound = proto.HasUpperBound ? proto.UpperBound : null,
             Projection = proto.Projection,
@@ -289,7 +289,7 @@ internal static class NetclawProtoMapper
         ToAdoptedContextSnapshotMessage(SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage m) => new()
     {
         MessageId = m.MessageId,
-        SenderId = m.SenderId,
+        SenderId = m.SenderId.Value,
         TimestampMs = m.TimestampMs,
         AuthorityAtInclusion = m.AuthorityAtInclusion
     };
@@ -299,7 +299,7 @@ internal static class NetclawProtoMapper
             Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord.Types.AdoptedContextSnapshotMessage proto) => new()
     {
         MessageId = proto.MessageId,
-        SenderId = proto.SenderId,
+        SenderId = new SenderId(proto.SenderId),
         TimestampMs = proto.TimestampMs,
         AuthorityAtInclusion = proto.AuthorityAtInclusion
     };
@@ -436,7 +436,7 @@ internal static class NetclawProtoMapper
             RecordedAtMs = evt.RecordedAtMs
         };
         if (evt.AuthorizerSenderId is not null)
-            proto.AuthorizerSenderId = evt.AuthorizerSenderId;
+            proto.AuthorizerSenderId = evt.AuthorizerSenderId.Value.Value;
         if (evt.LowerBound is not null)
             proto.LowerBound = evt.LowerBound;
         if (evt.UpperBound is not null)
@@ -456,7 +456,7 @@ internal static class NetclawProtoMapper
         {
             SessionId = FromProto(proto.SessionId),
             AuthorizedMessageId = proto.AuthorizedMessageId,
-            AuthorizerSenderId = proto.HasAuthorizerSenderId ? proto.AuthorizerSenderId : null,
+            AuthorizerSenderId = proto.HasAuthorizerSenderId ? new SenderId(proto.AuthorizerSenderId) : null,
             LowerBound = proto.HasLowerBound ? proto.LowerBound : null,
             UpperBound = proto.HasUpperBound ? proto.UpperBound : null,
             Projection = proto.Projection,
@@ -473,7 +473,7 @@ internal static class NetclawProtoMapper
         AdoptedContextRecorded.AdoptedMessageRecord m) => new()
     {
         MessageId = m.MessageId,
-        SenderId = m.SenderId,
+        SenderId = m.SenderId.Value,
         TimestampMs = m.TimestampMs,
         AuthorityAtInclusion = m.AuthorityAtInclusion
     };
@@ -482,7 +482,7 @@ internal static class NetclawProtoMapper
         Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto proto) => new()
     {
         MessageId = proto.MessageId,
-        SenderId = proto.SenderId,
+        SenderId = new SenderId(proto.SenderId),
         TimestampMs = proto.TimestampMs,
         AuthorityAtInclusion = proto.AuthorityAtInclusion
     };

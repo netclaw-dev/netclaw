@@ -131,7 +131,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 ThreadTs: threadTs,
                 EventId: message.EventId,
                 TurnId: turnId,
-                SenderId: message.UserId?.Value ?? "slack-user",
+                SenderId: new Netclaw.Actors.Protocol.SenderId(message.UserId?.Value ?? "slack-user"),
                 Audience: aclDecision.Audience,
                 Principal: aclDecision.Principal,
                 Provenance: aclDecision.Provenance,

@@ -169,7 +169,7 @@ internal static class SessionToolExecutionPipeline
                 {
                     SessionId = sessionId,
                     TimestampMs = timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    AgentName = info.AgentName,
+                    AgentName = new SubAgents.AgentName(info.AgentName),
                     Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Started,
                     ToolCount = info.ToolCount,
                     Success = info.Success,
@@ -192,7 +192,7 @@ internal static class SessionToolExecutionPipeline
                 completedRuns.Add(new CompletedSubAgentRun
                 {
                     RunId = info.RunId,
-                    AgentName = info.AgentName,
+                    AgentName = new SubAgents.AgentName(info.AgentName),
                     Success = info.Success,
                     Duration = info.Duration,
                     FindingsCount = info.Findings.Count,
@@ -209,7 +209,7 @@ internal static class SessionToolExecutionPipeline
                     acceptedFindings.Add(new AcceptedSubAgentFinding
                     {
                         RunId = info.RunId,
-                        AgentName = info.AgentName,
+                        AgentName = new SubAgents.AgentName(info.AgentName),
                         Duration = info.Duration,
                         Shape = finding.Shape.ToWireValue(),
                         Title = finding.Title,

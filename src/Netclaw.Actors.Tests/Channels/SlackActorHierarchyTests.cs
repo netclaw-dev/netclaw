@@ -76,12 +76,12 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             new SlackThreadTs("401.1"),
             new Netclaw.Tools.ToolCallId("call-1"),
             ApprovalOptionKeys.ApproveOnce,
-            "U1"));
+            new SenderId("U1")));
 
         var routed = await sink.ExpectMsgAsync<SlackApprovalResponse>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("call-1", routed.CallId.Value);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, routed.SelectedKey);
-        Assert.Equal("U1", routed.SenderId);
+        Assert.Equal("U1", routed.SenderId.Value);
     }
 
     // Regression for #979: when the per-thread binding has been passivated (e.g., the
@@ -107,13 +107,13 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
             new SlackThreadTs("999.1"),
             new Netclaw.Tools.ToolCallId("call-cold"),
             ApprovalOptionKeys.ApproveOnce,
-            "U1"));
+            new SenderId("U1")));
 
         var routed = await sink.ExpectMsgAsync<SlackApprovalResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("call-cold", routed.CallId.Value);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, routed.SelectedKey);
-        Assert.Equal("U1", routed.SenderId);
+        Assert.Equal("U1", routed.SenderId.Value);
     }
 
     [Fact]
@@ -432,7 +432,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
     private static MessageSource ReminderSource(string reminderId) => new()
     {
         ChannelType = ChannelType.Slack,
-        SenderId = "reminder-system",
+        SenderId = new SenderId("reminder-system"),
         Audience = TrustAudience.Personal,
         Boundary = TrustBoundary.TrustedInstance,
         Principal = PrincipalClassification.VerifiedAutomation,

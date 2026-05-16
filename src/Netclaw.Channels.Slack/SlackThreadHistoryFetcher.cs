@@ -259,7 +259,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         return new ChannelInput
         {
-            SenderId = senderId,
+            SenderId = new Netclaw.Actors.Protocol.SenderId(senderId),
             ChannelId = channelId.Value,
             MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
             Audience = audience,

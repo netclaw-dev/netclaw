@@ -21,7 +21,7 @@ public sealed class ClaimsPrincipalMapperTests
 
         Assert.Equal(PrincipalClassification.UntrustedExternal, result.Principal);
         Assert.Equal(TransportAuthenticity.Unknown, result.Transport);
-        Assert.Equal("unknown", result.SenderId);
+        Assert.Equal("unknown", result.SenderId.Value);
     }
 
     [Fact]
@@ -39,7 +39,7 @@ public sealed class ClaimsPrincipalMapperTests
 
         Assert.Equal(PrincipalClassification.Operator, result.Principal);
         Assert.Equal(TransportAuthenticity.LocalProcess, result.Transport);
-        Assert.Equal("local", result.SenderId);
+        Assert.Equal("local", result.SenderId.Value);
     }
 
     [Fact]
@@ -57,7 +57,7 @@ public sealed class ClaimsPrincipalMapperTests
 
         Assert.Equal(PrincipalClassification.Operator, result.Principal);
         Assert.Equal(TransportAuthenticity.Verified, result.Transport);
-        Assert.Equal("my-laptop", result.SenderId);
+        Assert.Equal("my-laptop", result.SenderId.Value);
     }
 
     [Fact]
@@ -70,7 +70,7 @@ public sealed class ClaimsPrincipalMapperTests
 
         Assert.Equal(PrincipalClassification.UntrustedExternal, result.Principal);
         Assert.Equal(TransportAuthenticity.Unknown, result.Transport);
-        Assert.Equal("unknown", result.SenderId);
+        Assert.Equal("unknown", result.SenderId.Value);
     }
 
     [Fact]
@@ -88,6 +88,6 @@ public sealed class ClaimsPrincipalMapperTests
 
         Assert.Equal(PrincipalClassification.UntrustedExternal, result.Principal);
         Assert.Equal(TransportAuthenticity.Unknown, result.Transport);
-        Assert.Equal("my-device", result.SenderId);
+        Assert.Equal("my-device", result.SenderId.Value);
     }
 }

@@ -18,7 +18,7 @@ public sealed class ClaimsPrincipalMapper
     private static readonly ConnectionIdentity UnauthenticatedFallback = new(
         PrincipalClassification.UntrustedExternal,
         TransportAuthenticity.Unknown,
-        "unknown");
+        new Protocol.SenderId("unknown"));
 
     /// <summary>
     /// Converts a <see cref="ClaimsPrincipal"/> to a <see cref="ConnectionIdentity"/>.
@@ -41,6 +41,6 @@ public sealed class ClaimsPrincipalMapper
             ? t
             : TransportAuthenticity.Unknown;
 
-        return new ConnectionIdentity(principalClassification, transportAuthenticity, senderId);
+        return new ConnectionIdentity(principalClassification, transportAuthenticity, new Protocol.SenderId(senderId));
     }
 }

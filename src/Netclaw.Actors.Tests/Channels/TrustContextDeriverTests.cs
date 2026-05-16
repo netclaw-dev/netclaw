@@ -41,7 +41,7 @@ public sealed class TrustContextDeriverTests
         var result = deriver.Derive(new MessageSource
         {
             ChannelType = ChannelType.Slack,
-            SenderId = "U123",
+            SenderId = new Netclaw.Actors.Protocol.SenderId("U123"),
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             Principal = PrincipalClassification.TrustedInternal,
@@ -68,7 +68,7 @@ public sealed class TrustContextDeriverTests
         var result = deriver.Derive(new MessageSource
         {
             ChannelType = ChannelType.SignalR,
-            SenderId = "local-user",
+            SenderId = new Netclaw.Actors.Protocol.SenderId("local-user"),
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal,
             Principal = PrincipalClassification.Operator,
@@ -96,7 +96,7 @@ public sealed class TrustContextDeriverTests
         var result = deriver.Derive(new MessageSource
         {
             ChannelType = ChannelType.Slack,
-            SenderId = "U123",
+            SenderId = new Netclaw.Actors.Protocol.SenderId("U123"),
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.TrustedInstance,
             Principal = PrincipalClassification.TrustedInternal,

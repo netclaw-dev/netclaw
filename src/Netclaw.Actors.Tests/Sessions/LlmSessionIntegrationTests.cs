@@ -125,7 +125,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             Source = new MessageSource
             {
                 ChannelType = ChannelType.Webhook,
-                SenderId = "webhook:test",
+                SenderId = new SenderId("webhook:test"),
                 ChannelId = "github-issues",
                 MessageId = "delivery-1",
                 TurnId = "delivery-1",
@@ -175,7 +175,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             Source = new MessageSource
             {
                 ChannelType = ChannelType.Slack,
-                SenderId = "U123",
+                SenderId = new SenderId("U123"),
                 ChannelId = "C1234567890",
                 MessageId = "evt-1",
                 TurnId = "turn-1",
@@ -1673,7 +1673,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     private MessageSource ReminderSource(string reminderId) => new()
     {
         ChannelType = ChannelType.Slack,
-        SenderId = "reminder-system",
+        SenderId = new SenderId("reminder-system"),
         ChannelId = null,
         Audience = TrustAudience.Personal,
         Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),

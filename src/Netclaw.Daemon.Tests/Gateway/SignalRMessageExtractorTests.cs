@@ -23,7 +23,7 @@ public sealed class SignalRMessageExtractorTests
     private static readonly MessageSource EmptySource = new()
     {
         ChannelType = ChannelType.SignalR,
-        SenderId = "test",
+        SenderId = new SenderId("test"),
         Audience = TrustAudience.Public,
         Boundary = TrustBoundary.Public,
         Principal = PrincipalClassification.UntrustedExternal,

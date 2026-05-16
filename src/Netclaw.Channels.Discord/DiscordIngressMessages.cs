@@ -45,7 +45,7 @@ internal sealed class PendingApprovalRequest(ToolInteractionRequest request)
     public ToolCallId CallId => Request.CallId;
 
     public DiscordUserId? RequesterSenderId { get; } =
-        request.RequesterSenderId is not null ? new DiscordUserId(request.RequesterSenderId) : null;
+        request.RequesterSenderId is not null ? new DiscordUserId(request.RequesterSenderId.Value.Value) : null;
 
     public PrincipalClassification? RequesterPrincipal => Request.RequesterPrincipal;
     public DiscordMessageId? PromptMessageId { get; set; }

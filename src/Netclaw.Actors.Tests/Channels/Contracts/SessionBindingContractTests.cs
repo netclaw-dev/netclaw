@@ -331,7 +331,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-2"),
                 ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "rm -rf /tmp",
-                RequesterSenderId = "user-1",
+                RequesterSenderId = new SenderId("user-1"),
                 Options =
                 [
                     new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
@@ -388,7 +388,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Single(feedback);
             Assert.Equal("call-cold", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
-            Assert.Equal("user-1", feedback[0].SenderId);
+            Assert.Equal("user-1", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
     }
 
@@ -407,7 +407,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-3"),
                 ToolName = new Netclaw.Tools.ToolName("write_file"),
                 DisplayText = "write /etc/hosts",
-                RequesterSenderId = "user-1",
+                RequesterSenderId = new SenderId("user-1"),
                 Options =
                 [
                     new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
@@ -576,7 +576,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-auto-1"),
                 ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "scheduled backup",
-                RequesterSenderId = "reminder-system",
+                RequesterSenderId = new SenderId("reminder-system"),
                 RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
                 Options =
                 [
@@ -602,7 +602,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Single(feedback);
             Assert.Equal("call-auto-1", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
-            Assert.Equal("random-human-user", feedback[0].SenderId);
+            Assert.Equal("random-human-user", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
     }
 
@@ -623,7 +623,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-wr-1"),
                 ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "rm -rf /tmp",
-                RequesterSenderId = "user-A",
+                RequesterSenderId = new SenderId("user-A"),
                 Options =
                 [
                     new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
@@ -672,7 +672,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-wr-2"),
                 ToolName = new Netclaw.Tools.ToolName("write_file"),
                 DisplayText = "write /etc/passwd",
-                RequesterSenderId = "user-A",
+                RequesterSenderId = new SenderId("user-A"),
                 Options =
                 [
                     new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
@@ -849,8 +849,8 @@ public abstract class SessionBindingContractTests : TestKit
         var items = CreateHistoryItems(2);
         historyFetcher.SetHistory(
         [
-            items[0] with { SenderId = "user-1" },
-            items[1] with { SenderId = "user-1" }
+            items[0] with { SenderId = new SenderId("user-1") },
+            items[1] with { SenderId = new SenderId("user-1") }
         ]);
 
         var pipeline = new RecordingSessionPipeline(_ =>

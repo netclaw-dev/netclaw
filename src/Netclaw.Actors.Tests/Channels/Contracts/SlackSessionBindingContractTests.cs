@@ -55,7 +55,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             ThreadTs: new SlackThreadTs("1000.1"),
             EventId: new SlackEventId($"evt-{Guid.NewGuid():N}"),
             TurnId: Guid.NewGuid().ToString("N"),
-            SenderId: senderId,
+            SenderId: new SenderId(senderId),
             Audience: TrustAudience.Team,
             Principal: PrincipalClassification.UntrustedExternal,
             Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
@@ -71,7 +71,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             ThreadTs: new SlackThreadTs("1000.1"),
             CallId: new Netclaw.Tools.ToolCallId(callId),
             SelectedKey: selectedKey,
-            SenderId: senderId);
+            SenderId: new SenderId(senderId));
 
     protected override IReadOnlyList<string> GetPostedTexts()
         => _replyClient.Posts.Select(p => p.Text).ToList();
@@ -114,7 +114,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         {
             items.Add(new ChannelInput
             {
-                SenderId = $"user-history-{i}",
+                SenderId = new SenderId($"user-history-{i}"),
                 ChannelId = "C-test",
                 MessageId = $"C-test:{900 + i}.1",
                 Contents = [new TextContent($"history message {i}")],

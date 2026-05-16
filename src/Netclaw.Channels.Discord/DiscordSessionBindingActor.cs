@@ -336,7 +336,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         // the historical context it needs.
         var input = new ChannelInput
         {
-            SenderId = message.SenderId.Value,
+            SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value),
             ChannelId = message.ChannelId.Value,
             MessageId = message.EventId.Value,
             Audience = message.Audience,
@@ -574,7 +574,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             switch (classifications[i].Outcome)
             {
                 case ClassificationOutcome.Allow:
-                    var authority = IsAuthorizedSender(candidates[i].SenderId)
+                    var authority = IsAuthorizedSender(candidates[i].SenderId.Value)
                         ? AdoptedMessageAuthority.Authorized
                         : AdoptedMessageAuthority.Pending;
                     gap.Add(new AdoptedContextMessage(candidates[i], authority));
@@ -612,14 +612,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
             adoptedContext,
             triggerInput.Contents,
-            triggerInput.SenderId,
+            triggerInput.SenderId.Value,
             triggerInput.ReceivedAt);
 
         return triggerInput with
         {
             Contents = merged.Contents,
             HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId, StringComparison.Ordinal)),
+                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
             AdoptedSpeakerIds = merged.SpeakerIds,
             AdoptedContextProjection = merged.Projection,
             AdoptedContextLowerBound = cursor?.ToString(),
@@ -723,7 +723,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             SessionId = _sessionId,
             CallId = pending!.CallId,
             SelectedKey = selectedKey,
-            SenderId = message.SenderId.Value
+            SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
         await TryResolveApprovalPromptAsync(pending!, selectedKey, message.SenderId.Value);
@@ -755,7 +755,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             SessionId = _sessionId,
             CallId = message.CallId,
             SelectedKey = message.SelectedKey,
-            SenderId = message.SenderId.Value
+            SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
         if (pending is not null)
@@ -1099,7 +1099,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 SessionId = _sessionId,
                 CallId = callId,
                 SelectedKey = ApprovalOptionKeys.Deny,
-                SenderId = "system"
+                SenderId = new Netclaw.Actors.Protocol.SenderId("system")
             });
         }
         catch (Exception ex)

@@ -149,7 +149,7 @@ public sealed class DaemonClientMappingTests
         {
             SessionId = new SessionId("signalr/test"),
             TimestampMs = 500,
-            AgentName = "memory-curator",
+            AgentName = new AgentName("memory-curator"),
             Phase = SubAgentPhase.Started,
             ToolCount = 5
         };
@@ -163,7 +163,7 @@ public sealed class DaemonClientMappingTests
 
         var roundTripped = DaemonClient.FromDto(dto);
         var result = Assert.IsType<SubAgentOutput>(roundTripped);
-        Assert.Equal("memory-curator", result.AgentName);
+        Assert.Equal("memory-curator", result.AgentName.Value);
         Assert.Equal(SubAgentPhase.Started, result.Phase);
         Assert.Equal(5, result.ToolCount);
     }
@@ -175,7 +175,7 @@ public sealed class DaemonClientMappingTests
         {
             SessionId = new SessionId("signalr/test"),
             TimestampMs = 600,
-            AgentName = "memory-retriever",
+            AgentName = new AgentName("memory-retriever"),
             Phase = SubAgentPhase.Completed,
             Success = true,
             Duration = TimeSpan.FromSeconds(12.3)
@@ -195,7 +195,7 @@ public sealed class DaemonClientMappingTests
 
         var roundTripped = DaemonClient.FromDto(enrichedDto);
         var result = Assert.IsType<SubAgentOutput>(roundTripped);
-        Assert.Equal("memory-retriever", result.AgentName);
+        Assert.Equal("memory-retriever", result.AgentName.Value);
         Assert.Equal(SubAgentPhase.Completed, result.Phase);
         Assert.True(result.Success);
         Assert.Equal(12300, result.Duration.TotalMilliseconds, 1);
@@ -264,7 +264,7 @@ public sealed class DaemonClientMappingTests
             CallId = new Netclaw.Tools.ToolCallId("call-1"),
             ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = "git push origin main",
-            RequesterSenderId = "device-1",
+            RequesterSenderId = new SenderId("device-1"),
             HasAdoptedContext = true,
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["device-1", "device-2"],
@@ -294,7 +294,7 @@ public sealed class DaemonClientMappingTests
         Assert.Equal("call-1", result.CallId.Value);
         Assert.Equal("shell_execute", result.ToolName.Value);
         Assert.Equal("git push origin main", result.DisplayText);
-        Assert.Equal("device-1", result.RequesterSenderId);
+        Assert.Equal("device-1", result.RequesterSenderId?.Value);
         Assert.True(result.HasAdoptedContext);
         Assert.True(result.HasThirdPartyAdoptedContext);
         Assert.Equal(["device-1", "device-2"], result.AdoptedSpeakerIds);

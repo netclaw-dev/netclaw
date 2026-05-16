@@ -41,7 +41,7 @@ public sealed class SlackApprovalBlockBuilderTests
             CallId = new Netclaw.Tools.ToolCallId("call-1"),
             ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = command,
-            RequesterSenderId = "device-1",
+            RequesterSenderId = new SenderId("device-1"),
             Patterns = verbs,
             CandidateVerbs = verbs,
             Cwd = cwd,

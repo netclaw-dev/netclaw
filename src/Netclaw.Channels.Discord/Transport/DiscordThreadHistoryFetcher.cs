@@ -25,7 +25,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
 
     internal sealed record HistoricalMessage(
         string MessageId,
-        string SenderId,
+        SenderId SenderId,
         bool IsBot,
         string Text,
         DateTimeOffset Timestamp,
@@ -496,7 +496,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
     private static HistoricalMessage ToHistoricalMessage(IMessage message)
         => new(
             MessageId: message.Id.ToString(),
-            SenderId: message.Author.Id.ToString(),
+            SenderId: new Netclaw.Actors.Protocol.SenderId(message.Author.Id.ToString()),
             IsBot: message.Author.IsBot,
             Text: message.Content ?? string.Empty,
             Timestamp: message.Timestamp,

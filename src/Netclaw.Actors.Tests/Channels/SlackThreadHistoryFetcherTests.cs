@@ -105,7 +105,7 @@ public sealed class SlackThreadHistoryFetcherTests
         Assert.Equal(2, result.Count);
 
         var rootEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "proactive post (root)"));
-        Assert.Equal("B_NETCLAW", rootEntry.SenderId);
+        Assert.Equal("B_NETCLAW", rootEntry.SenderId.Value);
         Assert.Equal("C1:1000.0", rootEntry.MessageId);
 
         Assert.Contains(result, r => r.Contents.OfType<TextContent>().Any(t => t.Text == "human reply"));
@@ -180,7 +180,7 @@ public sealed class SlackThreadHistoryFetcherTests
         var result = await CreateFetcher().FetchThreadHistoryAsync(new SessionId("C1/1000.0"), TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(result);
-        Assert.Equal("B_BOT_NO_USER", entry.SenderId);
+        Assert.Equal("B_BOT_NO_USER", entry.SenderId.Value);
     }
 
     [Fact]
@@ -200,7 +200,7 @@ public sealed class SlackThreadHistoryFetcherTests
         var result = await CreateFetcher().FetchThreadHistoryAsync(new SessionId("C1/1000.0"), TestContext.Current.CancellationToken);
 
         var entry = Assert.Single(result);
-        Assert.Equal("U_BOT_AS_USER", entry.SenderId);
+        Assert.Equal("U_BOT_AS_USER", entry.SenderId.Value);
     }
 
     [Fact]

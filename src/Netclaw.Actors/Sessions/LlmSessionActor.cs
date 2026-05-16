@@ -583,7 +583,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Payload: new MemoryCheckpointPayload(
                         SessionId: _sessionId.Value,
                         TriggerType: "subagent-findings",
-                        Source: finding.AgentName,
+                        Source: finding.AgentName.Value,
                         Content: finding.Content,
                         UserContent: null,
                         AssistantContent: finding.Content,
@@ -790,7 +790,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.Patterns,
                 msg.CandidateVerbs,
                 CurrentTurnAudience(),
-                msg.RequesterSenderId,
+                msg.RequesterSenderId?.Value,
                 msg.RequesterPrincipal,
                 msg.HasAdoptedContext,
                 msg.HasThirdPartyAdoptedContext,
@@ -812,7 +812,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            if (!ApprovalButtonValueCodec.CanApprove(pending.RequesterPrincipal, pending.RequesterSenderId, msg.SenderId))
+            if (!ApprovalButtonValueCodec.CanApprove(pending.RequesterPrincipal, pending.RequesterSenderId, msg.SenderId.Value))
             {
                 _log.Warning(
                     "Ignoring tool interaction response for call {CallId} from sender {SenderId}; expected {ExpectedSenderId}",
@@ -1949,7 +1949,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TurnLog().Info(
             "turn_received channel={ChannelType} sender={SenderId} hasMedia={HasMedia} textChars={TextLength}",
             cmd.Source?.ChannelType.ToWireValue() ?? "unknown",
-            cmd.Source?.SenderId ?? "unknown",
+            cmd.Source?.SenderId.Value ?? "unknown",
             mediaRefs.Count > 0,
             userContent.Length);
 
@@ -2796,7 +2796,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 self.Tell(new RoutedSkillSubAgentActivity(
                     _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    info.AgentName,
+                    new AgentName(info.AgentName),
                     info.IsStarted ? SubAgentPhase.Started : SubAgentPhase.Completed,
                     info.ToolCount,
                     info.Success,
@@ -3373,7 +3373,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private sealed record RoutedSkillSubAgentActivity(
         long TimestampMs,
-        string AgentName,
+        AgentName AgentName,
         SubAgentPhase Phase,
         int ToolCount,
         bool? Success,

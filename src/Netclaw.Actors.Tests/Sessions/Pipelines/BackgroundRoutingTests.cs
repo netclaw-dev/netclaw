@@ -249,7 +249,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
     private static MessageSource TestMessageSource() => new()
     {
         ChannelType = ChannelType.Tui,
-        SenderId = "test-user",
+        SenderId = new SenderId("test-user"),
         Audience = TrustAudience.Personal,
         Boundary = TrustBoundary.Personal,
         Principal = PrincipalClassification.TrustedInternal,

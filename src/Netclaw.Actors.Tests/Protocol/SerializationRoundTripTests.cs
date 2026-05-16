@@ -384,7 +384,7 @@ public sealed class SerializationRoundTripTests : TestKit
         {
             SessionId = new SessionId("C99999/1708531200.000100"),
             AuthorizedMessageId = "msg-42",
-            AuthorizerSenderId = "U12345",
+            AuthorizerSenderId = new SenderId("U12345"),
             LowerBound = "msg-40",
             UpperBound = "msg-42",
             Projection = "Alice said hello; Bob replied",
@@ -398,7 +398,7 @@ public sealed class SerializationRoundTripTests : TestKit
                 new AdoptedContextRecorded.AdoptedMessageRecord
                 {
                     MessageId = "msg-41",
-                    SenderId = "U67890",
+                    SenderId = new SenderId("U67890"),
                     TimestampMs = 1708531190000,
                     AuthorityAtInclusion = "verified"
                 }
@@ -409,7 +409,7 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(original.SessionId, result.SessionId);
         Assert.Equal("msg-42", result.AuthorizedMessageId);
-        Assert.Equal("U12345", result.AuthorizerSenderId);
+        Assert.Equal("U12345", result.AuthorizerSenderId?.Value);
         Assert.Equal("msg-40", result.LowerBound);
         Assert.Equal("msg-42", result.UpperBound);
         Assert.Equal("Alice said hello; Bob replied", result.Projection);
@@ -420,7 +420,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(1708531200000, result.RecordedAtMs);
         var msg = Assert.Single(result.Messages);
         Assert.Equal("msg-41", msg.MessageId);
-        Assert.Equal("U67890", msg.SenderId);
+        Assert.Equal("U67890", msg.SenderId.Value);
         Assert.Equal(1708531190000, msg.TimestampMs);
         Assert.Equal("verified", msg.AuthorityAtInclusion);
     }
@@ -647,6 +647,62 @@ public sealed class SerializationRoundTripTests : TestKit
 
         var result = RoundTrip(wrapped);
         Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), result.ActiveBackgroundJobs[0].JobId);
+    }
+
+    [Fact]
+    public void AdoptedContextRecorded_sender_id_wrap_is_byte_identical_to_raw_primitive_proto()
+    {
+        // Pass 7c wraps the adopted-context SenderId / AuthorizerSenderId fields
+        // in the SenderId value object. The journal bytes must stay identical to
+        // the pre-wrap raw-string representation so a daemon running the new
+        // binary can replay events written by the old one.
+        var wrapped = new AdoptedContextRecorded
+        {
+            SessionId = new SessionId("C99999/1708531200.000100"),
+            AuthorizedMessageId = "msg-42",
+            AuthorizerSenderId = new SenderId("U12345"),
+            Projection = "Alice said hello",
+            HasAdoptedContext = true,
+            ProjectionPersisted = true,
+            RecordedAtMs = 1708531200000,
+            Messages =
+            [
+                new AdoptedContextRecorded.AdoptedMessageRecord
+                {
+                    MessageId = "msg-41",
+                    SenderId = new SenderId("U67890"),
+                    TimestampMs = 1708531190000,
+                    AuthorityAtInclusion = "verified"
+                }
+            ]
+        };
+
+        var expected = new Serialization.Proto.AdoptedContextRecordedProto
+        {
+            SessionId = new Serialization.Proto.SessionIdProto { Value = "C99999/1708531200.000100" },
+            AuthorizedMessageId = "msg-42",
+            AuthorizerSenderId = "U12345",
+            Projection = "Alice said hello",
+            HasAdoptedContext = true,
+            ProjectionPersisted = true,
+            RecordedAtMs = 1708531200000,
+            Messages =
+            {
+                new Serialization.Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto
+                {
+                    MessageId = "msg-41",
+                    SenderId = "U67890",
+                    TimestampMs = 1708531190000,
+                    AuthorityAtInclusion = "verified"
+                }
+            }
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new SenderId("U12345"), result.AuthorizerSenderId);
+        Assert.Equal(new SenderId("U67890"), Assert.Single(result.Messages).SenderId);
     }
 
     [Fact]

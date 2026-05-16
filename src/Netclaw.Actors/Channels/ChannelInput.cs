@@ -19,7 +19,7 @@ public sealed record ChannelInput
     public sealed record AdoptedContextEntry
     {
         public required string MessageId { get; init; }
-        public required string SenderId { get; init; }
+        public required Protocol.SenderId SenderId { get; init; }
         public required DateTimeOffset Timestamp { get; init; }
         public required string AuthorityAtInclusion { get; init; }
     }
@@ -27,7 +27,7 @@ public sealed record ChannelInput
     /// <summary>
     /// Identity of the user who sent this message.
     /// </summary>
-    public required string SenderId { get; init; }
+    public required Protocol.SenderId SenderId { get; init; }
 
     /// <summary>
     /// Optional channel-specific identifier (e.g. Slack channel ID).

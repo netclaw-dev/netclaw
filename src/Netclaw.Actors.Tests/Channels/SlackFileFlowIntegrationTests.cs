@@ -711,7 +711,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-1"),
                 ToolName = new Netclaw.Tools.ToolName("shell_execute"),
                 DisplayText = "git push origin main",
-                RequesterSenderId = "U123",
+                RequesterSenderId = new SenderId("U123"),
                 Patterns = ["git push"],
                 Options =
                 [
@@ -762,7 +762,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ThreadTs: new SlackThreadTs("9050.1"),
             EventId: new SlackEventId("D7:approval-reply"),
             TurnId: "approval-turn",
-            SenderId: "U123",
+            SenderId: new SenderId("U123"),
             Audience: TrustAudience.Personal,
             Principal: PrincipalClassification.Operator,
             Provenance: new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public),
@@ -775,7 +775,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-1", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
-            Assert.Equal("U123", response.SenderId);
+            Assert.Equal("U123", response.SenderId.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(() =>
@@ -802,7 +802,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-blocks"),
                 ToolName = new Netclaw.Tools.ToolName("shell_execute"),
                 DisplayText = "git push origin dev",
-                RequesterSenderId = "U123",
+                RequesterSenderId = new SenderId("U123"),
                 Patterns = ["git push"],
                 Options =
                 [
@@ -874,7 +874,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-button"),
                 ToolName = new Netclaw.Tools.ToolName("shell_execute"),
                 DisplayText = "git push origin main",
-                RequesterSenderId = "U123",
+                RequesterSenderId = new SenderId("U123"),
                 Patterns = ["git push"],
                 Options =
                 [
@@ -924,7 +924,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new SlackThreadTs("9060.1"),
             new Netclaw.Tools.ToolCallId("call-button"),
             ApprovalOptionKeys.ApproveSession,
-            "U123"));
+            new SenderId("U123")));
 
         await AwaitAssertAsync(() =>
         {
@@ -932,7 +932,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-button", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveSession, response.SelectedKey);
-            Assert.Equal("U123", response.SenderId);
+            Assert.Equal("U123", response.SenderId.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(() =>
@@ -991,7 +991,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new SlackThreadTs("9061.1"),
             new Netclaw.Tools.ToolCallId("call-cold-binding"),
             ApprovalOptionKeys.ApproveOnce,
-            "U123"));
+            new SenderId("U123")));
 
         await AwaitAssertAsync(() =>
         {
@@ -999,7 +999,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-cold-binding", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
-            Assert.Equal("U123", response.SenderId);
+            Assert.Equal("U123", response.SenderId.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);

@@ -66,7 +66,7 @@ public sealed class SubAgentSpawner
             {
                 Success = false,
                 Output = $"Cannot spawn subagent '{profile.Name}': no session context available.",
-                AgentName = profile.Name
+                AgentName = new AgentName(profile.Name)
             };
         }
 
@@ -78,13 +78,13 @@ public sealed class SubAgentSpawner
             {
                 Success = false,
                 Output = $"Cannot spawn subagent '{profile.Name}': none of its tools are currently available.",
-                AgentName = profile.Name
+                AgentName = new AgentName(profile.Name)
             };
         }
 
         var definition = new SubAgentDefinition
         {
-            Name = profile.Name,
+            Name = new AgentName(profile.Name),
             SystemPrompt = AppendSystemPromptOverlay(profile.SystemPrompt, systemPromptOverlay),
             Tools = tools,
             ModelRole = profile.ModelRole,
@@ -98,7 +98,7 @@ public sealed class SubAgentSpawner
         context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
         {
             RunId = runId,
-            AgentName = definition.Name,
+            AgentName = definition.Name.Value,
             IsStarted = true,
             ToolCount = tools.Count
         });
@@ -140,7 +140,7 @@ public sealed class SubAgentSpawner
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
                 RunId = runId,
-                AgentName = definition.Name,
+                AgentName = definition.Name.Value,
                 IsStarted = false,
                 Success = result.Success,
                 Duration = sw.Elapsed,
@@ -162,7 +162,7 @@ public sealed class SubAgentSpawner
             context.OnSubAgentActivity?.Invoke(new SubAgentNotificationInfo
             {
                 RunId = runId,
-                AgentName = definition.Name,
+                AgentName = definition.Name.Value,
                 IsStarted = false,
                 Success = false,
                 Duration = sw.Elapsed
@@ -173,7 +173,7 @@ public sealed class SubAgentSpawner
             {
                 Success = false,
                 Output = $"Subagent error: {ex.Message}",
-                AgentName = profile.Name
+                AgentName = new AgentName(profile.Name)
             };
         }
     }

@@ -20,7 +20,7 @@ public enum SubAgentPhase
 /// </summary>
 public sealed record SubAgentNotification
 {
-    public required string AgentName { get; init; }
+    public required AgentName AgentName { get; init; }
     public required SubAgentPhase Phase { get; init; }
 
     /// <summary>Number of tools available to the subagent. Set on <see cref="SubAgentPhase.Started"/>.</summary>

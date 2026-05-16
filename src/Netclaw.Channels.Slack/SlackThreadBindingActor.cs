@@ -372,7 +372,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
 
             var buildResult = _hydrationPending
-                && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId), _dependencies.Options)
+                && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options)
                 ? await BuildInputWithDeferredHydrationAsync(message, contents, currentTs, inboundCts.Token)
                 : BuildInputForInbound(message, contents);
             var input = buildResult.Input;
@@ -955,7 +955,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             switch (classifications[i].Outcome)
             {
                 case ClassificationOutcome.Allow:
-                    var authority = SlackAclPolicy.IsAllowedUser(new SlackUserId(item.SenderId), _dependencies.Options)
+                    var authority = SlackAclPolicy.IsAllowedUser(new SlackUserId(item.SenderId.Value), _dependencies.Options)
                         ? AdoptedMessageAuthority.Authorized
                         : AdoptedMessageAuthority.Pending;
                     gap.Add(new AdoptedContextMessage(item, authority));
@@ -993,14 +993,14 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
             adoptedContext,
             triggerInput.Contents,
-            triggerInput.SenderId,
+            triggerInput.SenderId.Value,
             triggerInput.ReceivedAt);
 
         return triggerInput with
         {
             Contents = merged.Contents,
             HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId, StringComparison.Ordinal)),
+                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
             AdoptedSpeakerIds = merged.SpeakerIds,
             AdoptedContextProjection = merged.Projection,
             AdoptedContextLowerBound = cursor?.Value,
@@ -1229,7 +1229,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return false;
 
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            ApprovalButtonValueCodec.CanApprove(request.Request.RequesterPrincipal, request.Request.RequesterSenderId, message.SenderId));
+            ApprovalButtonValueCodec.CanApprove(request.Request.RequesterPrincipal, request.Request.RequesterSenderId?.Value, message.SenderId.Value));
 
         if (pendingIndex < 0)
         {
@@ -1251,7 +1251,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
             _pendingApprovalRequests.RemoveAt(pendingIndex);
 
-            await TryResolveApprovalPromptAsync(pending, selectedKey, message.SenderId);
+            await TryResolveApprovalPromptAsync(pending, selectedKey, message.SenderId.Value);
 
             _log.Info(
                 "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
@@ -1292,8 +1292,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         // pending-call state — see #979.
         if (pending is not null && !ApprovalButtonValueCodec.CanApprove(
                 pending.Request.RequesterPrincipal,
-                pending.Request.RequesterSenderId,
-                message.SenderId))
+                pending.Request.RequesterSenderId?.Value,
+                message.SenderId.Value))
         {
             await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
             return;
@@ -1312,7 +1312,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             if (pending is not null)
             {
                 _pendingApprovalRequests.RemoveAt(pendingIndex);
-                await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId);
+                await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
 
                 _log.Info(
                     "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
@@ -1440,7 +1440,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 SessionId = _sessionId,
                 CallId = request.CallId,
                 SelectedKey = ApprovalOptionKeys.Deny,
-                SenderId = request.RequesterSenderId ?? string.Empty
+                SenderId = request.RequesterSenderId ?? new Netclaw.Actors.Protocol.SenderId(string.Empty)
             });
         }
         catch (Exception ex)
