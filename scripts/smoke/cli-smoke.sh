@@ -28,6 +28,19 @@ FAIL=0
 pass() { echo "PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "FAIL: $1"; FAIL=$((FAIL + 1)); }
 
+# Portable timeout: GNU `timeout` (Linux), `gtimeout` (macOS + coreutils), or a
+# perl alarm fallback — stock macOS ships no `timeout`. Args: <seconds> <cmd...>.
+run_with_timeout() {
+  local secs="$1"; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${secs}s" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "${secs}s" "$@"
+  else
+    perl -e 'alarm shift; exec @ARGV' "$secs" "$@"
+  fi
+}
+
 # ── Offline commands (no daemon required) ────────────────────────────────────
 
 echo "=== netclaw version ==="
@@ -93,9 +106,9 @@ echo "=== netclaw mcp permissions --help ==="
 set +e
 mcp_permissions_help_exit=0
 if [[ -n "${NETCLAW_CLI:-}" ]]; then
-  mcp_permissions_help_output="$(timeout 15s "$NETCLAW_CLI" mcp permissions --help 2>&1)"
+  mcp_permissions_help_output="$(run_with_timeout 15 "$NETCLAW_CLI" mcp permissions --help 2>&1)"
 else
-  mcp_permissions_help_output="$(timeout 15s dotnet run --project "$CLI_PROJECT" --no-build -c "$BUILD_CONFIG" -- mcp permissions --help 2>&1)"
+  mcp_permissions_help_output="$(run_with_timeout 15 dotnet run --project "$CLI_PROJECT" --no-build -c "$BUILD_CONFIG" -- mcp permissions --help 2>&1)"
 fi
 mcp_permissions_help_exit=$?
 set -e
