@@ -13,6 +13,15 @@ public sealed class ShellApprovalMatcherTests
 {
     private readonly ShellApprovalMatcher _matcher = ShellApprovalMatcher.Instance;
 
+    /// <summary>
+    /// xunit.v3 <c>SkipUnless</c> hook: <c>ExtractPatterns</c> and
+    /// <c>ExtractCandidates</c> route through BashParser on POSIX only — the
+    /// Windows path falls back to the legacy <c>ShellTokenizer</c> splitter,
+    /// which is newline-blind. Tests that pin BashParser-specific behavior
+    /// skip cleanly on Windows runners.
+    /// </summary>
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     private static Dictionary<string, object?> Args(string command) => new() { ["Command"] = command };
 
     private static Dictionary<string, object?> Args(string command, string workingDirectory)
@@ -58,6 +67,59 @@ public sealed class ShellApprovalMatcherTests
     {
         var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"), Args(""));
         Assert.Empty(patterns);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — ExtractPatterns routes through BashParser on POSIX")]
+    public void ExtractPatterns_multiline_command_splits_one_unit_per_statement()
+    {
+        // A bare newline is a statement separator (ShellSyntaxTree 0.1.5+).
+        // Pre-upgrade the legacy splitter ignored newlines and produced the
+        // single garbled unit `git fetch git status`; the BashParser route
+        // now yields two clean approval units.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("git fetch\ngit status"));
+
+        Assert.Equal(2, patterns.Count);
+        Assert.Contains("git fetch", patterns);
+        Assert.Contains("git status", patterns);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — ExtractPatterns routes through BashParser on POSIX")]
+    public void ExtractPatterns_multiline_collapses_blank_lines()
+    {
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("echo a\n\n\necho b"));
+
+        Assert.Equal(2, patterns.Count);
+        Assert.Contains("echo a", patterns);
+        Assert.Contains("echo b", patterns);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — ExtractPatterns routes through BashParser on POSIX")]
+    public void ExtractPatterns_multiline_keeps_pipe_within_a_statement()
+    {
+        // A pipe stays inside one approval unit; the newline still splits
+        // the second statement out.
+        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
+            Args("echo one | grep o\necho two"));
+
+        Assert.Equal(2, patterns.Count);
+        Assert.Contains("echo one | grep o", patterns);
+        Assert.Contains("echo two", patterns);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_multiline_surfaces_each_verb()
+    {
+        // Security-relevant: pre-0.1.5 a multi-line command parsed as one
+        // clause, so `rm -rf` after a newline was buried as args of `cd`
+        // and never reached the gate as its own verb. Newline-as-separator
+        // surfaces `rm` as an independently gated candidate.
+        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
+            Args("cd /tmp\nrm -rf /tmp/foo"));
+
+        Assert.Contains(candidates, c => c.Verb == "cd" && c.Directory == "/tmp");
+        Assert.Contains(candidates, c => c.Verb == "rm" && c.Directory == "/tmp/foo");
     }
 
     [Fact]
