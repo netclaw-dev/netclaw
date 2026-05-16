@@ -92,6 +92,12 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
     private async Task<INetclawTool> AuthorizeCoreAsync(FunctionCallContent toolCall, ToolExecutionContext? context, CancellationToken ct)
     {
+        if (context is not null)
+        {
+            context.AppliedApprovalDecision = null;
+            context.AppliedApprovalPattern = null;
+        }
+
         var tool = _registry.GetByName(toolCall.Name);
         if (tool is null)
         {
@@ -132,30 +138,36 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 // after the click, throw ToolApprovalRequiredException again,
                 // and fail the turn (the outer try/catch is already inside
                 // the conditional catch so a re-throw escapes).
-                var verbsForCheck = approvalContext.Candidates is { Count: > 0 } candidates
+                var candidatesForCheck = approvalContext.Candidates is { Count: > 0 } candidates
                     ? candidates
                         .Where(c => !ApprovalPatternMatching.IsPureSideEffect(c))
-                        .Select(c => c.Verb)
-                        .Distinct(StringComparer.OrdinalIgnoreCase)
                         .ToList()
-                    : approvalContext.CandidateVerbs;
+                    : approvalContext.CandidateVerbs
+                        .Select(verb => new ApprovalCandidate(verb, Directory: null))
+                        .ToList();
 
-                if (verbsForCheck.Count == 0)
+                if (candidatesForCheck.Count == 0)
                 {
                     // Every candidate is side-effect-only — auto-allow.
                     accessDecision = ToolAccessDecision.Allow();
                 }
                 else
                 {
-                    var unapproved = await _approvalService.GetUnapprovedPatternsAsync(
-                        context?.SessionId,
+                    var approvalCheck = await _approvalService.CheckApprovalAsync(
+                        ToApprovalSessionId(context?.SessionId),
                         audience,
                         new ToolName(toolCall.Name),
-                        verbsForCheck,
+                        candidatesForCheck,
                         context?.Cwd,
                         ct);
 
-                    accessDecision = unapproved.Count == 0
+                    if (approvalCheck.UnapprovedPatterns.Count == 0 && context is not null)
+                    {
+                        context.AppliedApprovalDecision = "PreviouslyApproved";
+                        context.AppliedApprovalPattern = FormatApprovalMatches(approvalCheck.ApprovedMatches);
+                    }
+
+                    accessDecision = approvalCheck.UnapprovedPatterns.Count == 0
                         ? ToolAccessDecision.Allow()
                         : ToolAccessDecision.RequiresApproval(approvalContext);
                 }
@@ -187,6 +199,12 @@ public sealed class DispatchingToolExecutor : IToolExecutor
 
         return tool;
     }
+
+    private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
+        => string.Join(", ", matches.Select(match => $"{match.Pattern} [{match.Source}: {match.Scope}]"));
+
+    private static ToolApprovalSessionId? ToApprovalSessionId(string? sessionId)
+        => sessionId is null ? null : (ToolApprovalSessionId)sessionId;
 
     private static bool IsOneTimeApprovalSatisfied(
         ToolExecutionContext context,
