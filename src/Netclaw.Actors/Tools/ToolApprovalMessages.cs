@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -13,10 +14,10 @@ internal sealed record GetUnapprovedPatterns(
     SessionId? SessionId,
     TrustAudience Audience,
     ToolName ToolName,
-    IReadOnlyList<string> Patterns,
+    IReadOnlyList<ApprovalCandidate> Candidates,
     string? Cwd);
 
-internal sealed record UnapprovedPatternsResponse(IReadOnlyList<string> Patterns);
+internal sealed record UnapprovedPatternsResponse(ToolApprovalCheckResult Result);
 
 internal sealed record RecordToolApproval(
     SessionId SessionId,

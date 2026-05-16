@@ -255,7 +255,9 @@ internal static class SessionToolExecutionPipeline
                         tc, sessionId, source, auditLogger, timeProvider,
                         meta, backgroundJobManager,
                         meta.TimeoutHintSeconds ?? shellTimeoutSeconds,
-                        sw.Elapsed, logger);
+                        sw.Elapsed, logger,
+                        context.AppliedApprovalDecision,
+                        context.AppliedApprovalPattern);
                 }
             }
 
@@ -264,7 +266,9 @@ internal static class SessionToolExecutionPipeline
 
             auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
             {
-                Allowed = true
+                Allowed = true,
+                ApprovalDecision = context.AppliedApprovalDecision,
+                ApprovalPattern = context.AppliedApprovalPattern
             });
         }
         catch (ToolApprovalRequiredException approvalEx)

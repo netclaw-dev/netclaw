@@ -33,17 +33,22 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 ? _persistentStore.GetApprovedEntries(msg.Audience, msg.ToolName.Value)
                 : (IReadOnlyList<ApprovalEntry>)[];
 
-            var unapproved = new List<string>(msg.Patterns.Count);
-            foreach (var pattern in msg.Patterns)
+            var unapproved = new List<string>(msg.Candidates.Count);
+            var approvedMatches = new List<ToolApprovalMatch>(msg.Candidates.Count);
+            foreach (var candidate in msg.Candidates)
             {
-                if (!IsApproved(msg.SessionId, msg.Audience, msg.ToolName, pattern, msg.Cwd, approved))
+                var match = MatchApproval(msg.SessionId, msg.Audience, msg.ToolName, candidate, msg.Cwd, approved);
+                if (match is null)
                 {
-                    unapproved.Add(pattern);
-                    LogApprovalNearMisses(msg.ToolName, pattern, msg.Cwd, approved);
+                    unapproved.Add(candidate.Verb);
+                    LogApprovalNearMisses(msg.ToolName, candidate, msg.Cwd, approved);
+                    continue;
                 }
+
+                approvedMatches.Add(match);
             }
 
-            Sender.Tell(new UnapprovedPatternsResponse(unapproved));
+            Sender.Tell(new UnapprovedPatternsResponse(new ToolApprovalCheckResult(unapproved, approvedMatches)));
         });
 
         Receive<RecordToolApproval>(msg =>
@@ -75,12 +80,12 @@ internal sealed class ToolApprovalActor : ReceiveActor
     public static Props CreateProps(ToolApprovalStore? persistentStore = null)
         => Props.Create(() => new ToolApprovalActor(persistentStore));
 
-    private bool IsApproved(SessionId? sessionId, TrustAudience audience, ToolName toolName, string candidateVerb, string? cwd, IReadOnlyList<ApprovalEntry> persistedApprovals)
+    private ToolApprovalMatch? MatchApproval(SessionId? sessionId, TrustAudience audience, ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> persistedApprovals)
     {
-        if (sessionId.HasValue && IsSessionApproved(sessionId.Value, audience, toolName, candidateVerb))
-            return true;
+        if (sessionId.HasValue && IsSessionApproved(sessionId.Value, audience, toolName, candidate.Verb))
+            return new ToolApprovalMatch(candidate.Verb, "session", "this chat");
 
-        return MatchesPersistedEntry(toolName, candidateVerb, cwd, persistedApprovals);
+        return MatchPersistedEntry(toolName, candidate, cwd, persistedApprovals);
     }
 
     private bool IsSessionApproved(SessionId sessionId, TrustAudience audience, ToolName toolName, string candidateVerb)
@@ -130,10 +135,23 @@ internal sealed class ToolApprovalActor : ReceiveActor
         verbs.Add(candidateVerb);
     }
 
-    private static bool MatchesPersistedEntry(ToolName toolName, string candidateVerb, string? cwd, IReadOnlyList<ApprovalEntry> approved)
-        => string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
-            ? ApprovalPatternMatching.MatchesShellApproval(candidateVerb, cwd, approved)
-            : ApprovalPatternMatching.MatchesAny(candidateVerb, approved);
+    private static ToolApprovalMatch? MatchPersistedEntry(ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> approved)
+    {
+        foreach (var entry in approved)
+        {
+            if (!ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb))
+                continue;
+
+            var matches = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
+                ? ApprovalPatternMatching.MatchesShellApproval(candidate.Verb, candidate.Directory, cwd, [entry])
+                : ApprovalPatternMatching.MatchesAny(candidate.Verb, [entry]);
+
+            if (matches)
+                return new ToolApprovalMatch(candidate.Verb, "persistent", entry.FormatScope());
+        }
+
+        return null;
+    }
 
     /// <summary>
     /// Emits a diagnostic when a shell pattern is prompted for despite a
@@ -142,21 +160,24 @@ internal sealed class ToolApprovalActor : ReceiveActor
     /// gate decision. Non-shell tools authorize on a verb match alone, so a
     /// same-verb persisted entry would have approved them; nothing to explain.
     /// </summary>
-    private void LogApprovalNearMisses(ToolName toolName, string candidateVerb, string? cwd, IReadOnlyList<ApprovalEntry> approved)
+    private void LogApprovalNearMisses(ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> approved)
     {
         if (!string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
             return;
 
         var nearMisses = ApprovalPatternMatching.ExplainShellNearMisses(
-            candidateVerb, candidateDirectory: null, cwd, approved);
+            candidate.Verb, candidate.Directory, cwd, approved);
 
         foreach (var miss in nearMisses)
         {
             _log.Info(
-                "Approval near-miss for {0} '{1}' (cwd '{2}'): prompted despite persisted grant '{3}' (added {4}) — {5}",
+                "approval_near_miss tool={ToolName} verb={CandidateVerb} candidate_dir={CandidateDirectory} cwd={Cwd}",
                 toolName.Value,
-                candidateVerb,
-                cwd ?? "(none)",
+                candidate.Verb,
+                candidate.Directory ?? "(none)",
+                cwd ?? "(none)");
+            _log.Info(
+                "approval_near_miss grant={GrantScope} grant_created_at={GrantCreatedAt} reason={Reason}",
                 miss.Grant.FormatScope(),
                 miss.Grant.CreatedAt?.ToString("u") ?? "unknown",
                 miss.Describe());

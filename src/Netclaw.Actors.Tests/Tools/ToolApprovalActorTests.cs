@@ -313,6 +313,77 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
+    public async Task Persistent_shell_approval_uses_candidate_directory_when_present()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
+            var candidateDir = Path.Combine(grantDir, "src");
+            var unrelatedCwd = Path.Combine(Path.GetTempPath(), "netclaw-approval", "other");
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "dotnet test", Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ApprovalCandidate("dotnet test", candidateDir)],
+                cwd: unrelatedCwd,
+                ct);
+
+            Assert.Empty(result.UnapprovedPatterns);
+            var match = Assert.Single(result.ApprovedMatches);
+            Assert.Equal("persistent", match.Source);
+            Assert.Equal($"dotnet test in {grantDir}", match.Scope);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Persistent_shell_approval_rejects_candidate_directory_outside_grant_even_when_cwd_matches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
+            var outsideDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "outside");
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "cat", Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ApprovalCandidate("cat", outsideDir)],
+                cwd: grantDir,
+                ct);
+
+            Assert.Equal(["cat"], result.UnapprovedPatterns);
+            Assert.Empty(result.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public async Task Directory_near_miss_is_logged_without_changing_the_decision()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -331,7 +402,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var service = CreateService(actor);
 
             IReadOnlyList<string> unapproved = [];
-            await EventFilter.Info(contains: "near-miss").ExpectOneAsync(async () =>
+            await EventFilter.Info(contains: "approval_near_miss").ExpectAsync(2, async () =>
             {
                 unapproved = await service.GetUnapprovedPatternsAsync(
                     "session-a", TrustAudience.Personal, new ToolName("shell_execute"),
@@ -363,7 +434,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
-            await EventFilter.Info(contains: "near-miss").ExpectAsync(0, async () =>
+            await EventFilter.Info(contains: "approval_near_miss").ExpectAsync(0, async () =>
             {
                 var unapproved = await service.GetUnapprovedPatternsAsync(
                     "session-a", TrustAudience.Personal, new ToolName("shell_execute"),

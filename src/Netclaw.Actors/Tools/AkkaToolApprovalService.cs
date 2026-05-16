@@ -30,13 +30,26 @@ public sealed class AkkaToolApprovalService : IToolApprovalService
         string? cwd,
         CancellationToken ct = default)
     {
+        var candidates = patterns.Select(pattern => new ApprovalCandidate(pattern, Directory: null)).ToList();
+        var result = await CheckApprovalAsync(sessionId, audience, toolName, candidates, cwd, ct);
+        return result.UnapprovedPatterns;
+    }
+
+    public async Task<ToolApprovalCheckResult> CheckApprovalAsync(
+        string? sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        CancellationToken ct = default)
+    {
         var actor = await _actorProvider.GetAsync(ct);
         var response = await actor.Ask<UnapprovedPatternsResponse>(
-            new GetUnapprovedPatterns(sessionId is not null ? (SessionId)sessionId : null, audience, toolName, patterns, cwd),
+            new GetUnapprovedPatterns(sessionId is not null ? (SessionId)sessionId : null, audience, toolName, candidates, cwd),
             TimeSpan.FromSeconds(5),
             ct);
 
-        return response.Patterns;
+        return response.Result;
     }
 
     public async Task RecordApprovalAsync(

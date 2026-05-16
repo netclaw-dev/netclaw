@@ -11,6 +11,21 @@ namespace Netclaw.Security;
 public interface IToolApprovalService
 {
     /// <summary>
+    /// Evaluates candidate <c>(verb, directory)</c> pairs against session and
+    /// persistent approvals, returning both misses and the approvals that
+    /// satisfied the gate. Shell callers SHOULD prefer this overload so
+    /// folder-scoped grants are checked against each candidate's path argument
+    /// rather than only the process cwd.
+    /// </summary>
+    Task<ToolApprovalCheckResult> CheckApprovalAsync(
+        string? sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        CancellationToken ct = default);
+
+    /// <summary>
     /// Returns the subset of <paramref name="patterns"/> (candidate verb chains)
     /// that are not approved for the given audience and tool. The
     /// <paramref name="cwd"/> is the candidate's resolved working directory; it
@@ -35,3 +50,12 @@ public interface IToolApprovalService
         string? cwd,
         CancellationToken ct = default);
 }
+
+public sealed record ToolApprovalCheckResult(
+    IReadOnlyList<string> UnapprovedPatterns,
+    IReadOnlyList<ToolApprovalMatch> ApprovedMatches);
+
+public sealed record ToolApprovalMatch(
+    string Pattern,
+    string Source,
+    string Scope);

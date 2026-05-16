@@ -219,10 +219,15 @@ reason `channel_does_not_support_approval`.
 ## Audit
 
 Tool audit entries include `ApprovalDecision` and `ApprovalPattern` fields when
-a tool goes through the approval flow:
+a tool goes through the approval flow. Later calls that are satisfied by a
+session or persistent approval are audited as `PreviouslyApproved`; the pattern
+includes the matched source and scope so operators can tell which grant applied.
+Near-miss diagnostics are also emitted to the daemon log when a same-verb
+persistent shell grant exists but does not match the candidate directory/cwd.
 
 ```
 Tool executed: shell_execute (approved, pattern=git push)
+Tool executed: shell_execute (PreviouslyApproved, pattern=git push [persistent: git push in /home/user/repo])
 Tool denied: shell_execute (denied_by_user, pattern=docker rm)
 Tool denied: shell_execute (timed_out, pattern=kubectl apply)
 ```
