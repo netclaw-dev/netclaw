@@ -215,4 +215,70 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal("echo", result.Clauses[0].Verb.Joined);
         Assert.Contains(result.Clauses[0].Args, a => a.Raw.Contains("#1234"));
     }
+
+    [Fact]
+    public void Bare_newline_separates_clauses_as_sequence()
+    {
+        // ShellSyntaxTree 0.1.5-beta (SPEC §4): a bare newline outside
+        // quotes/heredocs/continuations is a clause separator equivalent to
+        // `;`, and the following clause gets CompoundOperator.Sequence.
+        // Netclaw's approval gate relies on this so a multi-line command
+        // decomposes into one approval unit per statement rather than
+        // collapsing two verbs into a single garbled unit.
+        var parser = new BashParser();
+
+        var result = parser.Parse("git fetch\ngit status");
+
+        Assert.False(result.IsUnparseable);
+        Assert.Equal(2, result.Clauses.Count);
+        Assert.Equal("git fetch", result.Clauses[0].Verb.Joined);
+        Assert.Equal(CompoundOperator.Sequence, result.Clauses[1].Operator);
+        Assert.Equal("git status", result.Clauses[1].Verb.Joined);
+    }
+
+    [Fact]
+    public void Consecutive_newlines_collapse_without_empty_clauses()
+    {
+        // Blank lines, leading/trailing newlines, and newlines after a
+        // compound operator collapse — they must not produce empty clauses
+        // that would surface as blank approval units.
+        var parser = new BashParser();
+
+        var result = parser.Parse("\necho a\n\n\necho b\n");
+
+        Assert.False(result.IsUnparseable);
+        Assert.Equal(2, result.Clauses.Count);
+        Assert.Equal("echo a", result.Clauses[0].Verb.Joined);
+        Assert.Equal("echo b", result.Clauses[1].Verb.Joined);
+    }
+
+    [Fact]
+    public void Heredoc_followed_by_command_parses_as_two_clauses()
+    {
+        // The newline after a heredoc terminator separates the heredoc body
+        // from the next command; newlines *inside* the heredoc do not.
+        var parser = new BashParser();
+
+        var result = parser.Parse("cat <<EOF\nbody line\nEOF\necho after");
+
+        Assert.False(result.IsUnparseable);
+        Assert.Equal(2, result.Clauses.Count);
+        Assert.Equal("cat", result.Clauses[0].Verb.Joined);
+        Assert.Equal("echo after", result.Clauses[1].Verb.Joined);
+    }
+
+    [Fact]
+    public void Control_flow_keyword_opening_newline_clause_is_unparseable()
+    {
+        // A control-flow keyword that opens a newline-separated clause makes
+        // the whole parse unparseable (control flow is unsupported in v0.1).
+        // ExtractCandidatesViaBashParser maps that to an empty candidate
+        // list, so the approval gate fails closed to a Once/Deny prompt.
+        var parser = new BashParser();
+
+        var result = parser.Parse("echo hi\nfor x in 1 2 3; do echo $x; done");
+
+        Assert.True(result.IsUnparseable);
+        Assert.False(string.IsNullOrEmpty(result.UnparseableReason));
+    }
 }

@@ -62,6 +62,15 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private ulong? _cursorSnowflake;
     private ulong? _pendingCursorSnowflake;
 
+    // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
+    // found no authorized trigger to anchor a turn. This is the proactive-thread
+    // case: the binding actor's lifetime began when the agent posted the thread
+    // root, so the one-shot hydration ran before any authorized human inbound
+    // existed. While set, the first authorized inbound performs the deferred
+    // hydration instead of taking the fetch-free path; it is cleared once that
+    // hydration completes.
+    private bool _hydrationPending;
+
     public ITimerScheduler Timers { get; set; } = null!;
 
     public DiscordSessionBindingActor(
@@ -319,10 +328,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (liveContents.Count == 0)
             return;
 
-        // Live inbound path is fetch-free. Thread history is hydrated exactly
-        // once per actor lifetime in PerformOneShotHydrationAsync (driven by
-        // the RecoveryCompleted handler), so by the time we get here the
-        // session already has the historical context it needs.
+        // Live inbound path is fetch-free. Thread history is hydrated once per
+        // actor lifetime in PerformOneShotHydrationAsync (driven by the
+        // RecoveryCompleted handler); the only exception is a deferred
+        // hydration, which ApplyDeferredHydrationAsync completes on the first
+        // authorized inbound. By the time we get here the session already has
+        // the historical context it needs.
         var input = new ChannelInput
         {
             SenderId = message.SenderId.Value,
@@ -336,6 +347,9 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             ReceivedAt = message.ReceivedAt,
             ExecutableText = message.Text
         };
+
+        if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
+            input = await ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
 
         try
         {
@@ -424,45 +438,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
         }
 
-        var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cts.Token)));
-
-        var gap = new List<AdoptedContextMessage>(candidates.Count);
-        var blockedForRisk = 0;
-        var detectorUnavailable = false;
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            switch (classifications[i].Outcome)
-            {
-                case ClassificationOutcome.Allow:
-                    var authority = _dependencies.Options.AllowedUserIds.Length == 0
-                        || _dependencies.Options.AllowedUserIds.Contains(candidates[i].SenderId, StringComparer.Ordinal)
-                        ? AdoptedMessageAuthority.Authorized
-                        : AdoptedMessageAuthority.Pending;
-                    gap.Add(new AdoptedContextMessage(candidates[i], authority));
-                    break;
-
-                case ClassificationOutcome.Block:
-                    blockedForRisk++;
-                    _log.Warning(
-                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        candidates[i].SenderId,
-                        candidates[i].MessageId ?? "none",
-                        classifications[i].Reason ?? "high-risk pattern detected");
-                    break;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    blockedForRisk++;
-                    detectorUnavailable = true;
-                    break;
-            }
-        }
+        var classified = await ClassifyGapAsync(candidates, cts.Token);
+        var gap = classified.Gap;
 
         _log.Info(
             "Thread history hydration fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
-            history.Count, candidates.Count, gap.Count, blockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
+            history.Count, candidates.Count, gap.Count, classified.BlockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
 
-        if (detectorUnavailable)
+        if (classified.DetectorUnavailable)
             await SafeReplyAsync(BackfillDetectorWarning);
 
         if (gap.Count == 0)
@@ -485,7 +468,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         if (trigger is null)
         {
-            _log.Info("Thread history hydration: no authorized message in gap; deferring backfill to next live inbound session={Session}", _sessionId.Value);
+            // Deferred: a non-empty gap with no authorized trigger. The
+            // proactive-thread case — the binding actor's lifetime began when
+            // the agent posted the thread root, so this hydration ran before
+            // any authorized human inbound existed. Re-arm so the first
+            // authorized inbound performs this hydration (adopting the gap,
+            // e.g. the bot-authored root) instead of taking the fetch-free path.
+            _hydrationPending = true;
+            _log.Info("Thread history hydration: no authorized message in gap; re-armed for next authorized inbound session={Session}", _sessionId.Value);
             return;
         }
 
@@ -498,25 +488,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
 
         var triggerInput = trigger.Input;
-        var triggerSenderId = triggerInput.SenderId;
         var triggerSnowflake = TryParseSnowflake(triggerInput.MessageId ?? string.Empty);
-
-        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            adoptedContext,
-            triggerInput.Contents,
-            triggerSenderId,
-            triggerInput.ReceivedAt);
-
-        var backfillInput = triggerInput with
-        {
-            Contents = merged.Contents,
-            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(id => !string.Equals(id, triggerSenderId, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = merged.SpeakerIds,
-            AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor?.ToString(),
-            AdoptedContextUpperBound = triggerInput.MessageId,
-            AdoptedContextEntries = merged.Entries
-        };
+        var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
 
         if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
         {
@@ -567,6 +540,167 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         return PromptClassifier.ClassifyAsync(
             _promptInjectionDetector, text, "discord-backfill", _log, cancellationToken);
+    }
+
+    // Discord authorization basis for adopted-context: an empty AllowedUserIds
+    // list means the instance is unrestricted; otherwise the sender must be listed.
+    private bool IsAuthorizedSender(string senderId)
+        => _dependencies.Options.AllowedUserIds.Length == 0
+            || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
+
+    private readonly record struct GapClassification(
+        List<AdoptedContextMessage> Gap,
+        int BlockedForRisk,
+        bool DetectorUnavailable);
+
+    /// <summary>
+    /// Runs prompt-injection classification over candidate gap messages and
+    /// captures each surviving message's authority-at-inclusion. Blocked
+    /// messages are dropped; detector-unavailable messages are also dropped
+    /// and surface a caller-visible flag.
+    /// </summary>
+    private async Task<GapClassification> ClassifyGapAsync(
+        IReadOnlyList<ChannelInput> candidates,
+        CancellationToken cancellationToken)
+    {
+        var classifications = await Task.WhenAll(
+            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
+
+        var gap = new List<AdoptedContextMessage>(candidates.Count);
+        var blockedForRisk = 0;
+        var detectorUnavailable = false;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            switch (classifications[i].Outcome)
+            {
+                case ClassificationOutcome.Allow:
+                    var authority = IsAuthorizedSender(candidates[i].SenderId)
+                        ? AdoptedMessageAuthority.Authorized
+                        : AdoptedMessageAuthority.Pending;
+                    gap.Add(new AdoptedContextMessage(candidates[i], authority));
+                    break;
+
+                case ClassificationOutcome.Block:
+                    blockedForRisk++;
+                    _log.Warning(
+                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
+                        candidates[i].SenderId,
+                        candidates[i].MessageId ?? "none",
+                        classifications[i].Reason ?? "high-risk pattern detected");
+                    break;
+
+                case ClassificationOutcome.DetectorUnavailable:
+                    blockedForRisk++;
+                    detectorUnavailable = true;
+                    break;
+            }
+        }
+
+        return new GapClassification(gap, blockedForRisk, detectorUnavailable);
+    }
+
+    /// <summary>
+    /// Merges <paramref name="adoptedContext"/> as the adopted-context window
+    /// preceding <paramref name="triggerInput"/> (the executable message) and
+    /// returns the trigger input with adopted-context metadata populated.
+    /// </summary>
+    private static ChannelInput MergeAdoptedContext(
+        ChannelInput triggerInput,
+        List<AdoptedContextMessage> adoptedContext,
+        ulong? cursor)
+    {
+        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
+            adoptedContext,
+            triggerInput.Contents,
+            triggerInput.SenderId,
+            triggerInput.ReceivedAt);
+
+        return triggerInput with
+        {
+            Contents = merged.Contents,
+            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
+                id => !string.Equals(id, triggerInput.SenderId, StringComparison.Ordinal)),
+            AdoptedSpeakerIds = merged.SpeakerIds,
+            AdoptedContextProjection = merged.Projection,
+            AdoptedContextLowerBound = cursor?.ToString(),
+            AdoptedContextUpperBound = triggerInput.MessageId,
+            AdoptedContextEntries = merged.Entries
+        };
+    }
+
+    /// <summary>
+    /// Completes a thread-history hydration that <see cref="PerformOneShotHydrationAsync"/>
+    /// deferred for lack of an authorized trigger (<see cref="_hydrationPending"/>).
+    /// This authorized inbound is the executable trigger; the thread gap strictly
+    /// before it — most importantly a proactively-posted bot-authored root — is
+    /// fetched, classified, and merged as its adopted-context window. On fetch
+    /// failure the turn proceeds un-enriched and hydration stays re-armed so a
+    /// later authorized inbound retries.
+    /// </summary>
+    private async Task<ChannelInput> ApplyDeferredHydrationAsync(
+        ChannelInput baseInput,
+        string liveMessageId,
+        CancellationToken cancellationToken)
+    {
+        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
+            return baseInput;
+
+        // Without the live message's ordering key the gap below it cannot be
+        // bounded; leave hydration re-armed and take the fetch-free path.
+        if (TryParseSnowflake(liveMessageId) is not { } liveSnowflake)
+            return baseInput;
+
+        IReadOnlyList<ChannelInput> history;
+        try
+        {
+            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: execute the turn without an adopted window and keep
+            // hydration re-armed so a later authorized inbound retries.
+            _log.Warning(ex, "Re-armed thread history fetch failed for session {SessionId}", _sessionId.Value);
+            return baseInput;
+        }
+
+        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
+        // above) keeps the flag armed — classify/merge outcomes never re-arm.
+        _hydrationPending = false;
+
+        var cursor = _cursorSnowflake;
+        var candidates = new List<ChannelInput>(history.Count);
+        foreach (var item in history)
+        {
+            if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
+                continue;
+
+            // Strictly above the watermark and strictly below the live inbound:
+            // the live inbound is the executable message, not adopted context.
+            if (cursor is { } c && itemSnowflake <= c)
+                continue;
+            if (itemSnowflake >= liveSnowflake)
+                continue;
+
+            candidates.Add(item);
+        }
+
+        if (candidates.Count == 0)
+            return baseInput;
+
+        var classified = await ClassifyGapAsync(candidates, cancellationToken);
+        if (classified.DetectorUnavailable)
+            await SafeReplyAsync(BackfillDetectorWarning);
+
+        if (classified.Gap.Count == 0)
+            return baseInput;
+
+        _log.Info(
+            "discord_deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
+            classified.Gap.Count,
+            baseInput.MessageId,
+            _sessionId.Value);
+
+        return MergeAdoptedContext(baseInput, classified.Gap, cursor);
     }
 
     private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message, string selectedKey)
