@@ -1,16 +1,16 @@
 ## 1. Pass 7a — Value-object audit document
 
-- [ ] 1.1 Write `docs/spec/value-object-audit.md` — the full inventory of the
+- [x] 1.1 Write `docs/spec/value-object-audit.md` — the full inventory of the
   ~70 raw-primitive protocol fields, each tagged wrap-with-existing,
   wrap-with-new, or leave-as-string, with the headline counts and the top-10
   highest-impact opportunities.
-- [ ] 1.2 In the audit doc, record the value-object design rules (`readonly
+- [x] 1.2 In the audit doc, record the value-object design rules (`readonly
   record struct`, single `Value`, explicit-only conversion, validating
   constructor where a rule exists, named factories for constants, serializer
   mapping that preserves wire/disk bytes).
-- [ ] 1.3 Cross-link the audit doc from this change's `design.md` and from
+- [x] 1.3 Cross-link the audit doc from this change's `design.md` and from
   issue #994.
-- [ ] 1.4 Verify Pass 7a: markdownlint clean on the new doc.
+- [x] 1.4 Verify Pass 7a: markdownlint clean on the new doc.
 
 ## 2. Pass 5 — Primary-constructor migration (≤3 required props)
 
