@@ -120,6 +120,34 @@ public sealed class ToolExecutionContext
     public IParentApprovalBridge? ApprovalBridge { get; set; }
 
     /// <summary>
+    /// Parent session actor (an <c>Akka.Actor.IActorRef</c>, typed as
+    /// <see cref="object"/> to keep Akka out of the tools abstraction layer) that
+    /// receives sub-agent liveness heartbeats. Wired by <c>LlmSessionActor</c>;
+    /// null when there is no session to keep a watchdog refreshed.
+    /// </summary>
+    public object? SubAgentHeartbeatSink { get; set; }
+
+    /// <summary>
+    /// The parent session's processing-watchdog operation id for the in-flight
+    /// tool batch. A spawned sub-agent echoes this in every heartbeat so the
+    /// parent only refreshes its watchdog while this operation is still current.
+    /// </summary>
+    public long SubAgentParentWatchdogOpId { get; set; }
+
+    /// <summary>
+    /// Inactivity-watchdog budgets a spawned sub-agent inherits from the parent
+    /// session's <c>SessionConfig</c>. Null when spawned outside a session, in
+    /// which case the sub-agent falls back to a flat timeout.
+    /// </summary>
+    public TimeSpan? SubAgentPrefillTimeout { get; set; }
+
+    /// <summary>Inter-delta inactivity budget for a spawned sub-agent's LLM calls.</summary>
+    public TimeSpan? SubAgentFirstTokenTimeout { get; set; }
+
+    /// <summary>Tool-batch inactivity budget for a spawned sub-agent.</summary>
+    public TimeSpan? SubAgentToolExecutionTimeout { get; set; }
+
+    /// <summary>
     /// Tool name granted a one-shot approval for the current execution retry.
     /// This is not persisted and only applies to the current in-memory context.
     /// </summary>

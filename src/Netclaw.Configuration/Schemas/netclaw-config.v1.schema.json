@@ -481,9 +481,9 @@
         "DefaultTimeoutSeconds": {
           "type": "integer",
           "minimum": 5,
-          "maximum": 600,
-          "default": 60,
-          "description": "Default subagent timeout when no tool-specific override exists."
+          "maximum": 3600,
+          "default": 3600,
+          "description": "Default absolute wall-clock backstop in seconds for a sub-agent run. A sub-agent is primarily governed by an inactivity watchdog that resets while the model streams; this backstop only bounds a run that keeps producing activity but never finishes, so it is generous."
         },
         "StoreMemoryTimeoutSeconds": {
           "type": "integer",

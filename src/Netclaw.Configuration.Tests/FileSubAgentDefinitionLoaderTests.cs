@@ -94,7 +94,7 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     }
 
     [Fact]
-    public void LoadAll_defaults_model_role_to_compaction_and_timeout_to_60()
+    public void LoadAll_defaults_model_role_to_compaction_and_timeout_to_backstop()
     {
         WriteAgent("minimal.md", """
             ---
@@ -110,7 +110,7 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
 
         var profile = Assert.Single(results);
         Assert.Equal(ModelRole.Compaction, profile.ModelRole);
-        Assert.Equal(60, profile.TimeoutSeconds);
+        Assert.Equal(SubAgentProfile.DefaultBackstopSeconds, profile.TimeoutSeconds);
         Assert.False(profile.EmitStructuredFindings);
         Assert.Equal(SubAgentVisibility.UserFacing, profile.Visibility);
     }

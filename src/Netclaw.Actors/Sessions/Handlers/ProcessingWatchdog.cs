@@ -73,6 +73,26 @@ internal sealed class ProcessingWatchdog
     }
 
     /// <summary>
+    /// Refresh the watchdog timer for an arbitrary operation, identified by both
+    /// name and ID. Unlike <see cref="Refresh"/> (which is hardwired to
+    /// <see cref="LlmCall"/>), this keeps a non-LLM operation — e.g. a
+    /// <see cref="ToolExecution"/> covering a running sub-agent — alive from an
+    /// external liveness signal. The name+ID guard means a stale or late refresh
+    /// (the operation already ended, or the watchdog moved on) is a no-op rather
+    /// than silently extending the wrong operation.
+    /// </summary>
+    public void RefreshIfCurrent(string expectedOperation, long expectedOpId, TimeSpan timeout, ITimerScheduler timers)
+    {
+        if (_operationName != expectedOperation || _operationId != expectedOpId)
+            return;
+
+        timers.StartSingleTimer(
+            TimerKey,
+            new ProcessingWatchdogExpired(_operationId, _operationName),
+            timeout);
+    }
+
+    /// <summary>
     /// Check whether the given watchdog expiration message matches the current operation.
     /// </summary>
     public bool IsCurrent(ProcessingWatchdogExpired msg)

@@ -116,6 +116,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Processing watchdog (timer management for stuck operations)
     private readonly ProcessingWatchdog _watchdog = new();
 
+    // Liveness heartbeats received from a spawned sub-agent during the current
+    // tool batch. Reset when the ToolExecution watchdog is armed; surfaced in the
+    // watchdog-expiry log so a debugger can tell "sub-agent never started" (0)
+    // from "sub-agent stalled" (>0).
+    private int _subAgentHeartbeatCount;
+
     // Actor-owned CTS for the active LLM call. Cancelled by the watchdog on timeout
     // or when a response/failure arrives. The session-level watchdog (FirstTokenTimeout)
     // is the authoritative timeout — this CTS just propagates cancellation to the
@@ -366,6 +372,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
 
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<SubAgentHeartbeat>(_ => { }); // stale heartbeat from an already-finished sub-agent
         Command<LlmCallFailed>(_ => { }); // stale failure arriving after watchdog timeout
         Command<LlmResponseReceived>(_ => { }); // stale response arriving after transition to Ready
         Command<CompactionWorkCompleted>(_ => { });
@@ -959,10 +966,34 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
             CancelAndDisposeLlmCts();
 
-            _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId})",
-                msg.OperationName, msg.OperationId);
-            var errorMessage = ExtractLlmErrorMessage(timeoutCause);
+            _log.Error(
+                "Processing watchdog expired for operation {OperationName} (opId={OperationId}, subAgentHeartbeats={HeartbeatCount})",
+                msg.OperationName, msg.OperationId, _subAgentHeartbeatCount);
+
+            // Build the user-facing message from the operation that actually
+            // stalled. A tool-execution timeout is NOT an LLM-stream timeout —
+            // routing it through ExtractLlmErrorMessage (which only sees a bare
+            // TimeoutException) would misattribute a stuck tool/sub-agent to the model.
+            var errorMessage = msg.OperationName == ProcessingWatchdog.ToolExecution
+                ? $"A tool or sub-agent produced no activity for {timeout.TotalSeconds:F0}s and was stopped. "
+                  + "It may be stuck — please try again, or simplify the request."
+                : ExtractLlmErrorMessage(timeoutCause);
             FailCurrentTurn(errorMessage, timeoutCause, ErrorCategory.Timeout);
+        });
+
+        Command<SubAgentHeartbeat>(msg =>
+        {
+            // A spawned sub-agent is alive and progressing — keep the
+            // tool-execution watchdog refreshed. Guarded by the operation id
+            // captured at dispatch, so a late heartbeat (the spawn_agent call
+            // already finished, or the watchdog advanced) is a no-op rather than
+            // refreshing the wrong operation.
+            _watchdog.RefreshIfCurrent(
+                ProcessingWatchdog.ToolExecution, msg.ParentWatchdogOpId, _config.ToolExecutionTimeout, Timers);
+            _subAgentHeartbeatCount++;
+            _log.Debug(
+                "SubAgent [{AgentName}] heartbeat phase={Phase} tokens={InputTokens}/{OutputTokens}",
+                msg.AgentName, msg.Phase, msg.InputTokens, msg.OutputTokens);
         });
 
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
@@ -1108,6 +1139,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _buffer.Add(cmd);
             TryReplyAck();
         });
+
+        Command<SubAgentHeartbeat>(_ => { }); // stale heartbeat — spawn_agent completed before compaction
 
         Command<ProcessingWatchdogExpired>(msg =>
         {
@@ -1414,6 +1447,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         // Ignore stale processing/compaction messages
         Command<ProcessingWatchdogExpired>(_ => { });
+        Command<SubAgentHeartbeat>(_ => { });
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
@@ -1685,6 +1719,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _watchdog.Start(ProcessingWatchdog.ToolExecution, toolExecutionTimeout, Timers);
 
+        // Capture the watchdog operation id AFTER arming it — a spawned sub-agent
+        // echoes this id in every heartbeat so RefreshIfCurrent can reject a stale
+        // refresh once this tool batch has ended.
+        var watchdogOpId = _watchdog.CurrentOperationId;
+        _subAgentHeartbeatCount = 0;
+        var subAgentWiring = new SubAgentExecutionWiring(
+            self,
+            watchdogOpId,
+            _config.PrefillTimeout,
+            _config.FirstTokenTimeout,
+            _config.ToolExecutionTimeout);
+
         // Capture subscriber snapshot for subagent activity notifications.
         // These are emitted directly from the tool execution thread via Tell(),
         // which is thread-safe. The snapshot ensures we don't read _subscribers
@@ -1727,7 +1773,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             shellTimeoutSeconds: _toolAccessPolicy?.ShellTimeoutSeconds ?? 60,
             backgroundJobManager: bgJobManager,
             projectDirectory: _state.WorkingContext.ProjectDirectory,
-            setWorkingDirectoryAvailable: setWorkingDirectoryAvailable);
+            setWorkingDirectoryAvailable: setWorkingDirectoryAvailable,
+            subAgentWiring: subAgentWiring);
     }
 
     private void HandleTextResponse(

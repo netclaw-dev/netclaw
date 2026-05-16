@@ -556,6 +556,152 @@ public class SubAgentActorTests : TestKit
         Assert.DoesNotContain("Context:", fakeClient.LastReceivedMessages[1].Text);
     }
 
+    [Fact]
+    public async Task Streaming_activity_keeps_subagent_alive_past_inactivity_budget()
+    {
+        // 8 deltas, 500ms apart — a ~4s run. No single inactivity budget is 4s;
+        // a flat wall-clock timeout would have killed it. The inactivity watchdog
+        // resets on each streaming delta, so a responsive model keeps rolling.
+        var fakeClient = new PacedStreamingChatClient(deltaCount: 8, interDelay: TimeSpan.FromMilliseconds(500));
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Stream slowly",
+                Timeout = TimeSpan.FromSeconds(30),
+                TimeoutBudget = new SubAgentTimeoutBudget
+                {
+                    PrefillTimeout = TimeSpan.FromSeconds(3),
+                    FirstTokenTimeout = TimeSpan.FromSeconds(3),
+                    ToolExecutionTimeout = TimeSpan.FromSeconds(3),
+                    AbsoluteBackstop = TimeSpan.FromSeconds(30)
+                },
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Contains("d0", result.Output);
+    }
+
+    [Fact]
+    public async Task Inactivity_watchdog_fails_run_when_llm_stalls()
+    {
+        // One delta, then the stream goes silent. The inactivity watchdog fires
+        // on the FirstToken budget — well before the absolute backstop.
+        var fakeClient = new PacedStreamingChatClient(
+            deltaCount: 1, interDelay: TimeSpan.FromMilliseconds(100), stallAtEnd: true);
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Stall after first token",
+                Timeout = TimeSpan.FromSeconds(30),
+                TimeoutBudget = new SubAgentTimeoutBudget
+                {
+                    PrefillTimeout = TimeSpan.FromSeconds(3),
+                    FirstTokenTimeout = TimeSpan.FromSeconds(2),
+                    ToolExecutionTimeout = TimeSpan.FromSeconds(2),
+                    AbsoluteBackstop = TimeSpan.FromSeconds(30)
+                },
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LLM streaming activity", result.Output);
+    }
+
+    [Fact]
+    public async Task Absolute_backstop_fails_run_despite_continuous_activity()
+    {
+        // The model streams forever — the inactivity watchdog never fires. The
+        // absolute backstop is the only thing that can stop a responding-but-
+        // never-finishing run.
+        var fakeClient = new PacedStreamingChatClient(
+            deltaCount: 1000, interDelay: TimeSpan.FromMilliseconds(200));
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Stream without end",
+                Timeout = TimeSpan.FromSeconds(2),
+                TimeoutBudget = new SubAgentTimeoutBudget
+                {
+                    PrefillTimeout = TimeSpan.FromSeconds(10),
+                    FirstTokenTimeout = TimeSpan.FromSeconds(10),
+                    ToolExecutionTimeout = TimeSpan.FromSeconds(10),
+                    AbsoluteBackstop = TimeSpan.FromSeconds(2)
+                },
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains("absolute time limit", result.Output);
+    }
+
+    [Fact]
+    public async Task Nested_spawn_agent_tool_is_filtered_from_subagent()
+    {
+        // A sub-agent must never be able to spawn another sub-agent. spawn_agent
+        // is stripped from its tool set even if the definition lists it.
+        var spawnAgentTool = new FakeNetclawTool("spawn_agent", "should never be offered");
+        var webSearchTool = new FakeNetclawTool("web_search", "ok");
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition([spawnAgentTool, webSearchTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Do the thing", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastOfferedToolNames);
+        Assert.Contains("web_search", fakeClient.LastOfferedToolNames!);
+        Assert.DoesNotContain("spawn_agent", fakeClient.LastOfferedToolNames!);
+    }
+
+    [Fact]
+    public async Task Heartbeat_is_emitted_to_the_sink_during_a_tool_call()
+    {
+        var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-1", "greet")]
+        };
+        var heartbeatSink = CreateTestProbe();
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Greet the user",
+                Timeout = TimeSpan.FromSeconds(5),
+                HeartbeatSink = heartbeatSink.Ref,
+                RunId = "run-xyz",
+                ParentWatchdogOpId = 7,
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        var heartbeat = await heartbeatSink.ExpectMsgAsync<SubAgentHeartbeat>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("test-agent", heartbeat.AgentName.Value);
+        Assert.Equal("run-xyz", heartbeat.RunId);
+        Assert.Equal(7, heartbeat.ParentWatchdogOpId);
+        Assert.Equal(SubAgentHeartbeatPhase.ToolDispatch, heartbeat.Phase);
+    }
+
     /// <summary>
     /// IChatClient that always throws on GetResponseAsync.
     /// </summary>
@@ -593,6 +739,9 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public IReadOnlyList<ChatMessage>? LastReceivedMessages { get; private set; }
 
+    /// <summary>Tool names offered to the most recent call (from <c>options.Tools</c>).</summary>
+    public IReadOnlyList<string>? LastOfferedToolNames { get; private set; }
+
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
 
     /// <summary>
@@ -617,6 +766,7 @@ internal sealed class FakeChatClient : IChatClient
     {
         Interlocked.Increment(ref _callCount);
         LastReceivedMessages = messages.ToList();
+        LastOfferedToolNames = options?.Tools?.Select(t => t.Name).ToList();
 
         if (Delay > TimeSpan.Zero)
             await Task.Delay(Delay, cancellationToken);
@@ -748,6 +898,54 @@ internal sealed class SequencedToolCallChatClient(IReadOnlyList<FunctionCallCont
             yield return update;
             await Task.Yield();
         }
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
+}
+
+/// <summary>
+/// IChatClient that streams a fixed number of text deltas at a controlled pace,
+/// optionally stalling indefinitely after the last delta. Exercises the
+/// sub-agent inactivity watchdog and absolute backstop.
+/// </summary>
+internal sealed class PacedStreamingChatClient : IChatClient
+{
+    private readonly int _deltaCount;
+    private readonly TimeSpan _interDelay;
+    private readonly bool _stallAtEnd;
+
+    public PacedStreamingChatClient(int deltaCount, TimeSpan interDelay, bool stallAtEnd = false)
+    {
+        _deltaCount = deltaCount;
+        _interDelay = interDelay;
+        _stallAtEnd = stallAtEnd;
+    }
+
+    public Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("Streaming path is used in subagent tests.");
+
+    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => StreamAsync(cancellationToken);
+
+    private async IAsyncEnumerable<ChatResponseUpdate> StreamAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        for (var i = 0; i < _deltaCount; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            yield return new ChatResponseUpdate(ChatRole.Assistant, $"d{i} ");
+            await Task.Delay(_interDelay, ct);
+        }
+
+        if (_stallAtEnd)
+            await Task.Delay(TimeSpan.FromMinutes(5), ct);
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;

@@ -28,6 +28,19 @@ internal sealed record ToolCallResult(
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
 
 /// <summary>
+/// Sub-agent wiring threaded from the session actor into the tool-execution
+/// context: the heartbeat sink (the session actor) a spawned <c>SubAgentActor</c>
+/// reports liveness to, the watchdog operation id it echoes back, and the
+/// inactivity budgets it inherits from the parent session's <c>SessionConfig</c>.
+/// </summary>
+internal sealed record SubAgentExecutionWiring(
+    IActorRef HeartbeatSink,
+    long ParentWatchdogOpId,
+    TimeSpan PrefillTimeout,
+    TimeSpan FirstTokenTimeout,
+    TimeSpan ToolExecutionTimeout);
+
+/// <summary>
 /// Async pipeline for parallel tool execution. Runs on the thread pool and
 /// sends results back to the session actor via <c>self.Tell()</c>.
 /// </summary>
@@ -54,7 +67,8 @@ internal static class SessionToolExecutionPipeline
         int shellTimeoutSeconds = 60,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
-        bool setWorkingDirectoryAvailable = false)
+        bool setWorkingDirectoryAvailable = false,
+        SubAgentExecutionWiring? subAgentWiring = null)
     {
         try
         {
@@ -80,7 +94,8 @@ internal static class SessionToolExecutionPipeline
                 shellTimeoutSeconds,
                 backgroundJobManager,
                 projectDirectory,
-                setWorkingDirectoryAvailable));
+                setWorkingDirectoryAvailable,
+                subAgentWiring));
             var results = await Task.WhenAll(tasks);
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
@@ -132,7 +147,8 @@ internal static class SessionToolExecutionPipeline
         int shellTimeoutSeconds = 60,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
-        bool setWorkingDirectoryAvailable = false)
+        bool setWorkingDirectoryAvailable = false,
+        SubAgentExecutionWiring? subAgentWiring = null)
     {
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
@@ -147,6 +163,14 @@ internal static class SessionToolExecutionPipeline
         string resultText;
         var context = BuildToolExecutionContext(sessionId, source, sessionDir, spawnChildActor, projectDirectory);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
+        if (subAgentWiring is { } wiring)
+        {
+            context.SubAgentHeartbeatSink = wiring.HeartbeatSink;
+            context.SubAgentParentWatchdogOpId = wiring.ParentWatchdogOpId;
+            context.SubAgentPrefillTimeout = wiring.PrefillTimeout;
+            context.SubAgentFirstTokenTimeout = wiring.FirstTokenTimeout;
+            context.SubAgentToolExecutionTimeout = wiring.ToolExecutionTimeout;
+        }
         if (approvalChannel is not null && emitApprovalRequest is not null)
         {
             context.ApprovalBridge = new ParentSessionApprovalBridge(

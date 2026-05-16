@@ -105,6 +105,7 @@ public sealed class SubAgentSpawner
 
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
+        var timeoutBudget = BuildTimeoutBudget(context, subAgentTimeout);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
@@ -122,7 +123,11 @@ public sealed class SubAgentSpawner
                 {
                     Task = task,
                     RuntimeContext = runtimeContext,
-                    Timeout = subAgentTimeout,
+                    Timeout = timeoutBudget.AbsoluteBackstop,
+                    TimeoutBudget = timeoutBudget,
+                    HeartbeatSink = context.SubAgentHeartbeatSink as IActorRef,
+                    RunId = runId,
+                    ParentWatchdogOpId = context.SubAgentParentWatchdogOpId,
                     SessionScopeId = subAgentScopeId,
                     Audience = context.Audience,
                     Boundary = context.Boundary,
@@ -132,7 +137,10 @@ public sealed class SubAgentSpawner
                     Cancellation = ct,
                     ApprovalBridge = context.ApprovalBridge
                 },
-                timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)),
+                // The Ask only needs to outlast the sub-agent's own absolute
+                // backstop: SubAgentActor.Complete always replies (even on timeout
+                // or cancellation), so this timeout is purely a dead-actor backstop.
+                timeout: timeoutBudget.AbsoluteBackstop.Add(TimeSpan.FromSeconds(30)),
                 cancellationToken: ct);
 
             sw.Stop();
@@ -236,6 +244,27 @@ public sealed class SubAgentSpawner
     {
         subAgent.Tell(PoisonPill.Instance);
     }
+
+    /// <summary>
+    /// Build the sub-agent's timeout budget: inactivity budgets inherited from the
+    /// parent session (carried on the context), plus the per-profile absolute
+    /// backstop. When the inactivity budgets are absent (spawned outside a
+    /// session) the budget collapses to a flat timeout.
+    /// </summary>
+    private static SubAgentTimeoutBudget BuildTimeoutBudget(ToolExecutionContext context, TimeSpan backstop)
+        => (context.SubAgentPrefillTimeout,
+            context.SubAgentFirstTokenTimeout,
+            context.SubAgentToolExecutionTimeout) switch
+        {
+            ({ } prefill, { } firstToken, { } toolExec) => new SubAgentTimeoutBudget
+            {
+                PrefillTimeout = prefill,
+                FirstTokenTimeout = firstToken,
+                ToolExecutionTimeout = toolExec,
+                AbsoluteBackstop = backstop
+            },
+            _ => SubAgentTimeoutBudget.FromLegacyTimeout(backstop)
+        };
 
     private static string AppendSystemPromptOverlay(string basePrompt, string? overlay)
     {

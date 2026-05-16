@@ -43,6 +43,40 @@ public sealed record SubAgentDefinition
 }
 
 /// <summary>
+/// Timeout budget for a sub-agent run. The three inactivity budgets mirror the
+/// parent session's <see cref="Configuration.SessionConfig"/> values and reset on
+/// activity (streaming deltas, tool transitions); <see cref="AbsoluteBackstop"/>
+/// is a single hard wall-clock cap on the whole run regardless of activity.
+/// </summary>
+public sealed record SubAgentTimeoutBudget
+{
+    /// <summary>Inactivity budget awaiting the first streaming delta of an LLM call.</summary>
+    public required TimeSpan PrefillTimeout { get; init; }
+
+    /// <summary>Inactivity budget between consecutive streaming deltas.</summary>
+    public required TimeSpan FirstTokenTimeout { get; init; }
+
+    /// <summary>Inactivity budget covering a single tool batch.</summary>
+    public required TimeSpan ToolExecutionTimeout { get; init; }
+
+    /// <summary>Hard wall-clock cap on the entire sub-agent run.</summary>
+    public required TimeSpan AbsoluteBackstop { get; init; }
+
+    /// <summary>
+    /// Degenerate budget derived from a single flat timeout — used when a caller
+    /// supplies only <see cref="RunSubAgent.Timeout"/> and no explicit budget.
+    /// Every phase collapses to the one value.
+    /// </summary>
+    public static SubAgentTimeoutBudget FromLegacyTimeout(TimeSpan timeout) => new()
+    {
+        PrefillTimeout = timeout,
+        FirstTokenTimeout = timeout,
+        ToolExecutionTimeout = timeout,
+        AbsoluteBackstop = timeout
+    };
+}
+
+/// <summary>
 /// Message sent to a <see cref="SubAgentActor"/> to begin execution.
 /// </summary>
 public sealed record RunSubAgent : INoSerializationVerificationNeeded
@@ -98,6 +132,29 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     /// approval requests back to the interactive user instead of auto-denying.
     /// </summary>
     public IParentApprovalBridge? ApprovalBridge { get; init; }
+
+    /// <summary>
+    /// Per-operation inactivity budgets plus the absolute backstop. When null the
+    /// sub-agent derives a degenerate budget from <see cref="Timeout"/>.
+    /// </summary>
+    public SubAgentTimeoutBudget? TimeoutBudget { get; init; }
+
+    /// <summary>
+    /// Parent session actor that receives <see cref="SubAgentHeartbeat"/> liveness
+    /// signals while this sub-agent runs. Null for standalone runs with no parent
+    /// watchdog to refresh.
+    /// </summary>
+    public IActorRef? HeartbeatSink { get; init; }
+
+    /// <summary>Spawn-unique run id, echoed back in heartbeats for correlation.</summary>
+    public string? RunId { get; init; }
+
+    /// <summary>
+    /// The parent's <c>ProcessingWatchdog</c> operation id for the <c>spawn_agent</c>
+    /// tool batch, echoed in every <see cref="SubAgentHeartbeat"/> so a stale
+    /// heartbeat cannot refresh the wrong parent operation.
+    /// </summary>
+    public long ParentWatchdogOpId { get; init; }
 }
 
 /// <summary>
@@ -123,5 +180,48 @@ public sealed record SubAgentResult : INoSerializationVerificationNeeded
     /// Total number of structured findings returned before parent-session review.
     /// </summary>
     public int FindingsCount { get; init; }
+}
+
+/// <summary>Phase a sub-agent reports in a <see cref="SubAgentHeartbeat"/>.</summary>
+public enum SubAgentHeartbeatPhase
+{
+    /// <summary>The sub-agent's LLM call is actively streaming.</summary>
+    LlmStreaming,
+
+    /// <summary>The sub-agent has dispatched a tool batch.</summary>
+    ToolDispatch,
+
+    /// <summary>The sub-agent's tool batch completed.</summary>
+    ToolComplete
+}
+
+/// <summary>
+/// Liveness signal sent from a running <see cref="SubAgentActor"/> to its parent
+/// session so the parent can keep the <c>spawn_agent</c> tool-execution watchdog
+/// refreshed for as long as the sub-agent is making progress.
+/// </summary>
+public sealed record SubAgentHeartbeat : INoSerializationVerificationNeeded
+{
+    /// <summary>The reporting sub-agent's name.</summary>
+    public required AgentName AgentName { get; init; }
+
+    /// <summary>Spawn-unique run id, correlating this heartbeat to one spawn.</summary>
+    public required string RunId { get; init; }
+
+    /// <summary>
+    /// The parent session's <c>ProcessingWatchdog</c> operation id captured when the
+    /// <c>spawn_agent</c> tool batch was armed. The parent refreshes its watchdog
+    /// only while this still matches its current operation.
+    /// </summary>
+    public required long ParentWatchdogOpId { get; init; }
+
+    /// <summary>What the sub-agent was doing when it emitted this heartbeat.</summary>
+    public SubAgentHeartbeatPhase Phase { get; init; }
+
+    /// <summary>Input tokens for the sub-agent's most recent completed LLM call, when known.</summary>
+    public long? InputTokens { get; init; }
+
+    /// <summary>Output tokens for the sub-agent's most recent completed LLM call, when known.</summary>
+    public long? OutputTokens { get; init; }
 }
 

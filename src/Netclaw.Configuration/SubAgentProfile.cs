@@ -47,8 +47,21 @@ public sealed record SubAgentProfile
     /// </summary>
     public ModelRole ModelRole { get; init; } = ModelRole.Compaction;
 
-    /// <summary>Wall-clock timeout in seconds for subagent execution.</summary>
-    public int TimeoutSeconds { get; init; } = 60;
+    /// <summary>
+    /// Absolute wall-clock backstop in seconds for a sub-agent run. This is NOT
+    /// the primary timeout — a sub-agent is governed by an inactivity watchdog
+    /// (inherited from the parent session's <c>SessionConfig</c>) that resets
+    /// while the model streams. The backstop only bounds a run that keeps
+    /// producing activity but never finishes, so it is deliberately generous and
+    /// must exceed the longest inherited inactivity budget.
+    /// </summary>
+    public int TimeoutSeconds { get; init; } = DefaultBackstopSeconds;
+
+    /// <summary>
+    /// Default value for <see cref="TimeoutSeconds"/> — the absolute backstop
+    /// when a profile or definition file does not specify one.
+    /// </summary>
+    public const int DefaultBackstopSeconds = 3600;
 
     /// <summary>
     /// Whether successful free-form output should be converted into structured

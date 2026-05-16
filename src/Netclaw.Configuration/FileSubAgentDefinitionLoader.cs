@@ -226,7 +226,7 @@ public sealed class FileSubAgentDefinitionLoader
             SystemPrompt = systemPrompt,
             ToolNames = tools,
             ModelRole = modelRole,
-            TimeoutSeconds = frontmatter.TimeoutSeconds ?? 60,
+            TimeoutSeconds = frontmatter.TimeoutSeconds ?? SubAgentProfile.DefaultBackstopSeconds,
             EmitStructuredFindings = frontmatter.EmitStructuredFindings ?? false,
             Visibility = visibility
         };

@@ -3,12 +3,14 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using System.Text;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
@@ -31,7 +33,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 {
     private const int MaxToolIterations = 10;
     private const string EmptyResponseMarker = "(no response)";
-    private const string TimeoutTimerKey = "subagent-timeout";
+    private const string BackstopTimerKey = "subagent-backstop";
+    private const string HeartbeatTimerKey = "subagent-heartbeat";
+    private const string SpawnAgentToolName = "spawn_agent";
+    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan ActivityPingInterval = TimeSpan.FromSeconds(1);
 
     private readonly SubAgentDefinition _definition;
     private readonly IChatClient _chatClient;
@@ -53,6 +59,26 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private CancellationTokenRegistration _externalCancellationRegistration;
     private ToolExecutionContext _toolExecutionContext = ToolExecutionContext.Empty;
 
+    // Inactivity watchdog (mirrors LlmSessionActor): resets on streaming/tool
+    // activity so a responsive sub-agent is never killed mid-stream. The
+    // single-shot backstop timer is the only hard wall-clock cap.
+    private readonly ProcessingWatchdog _watchdog = new();
+    private SubAgentTimeoutBudget _budget = SubAgentTimeoutBudget.FromLegacyTimeout(TimeSpan.FromSeconds(60));
+    private bool _anyContentStreamedThisCall;
+
+    // Set once in Complete — guards the multiple convergent termination paths
+    // (inactivity watchdog, absolute backstop, parent cancellation) from
+    // double-replying or double-stopping.
+    private bool _completed;
+
+    // Heartbeat state — liveness signal to the parent session's watchdog.
+    private IActorRef? _heartbeatSink;
+    private string _runId = string.Empty;
+    private long _parentWatchdogOpId;
+    private SubAgentHeartbeatPhase _currentPhase = SubAgentHeartbeatPhase.LlmStreaming;
+    private long? _lastInputTokens;
+    private long? _lastOutputTokens;
+
     public SubAgentActor(
         SubAgentDefinition definition,
         IChatClient chatClient,
@@ -72,10 +98,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _approvalService = approvalService;
         _log = Context.GetLogger();
 
-        // Build a private ToolRegistry for this subagent's tool subset
+        // Build a private ToolRegistry for this subagent's tool subset.
+        // spawn_agent is filtered unconditionally: a sub-agent must never spawn
+        // another sub-agent — that would allow unbounded nesting and recursive
+        // watchdog/heartbeat chains with no depth limit.
         _toolRegistry = new ToolRegistry();
         foreach (var tool in definition.Tools)
         {
+            if (string.Equals(tool.Name, SpawnAgentToolName, StringComparison.Ordinal))
+            {
+                _log.Warning(
+                    "SubAgent [{AgentName}] tool '{ToolName}' filtered — sub-agents cannot spawn sub-agents",
+                    definition.Name, tool.Name);
+                continue;
+            }
+
             _toolRegistry.Register(tool);
         }
 
@@ -134,8 +171,22 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
 
-            // Schedule wall-clock timeout
-            Timers.StartSingleTimer(TimeoutTimerKey, SubAgentTimeout.Instance, msg.Timeout);
+            _budget = msg.TimeoutBudget ?? SubAgentTimeoutBudget.FromLegacyTimeout(msg.Timeout);
+            _heartbeatSink = msg.HeartbeatSink;
+            _runId = msg.RunId ?? Guid.NewGuid().ToString("N");
+            _parentWatchdogOpId = msg.ParentWatchdogOpId;
+
+            // Absolute wall-clock backstop — armed once for the whole run, never
+            // refreshed. The inactivity watchdog (armed per-operation in
+            // FireLlmCall / HandleToolCalls) is the primary control; the backstop
+            // only bounds a run that keeps producing activity but never finishes.
+            Timers.StartSingleTimer(BackstopTimerKey, SubAgentBackstopExpired.Instance, _budget.AbsoluteBackstop);
+
+            // Periodic liveness heartbeat so the parent session can keep its
+            // spawn_agent tool-execution watchdog refreshed while this sub-agent
+            // is alive. Skipped when there is no parent sink (standalone run).
+            if (_heartbeatSink is not null)
+                Timers.StartPeriodicTimer(HeartbeatTimerKey, SubAgentHeartbeatTick.Instance, HeartbeatInterval);
 
             // Build initial conversation: system prompt (from file, verbatim) + task as user message.
             // If the caller supplied runtime context, prefix it onto the user message so the
@@ -143,8 +194,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildSystemPrompt(_definition)));
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildUserMessage(msg.RuntimeContext, msg.Task)));
 
-            _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, timeout={Timeout})",
-                _definition.Name, _aiTools.Count, msg.Timeout);
+            _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, backstop={Backstop})",
+                _definition.Name, _aiTools.Count, _budget.AbsoluteBackstop);
 
             FireLlmCall();
             Become(Processing);
@@ -156,6 +207,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         Receive<LlmResponseReceived>(msg =>
         {
             var response = msg.Response;
+            if (response.Usage is { } usage)
+            {
+                _lastInputTokens = usage.InputTokenCount;
+                _lastOutputTokens = usage.OutputTokenCount;
+            }
+
             var lastMessage = response.Messages[^1];
 
             var toolCalls = lastMessage.Contents.OfType<FunctionCallContent>().ToList();
@@ -182,6 +239,22 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Complete(true, text);
         });
 
+        // Streaming keepalive from InvokeLlmAsync — resets the inactivity watchdog
+        // so a sub-agent whose model is actively responding is never killed.
+        Receive<SubAgentLlmActivity>(_ =>
+        {
+            _currentPhase = SubAgentHeartbeatPhase.LlmStreaming;
+            if (!_anyContentStreamedThisCall)
+            {
+                _anyContentStreamedThisCall = true;
+                _watchdog.Promote(_budget.FirstTokenTimeout, Timers);
+            }
+            else
+            {
+                _watchdog.Refresh(_budget.FirstTokenTimeout, Timers);
+            }
+        });
+
         Receive<ToolExecutionCompleted>(msg =>
         {
             // Append tool results as MEAI messages and log each result
@@ -196,6 +269,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             }
 
             _toolIterationCount++;
+            EmitHeartbeat(SubAgentHeartbeatPhase.ToolComplete);
 
             if (_toolIterationCount >= MaxToolIterations)
             {
@@ -222,6 +296,39 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Complete(false, $"LLM call failed: {msg.Cause.Message}");
         });
 
+        // Periodic liveness signal to the parent session's spawn_agent watchdog.
+        // Sent unconditionally: it proves this actor's message loop is alive.
+        // A stalled operation is caught by this sub-agent's own inactivity
+        // watchdog (which self-terminates with a SubAgentResult); the parent
+        // watchdog is the backstop for a fully-wedged sub-agent that cannot even
+        // process its own timers.
+        Receive<SubAgentHeartbeatTick>(_ => EmitHeartbeat(_currentPhase));
+
+        Receive<ProcessingWatchdogExpired>(msg =>
+        {
+            if (!_watchdog.IsCurrent(msg))
+                return; // stale — the operation already ended or advanced
+
+            _watchdog.Stop(Timers);
+            _executionCts?.Cancel();
+
+            var (what, budget) = msg.OperationName switch
+            {
+                ProcessingWatchdog.LlmCall => (
+                    "no LLM streaming activity",
+                    _anyContentStreamedThisCall ? _budget.FirstTokenTimeout : _budget.PrefillTimeout),
+                ProcessingWatchdog.ToolExecution => ("no tool activity", _budget.ToolExecutionTimeout),
+                _ => ("no activity", _budget.AbsoluteBackstop)
+            };
+
+            _log.Warning(
+                "SubAgent [{AgentName}] inactivity watchdog expired operation={Operation} iterations={Iterations}",
+                _definition.Name, msg.OperationName, _toolIterationCount);
+            Complete(false,
+                $"Subagent '{_definition.Name}' timed out: {what} for {budget.TotalSeconds:F0}s "
+                + $"(iteration {_toolIterationCount}).");
+        });
+
         Receive<SubAgentCancelled>(_ =>
         {
             _executionCts?.Cancel();
@@ -229,12 +336,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Complete(false, "Subagent cancelled by parent");
         });
 
-        Receive<SubAgentTimeout>(_ =>
+        Receive<SubAgentBackstopExpired>(_ =>
         {
             _executionCts?.Cancel();
-            _log.Warning("SubAgent [{AgentName}] timed out after {Iterations} tool iterations",
+            _log.Warning("SubAgent [{AgentName}] exceeded absolute backstop after {Iterations} tool iterations",
                 _definition.Name, _toolIterationCount);
-            Complete(false, "Subagent timed out");
+            Complete(false,
+                $"Subagent '{_definition.Name}' timed out: exceeded its absolute time limit of "
+                + $"{_budget.AbsoluteBackstop.TotalSeconds:F0}s.");
         });
     }
 
@@ -246,6 +355,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
         _log.Info("SubAgent [{AgentName}] calling tools: [{ToolNames}]",
             _definition.Name, toolNames);
+
+        // Switch the inactivity watchdog from the LLM-call budget to the
+        // tool-batch budget for the duration of tool execution.
+        _watchdog.Stop(Timers);
+        _watchdog.Start(ProcessingWatchdog.ToolExecution, _budget.ToolExecutionTimeout, Timers);
+        EmitHeartbeat(SubAgentHeartbeatPhase.ToolDispatch);
 
         var self = Self;
         var executor = new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalService);
@@ -261,6 +376,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void FireLlmCall(bool forceNoTools = false)
     {
+        // Arm the inactivity watchdog with the generous prefill budget; the first
+        // streaming delta promotes it to the tighter inter-delta budget.
+        _watchdog.Stop(Timers);
+        _watchdog.Start(ProcessingWatchdog.LlmCall, _budget.PrefillTimeout, Timers);
+        _anyContentStreamedThisCall = false;
+        _currentPhase = SubAgentHeartbeatPhase.LlmStreaming;
+
         var self = Self;
         var client = _chatClient;
         var messages = new List<AiChatMessage>(_history);
@@ -278,10 +400,38 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _ = InvokeLlmAsync(client, messages, options, sessionId, self, _executionCts?.Token ?? CancellationToken.None);
     }
 
+    /// <summary>
+    /// Send a liveness heartbeat to the parent session so it can refresh the
+    /// <c>spawn_agent</c> tool-execution watchdog. No-op for a standalone run.
+    /// </summary>
+    private void EmitHeartbeat(SubAgentHeartbeatPhase phase)
+    {
+        _currentPhase = phase;
+        if (_heartbeatSink is null)
+            return;
+
+        _heartbeatSink.Tell(new SubAgentHeartbeat
+        {
+            AgentName = _definition.Name,
+            RunId = _runId,
+            ParentWatchdogOpId = _parentWatchdogOpId,
+            Phase = phase,
+            InputTokens = _lastInputTokens,
+            OutputTokens = _lastOutputTokens
+        });
+    }
+
     private void Complete(bool success, string output)
     {
+        // Multiple termination paths (inactivity watchdog, absolute backstop,
+        // parent cancellation, normal finish) can converge — only the first runs.
+        if (_completed)
+            return;
+        _completed = true;
+
+        _watchdog.Stop(Timers);
+        Timers.CancelAll();
         _executionCts?.Cancel();
-        Timers.Cancel(TimeoutTimerKey);
         _externalCancellationRegistration.Dispose();
         _executionCts?.Dispose();
         _executionCts = null;
@@ -382,22 +532,38 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     internal static async Task InvokeLlmAsync(
         IChatClient client, List<AiChatMessage> messages, ChatOptions? options, SessionId? sessionId, IActorRef self, CancellationToken ct)
     {
+        // Sub-agents share the parent's diagnostics scope: SessionDiagnosticsContext
+        // strips the "/subagent/..." suffix back to the parent id, so logs roll up
+        // to the parent session. The session-affinity id, by contrast, keeps the
+        // full subagent scope id — the reverse proxy hash-routes that to its own
+        // sticky GPU bucket (off the parent's card) with KV-cache reuse across the
+        // sub-agent's own calls. Null is intentional for runs outside any session.
+        SessionAffinityContext.SessionId = sessionId?.Value;
+        using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId?.Value);
         try
         {
-            // Sub-agents share the parent's diagnostics scope: SessionDiagnosticsContext
-            // strips the "/subagent/..." suffix back to the parent id. Null is intentional
-            // for sub-agents that run outside any session.
-            using var diagnosticsScope = SessionDiagnosticsContext.Push(sessionId?.Value);
-
             // Use streaming to match the main session path. The non-streaming
             // GetResponseAsync path drops reasoning content for some providers
             // (e.g., Qwen emits <think> blocks that surface as TextReasoningContent
             // only in streaming mode), leaving the assistant message with no
             // TextContent and causing the subagent to report empty "(no response)".
             var updates = new List<ChatResponseUpdate>();
+            var throttle = Stopwatch.StartNew();
+            var pinged = false;
             await foreach (var update in client.GetStreamingResponseAsync(messages, options, ct))
             {
                 updates.Add(update);
+
+                // Liveness ping so the actor's inactivity watchdog resets. The
+                // first update always pings (it promotes the watchdog off the
+                // prefill budget); later ones are throttled — the actor needs the
+                // signal, not every delta's content.
+                if (!pinged || throttle.Elapsed >= ActivityPingInterval)
+                {
+                    pinged = true;
+                    throttle.Restart();
+                    self.Tell(SubAgentLlmActivity.Instance);
+                }
             }
 
             var response = updates.ToChatResponse();
@@ -411,6 +577,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         catch (Exception ex)
         {
             self.Tell(new LlmCallFailed(ex));
+        }
+        finally
+        {
+            SessionAffinityContext.SessionId = null;
         }
     }
 
@@ -531,17 +701,31 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return SystemPromptAssembler.Assemble(agents: definition.SystemPrompt, projectInstructions: definition.ProjectInstructions);
     }
 
-    /// <summary>Singleton timeout marker message.</summary>
-    private sealed class SubAgentTimeout
+    /// <summary>Singleton absolute-backstop timer marker — fired once per run.</summary>
+    private sealed class SubAgentBackstopExpired
     {
-        public static readonly SubAgentTimeout Instance = new();
-        private SubAgentTimeout() { }
+        public static readonly SubAgentBackstopExpired Instance = new();
+        private SubAgentBackstopExpired() { }
     }
 
     private sealed class SubAgentCancelled
     {
         public static readonly SubAgentCancelled Instance = new();
         private SubAgentCancelled() { }
+    }
+
+    /// <summary>Streaming keepalive self-message emitted by <see cref="InvokeLlmAsync"/>.</summary>
+    private sealed class SubAgentLlmActivity
+    {
+        public static readonly SubAgentLlmActivity Instance = new();
+        private SubAgentLlmActivity() { }
+    }
+
+    /// <summary>Periodic timer marker that triggers a parent liveness heartbeat.</summary>
+    private sealed class SubAgentHeartbeatTick
+    {
+        public static readonly SubAgentHeartbeatTick Instance = new();
+        private SubAgentHeartbeatTick() { }
     }
 
     // ── Reuse LlmSessionActor's internal message types ──
