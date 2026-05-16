@@ -678,13 +678,9 @@ public class DispatchingToolExecutorTests
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
         try
         {
-            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval-audit", "repo");
-            var commandPath = Path.Combine(grantDir, "README.md");
-            var unrelatedCwd = Path.Combine(Path.GetTempPath(), "netclaw-approval-audit", "other");
-
             var store = new ToolApprovalStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry { Verb = "cat", Directory = grantDir });
+                new ApprovalEntry { Verb = "git status", Directory = null });
 
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(store), "tool-approval");
             var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
@@ -710,14 +706,12 @@ public class DispatchingToolExecutorTests
             var call = new FunctionCallContent(
                 "call-audit",
                 "shell_execute",
-                ToolInput.Create(
-                    "Command", $"cat {commandPath}",
-                    "WorkingDirectory", unrelatedCwd));
+                ToolInput.Create("Command", "git status"));
 
             await executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
 
             Assert.Equal("PreviouslyApproved", context.AppliedApprovalDecision);
-            Assert.Equal($"cat [persistent: cat in {grantDir}]", context.AppliedApprovalPattern);
+            Assert.Equal("git status [persistent: git status anywhere]", context.AppliedApprovalPattern);
         }
         finally
         {
