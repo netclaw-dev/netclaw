@@ -52,6 +52,35 @@ data.
 - For releases with incompatible schema changes, publish a release note entry
   with explicit rollback guidance.
 
+## Version-Specific Upgrade Notes
+
+### Trust-context hardening (issue #994)
+
+The trust-context hardening change makes the `audience` and `boundary` trust
+fields **required** on persisted background-job and reminder documents. A
+job/reminder JSON document written by an older daemon predates these fields.
+
+**Symptom:** after upgrading, a background job or reminder that previously ran
+silently stops being scheduled.
+
+**Cause:** the daemon rejects any persisted `BackgroundJobDefinition` or
+`ReminderDefinition` document that lacks `audience` or `boundary`. On load it
+logs an error naming the file and the missing field(s), excludes the document
+from scheduling, and **preserves the file on disk** for inspection. The trust
+context is not substituted — a job or reminder with no persisted audience
+cannot be run safely, so no audience is invented.
+
+**Remedy:** for each rejected document under `~/.netclaw`, either:
+
+- recreate the job/reminder through the daemon (it will be persisted with
+  explicit trust fields), or
+- hand-edit the JSON document to add explicit `audience` and `boundary`
+  values, then restart the daemon.
+
+Check the daemon logs after upgrade for `predates issue #994` error entries to
+find affected files. There is no automatic backfill and no `doctor` fix for
+this case.
+
 ## Release Checklist (Pre-Distribution)
 
 - migration scripts are idempotent and versioned

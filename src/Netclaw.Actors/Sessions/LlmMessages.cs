@@ -33,20 +33,16 @@ internal sealed record LlmResponseReceived : INoSerializationVerificationNeeded
 /// <summary>
 /// Incremental streaming delta emitted while an LLM response is in-flight.
 /// </summary>
-internal sealed record LlmResponseDeltaReceived : INoSerializationVerificationNeeded
+internal sealed record LlmResponseDeltaReceived(AIContent Content) : INoSerializationVerificationNeeded
 {
-    public required AIContent Content { get; init; }
-
     public long CallId { get; init; }
 }
 
 /// <summary>
 /// Internal message sent back to the session actor when the async LLM call fails.
 /// </summary>
-internal sealed record LlmCallFailed : INoSerializationVerificationNeeded
+internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerificationNeeded
 {
-    public required Exception Cause { get; init; }
-
     public long CallId { get; init; }
 }
 
@@ -106,31 +102,21 @@ internal sealed record ToolExecutionFailed : INoSerializationVerificationNeeded
 /// Internal watchdog timeout used to force stuck Processing operations to fail
 /// and return the session actor to Ready state.
 /// </summary>
-internal sealed record ProcessingWatchdogExpired : INoSerializationVerificationNeeded
-{
-    public required long OperationId { get; init; }
-
-    public required string OperationName { get; init; }
-}
+internal sealed record ProcessingWatchdogExpired(long OperationId, string OperationName)
+    : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Marshal a child actor creation request back onto the session actor thread.
 /// This keeps <c>Context.ActorOf</c> usage on the actor mailbox thread.
 /// </summary>
-internal sealed record SpawnChildActorRequest : INoSerializationVerificationNeeded
-{
-    public required Props Props { get; init; }
-    public required string ActorName { get; init; }
-}
+internal sealed record SpawnChildActorRequest(Props Props, string ActorName)
+    : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Internal trigger to begin the compaction sequence.
 /// Sent to self after a turn completes when usage exceeds the threshold.
 /// </summary>
-internal sealed record CompactionTriggered : INoSerializationVerificationNeeded
-{
-    public required long InputTokenCount { get; init; }
-}
+internal sealed record CompactionTriggered(long InputTokenCount) : INoSerializationVerificationNeeded;
 
 internal sealed record CompactionWorkCompleted : INoSerializationVerificationNeeded
 {

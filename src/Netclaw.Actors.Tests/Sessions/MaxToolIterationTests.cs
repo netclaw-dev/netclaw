@@ -75,10 +75,9 @@ public class MaxToolIterationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("max-iter-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
@@ -125,10 +124,9 @@ public class MaxToolIterationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("max-iter-violation-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -171,10 +169,9 @@ public class MaxToolIterationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("iter-reset-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
@@ -231,10 +228,9 @@ public class MaxToolIterationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("normal-tool-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification

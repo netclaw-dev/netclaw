@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Configuration;
 
@@ -14,6 +15,22 @@ namespace Netclaw.Actors.Jobs;
 public readonly record struct BackgroundJobId(string Value)
 {
     public override string ToString() => Value;
+}
+
+/// <summary>
+/// Serializes <see cref="BackgroundJobId"/> as its bare primitive string so the
+/// on-disk JSON form is byte-identical to the pre-value-object representation
+/// (a raw <c>"id"</c> string, never a nested <c>{ "Value": ... }</c> object).
+/// </summary>
+public sealed class BackgroundJobIdJsonConverter : JsonConverter<BackgroundJobId>
+{
+    public override BackgroundJobId Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        new(reader.GetString() ?? string.Empty);
+
+    public override void Write(
+        Utf8JsonWriter writer, BackgroundJobId value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.Value);
 }
 
 public enum BackgroundJobStatus
@@ -106,10 +123,12 @@ internal sealed record BackgroundJobCompleted
 /// </summary>
 public sealed record BackgroundJobDefinition
 {
-    public required string Id { get; init; }
+    [JsonConverter(typeof(BackgroundJobIdJsonConverter))]
+    public required BackgroundJobId Id { get; init; }
     public required string Command { get; init; }
     public string? WorkingDirectory { get; init; }
-    public required string SessionId { get; init; }
+    [JsonConverter(typeof(Protocol.SessionIdJsonConverter))]
+    public required Protocol.SessionId SessionId { get; init; }
     public required string Rationale { get; init; }
     public BackgroundJobStatus Status { get; init; } = BackgroundJobStatus.Pending;
     public int? ExitCode { get; init; }

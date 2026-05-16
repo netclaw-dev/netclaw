@@ -586,7 +586,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
                 FilePath = tempFile,
                 FileName = "test.txt",
-                MimeType = "text/plain"
+                MimeType = new Netclaw.Security.MimeType("text/plain")
             },
             new TurnCompleted
             {
@@ -645,11 +645,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Timeout_during_post_sends_transport_failure_feedback_to_session()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput("Hello from the LLM")
             {
                 SessionId = new SessionId("D7/9000.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = "Hello from the LLM"
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {
@@ -709,8 +708,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             {
                 SessionId = new SessionId("D7/9050.1"),
                 Kind = "approval",
-                CallId = "call-1",
-                ToolName = "shell_execute",
+                CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
                 DisplayText = "git push origin main",
                 RequesterSenderId = "U123",
                 Patterns = ["git push"],
@@ -774,7 +773,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
-            Assert.Equal("call-1", response.CallId);
+            Assert.Equal("call-1", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
             Assert.Equal("U123", response.SenderId);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -800,8 +799,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             {
                 SessionId = new SessionId("D7/9055.1"),
                 Kind = "approval",
-                CallId = "call-blocks",
-                ToolName = "shell_execute",
+                CallId = new Netclaw.Tools.ToolCallId("call-blocks"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
                 DisplayText = "git push origin dev",
                 RequesterSenderId = "U123",
                 Patterns = ["git push"],
@@ -872,8 +871,8 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             {
                 SessionId = new SessionId("D7/9060.1"),
                 Kind = "approval",
-                CallId = "call-button",
-                ToolName = "shell_execute",
+                CallId = new Netclaw.Tools.ToolCallId("call-button"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
                 DisplayText = "git push origin main",
                 RequesterSenderId = "U123",
                 Patterns = ["git push"],
@@ -923,7 +922,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         actor.Tell(new SlackApprovalResponse(
             new SlackChannelId("D7"),
             new SlackThreadTs("9060.1"),
-            "call-button",
+            new Netclaw.Tools.ToolCallId("call-button"),
             ApprovalOptionKeys.ApproveSession,
             "U123"));
 
@@ -931,7 +930,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
-            Assert.Equal("call-button", response.CallId);
+            Assert.Equal("call-button", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveSession, response.SelectedKey);
             Assert.Equal("U123", response.SenderId);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -990,7 +989,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         actor.Tell(new SlackApprovalResponse(
             new SlackChannelId("D7"),
             new SlackThreadTs("9061.1"),
-            "call-cold-binding",
+            new Netclaw.Tools.ToolCallId("call-cold-binding"),
             ApprovalOptionKeys.ApproveOnce,
             "U123"));
 
@@ -998,7 +997,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
         {
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
-            Assert.Equal("call-cold-binding", response.CallId);
+            Assert.Equal("call-cold-binding", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
             Assert.Equal("U123", response.SenderId);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
@@ -1012,11 +1011,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Generic_exception_during_post_sends_unknown_failure_feedback_to_session()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput("Hello from the LLM")
             {
                 SessionId = new SessionId("D7/9100.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = "Hello from the LLM"
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {
@@ -1072,11 +1070,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Content_rejection_msg_too_long_sends_message_too_large_feedback()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput(new string('x', 50_000))
             {
                 SessionId = new SessionId("D7/9200.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = new string('x', 50_000)
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {
@@ -1136,11 +1133,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Content_rejection_invalid_blocks_sends_content_rejected_feedback()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput("Some text with bad formatting")
             {
                 SessionId = new SessionId("D7/9300.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = "Some text with bad formatting"
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {

@@ -74,8 +74,8 @@ internal static class WorkingContextUpdater
         var pendingIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in results)
         {
-            if (!string.IsNullOrEmpty(r.ToolCallId))
-                pendingIds.Add(r.ToolCallId);
+            if (r.ToolCallId is { } id && !string.IsNullOrEmpty(id.Value))
+                pendingIds.Add(id.Value);
         }
         if (pendingIds.Count == 0)
             return current;
@@ -89,16 +89,16 @@ internal static class WorkingContextUpdater
 
             foreach (var tc in msg.ToolCalls)
             {
-                if (pendingIds.Remove(tc.CallId))
-                    argsByCallId[tc.CallId] = tc.ArgumentsJson;
+                if (pendingIds.Remove(tc.CallId.Value))
+                    argsByCallId[tc.CallId.Value] = tc.ArgumentsJson;
             }
         }
 
         var updated = current;
         foreach (var result in results)
         {
-            if (result.ToolCallId is null
-                || !argsByCallId.TryGetValue(result.ToolCallId, out var argumentsJson))
+            if (result.ToolCallId is not { } resultCallId
+                || !argsByCallId.TryGetValue(resultCallId.Value, out var argumentsJson))
             {
                 continue;
             }

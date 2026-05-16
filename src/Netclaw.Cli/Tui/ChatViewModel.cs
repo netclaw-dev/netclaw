@@ -209,7 +209,7 @@ public partial class ChatViewModel : ReactiveViewModel
         try
         {
             await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-            await _daemonClient.RespondToInteractionAsync(pending.CallId, selectedKey);
+            await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
 
             _pendingInteractions.Dequeue();
             RefreshApprovalOptions();
@@ -363,7 +363,7 @@ public partial class ChatViewModel : ReactiveViewModel
         try
         {
             await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
-            await _daemonClient.RespondToInteractionAsync(pending.CallId, selectedKey);
+            await _daemonClient.RespondToInteractionAsync(pending.CallId.Value, selectedKey);
 
             _pendingInteractions.Dequeue();
             RefreshApprovalOptions();

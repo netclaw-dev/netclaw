@@ -114,7 +114,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
 
         var approval = await sink.ExpectMsgAsync<DiscordApprovalResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("call-1", approval.CallId);
+        Assert.Equal("call-1", approval.CallId.Value);
     }
 
     // Regression for #979 (Discord side): when the per-session binding has been
@@ -140,7 +140,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
 
         var approval = await sink.ExpectMsgAsync<DiscordApprovalResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("call-cold", approval.CallId);
+        Assert.Equal("call-cold", approval.CallId.Value);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, approval.SelectedKey);
     }
 

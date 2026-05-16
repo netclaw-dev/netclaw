@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Akka.Actor;
 using Netclaw.Actors.Serialization;
@@ -16,6 +17,22 @@ namespace Netclaw.Actors.Reminders;
 public readonly record struct ReminderId(string Value) : INetclawSerializableMessage
 {
     public override string ToString() => Value;
+}
+
+/// <summary>
+/// Serializes <see cref="ReminderId"/> as its bare primitive string so the
+/// on-disk JSON form is byte-identical to the pre-value-object representation
+/// (a raw <c>"id"</c> string, never a nested <c>{ "Value": ... }</c> object).
+/// </summary>
+public sealed class ReminderIdJsonConverter : JsonConverter<ReminderId>
+{
+    public override ReminderId Read(
+        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        new(reader.GetString() ?? string.Empty);
+
+    public override void Write(
+        Utf8JsonWriter writer, ReminderId value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.Value);
 }
 
 /// <summary>
@@ -148,7 +165,8 @@ public sealed record ReminderSchedule : INetclawSerializableMessage
 /// </summary>
 public sealed record ReminderDefinition
 {
-    public required string Id { get; init; }
+    [JsonConverter(typeof(ReminderIdJsonConverter))]
+    public required ReminderId Id { get; init; }
     public required string Title { get; init; }
     public required ReminderSchedule Schedule { get; init; }
     public required string Instructions { get; init; }

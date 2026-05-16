@@ -62,11 +62,7 @@ public sealed class RestartRecoveryService : IHostedService
                 try
                 {
                     await sessionManager.Ask<CommandAck>(
-                        new WarmSession
-                        {
-                            SessionId = sessionId,
-                            RestartNotice = RestartNotice
-                        },
+                        new WarmSession(sessionId, RestartNotice),
                         timeout: TimeSpan.FromSeconds(10),
                         cancellationToken: cancellationToken);
 

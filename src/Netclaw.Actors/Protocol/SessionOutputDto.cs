@@ -35,11 +35,7 @@ public static class SessionOutputTypes
 /// Lightweight DTO for a chat message carried on the wire (role + content only).
 /// Used to replay recent history when resuming a session.
 /// </summary>
-public sealed record ChatMessageDto
-{
-    public required string Role { get; init; }
-    public required string Content { get; init; }
-}
+public sealed record ChatMessageDto(string Role, string Content);
 
 /// <summary>
 /// Wire-safe DTO for session output. Flattens the discriminated union

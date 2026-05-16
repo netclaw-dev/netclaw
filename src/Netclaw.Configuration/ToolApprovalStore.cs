@@ -32,6 +32,7 @@ public sealed class ToolApprovalStore
     public const int CurrentSchemaVersion = 2;
 
     private readonly string _filePath;
+    private readonly TimeProvider _timeProvider;
     private readonly object _lock = new();
 
     // Cache state guarded by _lock. `_cachedData` is the live in-memory
@@ -75,9 +76,16 @@ public sealed class ToolApprovalStore
         AllowTrailingCommas = true
     };
 
-    public ToolApprovalStore(string filePath)
+    /// <param name="filePath">Path to <c>tool-approvals.json</c>.</param>
+    /// <param name="timeProvider">
+    /// Clock used to stamp <see cref="ApprovalEntry.CreatedAt"/> on newly
+    /// added grants. Defaults to <see cref="TimeProvider.System"/> in
+    /// production; tests pass a fake to assert on timestamps.
+    /// </param>
+    public ToolApprovalStore(string filePath, TimeProvider? timeProvider = null)
     {
         _filePath = filePath;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -258,7 +266,15 @@ public sealed class ToolApprovalStore
                     return false;
             }
 
-            entries.Add(normalized);
+            // Stamp creation time on the new grant only. An equivalent grant
+            // already on disk returns above without restamping, so re-granting
+            // an existing approval preserves its original CreatedAt. A non-null
+            // incoming CreatedAt (e.g. a hand-edited file) is left untouched.
+            var stamped = normalized.CreatedAt is null
+                ? normalized with { CreatedAt = _timeProvider.GetUtcNow() }
+                : normalized;
+
+            entries.Add(stamped);
             Save(data);
             return true;
         }

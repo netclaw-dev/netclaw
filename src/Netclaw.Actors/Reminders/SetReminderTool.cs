@@ -247,7 +247,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
 
         var definition = new ReminderDefinition
         {
-            Id = id.Value,
+            Id = id,
             Title = args.Name,
             Schedule = schedule,
             Instructions = args.Prompt,

@@ -206,7 +206,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         sessionBinding.Forward(new DiscordApprovalResponse(
             ChannelId: _channelId,
             ThreadOrMessageId: interaction.ThreadOrMessageId,
-            CallId: interaction.CallId,
+            CallId: new Netclaw.Tools.ToolCallId(interaction.CallId),
             SelectedKey: interaction.SelectedKey,
             SenderId: interaction.SenderId,
             RequesterSenderId: interaction.RequesterSenderId));

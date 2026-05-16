@@ -34,11 +34,7 @@ internal sealed class ProcessingWatchdog
 
         timers.StartSingleTimer(
             TimerKey,
-            new ProcessingWatchdogExpired
-            {
-                OperationId = _operationId,
-                OperationName = operationName
-            },
+            new ProcessingWatchdogExpired(_operationId, operationName),
             timeout);
     }
 
@@ -72,11 +68,7 @@ internal sealed class ProcessingWatchdog
 
         timers.StartSingleTimer(
             TimerKey,
-            new ProcessingWatchdogExpired
-            {
-                OperationId = _operationId,
-                OperationName = _operationName
-            },
+            new ProcessingWatchdogExpired(_operationId, _operationName),
             timeout);
     }
 

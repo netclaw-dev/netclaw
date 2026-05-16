@@ -154,7 +154,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         // only after the tool validates params. If the tool returns an error, there is no command.
         // (The tool emits "Error: Invalid audience..." before Ask, so no SaveReminderCommand is sent.)
         Assert.DoesNotContain(_testActor.ReceivedMessages, m => m is SaveReminderCommand { } cmd
-            && cmd.Definition.Id == "invalid-audience");
+            && cmd.Definition.Id.Value == "invalid-audience");
     }
 
     // ── Test case 5a: import as non-Operator → 400 with validation error ──
@@ -230,7 +230,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var saveCmd = _testActor.ReceivedMessages.OfType<SaveReminderCommand>().FirstOrDefault();
         Assert.NotNull(saveCmd);
-        Assert.Equal("import-operator", saveCmd.Definition.Id);
+        Assert.Equal("import-operator", saveCmd.Definition.Id.Value);
     }
 
     // ── Test case 6: DELETE with ?permanent=true → DeleteReminderCommand; without → CancelReminderCommand ──
@@ -313,7 +313,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var saveCmd = _testActor.ReceivedMessages.OfType<SaveReminderCommand>()
-            .FirstOrDefault(x => x.Definition.Id == "rest-create-public-boundary");
+            .FirstOrDefault(x => x.Definition.Id.Value == "rest-create-public-boundary");
         Assert.NotNull(saveCmd);
         Assert.Equal(TrustAudience.Public, saveCmd.Definition.Audience);
         Assert.Equal(SecurityPolicyDefaults.PublicBoundary, saveCmd.Definition.Boundary);
@@ -490,7 +490,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
                 if (cmd.Authorization?.SourceAudience is null)
                 {
                     Sender.Tell(new ReminderSavedResponse(
-                        new ReminderId(cmd.Definition.Id),
+                        cmd.Definition.Id,
                         cmd.Definition.Title,
                         Success: false,
                         NextFire: null,
@@ -500,7 +500,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
                 else
                 {
                     Sender.Tell(new ReminderSavedResponse(
-                        new ReminderId(cmd.Definition.Id),
+                        cmd.Definition.Id,
                         cmd.Definition.Title,
                         Success: true,
                         NextFire: DateTimeOffset.UtcNow.AddMinutes(30),

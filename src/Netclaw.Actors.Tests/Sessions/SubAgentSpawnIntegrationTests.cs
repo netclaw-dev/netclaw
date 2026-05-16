@@ -188,10 +188,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("subagent-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -204,7 +203,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("spawn_agent", toolCall.ToolName);
+        Assert.Equal("spawn_agent", toolCall.ToolName.Value);
 
         var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Started, started.Phase);
@@ -247,10 +246,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-missing-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -277,10 +275,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-success-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -330,10 +327,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-reminder-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -364,10 +360,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-reminder-dedup-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -409,10 +404,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-reminder-dedup-inflight-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -481,10 +475,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("routed-slash-restrictive-events");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);

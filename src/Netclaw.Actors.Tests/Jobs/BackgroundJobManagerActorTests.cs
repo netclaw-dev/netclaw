@@ -118,9 +118,9 @@ public class BackgroundJobManagerActorTests : TestKit
         // to verify reconciliation.
         var orphanDef = new BackgroundJobDefinition
         {
-            Id = "orphan-123",
+            Id = new BackgroundJobId("orphan-123"),
             Command = "sleep 999",
-            SessionId = "test/thread",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("test/thread"),
             Rationale = "orphaned test",
             Status = BackgroundJobStatus.Running,
             StartedAtMs = DateTimeOffset.UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds(),

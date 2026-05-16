@@ -129,8 +129,8 @@ public sealed class SlackReplyClientTests
         {
             SessionId = new SessionId("D1/123.456"),
             Kind = "approval",
-            CallId = "call-1",
-            ToolName = "shell_execute",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = "git status",
             RequesterSenderId = "U1",
             Patterns = ["git status"],

@@ -52,11 +52,7 @@ internal static class SessionDrainHelper
             try
             {
                 var ack = await sessionManager.Ask<CommandAck>(
-                    new PrepareForDaemonRestart
-                    {
-                        SessionId = sessionId,
-                        Reason = reason
-                    },
+                    new PrepareForDaemonRestart(sessionId, reason),
                     timeout: Timeout.InfiniteTimeSpan,
                     cancellationToken: cancellationToken);
 

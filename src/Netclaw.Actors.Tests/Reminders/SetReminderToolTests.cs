@@ -55,7 +55,7 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("test-reminder", cmd.Definition.Id);
+        Assert.Equal("test-reminder", cmd.Definition.Id.Value);
         Assert.Equal("Check the server", cmd.Definition.Instructions);
         Assert.Equal(ReminderScheduleType.OneShot, cmd.Definition.Schedule.Type);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
@@ -66,7 +66,7 @@ public class SetReminderToolTests : TestKit
 
         // Reply
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: expectedFire));
@@ -95,13 +95,13 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("interval-check", cmd.Definition.Id);
+        Assert.Equal("interval-check", cmd.Definition.Id.Value);
         Assert.Equal(ReminderScheduleType.Interval, cmd.Definition.Schedule.Type);
         Assert.Equal(TimeSpan.FromHours(2), cmd.Definition.Schedule.Interval);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddHours(2)));
@@ -130,13 +130,13 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("cron-check", cmd.Definition.Id);
+        Assert.Equal("cron-check", cmd.Definition.Id.Value);
         Assert.Equal(ReminderScheduleType.Cron, cmd.Definition.Schedule.Type);
         Assert.Equal("0 */6 * * *", cmd.Definition.Schedule.CronExpression);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: new DateTimeOffset(2026, 3, 5, 18, 0, 0, TimeSpan.Zero)));
@@ -232,7 +232,7 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("self-target", cmd.Definition.Id);
+        Assert.Equal("self-target", cmd.Definition.Id.Value);
         // CurrentSession delivery: SessionId + OriginChannelType populated in Delivery struct.
         Assert.Equal(DeliveryKind.CurrentSession, cmd.Definition.Delivery.Kind);
         Assert.Equal("C0123ABC/1234567890.123456", cmd.Definition.Delivery.SessionId);
@@ -243,7 +243,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
@@ -285,7 +285,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(SecurityPolicyDefaults.TrustedInstanceBoundary, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
@@ -372,7 +372,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(SecurityPolicyDefaults.PublicBoundary, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(10)));
@@ -401,12 +401,12 @@ public class SetReminderToolTests : TestKit
         });
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("ram-price-tracking", cmd.Definition.Id);
+        Assert.Equal("ram-price-tracking", cmd.Definition.Id.Value);
         Assert.Equal("RAM Price Tracking", cmd.Definition.Title);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddHours(24)));
@@ -445,7 +445,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(TrustAudience.Personal, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));
@@ -485,7 +485,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(SecurityPolicyDefaults.PublicBoundary, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));
@@ -547,7 +547,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddHours(1)));
@@ -589,7 +589,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: false,
             NextFire: null,
@@ -631,7 +631,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(TrustAudience.Public, cmd.Authorization?.SourceAudience);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: false,
             NextFire: null,
@@ -676,7 +676,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));
@@ -796,7 +796,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(0, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
@@ -837,7 +837,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(15)));
@@ -880,7 +880,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(15)));
@@ -956,7 +956,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(expectedExpires, cmd.Definition.ExpiresAt.Value, TimeSpan.FromSeconds(1));
 
         probe.Reply(new ReminderSavedResponse(
-            new ReminderId(cmd.Definition.Id),
+            cmd.Definition.Id,
             cmd.Definition.Title,
             Success: true,
             NextFire: _timeProvider.GetUtcNow().AddMinutes(30)));

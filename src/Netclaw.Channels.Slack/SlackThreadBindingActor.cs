@@ -1270,7 +1270,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private async Task HandleApprovalResponseAsync(SlackApprovalResponse message)
     {
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            string.Equals(request.Request.CallId, message.CallId, StringComparison.Ordinal));
+            request.Request.CallId == message.CallId);
         var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
 
         // Stale path: this binding has previously observed an approval request and

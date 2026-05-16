@@ -430,7 +430,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
         Context.Parent.Tell(new ReminderExecutionCompleted(
             _executionId,
-            new ReminderId(_definition.Id),
+            _definition.Id,
             success,
             errorMessage));
 
@@ -449,7 +449,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         {
             try
             {
-                _historyStore.AppendAsync(new ReminderId(_definition.Id), _pendingHistory)
+                _historyStore.AppendAsync(_definition.Id, _pendingHistory)
                     .GetAwaiter().GetResult();
             }
             catch (Exception ex)

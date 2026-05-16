@@ -53,7 +53,7 @@ internal static class SlackApprovalBlockBuilder
             },
             new SectionBlock
             {
-                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName)}`\n*Request:* `{EscapeMarkdown(request.DisplayText)}`"),
+                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n*Request:* `{EscapeMarkdown(request.DisplayText)}`"),
                 Expand = true
             },
             new SectionBlock
@@ -149,7 +149,7 @@ internal static class SlackApprovalBlockBuilder
             new SectionBlock
             {
                 Text = new Markdown(
-                    $"*Tool:* `{EscapeMarkdown(request.ToolName)}`\n"
+                    $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
                     + $"*Request:* `{EscapeMarkdown(request.DisplayText)}`\n"
                     + $"*{EscapeMarkdown(resolutionLine)}*"),
                 Expand = true

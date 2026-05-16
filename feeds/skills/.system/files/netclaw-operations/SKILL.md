@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.1.0"
+  version: "2.1.2"
 ---
 
 # Netclaw Operations
@@ -355,6 +355,13 @@ tree as a safe space. If they keep getting prompted for the same mutating
 verb (e.g. `git push`), suggest `Always here` to persist
 `(git push, effective directory)`.
 
+When auditing repeated prompts, check both the tool audit trail and daemon
+logs. A later call satisfied by an existing grant records
+`ApprovalDecision=PreviouslyApproved` and an `ApprovalPattern` like
+`git push [persistent: git push in /home/user/repo]`. If the daemon prompts
+despite a same-verb persisted grant, it logs an approval near-miss with the
+candidate directory, cwd, persisted grant, creation time, and mismatch reason.
+
 ### Inspecting, revoking, and pre-approving grants
 
 Use the `netclaw approvals` CLI rather than hand-editing
@@ -365,7 +372,9 @@ mutations take effect on the next prompt without a daemon restart.
 # Interactive TUI: see everything grouped by audience and tool
 netclaw approvals
 
-# List — human-readable. Entries print as "<verb> in <dir>" or "<verb> anywhere".
+# List — human-readable. Entries print as "<verb> in <dir>" or "<verb> anywhere",
+# each followed by when the grant was added ("added 3 days ago"; "added —" for
+# grants saved before timestamps were tracked).
 netclaw approvals list
 netclaw approvals list --audience personal --tool shell_execute
 

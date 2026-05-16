@@ -21,8 +21,8 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        var action1 = acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "Hello " });
-        var action2 = acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "world" });
+        var action1 = acc.ProcessOutput(new TextDeltaOutput("Hello ") { SessionId = TestSessionId });
+        var action2 = acc.ProcessOutput(new TextDeltaOutput("world") { SessionId = TestSessionId });
 
         Assert.Equal(OutputAction.Continue, action1);
         Assert.Equal(OutputAction.Continue, action2);
@@ -34,7 +34,7 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        acc.ProcessOutput(new TextOutput { SessionId = TestSessionId, Text = "Full text" });
+        acc.ProcessOutput(new TextOutput("Full text") { SessionId = TestSessionId });
 
         Assert.Equal("Full text", acc.GetAccumulatedText());
     }
@@ -44,8 +44,8 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "streamed" });
-        acc.ProcessOutput(new TextOutput { SessionId = TestSessionId, Text = "assembled" });
+        acc.ProcessOutput(new TextDeltaOutput("streamed") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextOutput("assembled") { SessionId = TestSessionId });
 
         Assert.Equal("streamed", acc.GetAccumulatedText());
     }
@@ -98,8 +98,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-1",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Message sent to channel C1."
         });
 
@@ -115,8 +115,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-2",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-2"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Error: channel not found"
         });
 
@@ -132,8 +132,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-3",
-            ToolName = "web_search",
+            CallId = new Netclaw.Tools.ToolCallId("call-3"),
+            ToolName = new Netclaw.Tools.ToolName("web_search"),
             Result = "Found 5 results"
         });
 
@@ -179,8 +179,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-ok",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-ok"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Message sent."
         });
 
@@ -196,8 +196,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-err",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-err"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Error: channel not found"
         });
 

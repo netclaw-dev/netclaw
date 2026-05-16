@@ -109,7 +109,7 @@ public class ObservationPromptBuilderTests
         var longContent = new string('x', 4000);
         var messages = new List<SerializableChatMessage>
         {
-            new() { Role = ChatRole.Tool, Content = longContent, Name = "shell_execute", ToolCallId = "1" },
+            new() { Role = ChatRole.Tool, Content = longContent, Name = "shell_execute", ToolCallId = new Netclaw.Tools.ToolCallId("1") },
         };
 
         var prompt = ObservationPromptBuilder.BuildObservationUserPrompt(messages);
@@ -129,7 +129,7 @@ public class ObservationPromptBuilderTests
             {
                 Role = ChatRole.Assistant,
                 Content = string.Empty,
-                ToolCalls = [new SerializableToolCall { CallId = "1", Name = "shell_execute", ArgumentsJson = "{}" }]
+                ToolCalls = [new SerializableToolCall { CallId = new Netclaw.Tools.ToolCallId("1"), Name = new Netclaw.Tools.ToolName("shell_execute"), ArgumentsJson = "{}" }]
             },
         };
 
@@ -151,8 +151,8 @@ public class ObservationPromptBuilderTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "1",
-                        Name = "grep_files",
+                        CallId = new Netclaw.Tools.ToolCallId("1"),
+                        Name = new Netclaw.Tools.ToolName("grep_files"),
                         ArgumentsJson = """{"pattern":"Rect","path":"src/Termina.Layout"}"""
                     }
                 ]
@@ -181,8 +181,8 @@ public class ObservationPromptBuilderTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "1",
-                        Name = "huge_tool",
+                        CallId = new Netclaw.Tools.ToolCallId("1"),
+                        Name = new Netclaw.Tools.ToolName("huge_tool"),
                         ArgumentsJson = $"{{\"blob\":\"{bigBlob}\"}}"
                     }
                 ]

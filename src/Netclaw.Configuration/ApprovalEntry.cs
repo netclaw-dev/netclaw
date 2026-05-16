@@ -29,16 +29,13 @@ namespace Netclaw.Configuration;
 /// record's built-in equality (e.g. <c>HashSet&lt;ApprovalEntry&gt;</c>,
 /// <c>Enumerable.Distinct()</c>) for that purpose.
 /// </remarks>
-public sealed record ApprovalEntry
+/// <param name="Verb">
+/// The verb chain (e.g. <c>git remote</c>, <c>freshdesk</c>). For
+/// <c>shell_execute</c> this is the prefix of non-flag tokens extracted
+/// from a command; for other tools it is the tool name.
+/// </param>
+public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string Verb)
 {
-    /// <summary>
-    /// The verb chain (e.g. <c>git remote</c>, <c>freshdesk</c>). For
-    /// <c>shell_execute</c> this is the prefix of non-flag tokens extracted
-    /// from a command; for other tools it is the tool name.
-    /// </summary>
-    [JsonPropertyName("verb")]
-    public required string Verb { get; init; }
-
     /// <summary>
     /// Absolute directory path the grant is scoped to, or <c>null</c> for
     /// the global wildcard. Trailing slashes are normalized away by the
@@ -46,6 +43,19 @@ public sealed record ApprovalEntry
     /// </summary>
     [JsonPropertyName("directory")]
     public string? Directory { get; init; }
+
+    /// <summary>
+    /// When this grant was first persisted, or <c>null</c> for entries
+    /// written before approval timestamps were tracked. Stamped by
+    /// <see cref="ToolApprovalStore.AddApproval"/> at write time. This is an
+    /// additive, optional field — its presence does not change the on-disk
+    /// schema version. It is provenance only: it does NOT participate in
+    /// approval matching or in
+    /// <see cref="ToolApprovalEntryComparer.Equals(ApprovalEntry, ApprovalEntry)"/>,
+    /// so re-granting an existing approval keeps the original timestamp.
+    /// </summary>
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset? CreatedAt { get; init; }
 
     /// <summary>
     /// The user-visible scope label emitted by <c>netclaw approvals list</c>
@@ -88,7 +98,7 @@ public sealed record ApprovalEntry
                 error = "'<verb> anywhere' must include a verb.";
                 return false;
             }
-            entry = new ApprovalEntry { Verb = verb, Directory = null };
+            entry = new ApprovalEntry(verb) { Directory = null };
             return true;
         }
 
@@ -105,7 +115,7 @@ public sealed record ApprovalEntry
                 error = "'<verb> in <directory>' must include both verb and directory.";
                 return false;
             }
-            entry = new ApprovalEntry { Verb = verb, Directory = directory };
+            entry = new ApprovalEntry(verb) { Directory = directory };
             return true;
         }
 

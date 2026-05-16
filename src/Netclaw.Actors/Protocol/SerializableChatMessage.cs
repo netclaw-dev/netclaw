@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Serialization;
+using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -30,7 +32,7 @@ public sealed record SerializableChatMessage : INetclawSerializableMessage
     /// <summary>
     /// The tool call ID this message is a result for. Present when role is Tool.
     /// </summary>
-    public string? ToolCallId { get; init; }
+    public ToolCallId? ToolCallId { get; init; }
 
     /// <summary>
     /// Media references (images, audio, etc.) attached to this message.
@@ -49,7 +51,7 @@ public sealed record SerializableMediaReference : INetclawSerializableMessage
     public string RelativePath { get; init; } = string.Empty;
 
     /// <summary>MIME type of the media (e.g. "image/png").</summary>
-    public string MimeType { get; init; } = string.Empty;
+    public MimeType MimeType { get; init; }
 
     /// <summary>Content modality as integer for wire safety (maps to <see cref="MediaModality"/>).</summary>
     public int Modality { get; init; }
@@ -80,9 +82,9 @@ public enum MediaModality
 /// </summary>
 public sealed record SerializableToolCall : INetclawSerializableMessage
 {
-    public string CallId { get; init; } = string.Empty;
+    public ToolCallId CallId { get; init; }
 
-    public string Name { get; init; } = string.Empty;
+    public ToolName Name { get; init; }
 
     public string ArgumentsJson { get; init; } = string.Empty;
 

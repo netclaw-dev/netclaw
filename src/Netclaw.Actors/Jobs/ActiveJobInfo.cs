@@ -13,7 +13,7 @@ namespace Netclaw.Actors.Jobs;
 /// </summary>
 public sealed record ActiveJobInfo
 {
-    public required string JobId { get; init; }
+    public required BackgroundJobId JobId { get; init; }
 
     public required string Command { get; init; }
 

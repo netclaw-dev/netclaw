@@ -136,11 +136,7 @@ public sealed class SessionRegistry
                         "Attaching connection {ConnectionId} to existing session {SessionId}.",
                         callerConnectionId.Value, requestedSessionId.Value);
 
-                    return new SessionEnsureResultDto
-                    {
-                        SessionId = requestedSessionId.Value,
-                        Created = false
-                    };
+                    return new SessionEnsureResultDto(requestedSessionId.Value, Created: false);
                 }
 
                 // Session ID provided but unknown — create a fresh session binding
@@ -150,19 +146,11 @@ public sealed class SessionRegistry
                 var gw2 = await _gatewayProvider.GetAsync();
                 gw2.Tell(new StartSignalRSession(requestedSessionId, ct, callerConnectionId));
 
-                return new SessionEnsureResultDto
-                {
-                    SessionId = requestedSessionId.Value,
-                    Created = false
-                };
+                return new SessionEnsureResultDto(requestedSessionId.Value, Created: false);
             }
 
             var createdSessionId = await CreateSessionCoreAsync(callerConnectionId, ct);
-            return new SessionEnsureResultDto
-            {
-                SessionId = createdSessionId,
-                Created = true
-            };
+            return new SessionEnsureResultDto(createdSessionId, Created: true);
         }
         finally
         {
@@ -274,7 +262,7 @@ public sealed class SessionRegistry
         await _pipeline.SendFeedbackAsync(new ToolInteractionResponse
         {
             SessionId = requestedSessionId,
-            CallId = callId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = selectedKey,
             SenderId = identity.SenderId
         });

@@ -67,8 +67,8 @@ public sealed class DaemonClientMappingTests
 
         var result = Assert.IsType<ToolResultOutput>(output);
         Assert.Equal("signalr/test", result.SessionId.Value);
-        Assert.Equal("abc", result.CallId);
-        Assert.Equal("bash", result.ToolName);
+        Assert.Equal("abc", result.CallId.Value);
+        Assert.Equal("bash", result.ToolName.Value);
         Assert.Equal("ok", result.Result);
     }
 
@@ -101,8 +101,8 @@ public sealed class DaemonClientMappingTests
             TurnCount = 3,
             RecentMessages =
             [
-                new ChatMessageDto { Role = "user", Content = "Hello" },
-                new ChatMessageDto { Role = "assistant", Content = "Hi there!" }
+                new ChatMessageDto("user", "Hello"),
+                new ChatMessageDto("assistant", "Hi there!")
             ]
         };
 
@@ -261,8 +261,8 @@ public sealed class DaemonClientMappingTests
             SessionId = new SessionId("signalr/test"),
             TimestampMs = 888,
             Kind = "approval",
-            CallId = "call-1",
-            ToolName = "shell_execute",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = "git push origin main",
             RequesterSenderId = "device-1",
             HasAdoptedContext = true,
@@ -291,8 +291,8 @@ public sealed class DaemonClientMappingTests
 
         var roundTripped = DaemonClient.FromDto(dto);
         var result = Assert.IsType<ToolInteractionRequest>(roundTripped);
-        Assert.Equal("call-1", result.CallId);
-        Assert.Equal("shell_execute", result.ToolName);
+        Assert.Equal("call-1", result.CallId.Value);
+        Assert.Equal("shell_execute", result.ToolName.Value);
         Assert.Equal("git push origin main", result.DisplayText);
         Assert.Equal("device-1", result.RequesterSenderId);
         Assert.True(result.HasAdoptedContext);

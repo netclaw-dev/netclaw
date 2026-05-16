@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -32,37 +33,25 @@ public abstract record SessionOutput : IWithSessionId, INoSerializationVerificat
 /// User-facing text reply from the assistant.
 /// Requires <see cref="OutputFilter.Text"/>.
 /// </summary>
-public sealed record TextOutput : SessionOutput
-{
-    public required string Text { get; init; }
-}
+public sealed record TextOutput(string Text) : SessionOutput;
 
 /// <summary>
 /// Incremental text delta from the assistant while a turn is streaming.
 /// Requires <see cref="OutputFilter.Text"/>.
 /// </summary>
-public sealed record TextDeltaOutput : SessionOutput
-{
-    public required string Delta { get; init; }
-}
+public sealed record TextDeltaOutput(string Delta) : SessionOutput;
 
 /// <summary>
 /// Thinking/reasoning tokens from the model (e.g., Claude extended thinking).
 /// Requires <see cref="OutputFilter.Thinking"/>.
 /// </summary>
-public sealed record ThinkingOutput : SessionOutput
-{
-    public required string Text { get; init; }
-}
+public sealed record ThinkingOutput(string Text) : SessionOutput;
 
 /// <summary>
 /// Incremental thinking/reasoning delta while a turn is streaming.
 /// Requires <see cref="OutputFilter.Thinking"/>.
 /// </summary>
-public sealed record ThinkingDeltaOutput : SessionOutput
-{
-    public required string Delta { get; init; }
-}
+public sealed record ThinkingDeltaOutput(string Delta) : SessionOutput;
 
 /// <summary>
 /// The model has requested a tool/function call.
@@ -70,9 +59,9 @@ public sealed record ThinkingDeltaOutput : SessionOutput
 /// </summary>
 public sealed record ToolCallOutput : SessionOutput
 {
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
-    public required string ToolName { get; init; }
+    public required ToolName ToolName { get; init; }
 
     /// <summary>
     /// Tool arguments as a JSON string. Kept opaque at the protocol level —
@@ -87,9 +76,9 @@ public sealed record ToolCallOutput : SessionOutput
 /// </summary>
 public sealed record ToolResultOutput : SessionOutput
 {
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
-    public required string ToolName { get; init; }
+    public required ToolName ToolName { get; init; }
 
     public required string Result { get; init; }
 }
@@ -179,10 +168,7 @@ public sealed record TurnCompleted : SessionOutput
 /// Session title was generated or updated by the LLM.
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
-public sealed record SessionTitleOutput : SessionOutput
-{
-    public required string Title { get; init; }
-}
+public sealed record SessionTitleOutput(string Title) : SessionOutput;
 
 /// <summary>
 /// Classifies the source of an <see cref="ErrorOutput"/> for structured
@@ -245,7 +231,7 @@ public sealed record FileOutput : SessionOutput
     public required string FileName { get; init; }
 
     /// <summary>MIME type of the file.</summary>
-    public required string MimeType { get; init; }
+    public required MimeType MimeType { get; init; }
 }
 
 /// <summary>
@@ -339,10 +325,10 @@ public sealed record ToolInteractionRequest : SessionOutput
     public required string Kind { get; init; }
 
     /// <summary>The tool call ID that triggered this interaction.</summary>
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
     /// <summary>The tool that requires interaction.</summary>
-    public required string ToolName { get; init; }
+    public required ToolName ToolName { get; init; }
 
     /// <summary>Human-readable description of what the tool wants to do.</summary>
     public required string DisplayText { get; init; }

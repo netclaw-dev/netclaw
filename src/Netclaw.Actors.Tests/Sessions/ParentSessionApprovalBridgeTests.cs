@@ -23,7 +23,7 @@ public sealed class ParentSessionApprovalBridgeTests
             request =>
             {
                 emitted = request;
-                channel.Complete(new ToolCallId(request.CallId), ApprovalDecision.ApprovedOnce);
+                channel.Complete(request.CallId, ApprovalDecision.ApprovedOnce);
             },
             new SessionId("signalr/thread-1"),
             requesterSenderId: "user-123",
@@ -65,7 +65,7 @@ public sealed class ParentSessionApprovalBridgeTests
             request =>
             {
                 emitted = request;
-                channel.Complete(new ToolCallId(request.CallId), ApprovalDecision.ApprovedOnce);
+                channel.Complete(request.CallId, ApprovalDecision.ApprovedOnce);
             },
             new SessionId("signalr/thread-2"),
             requesterSenderId: "user-123",

@@ -15,9 +15,5 @@ namespace Netclaw.Actors.Protocol;
 /// it here so the dispatcher routes the line by message field, not by
 /// any ambient context that would not flow across actor mailboxes.
 /// </summary>
-public sealed record SessionLogDiagnostic : IWithSessionId, INoSerializationVerificationNeeded
-{
-    public required SessionId SessionId { get; init; }
-
-    public required string Line { get; init; }
-}
+public sealed record SessionLogDiagnostic(SessionId SessionId, string Line)
+    : IWithSessionId, INoSerializationVerificationNeeded;

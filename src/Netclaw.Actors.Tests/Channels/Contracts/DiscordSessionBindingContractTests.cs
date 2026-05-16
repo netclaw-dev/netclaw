@@ -87,7 +87,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         => new DiscordApprovalResponse(
             ChannelId: new DiscordChannelId("ch-test"),
             ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
-            CallId: callId,
+            CallId: new Netclaw.Tools.ToolCallId(callId),
             SelectedKey: selectedKey,
             SenderId: new DiscordUserId(senderId));
 
@@ -220,7 +220,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -264,7 +264,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
         var actor = CreateActorCore(
@@ -305,7 +305,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
         var actor = CreateActorCore(

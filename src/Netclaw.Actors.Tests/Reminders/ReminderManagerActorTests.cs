@@ -119,11 +119,11 @@ public class ReminderManagerActorTests : TestKit
             new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(new ReminderId(definition.Id)), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new CancelReminderCommand(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(cancelled.Found);
 
-        var preserved = _definitionStore.Get(new ReminderId(definition.Id));
+        var preserved = _definitionStore.Get(definition.Id);
         Assert.NotNull(preserved);
         Assert.False(preserved!.Enabled);
     }
@@ -192,7 +192,7 @@ public class ReminderManagerActorTests : TestKit
         // fire time in the past, still enabled, no Akka.Reminders schedule
         var zombie = new ReminderDefinition
         {
-            Id = "zombie-oneshot",
+            Id = new ReminderId("zombie-oneshot"),
             Title = "Expired one-shot",
             Instructions = "This already fired",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
@@ -452,7 +452,7 @@ public class ReminderManagerActorTests : TestKit
         var now = TimeProvider.System.GetUtcNow();
         var definition = new ReminderDefinition
         {
-            Id = "mode-b-anchor",
+            Id = new ReminderId("mode-b-anchor"),
             Title = "Mode B Anchor",
             Instructions = "Check PR #123",
             Delivery = new ReminderDelivery
@@ -481,10 +481,10 @@ public class ReminderManagerActorTests : TestKit
         // internally at fire time.
         var envelope = new ReminderEnvelope<ReminderPayload>(
             entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
-            key: new ReminderKey(definition.Id),
+            key: new ReminderKey(definition.Id.Value),
             dueTimeUtc: now,
             deadline: ReminderDeadline.Infinite,
-            message: new ReminderPayload { Id = new ReminderId(definition.Id) });
+            message: new ReminderPayload { Id = definition.Id });
 
         manager.Tell(envelope);
 
@@ -528,7 +528,7 @@ public class ReminderManagerActorTests : TestKit
         var now = TimeProvider.System.GetUtcNow();
         var definition = new ReminderDefinition
         {
-            Id = "mode-b-discord-anchor",
+            Id = new ReminderId("mode-b-discord-anchor"),
             Title = "Mode B Discord Anchor",
             Instructions = "Check incident status",
             Delivery = new ReminderDelivery
@@ -554,10 +554,10 @@ public class ReminderManagerActorTests : TestKit
 
         var envelope = new ReminderEnvelope<ReminderPayload>(
             entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
-            key: new ReminderKey(definition.Id),
+            key: new ReminderKey(definition.Id.Value),
             dueTimeUtc: now,
             deadline: ReminderDeadline.Infinite,
-            message: new ReminderPayload { Id = new ReminderId(definition.Id) });
+            message: new ReminderPayload { Id = definition.Id });
 
         manager.Tell(envelope);
 
@@ -589,7 +589,7 @@ public class ReminderManagerActorTests : TestKit
             var definition = CreateCurrentSessionDefinition("current-session-timeout", deliveryRequired: true);
             _definitionStore.Save(definition);
 
-            manager.Tell(CreateEnvelope(definition.Id));
+            manager.Tell(CreateEnvelope(definition.Id.Value));
 
             var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
                 TimeSpan.FromSeconds(5),
@@ -606,7 +606,7 @@ public class ReminderManagerActorTests : TestKit
                 Assert.Equal(0, health.ActiveExecutions);
                 Assert.Contains(_notificationSink.Alerts, alert =>
                     alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id
+                    && alert.Source == definition.Id.Value
                     && alert.Summary.Contains("delivery not observed", StringComparison.OrdinalIgnoreCase));
             }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         }
@@ -634,7 +634,7 @@ public class ReminderManagerActorTests : TestKit
             var definition = CreateCurrentSessionDefinition("current-session-observed", deliveryRequired: true);
             _definitionStore.Save(definition);
 
-            manager.Tell(CreateEnvelope(definition.Id));
+            manager.Tell(CreateEnvelope(definition.Id.Value));
 
             var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
                 TimeSpan.FromSeconds(5),
@@ -656,7 +656,7 @@ public class ReminderManagerActorTests : TestKit
                 Assert.Equal(0, health.FailedCount);
                 Assert.DoesNotContain(_notificationSink.Alerts, alert =>
                     alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id);
+                    && alert.Source == definition.Id.Value);
             }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
@@ -680,7 +680,7 @@ public class ReminderManagerActorTests : TestKit
         // Write an expired interval reminder directly to the store
         var expired = new ReminderDefinition
         {
-            Id = "expired-interval",
+            Id = new ReminderId("expired-interval"),
             Title = "Expired interval check",
             Instructions = "This should be disabled",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
@@ -725,7 +725,7 @@ public class ReminderManagerActorTests : TestKit
         // Write an interval reminder that just expired
         var expired = new ReminderDefinition
         {
-            Id = "just-expired",
+            Id = new ReminderId("just-expired"),
             Title = "Just expired check",
             Instructions = "This should not execute",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
@@ -806,7 +806,7 @@ public class ReminderManagerActorTests : TestKit
             var expiringId = "queued-expiring";
             var expiringReminder = new ReminderDefinition
             {
-                Id = expiringId,
+                Id = new ReminderId(expiringId),
                 Title = "Queued expiring reminder",
                 Instructions = "Should not execute after expiry",
                 Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
@@ -867,7 +867,7 @@ public class ReminderManagerActorTests : TestKit
                 sessionId: "129847561203948576/130111223344556677");
             _definitionStore.Save(definition);
 
-            manager.Tell(CreateEnvelope(definition.Id));
+            manager.Tell(CreateEnvelope(definition.Id.Value));
 
             var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
                 TimeSpan.FromSeconds(5),
@@ -884,7 +884,7 @@ public class ReminderManagerActorTests : TestKit
                 Assert.Equal(0, health.ActiveExecutions);
                 Assert.Contains(_notificationSink.Alerts, alert =>
                     alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id
+                    && alert.Source == definition.Id.Value
                     && alert.Summary.Contains("delivery not observed", StringComparison.OrdinalIgnoreCase));
             }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         }
@@ -916,7 +916,7 @@ public class ReminderManagerActorTests : TestKit
                 sessionId: "129847561203948576/130111223344556677");
             _definitionStore.Save(definition);
 
-            manager.Tell(CreateEnvelope(definition.Id));
+            manager.Tell(CreateEnvelope(definition.Id.Value));
 
             var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
                 TimeSpan.FromSeconds(5),
@@ -938,7 +938,7 @@ public class ReminderManagerActorTests : TestKit
                 Assert.Equal(0, health.FailedCount);
                 Assert.DoesNotContain(_notificationSink.Alerts, alert =>
                     alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id);
+                    && alert.Source == definition.Id.Value);
             }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
@@ -965,8 +965,8 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateCurrentSessionDefinition("dup-guard-test", deliveryRequired: false);
         _definitionStore.Save(definition);
 
-        var envelope1 = CreateEnvelope(definition.Id);
-        var envelope2 = CreateEnvelope(definition.Id);
+        var envelope1 = CreateEnvelope(definition.Id.Value);
+        var envelope2 = CreateEnvelope(definition.Id.Value);
 
         // Both envelopes go into the actor's mailbox before either is processed,
         // so the second always arrives while the first execution is still in flight.
@@ -985,7 +985,7 @@ public class ReminderManagerActorTests : TestKit
 
         // No failure alert — duplicate skip is silent from an alert standpoint.
         Assert.DoesNotContain(_notificationSink.Alerts, a =>
-            a.Category == AlertType.ReminderExecutionFailed && a.Source == definition.Id);
+            a.Category == AlertType.ReminderExecutionFailed && a.Source == definition.Id.Value);
     }
 
     /// <summary>
@@ -1027,7 +1027,7 @@ public class ReminderManagerActorTests : TestKit
 
         return new ReminderDefinition
         {
-            Id = id.Value,
+            Id = id,
             Title = name,
             Instructions = instructions,
             Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },
@@ -1055,7 +1055,7 @@ public class ReminderManagerActorTests : TestKit
         var now = TimeProvider.System.GetUtcNow();
         return new ReminderDefinition
         {
-            Id = id,
+            Id = new ReminderId(id),
             Title = id,
             Instructions = "Check status",
             Delivery = new ReminderDelivery
