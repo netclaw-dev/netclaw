@@ -58,6 +58,31 @@ default surface, no `Screenshot` directives, pair every non-trivial tape
 with an assertion script that re-validates `netclaw doctor` and the
 relevant `--json` output.
 
+## Install Script Smoke Test
+
+`scripts/smoke/install-smoke.sh` is a hermetic regression test for the
+`curl | bash` installer (`scripts/install.sh`). It needs no network, no
+`dotnet` build, and no running daemon — it serves a generated manifest and
+stand-in archives from `localhost`.
+
+| Command | Purpose |
+|---------|---------|
+| `bash scripts/smoke/install-smoke.sh` | Run the full install-script smoke test |
+
+It covers two layers:
+
+- **Detection matrix** — runs `install.sh --dry-run` under `uname`/`sysctl`
+  shims to assert every supported OS/arch resolves to the right RID
+  (`linux-x64`, `linux-arm64`, `osx-arm64`) and that Intel Macs and
+  unsupported OSes are rejected cleanly. This runs identically on any host.
+- **Mechanical check** — one real install of a stand-in archive on the
+  host's native RID, exercising download → checksum → `tar` extract → `cp`.
+
+The `install-smoke` job in `pr_validation.yml` runs it on both
+`ubuntu-latest` and `macos-latest` on every PR. `install.sh --dry-run` is
+also useful on its own — it reports which binary *would* be installed for
+the current platform without touching the system.
+
 ## Source Control and CI Signals
 
 - `git` repository with active `dev` branch

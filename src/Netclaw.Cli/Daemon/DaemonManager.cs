@@ -233,8 +233,12 @@ public sealed partial class DaemonManager
     {
         if (!OperatingSystem.IsLinux())
             return new DaemonResult(false,
-                "Service installation is currently Linux-only (systemd). " +
-                "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
+                OperatingSystem.IsMacOS()
+                    ? "Service installation is not yet supported on macOS — run the daemon " +
+                      "manually with `netclaw daemon start`. Tracking: " +
+                      "https://github.com/netclaw-dev/netclaw/issues/1015"
+                    : "Service installation is currently Linux-only (systemd). " +
+                      "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
 
         var binaryPath = FindDaemonBinary();
         if (binaryPath is null)
@@ -345,8 +349,12 @@ public sealed partial class DaemonManager
     {
         if (!OperatingSystem.IsLinux())
             return new DaemonResult(false,
-                "Service uninstallation is currently Linux-only (systemd). " +
-                "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
+                OperatingSystem.IsMacOS()
+                    ? "Service uninstallation is not yet supported on macOS — stop the daemon " +
+                      "with `netclaw daemon stop`. Tracking: " +
+                      "https://github.com/netclaw-dev/netclaw/issues/1015"
+                    : "Service uninstallation is currently Linux-only (systemd). " +
+                      "See https://github.com/netclaw-dev/netclaw/issues for Windows service support.");
 
         await RunCommandAsync("systemctl", "--user stop netclaw.service");
         await RunCommandAsync("systemctl", "--user disable netclaw.service");

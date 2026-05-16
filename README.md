@@ -73,6 +73,17 @@ curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon
 NETCLAW_VERSION=0.17.1 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
+**macOS** (Apple Silicon — M1 or later — installs CLI + daemon to `~/.netclaw/bin`):
+
+```bash
+curl -sSL https://releases.netclaw.dev/install.sh | bash
+```
+
+The `cli` / `daemon` / `NETCLAW_VERSION` options shown above for Linux work the
+same way on macOS. Auto-starting the daemon as a background service is not yet
+available on macOS ([#1015](https://github.com/netclaw-dev/netclaw/issues/1015))
+— run it manually with `netclaw daemon start`.
+
 **Windows** (installs to `%LOCALAPPDATA%\Programs\netclaw`):
 
 ```powershell

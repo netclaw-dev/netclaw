@@ -20,14 +20,20 @@ else
     CURL_PROGRESS=(-s)
 fi
 
-MANIFEST_URL="https://releases.netclaw.dev/manifest.json"
+# MANIFEST_URL is overridable so the script can be pointed at a local manifest
+# (smoke tests) or a private mirror.
+MANIFEST_URL="${MANIFEST_URL:-https://releases.netclaw.dev/manifest.json}"
 
 # ── Argument parsing ──
-COMPONENT="${1:-all}"  # "all", "cli", or "daemon"
-if [[ "$COMPONENT" != "all" && "$COMPONENT" != "cli" && "$COMPONENT" != "daemon" ]]; then
-    echo "Usage: install.sh [all|cli|daemon]" >&2
-    exit 1
-fi
+COMPONENT="all"   # "all", "cli", or "daemon"
+DRY_RUN=false     # --dry-run: resolve and report what would happen, install nothing
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        all|cli|daemon) COMPONENT="$arg" ;;
+        *) echo "Usage: install.sh [all|cli|daemon] [--dry-run]" >&2; exit 1 ;;
+    esac
+done
 
 # ── Platform detection ──
 detect_platform() {
@@ -37,14 +43,34 @@ detect_platform() {
     arch=$(uname -m)
 
     case "$os" in
-        linux) ;;
-        *) echo "Error: Unsupported OS: $os. This script supports Linux only." >&2; exit 1 ;;
-    esac
-
-    case "$arch" in
-        x86_64|amd64) rid="linux-x64" ;;
-        aarch64|arm64) rid="linux-arm64" ;;
-        *) echo "Error: Unsupported architecture: $arch" >&2; exit 1 ;;
+        linux)
+            case "$arch" in
+                x86_64|amd64) rid="linux-x64" ;;
+                aarch64|arm64) rid="linux-arm64" ;;
+                *) echo "Error: Unsupported architecture '$arch' on Linux." >&2; exit 1 ;;
+            esac
+            ;;
+        darwin)
+            # A shell running under Rosetta 2 on Apple Silicon reports x86_64;
+            # sysctl.proc_translated == 1 means the real CPU is arm64.
+            if [ "$arch" = "x86_64" ] && \
+               [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ]; then
+                arch="arm64"
+            fi
+            case "$arch" in
+                arm64) rid="osx-arm64" ;;
+                x86_64)
+                    echo "Error: Intel Macs are not supported. Netclaw requires" >&2
+                    echo "Apple Silicon (M1 or later)." >&2
+                    exit 1
+                    ;;
+                *) echo "Error: Unsupported architecture '$arch' on macOS." >&2; exit 1 ;;
+            esac
+            ;;
+        *)
+            echo "Error: Unsupported OS: $os. Netclaw supports Linux and macOS." >&2
+            exit 1
+            ;;
     esac
 
     echo "$rid"
@@ -52,12 +78,26 @@ detect_platform() {
 
 # ── Dependency checks ──
 check_deps() {
-    for cmd in curl tar sha256sum; do
+    for cmd in curl tar; do
         if ! command -v "$cmd" >/dev/null 2>&1; then
             echo "Error: Required command '$cmd' not found." >&2
             exit 1
         fi
     done
+    # macOS ships 'shasum'; most Linux distros ship 'sha256sum' — accept either.
+    if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+        echo "Error: Need either 'sha256sum' or 'shasum' for checksum verification." >&2
+        exit 1
+    fi
+}
+
+# ── SHA-256 of a file (sha256sum on Linux, shasum on macOS) ──
+sha256_file() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
 }
 
 # ── JSON field extraction (no jq dependency) ──
@@ -81,6 +121,9 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.netclaw/bin}"
 echo "Netclaw installer"
 echo "  Platform: $RID"
 echo "  Install dir: $INSTALL_DIR"
+if [ "$DRY_RUN" = true ]; then
+    echo "  Mode: dry run (no changes will be made)"
+fi
 echo ""
 
 # Fetch manifest
@@ -134,6 +177,11 @@ download_component() {
         return 1
     fi
 
+    if [ "$DRY_RUN" = true ]; then
+        echo "  DRY RUN: would install $component from $url"
+        return 0
+    fi
+
     local filename
     filename=$(basename "$url")
 
@@ -146,7 +194,7 @@ download_component() {
     # Verify checksum
     echo "  Verifying checksum..."
     local actual_sha
-    actual_sha=$(sha256sum "$TMPDIR/$filename" | cut -d' ' -f1)
+    actual_sha=$(sha256_file "$TMPDIR/$filename")
     if [ "$actual_sha" != "$sha256" ]; then
         echo "  Error: Checksum mismatch for $filename" >&2
         echo "    Expected: $sha256" >&2
@@ -186,6 +234,12 @@ if [ "$SUCCESS" = false ]; then
     echo ""
     echo "Some components failed to install." >&2
     exit 1
+fi
+
+if [ "$DRY_RUN" = true ]; then
+    echo ""
+    echo "Dry run complete — nothing was installed."
+    exit 0
 fi
 
 # PATH instructions
