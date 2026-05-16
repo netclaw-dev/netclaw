@@ -214,7 +214,7 @@ public class SearchToolsToolTests
         var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
         };
 
@@ -249,7 +249,7 @@ public class SearchToolsToolTests
         var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
         };
 

@@ -79,7 +79,7 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     /// </summary>
     public TrustAudience? Audience { get; init; }
 
-    public string? Boundary { get; init; }
+    public TrustBoundary? Boundary { get; init; }
 
     public string? ChannelType { get; init; }
 

@@ -340,7 +340,7 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
                 UpdateSemantics: MemoryUpdateSemantics.MergeDocument,
                 Boundary: !string.IsNullOrWhiteSpace(payload.Boundary)
                     ? payload.Boundary!
-                    : SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    : TrustBoundary.TrustedInstanceValue,
                 Audience: milestoneAudience,
                 Sensitivity: payload.Sensitivity,
                 RecallMode: MemoryDomainEnumExtensions.TryFromWireValue(payload.RecallMode, out MemoryRecallMode rm)
@@ -545,7 +545,7 @@ public sealed class MemoryCurationEngine(
         SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
         var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
             ? payload.Boundary!
-            : SecurityPolicyDefaults.TrustedInstanceBoundary;
+            : TrustBoundary.TrustedInstanceValue;
 
         var existing = await store.SearchMemoriesAsync(payload.Content, 8, resolvedBoundary, parsedAudience, ct);
         var fingerprints = existing

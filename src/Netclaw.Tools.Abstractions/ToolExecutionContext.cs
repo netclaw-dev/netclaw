@@ -77,7 +77,7 @@ public sealed class ToolExecutionContext
     /// </summary>
     public required TrustAudience Audience { get; init; }
 
-    public string? Boundary { get; set; }
+    public TrustBoundary? Boundary { get; set; }
 
     /// <summary>
     /// Per-call timeout requested by the LLM after pipeline clamping.

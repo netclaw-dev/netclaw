@@ -85,7 +85,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
             var results = await store.SearchMemoriesAsync(
                 "synthetic create",
                 limit: 5,
-                boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                boundary: TrustBoundary.TrustedInstanceValue,
                 audience: TrustAudience.Public,
                 TestContext.Current.CancellationToken);
 
@@ -139,7 +139,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
             var results = await store.SearchMemoriesAsync(
                 "Batch",
                 limit: 5,
-                boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                boundary: TrustBoundary.TrustedInstanceValue,
                 audience: TrustAudience.Public,
                 TestContext.Current.CancellationToken);
 
@@ -213,7 +213,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
             SlotsJson: null,
             Relations: null,
             UpdateSemantics: "merge-document",
-            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary: TrustBoundary.TrustedInstanceValue,
             Audience: TrustAudience.Public,
             Sensitivity: "normal",
             RecallMode: "auto",

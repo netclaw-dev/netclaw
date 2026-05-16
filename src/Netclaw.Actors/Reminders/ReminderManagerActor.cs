@@ -236,7 +236,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        var effectiveBoundary = boundaryValidation.NormalizedBoundary!;
+        var effectiveBoundary = boundaryValidation.NormalizedBoundary!.Value;
 
         var normalized = cmd.Definition with
         {
@@ -346,13 +346,10 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     }
 
     private static ReminderBoundaryValidationResult ValidateRequestedBoundary(
-        string? requestedBoundary,
+        TrustBoundary requestedBoundary,
         TrustAudience effectiveAudience)
     {
-        if (string.IsNullOrWhiteSpace(requestedBoundary))
-            return ReminderBoundaryValidationResult.Fail("Reminder boundary is required.");
-
-        if (!SecurityPolicyDefaults.TryNormalizeBoundary(requestedBoundary, out var normalizedBoundary))
+        if (!SecurityPolicyDefaults.TryNormalizeBoundary(requestedBoundary.Value, out var normalizedBoundary))
         {
             return ReminderBoundaryValidationResult.Fail(
                 $"Reminder boundary '{requestedBoundary}' is not a recognized trust boundary.");
@@ -1006,9 +1003,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             => new(false, null, errorMessage);
     }
 
-    private sealed record ReminderBoundaryValidationResult(bool IsSuccess, string? NormalizedBoundary, string? ErrorMessage) : INoSerializationVerificationNeeded
+    private sealed record ReminderBoundaryValidationResult(bool IsSuccess, TrustBoundary? NormalizedBoundary, string? ErrorMessage) : INoSerializationVerificationNeeded
     {
-        public static ReminderBoundaryValidationResult Success(string normalizedBoundary)
+        public static ReminderBoundaryValidationResult Success(TrustBoundary normalizedBoundary)
             => new(true, normalizedBoundary, null);
 
         public static ReminderBoundaryValidationResult Fail(string errorMessage)

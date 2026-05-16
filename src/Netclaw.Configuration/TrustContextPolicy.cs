@@ -111,14 +111,6 @@ public sealed record EffectivePolicyDefaults(
 
 public static class SecurityPolicyDefaults
 {
-    public const string PublicBoundary = "boundary:public";
-    public const string TeamBoundary = "boundary:team";
-    public const string PersonalBoundary = "boundary:personal";
-    public const string TrustedInstanceBoundary = "boundary:trusted-instance";
-    public const string SlackWorkspaceBoundary = TrustedInstanceBoundary;
-    public const string LocalDaemonBoundary = TrustedInstanceBoundary;
-    public const string LegacyRestrictedBoundary = "boundary:legacy-restricted";
-
     public static string ToWireValue(this TrustAudience audience) => audience switch
     {
         TrustAudience.Public => "public",
@@ -151,15 +143,15 @@ public static class SecurityPolicyDefaults
         return false;
     }
 
-    public static string ResolveBoundary(string? boundary, string? channelType, TrustAudience audience)
+    public static TrustBoundary ResolveBoundary(TrustBoundary? boundary, string? channelType, TrustAudience audience)
     {
-        if (!string.IsNullOrWhiteSpace(boundary))
-            return boundary.Trim();
+        if (boundary is { } explicitBoundary)
+            return explicitBoundary;
 
         return ResolveBoundaryFromChannelType(channelType, audience);
     }
 
-    public static string ResolveBoundaryFromChannelType(string? channelType, TrustAudience audience)
+    public static TrustBoundary ResolveBoundaryFromChannelType(string? channelType, TrustAudience audience)
     {
         if (!string.IsNullOrWhiteSpace(channelType))
         {
@@ -167,7 +159,6 @@ public static class SecurityPolicyDefaults
             {
                 case "slack":
                 case "discord":
-                    return TrustedInstanceBoundary;
                 case "signalr":
                 case "tui":
                 case "headless":
@@ -175,14 +166,14 @@ public static class SecurityPolicyDefaults
                 case "reminder":
                 case "timer":
                 case "manual":
-                    return TrustedInstanceBoundary;
+                    return TrustBoundary.TrustedInstance;
             }
         }
 
         return ResolveBoundaryFromAudience(audience);
     }
 
-    public static string ResolveBoundaryFromSessionId(string? sessionId, TrustAudience audience = TrustAudience.Public)
+    public static TrustBoundary ResolveBoundaryFromSessionId(string? sessionId, TrustAudience audience = TrustAudience.Public)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
             return ResolveBoundaryFromAudience(audience);
@@ -225,48 +216,51 @@ public static class SecurityPolicyDefaults
     public static TrustAudience ResolveAudienceWithFallback(TrustAudience? configuredAudience, string? sessionId)
         => configuredAudience ?? ResolveAudienceFromSessionId(sessionId);
 
-    public static string ResolveBoundaryFromAudience(TrustAudience audience) => audience switch
+    public static TrustBoundary ResolveBoundaryFromAudience(TrustAudience audience) => audience switch
     {
-        TrustAudience.Public => PublicBoundary,
-        TrustAudience.Team => TeamBoundary,
-        TrustAudience.Personal => PersonalBoundary,
-        _ => PublicBoundary
+        TrustAudience.Public => TrustBoundary.Public,
+        TrustAudience.Team => TrustBoundary.Team,
+        TrustAudience.Personal => TrustBoundary.Personal,
+        _ => TrustBoundary.Public
     };
 
     /// <summary>
     /// Canonicalizes a known trust boundary string. Returns false when the
     /// boundary is blank or not one of Netclaw's supported persisted values.
+    /// Accepts a raw string so legacy / on-wire input can be normalized; the
+    /// canonical result is a <see cref="TrustBoundary"/>.
     /// </summary>
-    public static bool TryNormalizeBoundary(string? boundary, out string normalizedBoundary)
+    public static bool TryNormalizeBoundary(string? boundary, out TrustBoundary normalizedBoundary)
     {
-        normalizedBoundary = PublicBoundary;
+        normalizedBoundary = TrustBoundary.Public;
         if (string.IsNullOrWhiteSpace(boundary))
             return false;
 
         var trimmed = boundary.Trim();
-        if (string.Equals(trimmed, PublicBoundary, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(trimmed, TrustBoundary.Public.Value, StringComparison.OrdinalIgnoreCase))
         {
-            normalizedBoundary = PublicBoundary;
+            normalizedBoundary = TrustBoundary.Public;
             return true;
         }
 
-        if (string.Equals(trimmed, TeamBoundary, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(trimmed, TrustBoundary.Team.Value, StringComparison.OrdinalIgnoreCase))
         {
-            normalizedBoundary = TeamBoundary;
+            normalizedBoundary = TrustBoundary.Team;
             return true;
         }
 
-        if (string.Equals(trimmed, PersonalBoundary, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(trimmed, TrustBoundary.Personal.Value, StringComparison.OrdinalIgnoreCase))
         {
-            normalizedBoundary = PersonalBoundary;
+            normalizedBoundary = TrustBoundary.Personal;
             return true;
         }
 
-        if (string.Equals(trimmed, TrustedInstanceBoundary, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(trimmed, SlackWorkspaceBoundary, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(trimmed, LocalDaemonBoundary, StringComparison.OrdinalIgnoreCase))
+        // TrustedInstance is also the canonical form of the legacy
+        // Slack-workspace and local-daemon boundary aliases — all three
+        // share the "boundary:trusted-instance" string.
+        if (string.Equals(trimmed, TrustBoundary.TrustedInstance.Value, StringComparison.OrdinalIgnoreCase))
         {
-            normalizedBoundary = TrustedInstanceBoundary;
+            normalizedBoundary = TrustBoundary.TrustedInstance;
             return true;
         }
 
@@ -278,21 +272,19 @@ public static class SecurityPolicyDefaults
     /// does not exceed the supplied audience. Narrower boundaries are allowed:
     /// for example, a Personal audience may persist a Public boundary.
     /// </summary>
-    public static bool IsBoundaryCompatibleWithAudience(string boundary, TrustAudience audience)
+    public static bool IsBoundaryCompatibleWithAudience(TrustBoundary boundary, TrustAudience audience)
     {
-        if (!TryNormalizeBoundary(boundary, out var normalizedBoundary))
+        if (!TryNormalizeBoundary(boundary.Value, out var normalizedBoundary))
             return false;
 
-        if (string.Equals(normalizedBoundary, TrustedInstanceBoundary, StringComparison.Ordinal))
+        if (normalizedBoundary == TrustBoundary.TrustedInstance)
             return audience is TrustAudience.Team or TrustAudience.Personal;
 
-        var boundaryAudience = normalizedBoundary switch
-        {
-            PublicBoundary => TrustAudience.Public,
-            TeamBoundary => TrustAudience.Team,
-            PersonalBoundary => TrustAudience.Personal,
-            _ => throw new ArgumentOutOfRangeException(nameof(boundary), boundary, null)
-        };
+        var boundaryAudience =
+            normalizedBoundary == TrustBoundary.Public ? TrustAudience.Public
+            : normalizedBoundary == TrustBoundary.Team ? TrustAudience.Team
+            : normalizedBoundary == TrustBoundary.Personal ? TrustAudience.Personal
+            : throw new ArgumentOutOfRangeException(nameof(boundary), boundary, null);
 
         return boundaryAudience <= audience;
     }

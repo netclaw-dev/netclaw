@@ -65,8 +65,8 @@ internal sealed class SessionRecallManager
             recentUser,
             3,
             Audience: audience,
-            Boundary: turnSource?.Boundary
-                      ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId.Value, audience),
+            Boundary: turnSource?.Boundary.Value
+                      ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId.Value, audience).Value,
             RecentAssistantMessages: state.History
                 .Where(x => x.Role == Protocol.ChatRole.Assistant)
                 .Select(x => x.Content)

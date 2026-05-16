@@ -254,7 +254,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            Boundary = TrustBoundary.Team,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -396,7 +396,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         var definition = CreateDefinition("boundary-preserved") with
         {
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
             DeliveryInstructions = string.Empty
         };
@@ -408,7 +408,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(pipeline.CapturedInput);
-        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, pipeline.CapturedInput!.Boundary);
+        Assert.Equal(TrustBoundary.Public, pipeline.CapturedInput!.Boundary);
     }
 
     // ── History integration tests ─────────────────────────────────────────────

@@ -220,7 +220,7 @@ public class AttachFileToolTests : IDisposable
         var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
         var args = ToolInput.Create("Path", sourcePath, "DisplayName", "Copied Report.png");
@@ -249,7 +249,7 @@ public class AttachFileToolTests : IDisposable
         var context = new ToolExecutionContext("slack/thread-1", sessionDir)
         {
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             ChannelType = "slack"
         };
 
@@ -281,7 +281,7 @@ public class AttachFileToolTests : IDisposable
             var context = new ToolExecutionContext("signalr/thread-1", currentSessionDir)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr"
             };
             var args = ToolInput.Create("Path", symlinkPath);

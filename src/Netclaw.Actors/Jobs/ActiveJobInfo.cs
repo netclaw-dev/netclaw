@@ -23,5 +23,5 @@ public sealed record ActiveJobInfo
 
     public required TrustAudience Audience { get; init; }
 
-    public required string Boundary { get; init; }
+    public required TrustBoundary Boundary { get; init; }
 }

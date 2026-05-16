@@ -224,7 +224,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             ["visible"],
             [MemoryClass.DurableFact.ToWireValue()],
             10,
-            SecurityPolicyDefaults.TrustedInstanceBoundary,
+            TrustBoundary.TrustedInstanceValue,
             TrustAudience.Public,
             false, TestContext.Current.CancellationToken);
 
@@ -232,7 +232,7 @@ public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
             ["visible"],
             [MemoryClass.DurableFact.ToWireValue()],
             10,
-            SecurityPolicyDefaults.TrustedInstanceBoundary,
+            TrustBoundary.TrustedInstanceValue,
             TrustAudience.Personal,
             false, TestContext.Current.CancellationToken);
 

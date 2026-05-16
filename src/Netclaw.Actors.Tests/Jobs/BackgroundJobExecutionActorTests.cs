@@ -46,7 +46,7 @@ public class BackgroundJobExecutionActorTests : TestKit
         Status = BackgroundJobStatus.Running,
         StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
         Audience = TrustAudience.Personal,
-        Boundary = SecurityPolicyDefaults.PersonalBoundary,
+        Boundary = TrustBoundary.Personal,
         OriginChannelType = ChannelType.Tui,
         TimeoutSeconds = timeoutSeconds
     };

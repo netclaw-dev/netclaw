@@ -43,7 +43,7 @@ public sealed class TrustContextDeriverTests
             ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Principal = PrincipalClassification.TrustedInternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
@@ -70,7 +70,7 @@ public sealed class TrustContextDeriverTests
             ChannelType = ChannelType.SignalR,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary,
+            Boundary = TrustBoundary.Personal,
             Principal = PrincipalClassification.Operator,
             Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
             {
@@ -98,7 +98,7 @@ public sealed class TrustContextDeriverTests
             ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Principal = PrincipalClassification.TrustedInternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community)
             {

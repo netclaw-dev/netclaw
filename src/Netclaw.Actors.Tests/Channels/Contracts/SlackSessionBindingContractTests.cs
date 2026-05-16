@@ -120,7 +120,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
                 Contents = [new TextContent($"history message {i}")],
                 ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-(count - i)),
                 Audience = TrustAudience.Team,
-                Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 Principal = PrincipalClassification.UntrustedExternal,
                 Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             });

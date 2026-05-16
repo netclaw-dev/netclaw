@@ -202,7 +202,7 @@ public class ReminderManagerActorTests : TestKit
                 FireAt = now.AddHours(-1)
             },
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now.AddHours(-2),
@@ -307,7 +307,7 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateDefinition("explicit-audience", "Check explicit audience") with
         {
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary
+            Boundary = TrustBoundary.Public
         };
 
         var response = await manager.Ask<ReminderSavedResponse>(
@@ -331,7 +331,7 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateDefinition("public-boundary-mismatch", "Check mismatch") with
         {
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = TrustBoundary.Personal
         };
 
         var response = await manager.Ask<ReminderSavedResponse>(
@@ -353,7 +353,7 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateDefinition("narrow-boundary", "Check narrow boundary") with
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PublicBoundary
+            Boundary = TrustBoundary.Public
         };
 
         var response = await manager.Ask<ReminderSavedResponse>(
@@ -367,7 +367,7 @@ public class ReminderManagerActorTests : TestKit
 
         var saved = _definitionStore.Get(response.Id);
         Assert.NotNull(saved);
-        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, saved!.Boundary);
+        Assert.Equal(TrustBoundary.Public, saved!.Boundary);
     }
 
     [Fact]
@@ -468,7 +468,7 @@ public class ReminderManagerActorTests : TestKit
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -496,7 +496,7 @@ public class ReminderManagerActorTests : TestKit
         Assert.Contains("Check PR #123", delivered.Content);
         Assert.Equal(ChannelType.Slack, delivered.Source.ChannelType);
         Assert.Equal(TrustAudience.Team, delivered.Source.Audience);
-        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, delivered.Source.Boundary);
+        Assert.Equal(TrustBoundary.TrustedInstance, delivered.Source.Boundary);
         Assert.NotNull(delivered.Source.ReminderId);
         Assert.StartsWith("mode-b-anchor:", delivered.Source.ReminderId);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
@@ -544,7 +544,7 @@ public class ReminderManagerActorTests : TestKit
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -567,7 +567,7 @@ public class ReminderManagerActorTests : TestKit
         Assert.Contains("Check incident status", delivered.Content);
         Assert.Equal(ChannelType.Discord, delivered.Source.ChannelType);
         Assert.Equal(TrustAudience.Team, delivered.Source.Audience);
-        Assert.Equal(SecurityPolicyDefaults.TrustedInstanceBoundary, delivered.Source.Boundary);
+        Assert.Equal(TrustBoundary.TrustedInstance, delivered.Source.Boundary);
         Assert.NotNull(delivered.Source.ReminderId);
     }
 
@@ -692,7 +692,7 @@ public class ReminderManagerActorTests : TestKit
             },
             ExpiresAt = now.AddHours(-1),
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now.AddDays(-1),
@@ -737,7 +737,7 @@ public class ReminderManagerActorTests : TestKit
             },
             ExpiresAt = now.AddSeconds(-1),
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now.AddDays(-1),
@@ -818,7 +818,7 @@ public class ReminderManagerActorTests : TestKit
                 },
                 ExpiresAt = now.AddMilliseconds(200),
                 Audience = TrustAudience.Team,
-                Boundary = SecurityPolicyDefaults.TeamBoundary,
+                Boundary = TrustBoundary.Team,
                 Enabled = true,
                 CreatedBy = "test",
                 CreatedAt = now,
@@ -1038,7 +1038,7 @@ public class ReminderManagerActorTests : TestKit
                 FireAt = now.AddHours(1)
             },
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            Boundary = TrustBoundary.Team,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,
@@ -1072,7 +1072,7 @@ public class ReminderManagerActorTests : TestKit
                 FireAt = now.AddMinutes(5)
             },
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            Boundary = TrustBoundary.Team,
             Enabled = true,
             CreatedBy = "test",
             CreatedAt = now,

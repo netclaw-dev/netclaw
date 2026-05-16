@@ -180,7 +180,7 @@ public sealed class SidecarDiagnosticsContextTests : TestKit
             SlotsJson: null,
             Relations: null,
             UpdateSemantics: "merge-document",
-            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary: TrustBoundary.TrustedInstanceValue,
             Audience: TrustAudience.Public,
             Sensitivity: "normal",
             RecallMode: "auto",

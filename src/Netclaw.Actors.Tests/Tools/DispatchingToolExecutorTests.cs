@@ -77,7 +77,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -97,7 +97,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", Path.GetTempPath())
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -116,7 +116,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
         };
 
@@ -151,7 +151,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -186,7 +186,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -204,7 +204,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -230,7 +230,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
             {
                 Audience = TrustAudience.Public,
-                Boundary = SecurityPolicyDefaults.PublicBoundary,
+                Boundary = TrustBoundary.Public,
                 ChannelType = "slack"
             };
 
@@ -261,7 +261,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
             {
                 Audience = TrustAudience.Public,
-                Boundary = SecurityPolicyDefaults.PublicBoundary,
+                Boundary = TrustBoundary.Public,
                 ChannelType = "slack"
             };
 
@@ -292,7 +292,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", sessionDir)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr"
             };
 
@@ -340,7 +340,7 @@ public class DispatchingToolExecutorTests
         var teamContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            Boundary = TrustBoundary.Team,
             ChannelType = "slack"
         };
 
@@ -378,7 +378,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", null)
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            Boundary = TrustBoundary.Team,
             ChannelType = "slack"
         };
 
@@ -428,7 +428,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
             };
@@ -489,7 +489,7 @@ public class DispatchingToolExecutorTests
         var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
             SupportsInteractiveApproval = true
         };
@@ -546,7 +546,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
             };
@@ -616,7 +616,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-filtered", null)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
             };
@@ -762,7 +762,7 @@ public class DispatchingToolExecutorTests
             var firstContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
             };
@@ -770,7 +770,7 @@ public class DispatchingToolExecutorTests
             var secondContext = new Netclaw.Tools.ToolExecutionContext("signalr/thread-2", null)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
             };

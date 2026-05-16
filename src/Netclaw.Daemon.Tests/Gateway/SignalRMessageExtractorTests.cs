@@ -25,7 +25,7 @@ public sealed class SignalRMessageExtractorTests
         ChannelType = ChannelType.SignalR,
         SenderId = "test",
         Audience = TrustAudience.Public,
-        Boundary = SecurityPolicyDefaults.PublicBoundary,
+        Boundary = TrustBoundary.Public,
         Principal = PrincipalClassification.UntrustedExternal,
         Provenance = new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public)
     };

@@ -21,7 +21,7 @@ public sealed class MessageSourceFactoryTests : TestKit
 
     private static ChannelInput BuildInput(
         TrustAudience audience = TrustAudience.Public,
-        string? boundary = null,
+        TrustBoundary? boundary = null,
         PrincipalClassification principal = PrincipalClassification.UntrustedExternal,
         SourceProvenance? provenance = null,
         string? reminderId = null,
@@ -32,7 +32,7 @@ public sealed class MessageSourceFactoryTests : TestKit
         {
             SenderId = "user-1",
             Audience = audience,
-            Boundary = boundary ?? SecurityPolicyDefaults.PublicBoundary,
+            Boundary = boundary ?? TrustBoundary.Public,
             Principal = principal,
             Provenance = provenance
                 ?? new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public),
@@ -49,7 +49,7 @@ public sealed class MessageSourceFactoryTests : TestKit
     {
         var input = BuildInput(
             audience: TrustAudience.Team,
-            boundary: SecurityPolicyDefaults.TeamBoundary,
+            boundary: TrustBoundary.Team,
             principal: PrincipalClassification.TrustedInternal,
             provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community)
             {
@@ -62,7 +62,7 @@ public sealed class MessageSourceFactoryTests : TestKit
         // The factory is a pure mapper — trust context is whatever the adapter
         // stamped on the ChannelInput, never a pipeline-synthesized default.
         Assert.Equal(TrustAudience.Team, result.Audience);
-        Assert.Equal(SecurityPolicyDefaults.TeamBoundary, result.Boundary);
+        Assert.Equal(TrustBoundary.Team, result.Boundary);
         Assert.Equal(PrincipalClassification.TrustedInternal, result.Principal);
         Assert.Equal(TransportAuthenticity.Verified, result.Provenance.TransportAuthenticity);
         Assert.Equal(PayloadTaint.Community, result.Provenance.PayloadTaint);

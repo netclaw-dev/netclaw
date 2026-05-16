@@ -81,7 +81,7 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
             Status = BackgroundJobStatus.Pending,
             TimeoutSeconds = 300,
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary,
+            Boundary = TrustBoundary.Team,
             OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
         });
 
@@ -91,7 +91,7 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
 
         Assert.NotNull(loaded);
         Assert.Equal(TrustAudience.Team, loaded!.Audience);
-        Assert.Equal(SecurityPolicyDefaults.TeamBoundary, loaded.Boundary);
+        Assert.Equal(TrustBoundary.Team, loaded.Boundary);
         Assert.Equal(jobId, loaded.Id.Value);
         Assert.Equal("dotnet test", loaded.Command);
         Assert.Equal("C0ABC/1712000000.000001", loaded.SessionId.Value);

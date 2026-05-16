@@ -251,7 +251,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         ChannelType = ChannelType.Tui,
         SenderId = "test-user",
         Audience = TrustAudience.Personal,
-        Boundary = SecurityPolicyDefaults.PersonalBoundary,
+        Boundary = TrustBoundary.Personal,
         Principal = PrincipalClassification.TrustedInternal,
         Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
     };

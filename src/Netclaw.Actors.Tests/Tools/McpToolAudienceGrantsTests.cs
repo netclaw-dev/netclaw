@@ -230,7 +230,7 @@ public sealed class McpToolAudienceGrantsTests
             TrustAudience.Team,
             TrustAudience.Team,
             TrustAudience.Team,
-            SecurityPolicyDefaults.TrustedInstanceBoundary,
+            TrustBoundary.TrustedInstance,
             PrincipalClassification.TrustedInternal,
             TransportAuthenticity.Verified,
             PayloadTaint.Trusted,
@@ -392,7 +392,7 @@ public sealed class McpToolAudienceGrantsTests
         return new ToolExecutionContext("slack/thread-1", null)
         {
             Audience = audience,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
         };
     }

@@ -93,7 +93,7 @@ public sealed class ChannelPipelineAckTargetTests : TestKit
         ReminderId = reminderId,
         AckTarget = ackTarget,
         Audience = TrustAudience.Public,
-        Boundary = SecurityPolicyDefaults.PublicBoundary,
+        Boundary = TrustBoundary.Public,
         Principal = PrincipalClassification.UntrustedExternal,
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
     };

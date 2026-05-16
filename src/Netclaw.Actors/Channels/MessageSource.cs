@@ -60,7 +60,7 @@ public sealed record MessageSource
     /// Runtime-owned security boundary used to partition durable memory and other
     /// reusable state across trust domains.
     /// </summary>
-    public required string Boundary { get; init; }
+    public required TrustBoundary Boundary { get; init; }
 
     /// <summary>
     /// Principal classification hint for the inbound sender.

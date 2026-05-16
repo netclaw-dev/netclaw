@@ -492,7 +492,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
         SenderId = "reminder-system",
         MessageId = "reminder-1",
         Audience = TrustAudience.Team,
-        Boundary = "trusted-instance",
+        Boundary = TrustBoundary.TrustedInstance,
         Principal = PrincipalClassification.TrustedInternal,
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
         {

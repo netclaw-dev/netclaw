@@ -23,7 +23,7 @@ public class SessionRecallManagerTests
             ChannelType = ChannelType.Slack,
             SenderId = "U123",
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Principal = PrincipalClassification.UntrustedExternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };
@@ -50,7 +50,7 @@ public class SessionRecallManagerTests
             ChannelType = ChannelType.Tui,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary,
+            Boundary = TrustBoundary.Personal,
             Principal = PrincipalClassification.UntrustedExternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };
@@ -78,7 +78,7 @@ public class SessionRecallManagerTests
             ChannelType = ChannelType.Tui,
             SenderId = "local-user",
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary,
+            Boundary = TrustBoundary.Personal,
             Principal = PrincipalClassification.UntrustedExternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };

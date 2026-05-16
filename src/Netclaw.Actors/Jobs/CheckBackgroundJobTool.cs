@@ -45,7 +45,7 @@ public sealed partial class CheckBackgroundJobTool : NetclawTool<CheckBackground
         var audience = context.Audience;
         // Boundary, unlike Audience, is still nullable on the context — fall
         // closed to the public boundary when it is absent.
-        var boundary = context.Boundary ?? SecurityPolicyDefaults.PublicBoundary;
+        var boundary = context.Boundary ?? TrustBoundary.Public;
 
         if (args.Cancel)
         {

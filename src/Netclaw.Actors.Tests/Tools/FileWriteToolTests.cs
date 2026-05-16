@@ -139,7 +139,7 @@ public class FileWriteToolTests : IDisposable
         => new("signalr/thread-1", _sessionDir)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -147,7 +147,7 @@ public class FileWriteToolTests : IDisposable
         => new("slack/thread-1", _sessionDir)
         {
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             ChannelType = "slack"
         };
 }

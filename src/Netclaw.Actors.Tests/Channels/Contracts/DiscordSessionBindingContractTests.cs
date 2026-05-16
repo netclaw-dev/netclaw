@@ -130,7 +130,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
                 Contents = [new Microsoft.Extensions.AI.TextContent($"history message {i}")],
                 ReceivedAt = TimeProvider.System.GetUtcNow().AddMinutes(-count + i),
                 Audience = TrustAudience.Team,
-                Boundary = SecurityPolicyDefaults.PublicBoundary,
+                Boundary = TrustBoundary.Public,
                 Principal = PrincipalClassification.UntrustedExternal,
                 Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             });
@@ -336,7 +336,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Contents = [new Microsoft.Extensions.AI.TextContent(text)],
             ReceivedAt = TimeProvider.System.GetUtcNow(),
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Boundary = TrustBoundary.Public,
             Principal = PrincipalClassification.UntrustedExternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
         };

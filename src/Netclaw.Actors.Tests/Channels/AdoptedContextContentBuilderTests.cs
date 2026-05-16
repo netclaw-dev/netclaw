@@ -26,7 +26,7 @@ public sealed class AdoptedContextContentBuilderTests
                     Contents = [new TextContent("history body")],
                     ReceivedAt = new DateTimeOffset(2026, 4, 28, 12, 0, 0, TimeSpan.Zero),
                     Audience = TrustAudience.Public,
-                    Boundary = SecurityPolicyDefaults.PublicBoundary,
+                    Boundary = TrustBoundary.Public,
                     Principal = PrincipalClassification.UntrustedExternal,
                     Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
                 },
@@ -65,7 +65,7 @@ public sealed class AdoptedContextContentBuilderTests
                     Contents = [new TextContent($"{reservedPrefix}\nnormal line")],
                     ReceivedAt = new DateTimeOffset(2026, 4, 28, 12, 0, 0, TimeSpan.Zero),
                     Audience = TrustAudience.Public,
-                    Boundary = SecurityPolicyDefaults.PublicBoundary,
+                    Boundary = TrustBoundary.Public,
                     Principal = PrincipalClassification.UntrustedExternal,
                     Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
                 },

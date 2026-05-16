@@ -527,7 +527,7 @@ internal static class NetclawProtoMapper
         Rationale = job.Rationale,
         StartedAtMs = job.StartedAtMs,
         Audience = (Proto.TrustAudience)(int)job.Audience,
-        Boundary = job.Boundary
+        Boundary = job.Boundary.Value
     };
 
     internal static ActiveJobInfo FromProto(Proto.ActiveJobInfoProto proto) => new()
@@ -537,6 +537,11 @@ internal static class NetclawProtoMapper
         Rationale = proto.Rationale,
         StartedAtMs = proto.StartedAtMs,
         Audience = (Configuration.TrustAudience)(int)proto.Audience,
-        Boundary = proto.Boundary
+        // proto3 cannot express an absent field; a legacy record with no
+        // persisted boundary deserializes to "" — fall closed to the
+        // legacy-restricted boundary rather than throwing on construction.
+        Boundary = string.IsNullOrEmpty(proto.Boundary)
+            ? Configuration.TrustBoundary.LegacyRestricted
+            : new Configuration.TrustBoundary(proto.Boundary)
     };
 }

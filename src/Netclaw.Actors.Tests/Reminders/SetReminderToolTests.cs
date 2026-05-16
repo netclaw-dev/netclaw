@@ -213,7 +213,7 @@ public class SetReminderToolTests : TestKit
         var context = new ToolExecutionContext("C0123ABC/1234567890.123456", null)
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "slack"
         };
 
@@ -239,7 +239,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal(ChannelType.Slack, cmd.Definition.Delivery.OriginChannelType);
         Assert.Null(cmd.Definition.Delivery.Address);
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
-        Assert.Equal(SecurityPolicyDefaults.SlackWorkspaceBoundary, cmd.Definition.Boundary);
+        Assert.Equal(TrustBoundary.TrustedInstance, cmd.Definition.Boundary);
         Assert.Equal(ReminderWriteMode.Upsert, cmd.WriteMode);
 
         probe.Reply(new ReminderSavedResponse(
@@ -259,7 +259,7 @@ public class SetReminderToolTests : TestKit
         var context = new ToolExecutionContext("129847561203948576/130111223344556677", null)
         {
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "discord"
         };
 
@@ -282,7 +282,7 @@ public class SetReminderToolTests : TestKit
         Assert.Equal("129847561203948576/130111223344556677", cmd.Definition.Delivery.SessionId);
         Assert.Equal(ChannelType.Discord, cmd.Definition.Delivery.OriginChannelType);
         Assert.Equal(TrustAudience.Team, cmd.Authorization?.SourceAudience);
-        Assert.Equal(SecurityPolicyDefaults.TrustedInstanceBoundary, cmd.Definition.Boundary);
+        Assert.Equal(TrustBoundary.TrustedInstance, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
             cmd.Definition.Id,
@@ -369,7 +369,7 @@ public class SetReminderToolTests : TestKit
         Assert.Null(cmd.Definition.Delivery.Address);
         // Boundary is now required non-nullable (#994): when no source context is present,
         // the tool fills it with the fail-closed PublicBoundary default.
-        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, cmd.Definition.Boundary);
+        Assert.Equal(TrustBoundary.Public, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
             cmd.Definition.Id,
@@ -461,7 +461,7 @@ public class SetReminderToolTests : TestKit
         var context = new ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr"
         };
 
@@ -482,7 +482,7 @@ public class SetReminderToolTests : TestKit
 
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TrustAudience.Public, cmd.Definition.Audience);
-        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, cmd.Definition.Boundary);
+        Assert.Equal(TrustBoundary.Public, cmd.Definition.Boundary);
 
         probe.Reply(new ReminderSavedResponse(
             cmd.Definition.Id,

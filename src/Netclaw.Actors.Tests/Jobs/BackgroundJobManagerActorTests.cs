@@ -52,7 +52,7 @@ public class BackgroundJobManagerActorTests : TestKit
         SessionId = new SessionId("test/thread"),
         Rationale = "test run",
         Audience = TrustAudience.Personal,
-        Boundary = SecurityPolicyDefaults.PersonalBoundary,
+        Boundary = TrustBoundary.Personal,
         OriginChannelType = ChannelType.Tui,
         TimeoutSeconds = 60
     };
@@ -125,7 +125,7 @@ public class BackgroundJobManagerActorTests : TestKit
             Status = BackgroundJobStatus.Running,
             StartedAtMs = DateTimeOffset.UtcNow.AddMinutes(-30).ToUnixTimeMilliseconds(),
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary,
+            Boundary = TrustBoundary.Personal,
             OriginChannelType = ChannelType.Tui
         };
         _store.Save(orphanDef);

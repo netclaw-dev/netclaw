@@ -341,9 +341,9 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         };
     }
 
-    private string GetPersistedBoundaryOrThrow()
+    private TrustBoundary GetPersistedBoundaryOrThrow()
     {
-        if (!SecurityPolicyDefaults.TryNormalizeBoundary(_definition.Boundary, out var normalizedBoundary))
+        if (!SecurityPolicyDefaults.TryNormalizeBoundary(_definition.Boundary.Value, out var normalizedBoundary))
         {
             throw new InvalidOperationException(
                 $"Reminder '{_definition.Id}' has invalid persisted trust boundary '{_definition.Boundary}'.");

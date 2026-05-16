@@ -224,7 +224,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             ChannelId = channelId.Value,
             MessageId = message.MessageId,
             Audience = audience,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Principal = PrincipalClassification.UntrustedExternal,
             Provenance = new SourceProvenance(
                 TransportAuthenticity.Verified,

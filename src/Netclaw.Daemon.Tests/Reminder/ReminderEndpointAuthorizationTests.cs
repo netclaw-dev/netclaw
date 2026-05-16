@@ -290,7 +290,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         Assert.NotNull(saveCmd);
         // Operator loopback → authorization carries Personal audience
         Assert.Equal(TrustAudience.Personal, saveCmd.Authorization?.SourceAudience);
-        Assert.Equal(SecurityPolicyDefaults.TrustedInstanceBoundary, saveCmd.Definition.Boundary);
+        Assert.Equal(TrustBoundary.TrustedInstance, saveCmd.Definition.Boundary);
     }
 
     [Fact]
@@ -316,7 +316,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
             .FirstOrDefault(x => x.Definition.Id.Value == "rest-create-public-boundary");
         Assert.NotNull(saveCmd);
         Assert.Equal(TrustAudience.Public, saveCmd.Definition.Audience);
-        Assert.Equal(SecurityPolicyDefaults.PublicBoundary, saveCmd.Definition.Boundary);
+        Assert.Equal(TrustBoundary.Public, saveCmd.Definition.Boundary);
     }
 
     [Fact]

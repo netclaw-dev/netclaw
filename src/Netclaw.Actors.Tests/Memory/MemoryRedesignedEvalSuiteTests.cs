@@ -223,7 +223,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "merge-document",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "auto",
@@ -243,7 +243,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",
@@ -405,7 +405,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-3", accepted, CancellationToken.None);
-        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], ["durable_fact"], 5, SecurityPolicyDefaults.TrustedInstanceBoundary, TrustAudience.Public, false, TestContext.Current.CancellationToken);
+        var items = await _store.SearchByPlanAsync(["deploys", "east-2"], ["durable_fact"], 5, TrustBoundary.TrustedInstanceValue, TrustAudience.Public, false, TestContext.Current.CancellationToken);
 
         Assert.Single(items);
         Assert.Equal("Deployment region", items[0].Title);
@@ -433,7 +433,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",
@@ -520,7 +520,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",
@@ -540,7 +540,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "immutable-record",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "searchable",

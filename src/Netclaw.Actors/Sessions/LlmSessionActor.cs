@@ -2517,8 +2517,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
 
     private string CurrentMemoryBoundary()
-        => _currentTurnSource?.Boundary
-           ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, _currentTurnSource?.Audience ?? TrustAudience.Public);
+        => _currentTurnSource?.Boundary.Value
+           ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, _currentTurnSource?.Audience ?? TrustAudience.Public).Value;
 
     private IReadOnlyList<AITool> ResolveExposedToolsForCurrentTurn()
     {

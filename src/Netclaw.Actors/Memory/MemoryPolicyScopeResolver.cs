@@ -17,5 +17,5 @@ internal static class MemoryPolicyScopeResolver
     public static string ResolveBoundary(string? configuredBoundary)
         => !string.IsNullOrWhiteSpace(configuredBoundary)
             ? configuredBoundary.Trim()
-            : SecurityPolicyDefaults.TrustedInstanceBoundary;
+            : TrustBoundary.TrustedInstanceValue;
 }

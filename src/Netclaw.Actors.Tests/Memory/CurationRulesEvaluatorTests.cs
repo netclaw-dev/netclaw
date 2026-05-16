@@ -30,7 +30,7 @@ public sealed class CurationRulesEvaluatorTests
             SlotsJson: null,
             Relations: null,
             UpdateSemantics: updateSemantics,
-            Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary: TrustBoundary.TrustedInstanceValue,
             Audience: TrustAudience.Team,
             Sensitivity: "normal",
             RecallMode: "auto",

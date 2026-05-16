@@ -377,11 +377,11 @@ public sealed class MemoryPolicyGatesTests
         ],
         "normal",
         now,
-        boundary: SecurityPolicyDefaults.PersonalBoundary,
+        boundary: TrustBoundary.PersonalValue,
         audience: TrustAudience.Personal);
 
         var operation = Assert.Single(result.MemoryOperations);
-        Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, operation.Boundary);
+        Assert.Equal(TrustBoundary.PersonalValue, operation.Boundary);
         Assert.Equal(TrustAudience.Personal, operation.Audience);
     }
 

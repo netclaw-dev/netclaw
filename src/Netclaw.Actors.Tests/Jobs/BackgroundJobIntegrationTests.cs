@@ -59,7 +59,7 @@ public class BackgroundJobIntegrationTests : TestKit
         SessionId = new SessionId("C0123ABC/1712000000.000001"),
         Rationale = "integration test",
         Audience = TrustAudience.Personal,
-        Boundary = SecurityPolicyDefaults.PersonalBoundary,
+        Boundary = TrustBoundary.Personal,
         OriginChannelType = channelType,
         TimeoutSeconds = 30
     };
@@ -90,7 +90,7 @@ public class BackgroundJobIntegrationTests : TestKit
         Assert.Contains("completed", delivered.Content.ToLowerInvariant());
         Assert.Equal(ChannelType.Slack, delivered.Source.ChannelType);
         Assert.Equal(TrustAudience.Personal, delivered.Source.Audience);
-        Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, delivered.Source.Boundary);
+        Assert.Equal(TrustBoundary.Personal, delivered.Source.Boundary);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
         Assert.Equal("background-job", delivered.Source.Provenance.SourceKind);
         Assert.NotNull(delivered.Source.BackgroundJobId);
@@ -156,7 +156,7 @@ public class BackgroundJobIntegrationTests : TestKit
         var context = new ToolExecutionContext("C0123ABC/1712000000.000001", "/tmp")
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = TrustBoundary.Personal
         };
 
         var cancelResult = await tool.ExecuteAsync(cancelArgs, context, TestContext.Current.CancellationToken);

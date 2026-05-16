@@ -49,7 +49,7 @@ public sealed record ChannelInput
     /// Trust boundary for this message. The inbound adapter supplies this
     /// explicitly — the channel pipeline never synthesizes a default.
     /// </summary>
-    public required string Boundary { get; init; }
+    public required TrustBoundary Boundary { get; init; }
 
     /// <summary>
     /// Principal classification for the sender. The inbound adapter supplies

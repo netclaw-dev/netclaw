@@ -168,8 +168,8 @@ public sealed class SQLiteMemoryStore
 
         await EnsureAnchorAsync(conn, tx, document.Anchor, ct);
 
-        var resolvedBoundary = string.Equals(document.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
-            ? SecurityPolicyDefaults.TrustedInstanceBoundary
+        var resolvedBoundary = string.Equals(document.Boundary, TrustBoundary.LegacyRestrictedValue, StringComparison.Ordinal)
+            ? TrustBoundary.TrustedInstanceValue
             : document.Boundary;
 
         await using var cmd = conn.CreateCommand();
@@ -280,7 +280,7 @@ public sealed class SQLiteMemoryStore
             INNER JOIN memory_anchors a ON a.anchor_id = d.anchor_id
             WHERE d.recall_mode = '{MemoryRecallMode.Auto.ToWireValue()}'
               AND d.sensitivity != '{MemorySensitivity.Secret.ToWireValue()}'
-              AND ($boundary IS NULL OR COALESCE(d.boundary, '{SecurityPolicyDefaults.LegacyRestrictedBoundary}') = $boundary)
+              AND ($boundary IS NULL OR COALESCE(d.boundary, '{TrustBoundary.LegacyRestrictedValue}') = $boundary)
               AND (d.expires_at IS NULL OR d.expires_at > $now)
             ORDER BY dh.fts_rank, d.confidence DESC, d.updated_at DESC
             LIMIT $limit;
@@ -318,7 +318,7 @@ public sealed class SQLiteMemoryStore
                 FacetsJson: reader.IsDBNull(9) ? null : reader.GetString(9),
                 SlotsJson: reader.IsDBNull(10) ? null : reader.GetString(10),
                 UpdateSemantics: reader.GetString(11),
-                Boundary: reader.IsDBNull(12) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(12),
+                Boundary: reader.IsDBNull(12) ? TrustBoundary.LegacyRestrictedValue : reader.GetString(12),
                 Audience: reader.IsDBNull(13) ? TrustAudience.Personal.ToWireValue() : reader.GetString(13),
                 Sensitivity: reader.GetString(14),
                 RecallMode: reader.GetString(15),
@@ -584,7 +584,7 @@ public sealed class SQLiteMemoryStore
             """;
         cmd.Parameters.AddWithValue("$query", matchQuery);
         cmd.Parameters.AddWithValue("$boundary", boundary);
-        cmd.Parameters.AddWithValue("$legacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
+        cmd.Parameters.AddWithValue("$legacyBoundary", TrustBoundary.LegacyRestrictedValue);
         cmd.Parameters.AddWithValue("$fallbackAudience", TrustAudience.Personal.ToWireValue());
         cmd.Parameters.AddWithValue("$overfetch", limit * 5);
         cmd.Parameters.AddWithValue("$limit", limit);
@@ -661,7 +661,7 @@ public sealed class SQLiteMemoryStore
                     AliasesJson: reader.IsDBNull(4) ? null : reader.GetString(4),
                     FacetsJson: reader.IsDBNull(5) ? null : reader.GetString(5),
                     SlotsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
-                    Boundary: reader.IsDBNull(7) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(7),
+                    Boundary: reader.IsDBNull(7) ? TrustBoundary.LegacyRestrictedValue : reader.GetString(7),
                     Audience: reader.IsDBNull(8) ? TrustAudience.Personal.ToWireValue() : reader.GetString(8),
                     Sensitivity: reader.GetString(9),
                     RecallMode: reader.GetString(10),
@@ -698,7 +698,7 @@ public sealed class SQLiteMemoryStore
                     AliasesJson: reader.IsDBNull(4) ? null : reader.GetString(4),
                     FacetsJson: reader.IsDBNull(5) ? null : reader.GetString(5),
                     SlotsJson: reader.IsDBNull(6) ? null : reader.GetString(6),
-                    Boundary: reader.IsDBNull(7) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(7),
+                    Boundary: reader.IsDBNull(7) ? TrustBoundary.LegacyRestrictedValue : reader.GetString(7),
                     Audience: reader.IsDBNull(8) ? TrustAudience.Personal.ToWireValue() : reader.GetString(8),
                     Sensitivity: reader.GetString(9),
                     RecallMode: reader.GetString(10),
@@ -830,7 +830,7 @@ public sealed class SQLiteMemoryStore
             """;
         cmd.Parameters.AddWithValue("$query", matchQuery);
         cmd.Parameters.AddWithValue("$boundary", boundary);
-        cmd.Parameters.AddWithValue("$planLegacyBoundary", SecurityPolicyDefaults.LegacyRestrictedBoundary);
+        cmd.Parameters.AddWithValue("$planLegacyBoundary", TrustBoundary.LegacyRestrictedValue);
         cmd.Parameters.AddWithValue("$planFallbackAudience", TrustAudience.Personal.ToWireValue());
         cmd.Parameters.AddWithValue("$now", now);
         cmd.Parameters.AddWithValue("$allowExpiredEvidence", allowExpiredEvidence ? 1 : 0);
@@ -978,7 +978,7 @@ public sealed class SQLiteMemoryStore
             recallMode = reader.GetString(3);
             confidence = reader.GetDouble(4);
             freshnessAt = reader.IsDBNull(5) ? (long?)null : reader.GetInt64(5);
-            boundary = reader.IsDBNull(6) ? SecurityPolicyDefaults.LegacyRestrictedBoundary : reader.GetString(6);
+            boundary = reader.IsDBNull(6) ? TrustBoundary.LegacyRestrictedValue : reader.GetString(6);
             audience = reader.IsDBNull(7) ? TrustAudience.Personal.ToWireValue() : reader.GetString(7);
             memoryClass = reader.IsDBNull(8) ? MemoryClass.Evidence.ToWireValue() : reader.GetString(8);
         }
@@ -1218,8 +1218,8 @@ public sealed class SQLiteMemoryStore
         foreach (var operation in operations)
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            var resolvedBoundary = string.Equals(operation.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
-                ? SecurityPolicyDefaults.TrustedInstanceBoundary
+            var resolvedBoundary = string.Equals(operation.Boundary, TrustBoundary.LegacyRestrictedValue, StringComparison.Ordinal)
+                ? TrustBoundary.TrustedInstanceValue
                 : operation.Boundary;
             var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
                 ? operation.Title
@@ -1373,8 +1373,8 @@ public sealed class SQLiteMemoryStore
         foreach (var operation in operations)
         {
             var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
-            var resolvedBoundary = string.Equals(operation.Boundary, SecurityPolicyDefaults.LegacyRestrictedBoundary, StringComparison.Ordinal)
-                ? SecurityPolicyDefaults.TrustedInstanceBoundary
+            var resolvedBoundary = string.Equals(operation.Boundary, TrustBoundary.LegacyRestrictedValue, StringComparison.Ordinal)
+                ? TrustBoundary.TrustedInstanceValue
                 : operation.Boundary;
             var canonicalName = string.IsNullOrWhiteSpace(operation.AnchorCanonicalName)
                 ? operation.Title
@@ -1730,7 +1730,7 @@ public sealed record SQLiteMemoryDocument(
     long? ExpiresAtMs,
     long CreatedAtMs,
     long UpdatedAtMs,
-    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Boundary = TrustBoundary.LegacyRestrictedValue,
     string Audience = "public");
 
 public sealed record SQLiteMemoryCheckpoint(
@@ -1754,7 +1754,7 @@ public sealed record SQLiteMemorySearchResult(
     double Score,
     string Sensitivity,
     string RecallMode,
-    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Boundary = TrustBoundary.LegacyRestrictedValue,
     string Audience = "public");
 
 public sealed record SQLiteMemoryHydratedItem(
@@ -1771,7 +1771,7 @@ public sealed record SQLiteMemoryHydratedItem(
     string UpdateSemantics,
     long? ExpiresAtMs,
     long UpdatedAtMs,
-    string Boundary = SecurityPolicyDefaults.LegacyRestrictedBoundary,
+    string Boundary = TrustBoundary.LegacyRestrictedValue,
     string Audience = "public");
 
 public sealed record SQLiteMemoryCurationOperation(

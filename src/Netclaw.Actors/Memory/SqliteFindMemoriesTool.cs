@@ -66,7 +66,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             plan.SearchTerms,
             plan.MemoryClasses,
             limit,
-            MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary),
+            MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary?.Value),
             audience,
             allowExpiredEvidence: includeStale,
             ct);

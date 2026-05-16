@@ -46,7 +46,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "merge-document",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Public,
                     Sensitivity: "normal",
                     RecallMode: "auto",
@@ -66,7 +66,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
                     SlotsJson: null,
                     Relations: null,
                     UpdateSemantics: "merge-document",
-                    Boundary: SecurityPolicyDefaults.TrustedInstanceBoundary,
+                    Boundary: TrustBoundary.TrustedInstanceValue,
                     Audience: TrustAudience.Team,
                     Sensitivity: "normal",
                     RecallMode: "auto",
@@ -80,7 +80,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
         var context = new ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary
+            Boundary = TrustBoundary.TrustedInstance
         };
 
         var result = await tool.ExecuteAsync(
@@ -100,7 +100,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
         var context = new ToolExecutionContext("slack/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = TrustBoundary.Personal
         };
 
         await tool.ExecuteAsync(
@@ -115,7 +115,7 @@ public sealed class SqliteMemoryPolicyScopeTests : IAsyncDisposable
         var request = Assert.Single(sink.Requests);
         var payload = Assert.IsType<MemoryCheckpointPayload>(request.Payload);
         Assert.Equal(TrustAudience.Personal.ToWireValue(), payload.Audience);
-        Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, payload.Boundary);
+        Assert.Equal(TrustBoundary.PersonalValue, payload.Boundary);
     }
 
     public async ValueTask DisposeAsync()

@@ -750,7 +750,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ChannelId = _channelId.Value,
             MessageId = triggeringMessage.EventId.Value,
             Audience = triggeringMessage.Audience,
-            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Principal = triggeringMessage.Principal,
             Provenance = triggeringMessage.Provenance,
             Contents = liveContents,

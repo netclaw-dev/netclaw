@@ -57,7 +57,7 @@ public sealed record StartBackgroundJob
     public required Protocol.SessionId SessionId { get; init; }
     public required string Rationale { get; init; }
     public required TrustAudience Audience { get; init; }
-    public required string Boundary { get; init; }
+    public required TrustBoundary Boundary { get; init; }
     public required Channels.ChannelType OriginChannelType { get; init; }
     public int TimeoutSeconds { get; init; } = 600;
     public string? SenderId { get; init; }
@@ -70,12 +70,12 @@ public sealed record CancelBackgroundJob(
     BackgroundJobId JobId,
     Protocol.SessionId SessionId,
     TrustAudience Audience,
-    string Boundary);
+    TrustBoundary Boundary);
 
 /// <summary>
 /// Query for current status of a background job.
 /// </summary>
-public sealed record QueryBackgroundJob(BackgroundJobId JobId, Protocol.SessionId SessionId, TrustAudience Audience, string Boundary);
+public sealed record QueryBackgroundJob(BackgroundJobId JobId, Protocol.SessionId SessionId, TrustAudience Audience, TrustBoundary Boundary);
 
 // ── Responses ──
 
@@ -138,7 +138,9 @@ public sealed record BackgroundJobDefinition
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public required TrustAudience Audience { get; init; }
-    public required string Boundary { get; init; }
+
+    [JsonConverter(typeof(TrustBoundaryJsonConverter))]
+    public required TrustBoundary Boundary { get; init; }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public Channels.ChannelType OriginChannelType { get; init; }

@@ -23,7 +23,7 @@ public sealed record EffectiveTrustContext(
     TrustAudience DeploymentAudience,
     TrustAudience SourceAudience,
     TrustAudience EffectiveAudience,
-    string Boundary,
+    TrustBoundary Boundary,
     PrincipalClassification Principal,
     TransportAuthenticity TransportAuthenticity,
     PayloadTaint PayloadTaint,

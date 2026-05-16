@@ -25,7 +25,7 @@ public sealed class BackgroundJobSessionStateTests
             Rationale = "building project",
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = TrustBoundary.Personal
         };
 
         var state = SessionState.Empty.TrackBackgroundJob(jobKey, info);
@@ -52,7 +52,7 @@ public sealed class BackgroundJobSessionStateTests
             Rationale = "building project",
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary
+            Boundary = TrustBoundary.Public
         };
 
         var state = SessionState.Empty.TrackBackgroundJob(jobKey, info);
@@ -85,7 +85,7 @@ public sealed class BackgroundJobSessionStateTests
             Rationale = "running tests",
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             Audience = TrustAudience.Public,
-            Boundary = SecurityPolicyDefaults.PublicBoundary
+            Boundary = TrustBoundary.Public
         };
 
         var state = SessionState.Empty.TrackBackgroundJob(jobKey, info);

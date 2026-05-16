@@ -214,7 +214,8 @@ public sealed record ReminderDefinition
     /// boundary so reminder re-entry does not widen scope. Legacy documents
     /// missing this field are rejected at load and are never scheduled.
     /// </summary>
-    public required string Boundary { get; init; }
+    [JsonConverter(typeof(TrustBoundaryJsonConverter))]
+    public required TrustBoundary Boundary { get; init; }
 
     public string CreatedBy { get; init; } = "system";
     public long CreatedAtMs { get; set; }

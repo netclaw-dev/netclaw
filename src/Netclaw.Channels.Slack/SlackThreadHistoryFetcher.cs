@@ -263,7 +263,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             ChannelId = channelId.Value,
             MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
             Audience = audience,
-            Boundary = SecurityPolicyDefaults.SlackWorkspaceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Principal = PrincipalClassification.UntrustedExternal,
             Provenance = new SourceProvenance(
                 TransportAuthenticity.Verified,

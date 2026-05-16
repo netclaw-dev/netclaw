@@ -220,7 +220,7 @@ public sealed class SessionRegistry
             SenderId = identity.SenderId,
             MessageId = signalrMessageId,
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.LocalDaemonBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Principal = identity.Principal,
             Provenance = new SourceProvenance(
                 identity.Transport,

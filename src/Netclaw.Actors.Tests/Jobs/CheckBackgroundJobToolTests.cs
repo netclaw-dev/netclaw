@@ -21,7 +21,7 @@ public sealed class CheckBackgroundJobToolTests(ITestOutputHelper output) : Test
     private ToolExecutionContext MakeContext(string sessionId = "test/thread") => new(sessionId, "/tmp")
     {
         Audience = TrustAudience.Personal,
-        Boundary = SecurityPolicyDefaults.PersonalBoundary
+        Boundary = TrustBoundary.Personal
     };
 
     [Fact]

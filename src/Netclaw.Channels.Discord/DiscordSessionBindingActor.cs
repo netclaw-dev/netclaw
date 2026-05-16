@@ -340,7 +340,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             ChannelId = message.ChannelId.Value,
             MessageId = message.EventId.Value,
             Audience = message.Audience,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             Principal = message.Principal,
             Provenance = message.Provenance,
             Contents = liveContents,

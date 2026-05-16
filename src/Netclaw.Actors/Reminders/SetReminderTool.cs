@@ -217,9 +217,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         var sourceAudience = context.Audience;
         var effectiveRequestedAudience = audience ?? sourceAudience;
 
-        string? boundary = null;
-        if (!string.IsNullOrWhiteSpace(context.Boundary))
-            boundary = context.Boundary.Trim();
+        TrustBoundary? boundary = context.Boundary;
 
         // When a reminder explicitly downscopes its audience, it must not carry
         // over the creating session's broader boundary. Recompute the boundary
@@ -228,7 +226,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         {
             boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(explicitAudience);
         }
-        else if (string.IsNullOrWhiteSpace(boundary))
+        else if (boundary is null)
         {
             boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(effectiveRequestedAudience);
         }
@@ -258,7 +256,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
             // re-authorizes Audience/Boundary before persisting. Prefer the
             // explicitly requested audience, then the creating session's.
             Audience = effectiveRequestedAudience,
-            Boundary = boundary ?? SecurityPolicyDefaults.PublicBoundary,
+            Boundary = boundary ?? TrustBoundary.Public,
             Enabled = true,
             ExpiresAt = expiresAt,
             CreatedBy = "llm-tool",

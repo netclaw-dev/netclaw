@@ -99,7 +99,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
         var context = new ToolExecutionContext("signalr/thread-1", null)
         {
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+            Boundary = TrustBoundary.TrustedInstance,
             ChannelType = "signalr",
             SupportsInteractiveApproval = true
         };
