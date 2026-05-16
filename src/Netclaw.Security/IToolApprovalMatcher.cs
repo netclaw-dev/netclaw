@@ -110,6 +110,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly ShellApprovalMatcher Instance = new();
 
+    // BashParser is immutable — Parse delegates to a pure static — so one
+    // shared instance is safe and avoids a per-evaluation allocation. The DI
+    // container registers it as a singleton for the same reason.
+    private static readonly ShellSyntaxTree.BashParser Parser = new();
+
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
 
@@ -125,12 +130,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var workingDirectory = GetWorkingDirectory(arguments);
         var patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // POSIX commands route through BashParser so the approval units match
-        // the clause decomposition ExtractCandidates already uses. The key
-        // win: a bare newline separates statements (ShellSyntaxTree 0.1.5+),
-        // so `git fetch\ngit status` yields two units instead of one garbled
-        // `git fetch git status`. Windows keeps the legacy ShellTokenizer
-        // path — ShellSyntaxTree is bash-only.
+        // POSIX commands route through BashParser so the approval units
+        // match the clause decomposition ExtractCandidates already uses — in
+        // particular a bare newline separates statements, so a multi-line
+        // command yields one unit per statement. Windows keeps the legacy
+        // ShellTokenizer path — ShellSyntaxTree is bash-only.
         if (!OperatingSystem.IsWindows())
         {
             foreach (var unit in ExtractApprovalUnitsViaBashParser(command))
@@ -196,7 +200,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellSyntaxTree.ParsedCommand result;
         try
         {
-            result = new ShellSyntaxTree.BashParser().Parse(command);
+            result = Parser.Parse(command);
         }
         catch
         {
@@ -312,47 +316,46 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (ShellTokenizer.IsMessyCompoundCommand(command))
             return [];
 
-        ShellSyntaxTree.ParsedCommand result;
         try
         {
-            result = new ShellSyntaxTree.BashParser().Parse(command);
-        }
-        catch
-        {
-            // Defensive: an unhandled parser exception must not take down the
-            // approval prompt. Fail-empty — the matcher treats this as a
-            // messy command (Once/Deny prompt only).
-            return [];
-        }
+            var result = Parser.Parse(command);
+            if (result.IsUnparseable || result.Clauses.Count == 0)
+                return [];
 
-        if (result.IsUnparseable || result.Clauses.Count == 0)
-            return [];
+            var units = new List<string>();
+            var current = new StringBuilder();
 
-        var units = new List<string>();
-        var current = new StringBuilder();
-
-        foreach (var clause in result.Clauses)
-        {
-            // AndIf / OrIf / Sequence (and the leading None clause) each open
-            // a fresh approval unit; Pipe clauses fold into the unit in
-            // progress. `Sequence` is what a bare newline produces in
-            // ShellSyntaxTree 0.1.5+, so multi-line commands split here.
-            if (clause.Operator != ShellSyntaxTree.CompoundOperator.Pipe && current.Length > 0)
+            foreach (var clause in result.Clauses)
             {
-                units.Add(current.ToString());
-                current.Clear();
+                // AndIf / OrIf / Sequence (and the leading None clause) each
+                // open a fresh approval unit; Pipe clauses fold into the unit
+                // in progress. A bare newline produces Sequence, so multi-line
+                // commands split here too.
+                if (clause.Operator != ShellSyntaxTree.CompoundOperator.Pipe && current.Length > 0)
+                {
+                    units.Add(current.ToString());
+                    current.Clear();
+                }
+
+                if (current.Length > 0)
+                    current.Append(" | ");
+
+                current.Append(ReconstructClauseText(clause));
             }
 
             if (current.Length > 0)
-                current.Append(" | ");
+                units.Add(current.ToString());
 
-            current.Append(ReconstructClauseText(clause));
+            return units;
         }
-
-        if (current.Length > 0)
-            units.Add(current.ToString());
-
-        return units;
+        catch
+        {
+            // Defensive: a parser exception — or an unmapped redirect/clause
+            // shape from a future ShellSyntaxTree release — must not take
+            // down the approval prompt. Fail-empty so the matcher treats the
+            // command as messy (Once/Deny prompt only).
+            return [];
+        }
     }
 
     /// <summary>
