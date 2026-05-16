@@ -118,10 +118,9 @@ public abstract class SessionBindingContractTests : TestKit
     {
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var textOutput = new TextOutput
+        var textOutput = new TextOutput("echo reply")
         {
-            SessionId = new SessionId("session-safe"),
-            Text = "echo reply"
+            SessionId = new SessionId("session-safe")
         };
         var turnCompleted = new TurnCompleted
         {
@@ -152,7 +151,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-text");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "hello from LLM" },
+            new TextOutput("hello from LLM") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -192,7 +191,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-file");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "file context" },
+            new TextOutput("file context") { SessionId = sid },
             new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = "application/pdf" },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
@@ -242,7 +241,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-delivered-turn");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "real reply" },
+            new TextOutput("real reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -267,7 +266,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-reminder");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reminder output" },
+            new TextOutput("reminder output") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1, SourceReminderId = "reminder-1:123456" }
         ]);
 
@@ -495,7 +494,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-transport-fail");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "this will fail to post" },
+            new TextOutput("this will fail to post") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -770,7 +769,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TextOutput("hydrated reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -812,7 +811,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TextOutput("hydrated reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -856,7 +855,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TextOutput("hydrated reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -885,7 +884,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -922,7 +921,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -968,7 +967,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -979,7 +978,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply 2" },
+            new TextOutput("reply 2") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 2 }
         ]);
         CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
@@ -1018,7 +1017,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -1058,7 +1057,7 @@ public abstract class SessionBindingContractTests : TestKit
         // Cursor must NOT advance (PR #733 amnesia fix).
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "partial" },
+            new TextOutput("partial") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1, Outcome = TurnOutcome.Failed }
         ], reactive: true);
 
@@ -1086,7 +1085,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply 2" },
+            new TextOutput("reply 2") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 2, Outcome = TurnOutcome.Completed }
         ]);
 
@@ -1117,7 +1116,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply" },
+            new TextOutput("reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -1169,7 +1168,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "hydrated reply" },
+            new TextOutput("hydrated reply") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -1201,7 +1200,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply without history" },
+            new TextOutput("reply without history") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -1252,7 +1251,7 @@ public abstract class SessionBindingContractTests : TestKit
         var turnNumber = 0;
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = $"reply {Interlocked.Increment(ref turnNumber)}" },
+            new TextOutput($"reply {Interlocked.Increment(ref turnNumber)}") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = turnNumber, Outcome = TurnOutcome.Completed }
         ], reactive: true);
 
@@ -1289,7 +1288,7 @@ public abstract class SessionBindingContractTests : TestKit
         historyFetcher.ResetFetchCount();
         pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = "reply after restart" },
+            new TextOutput("reply after restart") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = 2, Outcome = TurnOutcome.Completed }
         ], reactive: true);
 
@@ -1335,7 +1334,7 @@ public abstract class SessionBindingContractTests : TestKit
         var turnNumber = 0;
         var pipeline1 = new RecordingSessionPipeline(_ =>
         [
-            new TextOutput { SessionId = sid, Text = $"reply {Interlocked.Increment(ref turnNumber)}" },
+            new TextOutput($"reply {Interlocked.Increment(ref turnNumber)}") { SessionId = sid },
             new TurnCompleted { SessionId = sid, TurnNumber = turnNumber, Outcome = TurnOutcome.Completed }
         ], reactive: true);
 

@@ -221,19 +221,17 @@ public sealed class SessionPipeline : ISessionPipeline
         // Inbound: ChannelInput → SendUserMessage → session manager (direct Tell)
         // Re-assert subscription before each message to recover from session actor
         // passivation/re-creation (JoinSession is idempotent).
-        var joinMsg = new JoinSession
+        var joinMsg = new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = options.Filter
         };
 
         SetSessionPromptOverlay? promptOverlayMsg = null;
         if (!string.IsNullOrWhiteSpace(options.PromptOverlay))
         {
-            promptOverlayMsg = new SetSessionPromptOverlay
+            promptOverlayMsg = new SetSessionPromptOverlay(sessionId)
             {
-                SessionId = sessionId,
                 PromptOverlay = options.PromptOverlay!.Trim()
             };
         }
@@ -281,10 +279,9 @@ public sealed class SessionPipeline : ISessionPipeline
         _lifecycleObserver?.OnSessionActivated(sessionId, options.ChannelType);
 
         // Join the session — subscriber starts receiving output
-        sessionManager.Tell(new JoinSession
+        sessionManager.Tell(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = options.Filter
         }, ActorRefs.NoSender);
 

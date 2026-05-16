@@ -22,8 +22,8 @@ public sealed class ShellApprovalMatcherTests
             ["WorkingDirectory"] = workingDirectory
         };
 
-    private static ApprovalEntry Verb(string verb) => new() { Verb = verb, Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new() { Verb = verb, Directory = dir };
+    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
+    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
     [Fact]
     public void ExtractPatterns_simple_command()
@@ -292,7 +292,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             candidateVerb: "find",
             candidateDirectory: "/home/petabridge/.netclaw",
             cwd: null,
-            approvedEntries: [new ApprovalEntry { Verb = "find", Directory = "/home/petabridge" }]));
+            approvedEntries: [new ApprovalEntry("find") { Directory = "/home/petabridge" }]));
     }
 
     [Fact]
@@ -302,7 +302,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             candidateVerb: "find",
             candidateDirectory: "/home/petabridge",
             cwd: null,
-            approvedEntries: [new ApprovalEntry { Verb = "find", Directory = "/home/petabridge" }]));
+            approvedEntries: [new ApprovalEntry("find") { Directory = "/home/petabridge" }]));
     }
 
     [Fact]
@@ -312,7 +312,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             candidateVerb: "find",
             candidateDirectory: "/home/other",
             cwd: null,
-            approvedEntries: [new ApprovalEntry { Verb = "find", Directory = "/home/petabridge" }]));
+            approvedEntries: [new ApprovalEntry("find") { Directory = "/home/petabridge" }]));
     }
 
     [Fact]
@@ -323,7 +323,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             candidateVerb: "git status",
             candidateDirectory: null,
             cwd: "/home/petabridge/.netclaw",
-            approvedEntries: [new ApprovalEntry { Verb = "git status", Directory = "/home/petabridge" }]));
+            approvedEntries: [new ApprovalEntry("git status") { Directory = "/home/petabridge" }]));
     }
 
     [Fact]
@@ -334,7 +334,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             candidateVerb: "freshdesk",
             candidateDirectory: null,
             cwd: null,
-            approvedEntries: [new ApprovalEntry { Verb = "freshdesk", Directory = null }]));
+            approvedEntries: [new ApprovalEntry("freshdesk") { Directory = null }]));
     }
 
     [Fact]
@@ -581,9 +581,9 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         // same way persistence does.
         var approvedEntries = new[]
         {
-            new ApprovalEntry { Verb = "cd", Directory = null },
-            new ApprovalEntry { Verb = "git status", Directory = null },
-            new ApprovalEntry { Verb = "git remote", Directory = null }
+            new ApprovalEntry("cd") { Directory = null },
+            new ApprovalEntry("git status") { Directory = null },
+            new ApprovalEntry("git remote") { Directory = null }
             // No echo entry — exactly what the side-effect skip produces.
         };
 
@@ -601,7 +601,7 @@ public sealed class DefaultApprovalMatcherTests
 {
     private readonly DefaultApprovalMatcher _matcher = DefaultApprovalMatcher.Instance;
 
-    private static ApprovalEntry Verb(string verb) => new() { Verb = verb, Directory = null };
+    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
 
     [Fact]
     public void ExtractPatterns_returns_tool_name()

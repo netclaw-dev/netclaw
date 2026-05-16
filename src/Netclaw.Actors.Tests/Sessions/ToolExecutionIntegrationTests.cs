@@ -78,10 +78,9 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("tool-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
@@ -136,10 +135,9 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("multi-tool-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
@@ -180,10 +178,9 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("error-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification
@@ -225,10 +222,9 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("truncate-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -284,10 +280,9 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("wc-populated-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);

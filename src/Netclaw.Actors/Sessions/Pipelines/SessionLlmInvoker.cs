@@ -45,11 +45,11 @@ internal static class SessionLlmInvoker
             // The actor's ProcessingWatchdog cancelled the CTS — let the watchdog
             // handler produce the user-facing error. Send a typed failure so the
             // actor can clean up, but the watchdog message is the authoritative timeout.
-            self.Tell(new LlmCallFailed { Cause = ex, CallId = callId });
+            self.Tell(new LlmCallFailed(ex) { CallId = callId });
         }
         catch (Exception ex)
         {
-            self.Tell(new LlmCallFailed { Cause = ex, CallId = callId });
+            self.Tell(new LlmCallFailed(ex) { CallId = callId });
         }
         finally
         {
@@ -91,9 +91,8 @@ internal static class SessionLlmInvoker
                             if (textDeltaCount == 1)
                             {
                                 pendingTextDelta = text.Text;
-                                self.Tell(new LlmResponseDeltaReceived
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent)
                                 {
-                                    Content = EmptyTextContent,
                                     CallId = callId
                                 });
                             }
@@ -101,14 +100,13 @@ internal static class SessionLlmInvoker
                             {
                                 if (textDeltaCount == 2 && !string.IsNullOrEmpty(pendingTextDelta))
                                 {
-                                    self.Tell(new LlmResponseDeltaReceived
+                                    self.Tell(new LlmResponseDeltaReceived(new TextContent(pendingTextDelta))
                                     {
-                                        Content = new TextContent(pendingTextDelta),
                                         CallId = callId
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived { Content = content, CallId = callId });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId });
                                 dispatched = true;
                             }
                             break;
@@ -119,9 +117,8 @@ internal static class SessionLlmInvoker
                             if (thinkingDeltaCount == 1)
                             {
                                 pendingThinkingDelta = thinking.Text;
-                                self.Tell(new LlmResponseDeltaReceived
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent)
                                 {
-                                    Content = EmptyTextContent,
                                     CallId = callId
                                 });
                             }
@@ -129,14 +126,13 @@ internal static class SessionLlmInvoker
                             {
                                 if (thinkingDeltaCount == 2 && !string.IsNullOrEmpty(pendingThinkingDelta))
                                 {
-                                    self.Tell(new LlmResponseDeltaReceived
+                                    self.Tell(new LlmResponseDeltaReceived(new TextReasoningContent(pendingThinkingDelta))
                                     {
-                                        Content = new TextReasoningContent(pendingThinkingDelta),
                                         CallId = callId
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived { Content = content, CallId = callId });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId });
                                 dispatched = true;
                             }
                             break;
@@ -151,9 +147,8 @@ internal static class SessionLlmInvoker
             // No content dispatched — send keepalive to refresh the idle timeout watchdog.
             if (!dispatched)
             {
-                self.Tell(new LlmResponseDeltaReceived
+                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent)
                 {
-                    Content = EmptyTextContent,
                     CallId = callId
                 });
             }

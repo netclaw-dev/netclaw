@@ -645,11 +645,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Timeout_during_post_sends_transport_failure_feedback_to_session()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput("Hello from the LLM")
             {
                 SessionId = new SessionId("D7/9000.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = "Hello from the LLM"
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {
@@ -1012,11 +1011,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Generic_exception_during_post_sends_unknown_failure_feedback_to_session()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput("Hello from the LLM")
             {
                 SessionId = new SessionId("D7/9100.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = "Hello from the LLM"
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {
@@ -1072,11 +1070,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Content_rejection_msg_too_long_sends_message_too_large_feedback()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput(new string('x', 50_000))
             {
                 SessionId = new SessionId("D7/9200.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = new string('x', 50_000)
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {
@@ -1136,11 +1133,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     public async Task Content_rejection_invalid_blocks_sends_content_rejected_feedback()
     {
         var feedbackPipeline = new RecordingSessionPipeline([
-            new TextOutput
+            new TextOutput("Some text with bad formatting")
             {
                 SessionId = new SessionId("D7/9300.1"),
-                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
-                Text = "Some text with bad formatting"
+                TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()
             },
             new TurnCompleted
             {

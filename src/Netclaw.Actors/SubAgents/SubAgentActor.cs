@@ -410,7 +410,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         }
         catch (Exception ex)
         {
-            self.Tell(new LlmCallFailed { Cause = ex });
+            self.Tell(new LlmCallFailed(ex));
         }
     }
 

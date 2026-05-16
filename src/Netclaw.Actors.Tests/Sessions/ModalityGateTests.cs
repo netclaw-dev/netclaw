@@ -57,10 +57,9 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("modality-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -107,10 +106,9 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("modality-image-only-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -181,10 +179,9 @@ public class ModalityGateVisionTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("vision-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken); // Drain subscriber notification

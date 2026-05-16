@@ -11,9 +11,8 @@ namespace Netclaw.Actors.Protocol;
 /// Installs additive session-scoped prompt context without replacing the base
 /// system prompt assembled from identity files.
 /// </summary>
-public sealed record SetSessionPromptOverlay : IWithSessionId, INoSerializationVerificationNeeded
+public sealed record SetSessionPromptOverlay(SessionId SessionId)
+    : IWithSessionId, INoSerializationVerificationNeeded
 {
-    public required SessionId SessionId { get; init; }
-
     public string PromptOverlay { get; init; } = string.Empty;
 }

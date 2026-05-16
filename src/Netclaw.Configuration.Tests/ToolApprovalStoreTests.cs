@@ -25,8 +25,8 @@ public sealed class ToolApprovalStoreTests : IDisposable
         if (File.Exists(_store.V1QuarantinePath)) File.Delete(_store.V1QuarantinePath);
     }
 
-    private static ApprovalEntry Verb(string verb) => new() { Verb = verb, Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new() { Verb = verb, Directory = dir };
+    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
+    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
     [Fact]
     public void RemoveApproval_returns_false_when_file_is_empty()

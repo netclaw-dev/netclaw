@@ -101,8 +101,8 @@ public sealed class DaemonClientMappingTests
             TurnCount = 3,
             RecentMessages =
             [
-                new ChatMessageDto { Role = "user", Content = "Hello" },
-                new ChatMessageDto { Role = "assistant", Content = "Hi there!" }
+                new ChatMessageDto("user", "Hello"),
+                new ChatMessageDto("assistant", "Hi there!")
             ]
         };
 

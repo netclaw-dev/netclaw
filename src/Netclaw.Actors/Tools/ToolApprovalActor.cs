@@ -59,7 +59,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
                     _persistentStore?.AddApproval(
                         msg.Audience,
                         msg.ToolName.Value,
-                        new ApprovalEntry { Verb = pattern, Directory = msg.Cwd });
+                        new ApprovalEntry(pattern) { Directory = msg.Cwd });
                 }
             }
 

@@ -21,8 +21,8 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        var action1 = acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "Hello " });
-        var action2 = acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "world" });
+        var action1 = acc.ProcessOutput(new TextDeltaOutput("Hello ") { SessionId = TestSessionId });
+        var action2 = acc.ProcessOutput(new TextDeltaOutput("world") { SessionId = TestSessionId });
 
         Assert.Equal(OutputAction.Continue, action1);
         Assert.Equal(OutputAction.Continue, action2);
@@ -34,7 +34,7 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        acc.ProcessOutput(new TextOutput { SessionId = TestSessionId, Text = "Full text" });
+        acc.ProcessOutput(new TextOutput("Full text") { SessionId = TestSessionId });
 
         Assert.Equal("Full text", acc.GetAccumulatedText());
     }
@@ -44,8 +44,8 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        acc.ProcessOutput(new TextDeltaOutput { SessionId = TestSessionId, Delta = "streamed" });
-        acc.ProcessOutput(new TextOutput { SessionId = TestSessionId, Text = "assembled" });
+        acc.ProcessOutput(new TextDeltaOutput("streamed") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextOutput("assembled") { SessionId = TestSessionId });
 
         Assert.Equal("streamed", acc.GetAccumulatedText());
     }

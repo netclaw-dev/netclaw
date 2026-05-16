@@ -14,23 +14,23 @@
 
 ## 2. Pass 5 — Primary-constructor migration (≤3 required props)
 
-- [ ] 2.1 Migrate the protocol/session records with ≤3 required properties to
+- [x] 2.1 Migrate the protocol/session records with ≤3 required properties to
   positional primary-constructor form: `CommandAck`, `CommandNack`,
   `PrepareForDaemonRestart`, `WarmSession`, `SetSessionPromptOverlay`,
   `SessionLogDiagnostic`, `SessionEnsureResultDto`, `ChatMessageDto`,
   `JoinSession`, `LeaveSession`.
-- [ ] 2.2 Migrate the LLM/session-message records: `LlmResponseDeltaReceived`,
+- [x] 2.2 Migrate the LLM/session-message records: `LlmResponseDeltaReceived`,
   `LlmCallFailed`, `ProcessingWatchdogExpired`, `SpawnChildActorRequest`,
   `CompactionTriggered`, `MemoryCheckpointEnqueueResult`, `ApprovalEntry`,
   `ChannelSecurityContext`, `HeadlessOptions`, and the `SessionOutput` subtypes
   (`TextOutput`, `TextDeltaOutput`, `ThinkingOutput`, `ThinkingDeltaOutput`,
   `SessionTitleOutput`).
-- [ ] 2.3 Confirm no migrated type appears in the `NetclawProtobufSerializer`
+- [x] 2.3 Confirm no migrated type appears in the `NetclawProtobufSerializer`
   registration list; leave any wire-serialized record shape in property-init
   form.
-- [ ] 2.4 Fix callsite compiler errors from the positional shape and update
+- [x] 2.4 Fix callsite compiler errors from the positional shape and update
   affected tests.
-- [ ] 2.5 Verify Pass 5: `dotnet build Netclaw.slnx` clean, affected test
+- [x] 2.5 Verify Pass 5: `dotnet build Netclaw.slnx` clean, affected test
   projects green, `dotnet slopwatch analyze` no new violations,
   `./scripts/Add-FileHeaders.ps1 -Verify` passes.
 

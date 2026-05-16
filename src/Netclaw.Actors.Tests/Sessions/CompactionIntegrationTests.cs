@@ -82,10 +82,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("compact-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -125,10 +124,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("no-compact-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -164,10 +162,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("sys-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -220,10 +217,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("buffer-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -279,10 +275,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("buffer-timeout-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -328,10 +323,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var subscriber = CreateTestProbe("recover-sub");
 
         // Phase 1: Send message, trigger compaction
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -357,10 +351,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
 
         // Phase 3: Recover — join again
         var recoverSub = CreateTestProbe("recover-sub-2");
-        var recovered = await sessionManager.Ask<SessionJoined>(new JoinSession
+        var recovered = await sessionManager.Ask<SessionJoined>(new JoinSession(recoverSub)
         {
             SessionId = sessionId,
-            Subscriber = recoverSub,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await recoverSub.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -398,10 +391,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("summary-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -457,10 +449,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("obs-session-id-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -530,10 +521,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("observer-grounding-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -586,10 +576,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("successive-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -666,10 +655,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("emergency-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -717,10 +705,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("emergency-buffer-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -787,10 +774,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("wc-survives-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
@@ -898,10 +884,9 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("cache-prefix-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
             SessionId = sessionId,
-            Subscriber = subscriber,
             Filter = OutputFilter.Full
         }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);

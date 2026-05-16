@@ -161,11 +161,7 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs,
             Title = msg.Title,
             TurnCount = msg.TurnCount,
-            RecentMessages = msg.RecentMessages?.Select(m => new ChatMessageDto
-            {
-                Role = m.Role,
-                Content = m.Content
-            }).ToList()
+            RecentMessages = msg.RecentMessages?.Select(m => new ChatMessageDto(m.Role, m.Content)).ToList()
         },
 
         ToolInteractionRequest msg => new SessionOutputDto
@@ -202,29 +198,25 @@ public static class SessionOutputDtoMapper
 
         return dto.Type switch
         {
-            SessionOutputTypes.Text => new TextOutput
+            SessionOutputTypes.Text => new TextOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Text = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
-            SessionOutputTypes.TextDelta => new TextDeltaOutput
+            SessionOutputTypes.TextDelta => new TextDeltaOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Delta = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
-            SessionOutputTypes.Thinking => new ThinkingOutput
+            SessionOutputTypes.Thinking => new ThinkingOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Text = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
-            SessionOutputTypes.ThinkingDelta => new ThinkingDeltaOutput
+            SessionOutputTypes.ThinkingDelta => new ThinkingDeltaOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Delta = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
             SessionOutputTypes.ToolCall => new ToolCallOutput
             {
@@ -266,11 +258,10 @@ public static class SessionOutputDtoMapper
                     : TurnOutcome.Completed,
                 SourceReminderId = dto.SourceReminderId
             },
-            SessionOutputTypes.SessionTitle => new SessionTitleOutput
+            SessionOutputTypes.SessionTitle => new SessionTitleOutput(dto.Title ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Title = dto.Title ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
             SessionOutputTypes.Error => new ErrorOutput
             {

@@ -92,11 +92,9 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider
         if (dispatcher is null && Volatile.Read(ref _pendingCount) >= PreResolutionBufferLimit)
             return;
 
-        var diagnostic = new SessionLogDiagnostic
-        {
-            SessionId = new SessionId(sessionId),
-            Line = $"[{_timeProvider.GetUtcNow():o}] Diagnostic: {message}"
-        };
+        var diagnostic = new SessionLogDiagnostic(
+            new SessionId(sessionId),
+            $"[{_timeProvider.GetUtcNow():o}] Diagnostic: {message}");
 
         if (dispatcher is not null)
         {

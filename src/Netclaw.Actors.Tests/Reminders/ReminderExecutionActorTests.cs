@@ -145,7 +145,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TextOutput { SessionId = sessionId, Text = "No new opportunities found." },
+            new TextOutput("No new opportunities found.") { SessionId = sessionId },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
@@ -169,7 +169,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TextOutput { SessionId = sessionId, Text = "Some output." },
+            new TextOutput("Some output.") { SessionId = sessionId },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
