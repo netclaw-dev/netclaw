@@ -56,18 +56,18 @@ public sealed partial class SendDiscordMessageTool : NetclawTool<SendDiscordMess
         if (gateway is null)
             return "Error: Discord gateway is not connected.";
 
+        var defaultChannelId = string.IsNullOrWhiteSpace(_options.DefaultChannelId)
+            ? (DiscordChannelId?)null
+            : new DiscordChannelId(_options.DefaultChannelId);
+
         var channelIdValue = !string.IsNullOrWhiteSpace(args.ChannelId)
             ? args.ChannelId!
-            : _options.DefaultChannelId;
+            : defaultChannelId?.Value;
 
         if (string.IsNullOrWhiteSpace(channelIdValue))
             return "Error: No 'channel_id' provided and no default Discord channel is configured.";
 
         var targetChannelId = new DiscordChannelId(channelIdValue);
-
-        var defaultChannelId = !string.IsNullOrWhiteSpace(_options.DefaultChannelId)
-            ? new DiscordChannelId(_options.DefaultChannelId)
-            : (DiscordChannelId?)null;
 
         if (!DiscordAclPolicy.IsAllowedChannel(targetChannelId, _options, defaultChannelId))
             return $"Error: Channel {targetChannelId.Value} is not in the allowed channels list.";

@@ -33,7 +33,8 @@ internal sealed class DiscordNetOutboundClient : IDiscordOutboundClient
                 $"Discord channel {channelId.Value} is not a text channel — "
                 + "a proactive post must target a text channel so a thread can be created.");
 
-        var rootMessage = await textChannel.SendMessageAsync(text: text);
+        var requestOptions = new RequestOptions { CancelToken = ct };
+        var rootMessage = await textChannel.SendMessageAsync(text: text, options: requestOptions);
 
         IThreadChannel thread;
         try
@@ -42,14 +43,15 @@ internal sealed class DiscordNetOutboundClient : IDiscordOutboundClient
                 threadName,
                 ThreadType.PublicThread,
                 ThreadArchiveDuration.OneDay,
-                message: rootMessage);
+                message: rootMessage,
+                options: requestOptions);
         }
         catch (HttpException httpEx) when (httpEx.HttpCode == HttpStatusCode.BadRequest)
         {
             // A thread already exists on this message (race with a concurrent
             // post on the same anchor). Reuse the existing thread rather than
             // failing — the proactive message was still delivered.
-            var existingThread = await FindExistingThreadAsync(textChannel, rootMessage.Id);
+            var existingThread = await DiscordThreadHelpers.FindExistingThreadAsync(textChannel, rootMessage.Id);
             if (existingThread is null)
                 throw new InvalidOperationException(
                     $"Failed to create thread on message {rootMessage.Id} "
@@ -63,17 +65,6 @@ internal sealed class DiscordNetOutboundClient : IDiscordOutboundClient
             ChannelId: channelId,
             ReplyChannelId: new DiscordReplyChannelId(threadIdStr),
             ThreadOrMessageId: new DiscordThreadOrMessageId(threadIdStr));
-    }
-
-    private static async Task<IThreadChannel?> FindExistingThreadAsync(
-        ITextChannel textChannel, ulong anchorMessageId)
-    {
-        var anchorMsg = await textChannel.GetMessageAsync(anchorMessageId);
-        if (anchorMsg?.Thread is { } thread)
-            return thread;
-
-        var activeThreads = await textChannel.GetActiveThreadsAsync();
-        return activeThreads.FirstOrDefault(t => t.Id == anchorMessageId);
     }
 
     private async Task<global::Discord.IChannel> ResolveChannelAsync(ulong channelSnowflake, string channelIdForError)
