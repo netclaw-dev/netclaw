@@ -33,6 +33,14 @@ public static class ApprovalOptionKeys
     public const string ApproveEverywhere = "approve_everywhere";
     public const string Deny = "deny";
 
+    // Typed factories for the canonical keys — used at construction sites so a
+    // raw string literal never has to be cast to ApprovalOptionKey.
+    public static ApprovalOptionKey ApproveOnceKey { get; } = new(ApproveOnce);
+    public static ApprovalOptionKey ApproveSessionKey { get; } = new(ApproveSession);
+    public static ApprovalOptionKey ApproveAlwaysKey { get; } = new(ApproveAlways);
+    public static ApprovalOptionKey ApproveEverywhereKey { get; } = new(ApproveEverywhere);
+    public static ApprovalOptionKey DenyKey { get; } = new(Deny);
+
     public const string ApproveOnceLabel = "Once";
     public const string ApproveSessionLabel = "This chat";
     public const string ApproveAlwaysLabel = "Always here";

@@ -78,7 +78,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Principal: PrincipalClassification.UntrustedExternal,
             Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                SourceKind = "discord"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("discord")
             },
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());
@@ -156,7 +156,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Principal: PrincipalClassification.UntrustedExternal,
             Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                SourceKind = "discord"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("discord")
             },
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());
@@ -221,7 +221,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         // The bot ("bot-account") is not an allowed user, so the proactively
@@ -265,7 +265,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
         var actor = CreateActorCore(
             sid, pipeline, detector, fetcher,
@@ -306,7 +306,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
         var actor = CreateActorCore(
             sid, pipeline, detector, fetcher,
@@ -354,7 +354,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Principal: PrincipalClassification.UntrustedExternal,
             Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                SourceKind = "discord"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("discord")
             },
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());

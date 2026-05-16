@@ -114,7 +114,7 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
 
             if (msg is TurnCompleted tc && tc.Outcome != TurnOutcome.Skipped)
             {
-                _turnCount = tc.TurnNumber;
+                _turnCount = tc.TurnNumber.Value;
                 _turnsSinceLastDistill++;
 
                 if (_distillTurnInterval > 0 && _hasNewContent && !_draining

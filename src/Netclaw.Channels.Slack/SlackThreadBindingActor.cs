@@ -1245,7 +1245,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             {
                 SessionId = _sessionId,
                 CallId = pending.Request.CallId,
-                SelectedKey = selectedKey,
+                SelectedKey = new Actors.Protocol.ApprovalOptionKey(selectedKey),
                 SenderId = message.SenderId
             });
 
@@ -1305,7 +1305,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             {
                 SessionId = _sessionId,
                 CallId = message.CallId,
-                SelectedKey = message.SelectedKey,
+                SelectedKey = new Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
                 SenderId = message.SenderId
             });
 
@@ -1373,7 +1373,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
     }
 
-    private async Task NotifyDeliveryFailedAsync(int turnNumber, DeliveryFailureKind failureKind, string errorMessage)
+    private async Task NotifyDeliveryFailedAsync(Actors.Protocol.TurnNumber turnNumber, DeliveryFailureKind failureKind, string errorMessage)
     {
         try
         {
@@ -1439,7 +1439,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             {
                 SessionId = _sessionId,
                 CallId = request.CallId,
-                SelectedKey = ApprovalOptionKeys.Deny,
+                SelectedKey = ApprovalOptionKeys.DenyKey,
                 SenderId = request.RequesterSenderId ?? new Netclaw.Actors.Protocol.SenderId(string.Empty)
             });
         }

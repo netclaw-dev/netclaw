@@ -248,7 +248,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
                 Principal = PrincipalClassification.TrustedInternal,
                 Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
                 {
-                    SourceKind = "reminder"
+                    SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
                 },
                 ReminderId = "rem-1"
             });
@@ -282,7 +282,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
                 Principal = PrincipalClassification.TrustedInternal,
                 Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
                 {
-                    SourceKind = "reminder"
+                    SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
                 },
                 ReminderId = "rem-1"
             });

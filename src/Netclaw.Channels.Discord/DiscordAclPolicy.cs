@@ -49,8 +49,8 @@ public static class DiscordAclPolicy
                 TransportAuthenticity.Verified,
                 PayloadTaint.Public)
             {
-                SourceKind = "discord",
-                SourceScope = message.ChannelId.Value
+                SourceKind = new SourceKind("discord"),
+                SourceScope = new SourceScope(message.ChannelId.Value)
             });
     }
 

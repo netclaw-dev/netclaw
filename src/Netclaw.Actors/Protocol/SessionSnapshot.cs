@@ -62,7 +62,7 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
     /// <see cref="DeliveryFailed"/> feedback after passivation.
     /// Null when no turn is eligible (initial state or retries exhausted).
     /// </summary>
-    public int? EligibleDeliveryTurnNumber { get; init; }
+    public TurnNumber? EligibleDeliveryTurnNumber { get; init; }
 
     /// <summary>
     /// Durable working-context state (recent files). Null when the session

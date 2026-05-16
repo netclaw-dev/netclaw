@@ -200,7 +200,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     public async Task EagerProbe_SetsHealthOnItems()
     {
         _fakeProbe.TypeResults["openrouter"] = new ProviderProbeResult(true, null,
-            [new DiscoveredModel { ModelId = "gpt-4" }]);
+            [new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("gpt-4") }]);
         _fakeProbe.TypeResults["ollama"] = new ProviderProbeResult(false, "Connection refused", []);
 
         WriteConfig(new Dictionary<string, object>
@@ -503,7 +503,7 @@ public sealed class ProviderManagerViewModelTests : IDisposable
 
         // Now the re-probe should succeed — update the per-type result
         _fakeProbe.TypeResults["openrouter"] = new ProviderProbeResult(true, null,
-            [new DiscoveredModel { ModelId = "model-a" }]);
+            [new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-a") }]);
 
         vm.FixApiKey = "sk-new-key";
         vm.SubmitFixCredentials();

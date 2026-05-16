@@ -55,7 +55,7 @@ public sealed class ExecutionOutputAccumulatorTests
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);
 
-        var action = acc.ProcessOutput(new TurnCompleted { SessionId = TestSessionId, TurnNumber = 1 });
+        var action = acc.ProcessOutput(new TurnCompleted { SessionId = TestSessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) });
 
         Assert.Equal(OutputAction.TurnCompleted, action);
     }

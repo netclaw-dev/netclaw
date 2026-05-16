@@ -259,7 +259,7 @@ public sealed class DaemonClientReconnectIntegrationTests
                 Type = "turn_completed",
                 SessionId = sessionId,
                 TimestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                TurnNumber = 1
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             });
         }
 

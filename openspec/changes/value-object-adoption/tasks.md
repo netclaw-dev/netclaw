@@ -95,21 +95,29 @@
 
 ## 6. Pass 7d — Remaining new value objects
 
-- [ ] 6.1 Create `ModelId` (`Netclaw.Configuration`) and replace `string`
+- [x] 6.1 Create `ModelId` (`Netclaw.Configuration`) and replace `string`
   model-id fields on `GetModelCapabilities`, `ModelCapabilitiesResponse`,
   `CapabilityResolved`, `DiscoveredModel`.
-- [ ] 6.2 Create `TurnNumber` and `TurnId` (`Netclaw.Actors.Protocol`); confirm
+- [x] 6.2 Create `TurnNumber` and `TurnId` (`Netclaw.Actors.Protocol`); confirm
   both have real callsites before creating the second, then replace the ordinal
   / correlation fields on `TurnCompleted`, `DeliveryFailed`,
   `SessionSnapshot.EligibleDeliveryTurnNumber`, `SessionOutputDto.TurnNumber`.
-- [ ] 6.3 Create `ApprovalOptionKey`, `ApprovalVerb`, `SkillName`,
-  `WebhookEventType`, `WebhookDeliveryId`, `SourceScope`, `SourceKind` in their
-  domain-owning namespaces and replace the corresponding primitive fields.
-- [ ] 6.4 Update `NetclawProtoMapper` mappings and JSON converters for touched
+  `TurnId` has genuine distinct callsites (`MessageSource.TurnId`,
+  `_activeTurnId`, `MemoryCheckpointRequest.TurnId`, `SlackThreadInbound.TurnId`)
+  and was created.
+- [x] 6.3 Create `ApprovalOptionKey`, `WebhookEventType`, `WebhookDeliveryId`,
+  `SourceScope`, `SourceKind` in their domain-owning namespaces and replace the
+  corresponding primitive fields. `ApprovalVerb` and `SkillName` were SKIPPED:
+  `ApprovalVerb` is a free-form extracted command head on the persisted
+  `tool-approvals.json` schema (audit "leave-as-string"), and no actor/protocol
+  record carries a `SkillName` identity field with type-confusion risk (only the
+  nullable diagnostic label `SkillScanIssue.SkillName` and the config-bound
+  `SkillEntry.Name`).
+- [x] 6.4 Update `NetclawProtoMapper` mappings and JSON converters for touched
   serializer-registered and JSON-persisted types; add byte-equality round-trip
   tests.
-- [ ] 6.5 Fix callsite compiler errors and update affected tests.
-- [ ] 6.6 Verify Pass 7d: build clean, tests green, slopwatch clean, file
+- [x] 6.5 Fix callsite compiler errors and update affected tests.
+- [x] 6.6 Verify Pass 7d: build clean, tests green, slopwatch clean, file
   headers verified.
 
 ## 7. Pass 7e — Memory / sub-agent finding enum unwrap fixes

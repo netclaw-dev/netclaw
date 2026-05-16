@@ -201,7 +201,7 @@ internal static class ModelCommand
 
         writer.WriteLine();
         writer.WriteLine($"{"Model ID",-40} {"Context Window",-16} {"Cost (in/out per 1M)"}");
-        foreach (var model in result.Models.OrderBy(m => m.ModelId, StringComparer.OrdinalIgnoreCase))
+        foreach (var model in result.Models.OrderBy(m => m.ModelId.Value, StringComparer.OrdinalIgnoreCase))
         {
             var ctx = model.ContextWindowTokens.HasValue
                 ? $"{model.ContextWindowTokens.Value:N0}"

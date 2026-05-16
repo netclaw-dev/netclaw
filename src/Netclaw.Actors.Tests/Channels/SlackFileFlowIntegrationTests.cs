@@ -591,7 +591,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/8000.1"),
-                TurnNumber = 1
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             }
         ]);
 
@@ -633,7 +633,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.UnsupportedContent, failure.FailureKind);
-            Assert.Equal(1, failure.TurnNumber);
+            Assert.Equal(1, failure.TurnNumber.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
@@ -653,7 +653,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9000.1"),
-                TurnNumber = 1
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             }
         ]);
 
@@ -692,7 +692,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.TransportFailure, failure.FailureKind);
-            Assert.Equal(1, failure.TurnNumber);
+            Assert.Equal(1, failure.TurnNumber.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
@@ -715,10 +715,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Patterns = ["git push"],
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -761,7 +761,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             ChannelId: new SlackChannelId("D7"),
             ThreadTs: new SlackThreadTs("9050.1"),
             EventId: new SlackEventId("D7:approval-reply"),
-            TurnId: "approval-turn",
+            TurnId: new Netclaw.Actors.Protocol.TurnId("approval-turn"),
             SenderId: new SenderId("U123"),
             Audience: TrustAudience.Personal,
             Principal: PrincipalClassification.Operator,
@@ -774,7 +774,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-1", response.CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey.Value);
             Assert.Equal("U123", response.SenderId.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -806,10 +806,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Patterns = ["git push"],
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -878,10 +878,10 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 Patterns = ["git push"],
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -931,7 +931,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-button", response.CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveSession, response.SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveSession, response.SelectedKey.Value);
             Assert.Equal("U123", response.SenderId.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -998,7 +998,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var response = Assert.IsType<ToolInteractionResponse>(feedback);
             Assert.Equal("call-cold-binding", response.CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey.Value);
             Assert.Equal("U123", response.SenderId.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1019,7 +1019,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9100.1"),
-                TurnNumber = 1
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             }
         ]);
 
@@ -1058,7 +1058,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.Unknown, failure.FailureKind);
-            Assert.Equal(1, failure.TurnNumber);
+            Assert.Equal(1, failure.TurnNumber.Value);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
         Watch(actor);
@@ -1078,7 +1078,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9200.1"),
-                TurnNumber = 1
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             }
         ]);
 
@@ -1120,7 +1120,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.MessageTooLarge, failure.FailureKind);
-            Assert.Equal(1, failure.TurnNumber);
+            Assert.Equal(1, failure.TurnNumber.Value);
             Assert.Contains("msg_too_long", failure.ErrorMessage);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 
@@ -1141,7 +1141,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             new TurnCompleted
             {
                 SessionId = new SessionId("D7/9300.1"),
-                TurnNumber = 1
+                TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
             }
         ]);
 
@@ -1183,7 +1183,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
             var feedback = Assert.Single(feedbackPipeline.Feedback);
             var failure = Assert.IsType<DeliveryFailed>(feedback);
             Assert.Equal(DeliveryFailureKind.ContentRejected, failure.FailureKind);
-            Assert.Equal(1, failure.TurnNumber);
+            Assert.Equal(1, failure.TurnNumber.Value);
             Assert.Contains("invalid_blocks", failure.ErrorMessage);
         }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
 

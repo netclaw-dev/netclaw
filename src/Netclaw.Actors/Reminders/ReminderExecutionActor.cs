@@ -147,7 +147,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     TransportAuthenticity.LocalProcess,
                     PayloadTaint.Trusted)
                 {
-                    SourceKind = "reminder"
+                    SourceKind = new SourceKind("reminder")
                 },
                 Contents = [new TextContent(prompt)],
                 ReceivedAt = _timeProvider.GetUtcNow()
@@ -193,7 +193,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 ChannelType = originChannelType,
                 SenderId = new Protocol.SenderId("reminder-system"),
                 MessageId = reminderDeliveryKey,
-                TurnId = reminderDeliveryKey,
+                TurnId = new Protocol.TurnId(reminderDeliveryKey),
                 Audience = audience,
                 Boundary = boundary,
                 Principal = PrincipalClassification.VerifiedAutomation,
@@ -201,7 +201,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     TransportAuthenticity.LocalProcess,
                     PayloadTaint.Trusted)
                 {
-                    SourceKind = "reminder"
+                    SourceKind = new SourceKind("reminder")
                 },
                 ReceivedAt = _dispatchedAt,
                 ReminderId = reminderDeliveryKey

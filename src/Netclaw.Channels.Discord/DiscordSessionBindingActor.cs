@@ -57,7 +57,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
-    private int _turnNumber;
+    private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
     private ulong? _pendingCursorSnowflake;
@@ -722,7 +722,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             SessionId = _sessionId,
             CallId = pending!.CallId,
-            SelectedKey = selectedKey,
+            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
@@ -754,7 +754,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             SessionId = _sessionId,
             CallId = message.CallId,
-            SelectedKey = message.SelectedKey,
+            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
@@ -1098,7 +1098,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             {
                 SessionId = _sessionId,
                 CallId = callId,
-                SelectedKey = ApprovalOptionKeys.Deny,
+                SelectedKey = ApprovalOptionKeys.DenyKey,
                 SenderId = new Netclaw.Actors.Protocol.SenderId("system")
             });
         }

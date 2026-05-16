@@ -40,7 +40,7 @@ public sealed record SessionPipelineOptions
 
 public static class MessageSourceFactory
 {
-    public static MessageSource Create(ChannelInput input, SessionPipelineOptions options, string turnId)
+    public static MessageSource Create(ChannelInput input, SessionPipelineOptions options, Protocol.TurnId turnId)
     {
         var textContent = string.Join("\n", input.Contents
             .OfType<TextContent>()
@@ -303,9 +303,8 @@ public sealed class SessionPipeline : ISessionPipeline
         SessionPipelineOptions options,
         NetclawPaths paths)
     {
-        var turnId = string.IsNullOrWhiteSpace(input.MessageId)
-            ? IdGen.ShortId()
-            : input.MessageId!;
+        var turnId = new Protocol.TurnId(
+            string.IsNullOrWhiteSpace(input.MessageId) ? IdGen.ShortId() : input.MessageId!);
 
         var textParts = input.Contents.OfType<TextContent>().Select(t => t.Text);
         var content = string.Join("\n", textParts);

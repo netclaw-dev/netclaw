@@ -429,24 +429,24 @@ public sealed class ToolAccessPolicy
         {
             return
             [
-                new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                new ToolApprovalOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolApprovalOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
             ];
         }
 
         var options = new List<ToolApprovalOption>(5)
         {
-            new ToolApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-            new ToolApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel)
+            new ToolApprovalOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+            new ToolApprovalOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel)
         };
 
         if (!isCwdShallow && !allEffectiveDirsAreSessionScratch)
         {
-            options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel));
+            options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel));
         }
 
-        options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.ApproveEverywhereLabel));
-        options.Add(new ToolApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel));
+        options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveEverywhereLabel));
+        options.Add(new ToolApprovalOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel));
 
         return options;
     }
@@ -647,7 +647,7 @@ public sealed record ToolApprovalContext(
     // actual paths the agent touched.
     IReadOnlyList<ApprovalCandidate>? Candidates = null);
 
-public sealed record ToolApprovalOption(string Key, string Label);
+public sealed record ToolApprovalOption(ApprovalOptionKey Key, string Label);
 
 public sealed class ToolAccessDeniedException : InvalidOperationException
 {

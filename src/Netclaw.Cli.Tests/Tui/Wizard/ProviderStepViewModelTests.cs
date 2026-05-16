@@ -130,8 +130,8 @@ public sealed class ProviderStepViewModelTests : IDisposable
 
         _fakeProbe.NextResult = new ProviderProbeResult(true, null,
         [
-            new DiscoveredModel { ModelId = "llama3:latest" },
-            new DiscoveredModel { ModelId = "qwen3:30b" }
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("llama3:latest") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("qwen3:30b") }
         ]);
 
         step.StartProbe();

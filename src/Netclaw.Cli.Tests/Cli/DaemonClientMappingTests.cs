@@ -272,10 +272,10 @@ public sealed class DaemonClientMappingTests
             CandidateVerbs = ["git push"],
             Options =
             [
-                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                new ToolInteractionOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
-                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
-                new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
             ]
         };
 
@@ -320,5 +320,61 @@ public sealed class DaemonClientMappingTests
         var error = Assert.IsType<ErrorOutput>(output);
         Assert.Equal(ErrorCategory.Unknown, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
+    }
+
+    [Fact]
+    public void SessionOutputDto_turn_number_serializes_as_bare_json_integer()
+    {
+        // Pass 7d wraps SessionOutputDto.TurnNumber in the TurnNumber value
+        // object. The SignalR JSON wire form must stay a bare integer (never a
+        // nested { "Value": N } object) so an old/new daemon and CLI interop.
+        var dto = new SessionOutputDto
+        {
+            Type = SessionOutputTypes.TurnCompleted,
+            SessionId = "signalr/test",
+            TimestampMs = 1,
+            TurnNumber = new TurnNumber(9)
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(dto);
+        Assert.Contains("\"TurnNumber\":9", json);
+        Assert.DoesNotContain("\"Value\"", json);
+
+        var restored = System.Text.Json.JsonSerializer.Deserialize<SessionOutputDto>(json);
+        Assert.Equal(new TurnNumber(9), restored!.TurnNumber);
+    }
+
+    [Fact]
+    public void SessionOutputDto_null_turn_number_serializes_as_json_null()
+    {
+        var dto = new SessionOutputDto
+        {
+            Type = SessionOutputTypes.Text,
+            SessionId = "signalr/test",
+            TimestampMs = 1,
+            TurnNumber = null
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(dto);
+        Assert.Contains("\"TurnNumber\":null", json);
+
+        var restored = System.Text.Json.JsonSerializer.Deserialize<SessionOutputDto>(json);
+        Assert.Null(restored!.TurnNumber);
+    }
+
+    [Fact]
+    public void ToolInteractionOption_key_serializes_as_bare_json_string()
+    {
+        // ToolInteractionOption.Key crosses the SignalR JSON boundary nested in
+        // SessionOutputDto.InteractionOptions. The ApprovalOptionKey converter
+        // must keep it a bare string so channel adapters parse it unchanged.
+        var option = new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, "Once");
+
+        var json = System.Text.Json.JsonSerializer.Serialize(option);
+        Assert.Contains("\"Key\":\"approve_once\"", json);
+        Assert.DoesNotContain("\"Value\"", json);
+
+        var restored = System.Text.Json.JsonSerializer.Deserialize<ToolInteractionOption>(json);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnceKey, restored!.Key);
     }
 }

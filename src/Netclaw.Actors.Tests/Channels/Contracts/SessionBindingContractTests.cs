@@ -125,7 +125,7 @@ public abstract class SessionBindingContractTests : TestKit
         var turnCompleted = new TurnCompleted
         {
             SessionId = new SessionId("session-safe"),
-            TurnNumber = 1
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
         };
         var pipeline = new RecordingSessionPipeline(_ => [textOutput, turnCompleted]);
         var sid = new SessionId("session-safe");
@@ -152,7 +152,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hello from LLM") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -172,7 +172,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new ErrorOutput { SessionId = sid, Message = "something broke" },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -193,7 +193,7 @@ public abstract class SessionBindingContractTests : TestKit
         [
             new TextOutput("file context") { SessionId = sid },
             new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = new Netclaw.Security.MimeType("application/pdf") },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActor(sid, pipeline, detector);
@@ -221,7 +221,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-empty-turn");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -242,7 +242,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("real reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActor(sid, pipeline, detector);
@@ -267,7 +267,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1, SourceReminderId = "reminder-1:123456" }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = "reminder-1:123456" }
         ]);
 
         var probe = CreateTestProbe();
@@ -300,8 +300,8 @@ public abstract class SessionBindingContractTests : TestKit
                 DisplayText = "git push origin main",
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -334,8 +334,8 @@ public abstract class SessionBindingContractTests : TestKit
                 RequesterSenderId = new SenderId("user-1"),
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -357,7 +357,7 @@ public abstract class SessionBindingContractTests : TestKit
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
             Assert.Equal("call-2", feedback[0].CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
         }, cancellationToken: ct);
     }
 
@@ -387,7 +387,7 @@ public abstract class SessionBindingContractTests : TestKit
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
             Assert.Equal("call-cold", feedback[0].CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
             Assert.Equal("user-1", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
     }
@@ -410,8 +410,8 @@ public abstract class SessionBindingContractTests : TestKit
                 RequesterSenderId = new SenderId("user-1"),
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -432,7 +432,7 @@ public abstract class SessionBindingContractTests : TestKit
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
             Assert.Equal("call-3", feedback[0].CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
         }, cancellationToken: ct);
     }
 
@@ -453,10 +453,10 @@ public abstract class SessionBindingContractTests : TestKit
                 DisplayText = "some command",
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel)
                 ]
             },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActor(sid, pipeline, detector);
@@ -495,7 +495,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("this will fail to post") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         SetReplyClientThrows(new InvalidOperationException("channel API down"));
@@ -538,7 +538,7 @@ public abstract class SessionBindingContractTests : TestKit
         var sid = new SessionId("session-stash");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActor(sid, pipeline, detector);
@@ -580,8 +580,8 @@ public abstract class SessionBindingContractTests : TestKit
                 RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -601,7 +601,7 @@ public abstract class SessionBindingContractTests : TestKit
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
             Assert.Equal("call-auto-1", feedback[0].CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
             Assert.Equal("random-human-user", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
     }
@@ -626,8 +626,8 @@ public abstract class SessionBindingContractTests : TestKit
                 RequesterSenderId = new SenderId("user-A"),
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -675,8 +675,8 @@ public abstract class SessionBindingContractTests : TestKit
                 RequesterSenderId = new SenderId("user-A"),
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -725,8 +725,8 @@ public abstract class SessionBindingContractTests : TestKit
                 DisplayText = "dangerous command",
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             }
         ]);
@@ -740,7 +740,7 @@ public abstract class SessionBindingContractTests : TestKit
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
             Assert.Equal("call-deny-1", feedback[0].CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.Deny, feedback[0].SelectedKey);
+            Assert.Equal(ApprovalOptionKeys.Deny, feedback[0].SelectedKey.Value);
         }, cancellationToken: ct);
 
         ClearReplyClientThrows();
@@ -770,7 +770,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -812,7 +812,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -856,7 +856,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -885,7 +885,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -922,7 +922,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -968,7 +968,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -979,7 +979,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply 2") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 2 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) }
         ]);
         CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
         await AwaitAssertAsync(() => Assert.NotNull(pipeline2.CapturedOptions), cancellationToken: ct);
@@ -1018,7 +1018,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1058,7 +1058,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("partial") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1, Outcome = TurnOutcome.Failed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), Outcome = TurnOutcome.Failed }
         ], reactive: true);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1086,7 +1086,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline2 = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply 2") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 2, Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), Outcome = TurnOutcome.Completed }
         ]);
 
         CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
@@ -1117,7 +1117,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1169,7 +1169,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("hydrated reply") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1201,7 +1201,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply without history") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1252,7 +1252,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput($"reply {Interlocked.Increment(ref turnNumber)}") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = turnNumber, Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(turnNumber), Outcome = TurnOutcome.Completed }
         ], reactive: true);
 
         var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1289,7 +1289,7 @@ public abstract class SessionBindingContractTests : TestKit
         pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reply after restart") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = 2, Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), Outcome = TurnOutcome.Completed }
         ], reactive: true);
 
         var actor2 = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
@@ -1335,7 +1335,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline1 = new RecordingSessionPipeline(_ =>
         [
             new TextOutput($"reply {Interlocked.Increment(ref turnNumber)}") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = turnNumber, Outcome = TurnOutcome.Completed }
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(turnNumber), Outcome = TurnOutcome.Completed }
         ], reactive: true);
 
         var actor1 = CreateBindingActorWithHydration(sid, pipeline1, detector, historyFetcher);

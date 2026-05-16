@@ -496,7 +496,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
         Principal = PrincipalClassification.TrustedInternal,
         Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
         {
-            SourceKind = "reminder"
+            SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
         },
         ReminderId = "rem-1"
     };
