@@ -120,7 +120,7 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
             SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Audience = TrustAudience.Team,
-            Boundary = SecurityPolicyDefaults.TeamBoundary
+            Boundary = TrustBoundary.Team
         };
 
         var json = JsonSerializer.Serialize(definition, options);

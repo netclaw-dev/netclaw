@@ -698,7 +698,7 @@ public class DispatchingToolExecutorTests
             var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-audit", null)
             {
                 Audience = TrustAudience.Personal,
-                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                Boundary = TrustBoundary.TrustedInstance,
                 ChannelType = "signalr",
                 SupportsInteractiveApproval = true
             };

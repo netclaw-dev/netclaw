@@ -195,7 +195,7 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
             Schedule = new ReminderSchedule { Type = ReminderScheduleType.OneShot, FireAt = now.AddHours(1) },
             Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.PersonalBoundary
+            Boundary = TrustBoundary.Personal
         };
 
         var json = JsonSerializer.Serialize(definition, options);
