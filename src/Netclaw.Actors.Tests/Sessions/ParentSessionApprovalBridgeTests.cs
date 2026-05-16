@@ -26,7 +26,7 @@ public sealed class ParentSessionApprovalBridgeTests
                 channel.Complete(request.CallId, ApprovalDecision.ApprovedOnce);
             },
             new SessionId("signalr/thread-1"),
-            requesterSenderId: "user-123",
+            requesterSenderId: new SenderId("user-123"),
             requesterPrincipal: PrincipalClassification.Operator,
             hasAdoptedContext: true,
             hasThirdPartyAdoptedContext: true,
@@ -43,7 +43,7 @@ public sealed class ParentSessionApprovalBridgeTests
 
         Assert.Equal(ParentApprovalDecision.ApprovedOnce, decision);
         Assert.NotNull(emitted);
-        Assert.Equal("user-123", emitted!.RequesterSenderId);
+        Assert.Equal("user-123", emitted!.RequesterSenderId?.Value);
         Assert.Equal(PrincipalClassification.Operator, emitted.RequesterPrincipal);
         Assert.True(emitted.HasAdoptedContext);
         Assert.True(emitted.HasThirdPartyAdoptedContext);
@@ -68,7 +68,7 @@ public sealed class ParentSessionApprovalBridgeTests
                 channel.Complete(request.CallId, ApprovalDecision.ApprovedOnce);
             },
             new SessionId("signalr/thread-2"),
-            requesterSenderId: "user-123",
+            requesterSenderId: new SenderId("user-123"),
             requesterPrincipal: PrincipalClassification.Operator,
             hasAdoptedContext: true,
             hasThirdPartyAdoptedContext: false,

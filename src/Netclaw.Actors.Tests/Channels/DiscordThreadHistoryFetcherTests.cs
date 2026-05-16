@@ -25,7 +25,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "1001",
-                    SenderId: "user-1",
+                    SenderId: new SenderId("user-1"),
                     IsBot: false,
                     Text: string.Empty,
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -64,7 +64,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "1002",
-                    SenderId: "user-2",
+                    SenderId: new SenderId("user-2"),
                     IsBot: false,
                     Text: "see attached",
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -101,7 +101,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "1003",
-                    SenderId: "user-3",
+                    SenderId: new SenderId("user-3"),
                     IsBot: false,
                     Text: "please inspect",
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -153,7 +153,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "1004",
-                    SenderId: "user-4",
+                    SenderId: new SenderId("user-4"),
                     IsBot: false,
                     Text: string.Empty,
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -207,7 +207,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "1006",
-                    SenderId: "user-6",
+                    SenderId: new SenderId("user-6"),
                     IsBot: false,
                     Text: string.Empty,
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -244,7 +244,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "1005",
-                    SenderId: "user-5",
+                    SenderId: new SenderId("user-5"),
                     IsBot: false,
                     Text: string.Empty,
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -280,14 +280,14 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000002001",
-                    SenderId: "bot-1",
+                    SenderId: new SenderId("bot-1"),
                     IsBot: true,
                     Text: "proactive post (root)",
                     Timestamp: TimeProvider.System.GetUtcNow(),
                     Attachments: []),
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000002002",
-                    SenderId: "user-1",
+                    SenderId: new SenderId("user-1"),
                     IsBot: false,
                     Text: "human reply",
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -302,11 +302,11 @@ public sealed class DiscordThreadHistoryFetcherTests
 
         var rootEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>()
             .Any(t => t.Text == "proactive post (root)"));
-        Assert.Equal("bot-1", rootEntry.SenderId);
+        Assert.Equal("bot-1", rootEntry.SenderId.Value);
 
         var humanEntry = Assert.Single(result, r => r.Contents.OfType<TextContent>()
             .Any(t => t.Text == "human reply"));
-        Assert.Equal("user-1", humanEntry.SenderId);
+        Assert.Equal("user-1", humanEntry.SenderId.Value);
     }
 
     [Fact]
@@ -321,28 +321,28 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000003001",
-                    SenderId: "user-1",
+                    SenderId: new SenderId("user-1"),
                     IsBot: false,
                     Text: "human-started root",
                     Timestamp: TimeProvider.System.GetUtcNow(),
                     Attachments: []),
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000003002",
-                    SenderId: "user-1",
+                    SenderId: new SenderId("user-1"),
                     IsBot: false,
                     Text: "human reply",
                     Timestamp: TimeProvider.System.GetUtcNow(),
                     Attachments: []),
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000003003",
-                    SenderId: "bot-other",
+                    SenderId: new SenderId("bot-other"),
                     IsBot: true,
                     Text: "third-party bot reply",
                     Timestamp: TimeProvider.System.GetUtcNow(),
                     Attachments: []),
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000003004",
-                    SenderId: "bot-netclaw",
+                    SenderId: new SenderId("bot-netclaw"),
                     IsBot: true,
                     Text: "our own prior bot reply",
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -371,21 +371,21 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000004001",
-                    SenderId: "bot-netclaw",
+                    SenderId: new SenderId("bot-netclaw"),
                     IsBot: true,
                     Text: "proactive root",
                     Timestamp: TimeProvider.System.GetUtcNow(),
                     Attachments: []),
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000004002",
-                    SenderId: "user-1",
+                    SenderId: new SenderId("user-1"),
                     IsBot: false,
                     Text: "user reply",
                     Timestamp: TimeProvider.System.GetUtcNow(),
                     Attachments: []),
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000004003",
-                    SenderId: "bot-netclaw",
+                    SenderId: new SenderId("bot-netclaw"),
                     IsBot: true,
                     Text: "agent's reply turn (in transcript)",
                     Timestamp: TimeProvider.System.GetUtcNow(),
@@ -423,7 +423,7 @@ public sealed class DiscordThreadHistoryFetcherTests
             [
                 new DiscordThreadHistoryFetcher.HistoricalMessage(
                     MessageId: "100000000000000010",
-                    SenderId: "user-10",
+                    SenderId: new SenderId("user-10"),
                     IsBot: false,
                     Text: "first DM message",
                     Timestamp: TimeProvider.System.GetUtcNow(),

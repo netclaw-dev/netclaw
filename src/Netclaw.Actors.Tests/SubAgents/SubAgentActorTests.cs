@@ -32,7 +32,7 @@ public class SubAgentActorTests : TestKit
     {
         return new SubAgentDefinition
         {
-            Name = "test-agent",
+            Name = new AgentName("test-agent"),
             SystemPrompt = "You are a test agent.",
             Tools = tools ?? [],
             EmitStructuredFindings = false
@@ -52,7 +52,7 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.Contains("Response #1", result.Output);
-        Assert.Equal("test-agent", result.AgentName);
+        Assert.Equal("test-agent", result.AgentName.Value);
         Assert.Empty(result.Findings);
     }
 

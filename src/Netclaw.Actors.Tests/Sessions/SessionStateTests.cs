@@ -368,7 +368,7 @@ public class SessionStateTests
         {
             SessionId = TestSessionId,
             AuthorizedMessageId = "authorized-1",
-            AuthorizerSenderId = "user-1",
+            AuthorizerSenderId = new SenderId("user-1"),
             LowerBound = "cursor-0",
             UpperBound = "authorized-1",
             Projection = "[adopted-context]",
@@ -381,7 +381,7 @@ public class SessionStateTests
                 new AdoptedContextRecorded.AdoptedMessageRecord
                 {
                     MessageId = "history-1",
-                    SenderId = "observer-1",
+                    SenderId = new SenderId("observer-1"),
                     TimestampMs = timestamp.ToUnixTimeMilliseconds(),
                     AuthorityAtInclusion = "pending"
                 }
@@ -392,7 +392,7 @@ public class SessionStateTests
 
         var record = Assert.Single(restored.AdoptedContextRecords);
         Assert.Equal("authorized-1", record.Key);
-        Assert.Equal("user-1", record.Value.AuthorizerSenderId);
+        Assert.Equal("user-1", record.Value.AuthorizerSenderId?.Value);
         Assert.Equal("cursor-0", record.Value.LowerBound);
         Assert.Equal("authorized-1", record.Value.UpperBound);
         Assert.True(record.Value.HasAdoptedContext);
@@ -402,7 +402,7 @@ public class SessionStateTests
         Assert.Equal("[adopted-context]", record.Value.Projection);
         var message = Assert.Single(record.Value.Messages);
         Assert.Equal("history-1", message.MessageId);
-        Assert.Equal("observer-1", message.SenderId);
+        Assert.Equal("observer-1", message.SenderId.Value);
         Assert.Equal(timestamp, message.Timestamp);
         Assert.Equal("pending", message.AuthorityAtInclusion);
     }

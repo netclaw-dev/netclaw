@@ -314,7 +314,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         var source = new MessageSource
         {
             ChannelType = originChannelType,
-            SenderId = SystemSenderId,
+            SenderId = new Protocol.SenderId(SystemSenderId),
             MessageId = jobDeliveryKey,
             TurnId = jobDeliveryKey,
             Audience = def.Audience,

@@ -60,7 +60,7 @@ public sealed record StartBackgroundJob
     public required TrustBoundary Boundary { get; init; }
     public required Channels.ChannelType OriginChannelType { get; init; }
     public int TimeoutSeconds { get; init; } = 600;
-    public string? SenderId { get; init; }
+    public Protocol.SenderId? SenderId { get; init; }
 }
 
 /// <summary>
@@ -145,7 +145,8 @@ public sealed record BackgroundJobDefinition
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public Channels.ChannelType OriginChannelType { get; init; }
 
-    public string? SenderId { get; init; }
+    [JsonConverter(typeof(Protocol.SenderIdJsonConverter))]
+    public Protocol.SenderId? SenderId { get; init; }
 
     [JsonIgnore]
     public DateTimeOffset StartedAt => DateTimeOffset.FromUnixTimeMilliseconds(StartedAtMs);

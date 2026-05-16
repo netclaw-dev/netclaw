@@ -123,7 +123,7 @@ public sealed class DiscordApprovalPromptBuilderTests
             CallId = new Netclaw.Tools.ToolCallId("call-rt"),
             ToolName = new Netclaw.Tools.ToolName("tool"),
             DisplayText = "action",
-            RequesterSenderId = "user-123",
+            RequesterSenderId = new SenderId("user-123"),
             Options =
             [
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)

@@ -17,7 +17,7 @@ namespace Netclaw.Actors.SubAgents;
 public sealed record SubAgentDefinition
 {
     /// <summary>Human-readable name for logging and observability.</summary>
-    public required string Name { get; init; }
+    public required AgentName Name { get; init; }
 
     /// <summary>System prompt for the subagent's LLM context.</summary>
     public required string SystemPrompt { get; init; }
@@ -112,7 +112,7 @@ public sealed record SubAgentResult : INoSerializationVerificationNeeded
     public required string Output { get; init; }
 
     /// <summary>Name of the subagent that produced this result.</summary>
-    public required string AgentName { get; init; }
+    public required AgentName AgentName { get; init; }
 
     /// <summary>
     /// Structured findings returned to the owning session for policy and checkpoint review.

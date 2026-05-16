@@ -21,7 +21,7 @@ public class SessionRecallManagerTests
         var source = new MessageSource
         {
             ChannelType = ChannelType.Slack,
-            SenderId = "U123",
+            SenderId = new SenderId("U123"),
             Audience = TrustAudience.Public,
             Boundary = TrustBoundary.Public,
             Principal = PrincipalClassification.UntrustedExternal,
@@ -48,7 +48,7 @@ public class SessionRecallManagerTests
         var source = new MessageSource
         {
             ChannelType = ChannelType.Tui,
-            SenderId = "local-user",
+            SenderId = new SenderId("local-user"),
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal,
             Principal = PrincipalClassification.UntrustedExternal,
@@ -76,7 +76,7 @@ public class SessionRecallManagerTests
         var source = new MessageSource
         {
             ChannelType = ChannelType.Tui,
-            SenderId = "local-user",
+            SenderId = new SenderId("local-user"),
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.Personal,
             Principal = PrincipalClassification.UntrustedExternal,

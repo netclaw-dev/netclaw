@@ -132,7 +132,7 @@ public sealed class SlackReplyClientTests
             CallId = new Netclaw.Tools.ToolCallId("call-1"),
             ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = "git status",
-            RequesterSenderId = "U1",
+            RequesterSenderId = new SenderId("U1"),
             Patterns = ["git status"],
             Options =
             [

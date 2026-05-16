@@ -124,7 +124,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         {
             items.Add(new ChannelInput
             {
-                SenderId = $"history-user-{i}",
+                SenderId = new SenderId($"history-user-{i}"),
                 ChannelId = "ch-test",
                 MessageId = (900_000_000_000_000_000UL + (ulong)i).ToString(),
                 Contents = [new Microsoft.Extensions.AI.TextContent($"history message {i}")],
@@ -330,7 +330,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     private static ChannelInput MakeHistoryItem(string senderId, string messageId, string text)
         => new()
         {
-            SenderId = senderId,
+            SenderId = new SenderId(senderId),
             ChannelId = "ch-test",
             MessageId = messageId,
             Contents = [new Microsoft.Extensions.AI.TextContent(text)],

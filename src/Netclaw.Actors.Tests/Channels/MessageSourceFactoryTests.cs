@@ -30,7 +30,7 @@ public sealed class MessageSourceFactoryTests : TestKit
         IReadOnlyList<string>? adoptedSpeakerIds = null)
         => new()
         {
-            SenderId = "user-1",
+            SenderId = new Netclaw.Actors.Protocol.SenderId("user-1"),
             Audience = audience,
             Boundary = boundary ?? TrustBoundary.Public,
             Principal = principal,

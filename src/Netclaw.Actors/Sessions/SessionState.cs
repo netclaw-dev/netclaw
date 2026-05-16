@@ -22,7 +22,7 @@ public sealed record SessionState
 {
     public sealed record AdoptedContextAuditRecord(
         string AuthorizedMessageId,
-        string? AuthorizerSenderId,
+        SenderId? AuthorizerSenderId,
         string? LowerBound,
         string? UpperBound,
         string Projection,
@@ -34,7 +34,7 @@ public sealed record SessionState
 
     public sealed record AdoptedContextAuditMessage(
         string MessageId,
-        string SenderId,
+        SenderId SenderId,
         DateTimeOffset Timestamp,
         string AuthorityAtInclusion);
 

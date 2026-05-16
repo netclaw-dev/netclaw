@@ -240,7 +240,7 @@ public sealed record FileOutput : SessionOutput
 /// </summary>
 public sealed record SubAgentOutput : SessionOutput
 {
-    public required string AgentName { get; init; }
+    public required SubAgents.AgentName AgentName { get; init; }
     public required SubAgents.SubAgentPhase Phase { get; init; }
 
     /// <summary>Number of tools available to the subagent (on Started).</summary>
@@ -337,7 +337,7 @@ public sealed record ToolInteractionRequest : SessionOutput
     /// Identity of the user who initiated the turn that triggered this request.
     /// Channels can use this to ensure responses are routed for the correct user.
     /// </summary>
-    public string? RequesterSenderId { get; init; }
+    public SenderId? RequesterSenderId { get; init; }
 
     /// <summary>
     /// Principal classification of the requester. When <see cref="PrincipalClassification.VerifiedAutomation"/>

@@ -125,7 +125,7 @@ public static class SessionOutputDtoMapper
             Type = SessionOutputTypes.SubAgent,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
-            AgentName = msg.AgentName,
+            AgentName = msg.AgentName.Value,
             Phase = msg.Phase.ToString().ToLowerInvariant(),
             ToolCountSub = msg.ToolCount,
             SubAgentSuccess = msg.Success,
@@ -173,7 +173,7 @@ public static class SessionOutputDtoMapper
             CallId = msg.CallId.Value,
             ToolName = msg.ToolName.Value,
             InteractionDisplayText = msg.DisplayText,
-            RequesterSenderId = msg.RequesterSenderId,
+            RequesterSenderId = msg.RequesterSenderId?.Value,
             InteractionPatterns = [.. msg.Patterns],
             InteractionCandidateVerbs = [.. msg.CandidateVerbs],
             InteractionCwd = msg.Cwd,
@@ -285,7 +285,7 @@ public static class SessionOutputDtoMapper
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
-                AgentName = dto.AgentName ?? "unknown",
+                AgentName = new SubAgents.AgentName(dto.AgentName ?? "unknown"),
                 Phase = dto.Phase?.Equals("completed", StringComparison.OrdinalIgnoreCase) == true
                     ? SubAgents.SubAgentPhase.Completed
                     : SubAgents.SubAgentPhase.Started,
@@ -327,7 +327,7 @@ public static class SessionOutputDtoMapper
                 CallId = new Netclaw.Tools.ToolCallId(dto.CallId ?? string.Empty),
                 ToolName = new Netclaw.Tools.ToolName(dto.ToolName ?? "unknown"),
                 DisplayText = dto.InteractionDisplayText ?? string.Empty,
-                RequesterSenderId = dto.RequesterSenderId,
+                RequesterSenderId = dto.RequesterSenderId is { } rsid ? new SenderId(rsid) : null,
                 HasAdoptedContext = dto.InteractionHasAdoptedContext ?? false,
                 HasThirdPartyAdoptedContext = dto.InteractionHasThirdPartyAdoptedContext ?? false,
                 AdoptedSpeakerIds = dto.InteractionAdoptedSpeakerIds ?? [],

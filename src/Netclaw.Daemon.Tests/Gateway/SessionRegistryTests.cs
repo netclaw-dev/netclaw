@@ -190,7 +190,7 @@ public sealed class SessionRegistryTests
         await registry.SendMessageAsync("conn-1", sessionId, "hello", principal);
 
         var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
-        Assert.Equal("local", enqueue.Input.SenderId);
+        Assert.Equal("local", enqueue.Input.SenderId.Value);
         Assert.Equal(PrincipalClassification.Operator, enqueue.Input.Principal);
         Assert.Equal(TransportAuthenticity.LocalProcess, enqueue.Input.Provenance!.TransportAuthenticity);
     }
@@ -206,7 +206,7 @@ public sealed class SessionRegistryTests
         await registry.SendMessageAsync("conn-1", sessionId, "hello", principal: null);
 
         var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
-        Assert.Equal("unknown", enqueue.Input.SenderId);
+        Assert.Equal("unknown", enqueue.Input.SenderId.Value);
         Assert.Equal(PrincipalClassification.UntrustedExternal, enqueue.Input.Principal);
         Assert.Equal(TransportAuthenticity.Unknown, enqueue.Input.Provenance!.TransportAuthenticity);
     }

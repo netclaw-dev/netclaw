@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Channels;
@@ -14,4 +15,4 @@ namespace Netclaw.Actors.Channels;
 public sealed record ConnectionIdentity(
     PrincipalClassification Principal,
     TransportAuthenticity Transport,
-    string SenderId);
+    SenderId SenderId);

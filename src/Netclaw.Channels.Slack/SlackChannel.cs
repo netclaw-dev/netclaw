@@ -119,8 +119,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             threadTs,
             new Netclaw.Tools.ToolCallId(callId),
             selectedKey,
-            senderId,
-            requesterSenderId));
+            new Netclaw.Actors.Protocol.SenderId(senderId),
+            requesterSenderId is { } rsid ? new Netclaw.Actors.Protocol.SenderId(rsid) : null));
     }
 
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)

@@ -207,12 +207,12 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Started, started.Phase);
-        Assert.Equal("summarizer", started.AgentName);
+        Assert.Equal("summarizer", started.AgentName.Value);
         Assert.Equal(1, started.ToolCount);
 
         var completed = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Completed, completed.Phase);
-        Assert.Equal("summarizer", completed.AgentName);
+        Assert.Equal("summarizer", completed.AgentName.Value);
         Assert.True(completed.Success);
         Assert.Equal(0, completed.FindingsCount);
         Assert.Null(completed.MemoryDecision);
@@ -508,7 +508,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         return new MessageSource
         {
             ChannelType = ChannelType.Tui,
-            SenderId = "test-user",
+            SenderId = new SenderId("test-user"),
             Audience = TrustAudience.Personal,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromChannelType(ChannelType.Tui.ToWireValue(), TrustAudience.Personal),
             Principal = PrincipalClassification.Operator,
@@ -522,7 +522,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         return new MessageSource
         {
             ChannelType = ChannelType.Reminder,
-            SenderId = "reminder-executor",
+            SenderId = new SenderId("reminder-executor"),
             Audience = TrustAudience.Team,
             Boundary = SecurityPolicyDefaults.ResolveBoundaryFromChannelType(ChannelType.Reminder.ToWireValue(), TrustAudience.Team),
             Principal = PrincipalClassification.VerifiedAutomation,

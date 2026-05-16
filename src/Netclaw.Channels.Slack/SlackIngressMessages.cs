@@ -46,7 +46,7 @@ public sealed record SlackThreadInbound(
     SlackThreadTs ThreadTs,
     SlackEventId EventId,
     string TurnId,
-    string SenderId,
+    SenderId SenderId,
     TrustAudience Audience,
     PrincipalClassification Principal,
     SourceProvenance Provenance,
@@ -86,5 +86,5 @@ public sealed record SlackApprovalResponse(
     SlackThreadTs ThreadTs,
     ToolCallId CallId,
     string SelectedKey,
-    string SenderId,
-    string? RequesterSenderId = null) : INoSerializationVerificationNeeded;
+    SenderId SenderId,
+    SenderId? RequesterSenderId = null) : INoSerializationVerificationNeeded;

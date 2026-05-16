@@ -21,7 +21,7 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
         {
             public string MessageId { get; init; } = string.Empty;
 
-            public string SenderId { get; init; } = string.Empty;
+            public SenderId SenderId { get; init; } = new(string.Empty);
 
             public long TimestampMs { get; init; }
 
@@ -30,7 +30,7 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
         public string AuthorizedMessageId { get; init; } = string.Empty;
 
-        public string? AuthorizerSenderId { get; init; }
+        public SenderId? AuthorizerSenderId { get; init; }
 
         public string? LowerBound { get; init; }
 

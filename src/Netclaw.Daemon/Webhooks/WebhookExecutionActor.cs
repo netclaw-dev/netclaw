@@ -86,7 +86,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
 
             await inputQueue.OfferAsync(new ChannelInput
             {
-                SenderId = $"webhook:{_invocation.Route.Name}",
+                SenderId = new SenderId($"webhook:{_invocation.Route.Name}"),
                 ChannelId = _invocation.Route.Name,
                 Audience = routeAudience,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(routeAudience),

@@ -489,7 +489,7 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
     private static MessageSource CreateReminderSource() => new()
     {
         ChannelType = ChannelType.Discord,
-        SenderId = "reminder-system",
+        SenderId = new SenderId("reminder-system"),
         MessageId = "reminder-1",
         Audience = TrustAudience.Team,
         Boundary = TrustBoundary.TrustedInstance,

@@ -138,7 +138,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
             await inputQueue.OfferAsync(new ChannelInput
             {
-                SenderId = "reminder-system",
+                SenderId = new Protocol.SenderId("reminder-system"),
                 ChannelId = _definition.Delivery.Address,
                 Audience = audience,
                 Boundary = boundary,
@@ -191,7 +191,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             var source = new MessageSource
             {
                 ChannelType = originChannelType,
-                SenderId = "reminder-system",
+                SenderId = new Protocol.SenderId("reminder-system"),
                 MessageId = reminderDeliveryKey,
                 TurnId = reminderDeliveryKey,
                 Audience = audience,

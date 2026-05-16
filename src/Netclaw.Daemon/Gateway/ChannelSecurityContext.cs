@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Protocol;
+
 namespace Netclaw.Daemon.Gateway;
 
 /// <summary>
@@ -28,11 +30,11 @@ public enum SecurityTrust
 /// </summary>
 public sealed record ChannelSecurityContext(SecurityTrust Trust)
 {
-    public string? SenderId { get; init; }
+    public SenderId? SenderId { get; init; }
 
     /// <summary>
     /// Creates a local operator context (full trust, Phase 1 default).
     /// </summary>
-    public static ChannelSecurityContext LocalOperator(string? senderId = null) =>
+    public static ChannelSecurityContext LocalOperator(SenderId? senderId = null) =>
         new(SecurityTrust.LocalOperator) { SenderId = senderId };
 }

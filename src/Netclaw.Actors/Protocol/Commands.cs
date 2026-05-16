@@ -72,5 +72,5 @@ public sealed record ToolInteractionResponse : IWithSessionId, INoSerializationV
     /// Identity of the user who selected the option. Used to bind approvals to
     /// the same principal that initiated the tool request.
     /// </summary>
-    public required string SenderId { get; init; }
+    public required SenderId SenderId { get; init; }
 }

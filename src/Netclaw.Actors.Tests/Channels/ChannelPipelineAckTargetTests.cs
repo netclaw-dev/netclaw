@@ -87,7 +87,7 @@ public sealed class ChannelPipelineAckTargetTests : TestKit
 
     private static ChannelInput BuildInput(string? reminderId, IActorRef? ackTarget) => new()
     {
-        SenderId = "user-1",
+        SenderId = new SenderId("user-1"),
         Contents = [new TextContent("hello")],
         ReceivedAt = DateTimeOffset.UtcNow,
         ReminderId = reminderId,

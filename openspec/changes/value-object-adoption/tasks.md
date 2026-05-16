@@ -67,30 +67,30 @@
 
 ## 5. Pass 7c — New value objects: `TrustBoundary`, `SenderId`, `AgentName`
 
-- [ ] 5.1 Create `TrustBoundary` (`Netclaw.Configuration`): `readonly record
+- [x] 5.1 Create `TrustBoundary` (`Netclaw.Configuration`): `readonly record
   struct`, validating constructor (non-empty, canonical form), explicit operator
   only, named static factories `Public`/`Personal`/`Team`/`TrustedInstance`
   replacing the `SecurityPolicyDefaults` magic constants.
-- [ ] 5.2 Replace `string Boundary` with `TrustBoundary` across `MessageSource`,
+- [x] 5.2 Replace `string Boundary` with `TrustBoundary` across `MessageSource`,
   `ChannelInput`, `StartBackgroundJob`, `CancelBackgroundJob`,
   `QueryBackgroundJob`, `BackgroundJobDefinition`, `ActiveJobInfo`,
   `ReminderDefinition`, `RunSubAgent`, `ToolExecutionContext`, and the memory
   query args; update the serializer/JSON-converter mappings.
-- [ ] 5.3 Create `SenderId` (`Netclaw.Actors.Protocol`/`Channels`): validating
+- [x] 5.3 Create `SenderId` (`Netclaw.Actors.Protocol`/`Channels`): validating
   value object; replace `string SenderId` on `ToolInteractionResponse`,
   `ChannelInput`, `MessageSource`, `ConnectionIdentity`, `StartBackgroundJob`,
   `BackgroundJobDefinition`, `ChannelSecurityContext`, `SlackThreadInbound`, and
   adopted-context records; convert at channel ingress from `SlackUserId` /
   `DiscordUserId`.
-- [ ] 5.4 Create `AgentName` (`Netclaw.Actors.SubAgents`): validating value
+- [x] 5.4 Create `AgentName` (`Netclaw.Actors.SubAgents`): validating value
   object; replace `string` agent-name fields on `SubAgentDefinition`,
   `SubAgentResult`, `SubAgentNotification`, `SubAgentOutput`,
   `CompletedSubAgentRun`, `AcceptedSubAgentFinding`.
-- [ ] 5.5 Update `NetclawProtoMapper` mappings and JSON converters for all
+- [x] 5.5 Update `NetclawProtoMapper` mappings and JSON converters for all
   touched serializer-registered and JSON-persisted types; add byte-equality
   round-trip tests.
-- [ ] 5.6 Fix callsite compiler errors and update affected tests.
-- [ ] 5.7 Verify Pass 7c: build clean, tests green, slopwatch clean, file
+- [x] 5.6 Fix callsite compiler errors and update affected tests.
+- [x] 5.7 Verify Pass 7c: build clean, tests green, slopwatch clean, file
   headers verified; behavioral review of trust-boundary and sender-id callsites.
 
 ## 6. Pass 7d — Remaining new value objects

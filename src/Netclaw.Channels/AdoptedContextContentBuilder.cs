@@ -63,7 +63,7 @@ public static class AdoptedContextContentBuilder
         foreach (var item in adopted)
         {
             var messageId = EscapeAttribute(item.Input.MessageId ?? "unknown");
-            var senderId = EscapeAttribute(item.Input.SenderId);
+            var senderId = EscapeAttribute(item.Input.SenderId.Value);
             var authority = item.AuthorityAtInclusion == AdoptedMessageAuthority.Authorized
                 ? "authorized"
                 : "pending";
@@ -78,7 +78,7 @@ public static class AdoptedContextContentBuilder
                 Timestamp = item.Input.ReceivedAt,
                 AuthorityAtInclusion = authority
             });
-            speakerIds.Add(item.Input.SenderId);
+            speakerIds.Add(item.Input.SenderId.Value);
 
             text.AppendLine($"[adopted-message id={messageId} author={senderId} authority-at-inclusion={authority}{ts}]");
 
