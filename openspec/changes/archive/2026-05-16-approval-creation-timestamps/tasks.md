@@ -81,5 +81,5 @@
   guidance references the `approvals list` shape.
 - [x] 6.2 Run `dotnet slopwatch analyze` — no new violations.
 - [x] 6.3 Run `./scripts/Add-FileHeaders.ps1 -Verify` for any new `.cs` files.
-- [ ] 6.4 `openspec validate approval-creation-timestamps --strict` passes
-  (done); archive the change once it is merged and verified.
+- [x] 6.4 `openspec validate approval-creation-timestamps --strict` passes;
+  change merged in #1010 and archived.
