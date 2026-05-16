@@ -232,22 +232,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
 
         await AwaitAssertAsync(() => Assert.Equal(1, fetcher.FetchCount), cancellationToken: ct);
 
-        actor.Tell(new DiscordThreadInbound(
-            SessionId: new SessionId("ignored"),
-            ChannelId: new DiscordChannelId("ch-test"),
-            ReplyChannelId: new DiscordReplyChannelId("reply-test"),
-            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
-            RootMessageId: null,
-            EventId: new DiscordEventId("1000000000000000001"),
-            SenderId: new DiscordUserId("replier-user"),
-            Audience: TrustAudience.Team,
-            Principal: PrincipalClassification.UntrustedExternal,
-            Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
-            {
-                SourceKind = "discord"
-            },
-            Text: "same as yesterday?",
-            ReceivedAt: TimeProvider.System.GetUtcNow()), TestActor);
+        actor.Tell(MakeInbound("1000000000000000001", "replier-user", "same as yesterday?"), TestActor);
 
         await AwaitAssertAsync(() =>
         {

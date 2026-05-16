@@ -1044,7 +1044,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return baseResult;
         }
 
-        // Hydration has now completed for this actor lifetime.
+        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
+        // above) keeps the flag armed — classify/merge outcomes never re-arm.
         _hydrationPending = false;
 
         var cursor = _cursorTs;
