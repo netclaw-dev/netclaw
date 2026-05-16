@@ -122,16 +122,27 @@
 
 ## 7. Pass 7e — Memory / sub-agent finding enum unwrap fixes
 
-- [ ] 7.1 Tighten `MemoryProposal` to carry its existing enums (`MemoryClass`,
+- [x] 7.1 Tighten `MemoryProposal` to carry its existing enums (`MemoryClass`,
   `MemorySensitivity`, `MemoryRecallMode`, `MemoryProposalOperation`,
-  `SubjectKind`) instead of wire strings.
-- [ ] 7.2 Tighten `ObservedMemoryCheckpointPayload` to carry
-  `CheckpointTriggerType` instead of a wire string, and `AcceptedSubAgentFinding`
-  to carry its typed enum.
-- [ ] 7.3 Update serializer/JSON mappings for the touched types; add
-  byte-equality round-trip tests.
-- [ ] 7.4 Fix callsite compiler errors and update affected tests.
-- [ ] 7.5 Verify Pass 7e: build clean, tests green, slopwatch clean, file
+  `SubjectKind`) instead of wire strings. `Operation`, `MemoryClass`,
+  `RecallMode`, and `Sensitivity` were retyped to their enums. `SubjectKind` was
+  SKIPPED and left `string`: the distillation prompt instructs the model to emit
+  subject identifiers (`"project"`, `"event"`) that fall outside the three-member
+  `SubjectKind` enum, so retyping would silently drop wire data — the gate
+  already parses it leniently with `TryFromWireValue`.
+- [x] 7.2 Tighten `ObservedMemoryCheckpointPayload` to carry
+  `CheckpointTriggerType` (and `MemorySensitivity`) instead of wire strings, and
+  `AcceptedSubAgentFinding` to carry its typed enums (`SubAgentFindingShape`,
+  `SubAgentFindingSensitivity`, `SubAgentFindingRecallMode`,
+  `SubAgentFindingDurability`, `SubAgentFindingReusability`,
+  `SubAgentFindingReviewDecision`). `Kind`/`UpdateSemantics` stayed `string` — no
+  matching enum.
+- [x] 7.3 Update serializer/JSON mappings for the touched types; add
+  byte-equality round-trip tests. Added wire-preserving `JsonConverter<T>` types
+  for the memory enums; `AcceptedSubAgentFinding` is
+  `INoSerializationVerificationNeeded` and never persisted (no converter needed).
+- [x] 7.4 Fix callsite compiler errors and update affected tests.
+- [x] 7.5 Verify Pass 7e: build clean, tests green, slopwatch clean, file
   headers verified.
 
 ## 8. Cross-cutting verification and close-out

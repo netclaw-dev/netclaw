@@ -566,13 +566,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
                         Success = true,
                         Duration = finding.Duration,
-                        MemoryDecision = finding.Decision,
+                        MemoryDecision = finding.Decision.ToWireValue(),
                         MemoryDecisionReason = finding.DecisionReason,
                         FindingsCount = runSummary?.FindingsCount ?? 1
                     }, OutputFilter.ToolCalls);
                 }
 
-                if (!string.Equals(finding.Decision, "accepted", StringComparison.OrdinalIgnoreCase))
+                if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
                     continue;
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
@@ -593,8 +593,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasAcceptedSubAgentFinding: true,
                         Boundary: CurrentMemoryBoundary(),
                         Audience: CurrentMemoryAudience(),
-                        Sensitivity: finding.Sensitivity,
-                        RecallMode: finding.RecallMode,
+                        Sensitivity: finding.Sensitivity.ToWireValue(),
+                        RecallMode: finding.RecallMode.ToWireValue(),
                         Confidence: finding.Confidence,
                         Title: finding.Title,
                         Kind: finding.Kind,
@@ -1031,7 +1031,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
-                Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
                 audience: CurrentTurnAudience());
