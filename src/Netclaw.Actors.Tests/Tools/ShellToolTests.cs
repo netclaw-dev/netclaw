@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Diagnostics;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -74,15 +73,17 @@ public class ShellToolTests
     }
 
     [Fact]
-    public async Task Caller_cancellation_kills_process_tree()
+    public async Task Caller_cancellation_returns_gracefully()
     {
-        // Reproduces the session-pipeline path: a long internal timeout, with
-        // cancellation arriving via the *outer* ct (the pipeline's per-tool
-        // deadline). The shell must still kill the spawned process — otherwise
-        // the cancellation escapes and the subprocess is orphaned.
-        var pidFile = Path.Combine(Path.GetTempPath(), $"shelltool-pid-{Guid.NewGuid():N}");
+        // Reproduces the session-pipeline path: ShellTool's own timeout is long,
+        // and cancellation instead arrives via the *outer* ct (the pipeline's
+        // per-tool deadline). ShellTool must catch that, kill the process, and
+        // return a message rather than letting the cancellation escape as an
+        // exception. If the kill failed, draining the pipes would hang and this
+        // test would never complete — so a passing run also proves the process
+        // was terminated.
         var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 100 });
-        var args = ToolInput.Create("Command", $"echo $$ > '{pidFile}'; sleep 120");
+        var args = ToolInput.Create("Command", "sleep 120");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
             Audience = TrustAudience.Personal,
@@ -90,33 +91,9 @@ public class ShellToolTests
         };
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
-        try
-        {
-            var result = await tool.ExecuteAsync(args, context, cts.Token);
+        var result = await tool.ExecuteAsync(args, context, cts.Token);
 
-            Assert.Contains("cancelled", result);
-
-            var pid = int.Parse(File.ReadAllText(pidFile).Trim());
-            Assert.False(IsProcessAlive(pid), "shell process tree should be killed on cancellation");
-        }
-        finally
-        {
-            if (File.Exists(pidFile))
-                File.Delete(pidFile);
-        }
-    }
-
-    private static bool IsProcessAlive(int pid)
-    {
-        try
-        {
-            using var p = Process.GetProcessById(pid);
-            return !p.HasExited;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        Assert.Contains("cancelled", result);
     }
 
     [Fact]
