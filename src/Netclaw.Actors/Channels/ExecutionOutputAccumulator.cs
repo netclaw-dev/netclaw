@@ -157,7 +157,7 @@ public sealed class ExecutionOutputAccumulator
 
     private void TrackNotificationResult(ToolResultOutput toolResult)
     {
-        if (!string.Equals(toolResult.ToolName, _notificationToolName.Value, StringComparison.Ordinal))
+        if (!string.Equals(toolResult.ToolName.Value, _notificationToolName.Value, StringComparison.Ordinal))
             return;
 
         _notifyAttempted = true;
@@ -167,12 +167,12 @@ public sealed class ExecutionOutputAccumulator
         {
             _notifyFailed = true;
             _notifyFailureDetail = result;
-            _onNotifyTracked?.Invoke(toolResult.ToolName, toolResult.CallId, false);
+            _onNotifyTracked?.Invoke(toolResult.ToolName.Value, toolResult.CallId.Value, false);
             return;
         }
 
         _notifyFailed = false;
         _notifyFailureDetail = null;
-        _onNotifyTracked?.Invoke(toolResult.ToolName, toolResult.CallId, true);
+        _onNotifyTracked?.Invoke(toolResult.ToolName.Value, toolResult.CallId.Value, true);
     }
 }

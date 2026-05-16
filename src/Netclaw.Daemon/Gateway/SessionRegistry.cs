@@ -262,7 +262,7 @@ public sealed class SessionRegistry
         await _pipeline.SendFeedbackAsync(new ToolInteractionResponse
         {
             SessionId = requestedSessionId,
-            CallId = callId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = selectedKey,
             SenderId = identity.SenderId
         });

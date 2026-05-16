@@ -224,8 +224,8 @@ public sealed class HeadlessChannel : IChannel
                 {
                     _toolCalls.Add(new JsonToolCall
                     {
-                        CallId = msg.CallId,
-                        ToolName = msg.ToolName,
+                        CallId = msg.CallId.Value,
+                        ToolName = msg.ToolName.Value,
                         ArgumentsJson = msg.ArgumentsJson
                     });
                 }

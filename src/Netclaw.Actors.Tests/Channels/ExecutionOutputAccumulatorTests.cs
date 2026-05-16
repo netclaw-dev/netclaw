@@ -98,8 +98,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-1",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Message sent to channel C1."
         });
 
@@ -115,8 +115,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-2",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-2"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Error: channel not found"
         });
 
@@ -132,8 +132,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-3",
-            ToolName = "web_search",
+            CallId = new Netclaw.Tools.ToolCallId("call-3"),
+            ToolName = new Netclaw.Tools.ToolName("web_search"),
             Result = "Found 5 results"
         });
 
@@ -179,8 +179,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-ok",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-ok"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Message sent."
         });
 
@@ -196,8 +196,8 @@ public sealed class ExecutionOutputAccumulatorTests
         acc.ProcessOutput(new ToolResultOutput
         {
             SessionId = TestSessionId,
-            CallId = "call-err",
-            ToolName = "send_slack_message",
+            CallId = new Netclaw.Tools.ToolCallId("call-err"),
+            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
             Result = "Error: channel not found"
         });
 

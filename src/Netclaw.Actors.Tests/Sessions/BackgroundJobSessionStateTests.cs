@@ -20,7 +20,7 @@ public sealed class BackgroundJobSessionStateTests
         var jobKey = "bg-job:abc123";
         var info = new ActiveJobInfo
         {
-            JobId = "abc123",
+            JobId = new Netclaw.Actors.Jobs.BackgroundJobId("abc123"),
             Command = "make build",
             Rationale = "building project",
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -37,7 +37,7 @@ public sealed class BackgroundJobSessionStateTests
         var recovered = SessionState.FromSnapshot(snapshot);
         Assert.Single(recovered.ActiveBackgroundJobs);
         Assert.True(recovered.ActiveBackgroundJobs.ContainsKey(jobKey));
-        Assert.Equal("abc123", recovered.ActiveBackgroundJobs[jobKey].JobId);
+        Assert.Equal("abc123", recovered.ActiveBackgroundJobs[jobKey].JobId.Value);
         Assert.Equal("make build", recovered.ActiveBackgroundJobs[jobKey].Command);
     }
 
@@ -47,7 +47,7 @@ public sealed class BackgroundJobSessionStateTests
         var jobKey = "bg-job:abc123";
         var info = new ActiveJobInfo
         {
-            JobId = "abc123",
+            JobId = new Netclaw.Actors.Jobs.BackgroundJobId("abc123"),
             Command = "make build",
             Rationale = "building project",
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -80,7 +80,7 @@ public sealed class BackgroundJobSessionStateTests
         var jobKey = "bg-job:def456";
         var info = new ActiveJobInfo
         {
-            JobId = "def456",
+            JobId = new Netclaw.Actors.Jobs.BackgroundJobId("def456"),
             Command = "make test",
             Rationale = "running tests",
             StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),

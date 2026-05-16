@@ -147,7 +147,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
             {
                 _capture.LastSavedDefinition = cmd.Definition;
                 Sender.Tell(new ReminderSavedResponse(
-                    new ReminderId(cmd.Definition.Id),
+                    cmd.Definition.Id,
                     cmd.Definition.Title,
                     _success,
                     _success ? DateTimeOffset.UtcNow.AddMinutes(30) : null,

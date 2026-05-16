@@ -434,7 +434,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     {
                         Role = Protocol.ChatRole.Tool,
                         Content = result,
-                        ToolCallId = tc.CallId,
+                        ToolCallId = new ToolCallId(tc.CallId),
                         Name = tc.Name
                     };
                 }
@@ -469,7 +469,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         {
                             Role = Protocol.ChatRole.Tool,
                             Content = result,
-                            ToolCallId = tc.CallId,
+                            ToolCallId = new ToolCallId(tc.CallId),
                             Name = tc.Name
                         };
                     }
@@ -481,7 +481,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     {
                         Role = Protocol.ChatRole.Tool,
                         Content = reason,
-                        ToolCallId = tc.CallId,
+                        ToolCallId = new ToolCallId(tc.CallId),
                         Name = tc.Name
                     };
                 }
@@ -491,7 +491,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     {
                         Role = Protocol.ChatRole.Tool,
                         Content = $"Error: {ex.Message}",
-                        ToolCallId = tc.CallId,
+                        ToolCallId = new ToolCallId(tc.CallId),
                         Name = tc.Name
                     };
                 }

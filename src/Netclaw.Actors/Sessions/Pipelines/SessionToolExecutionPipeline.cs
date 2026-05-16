@@ -282,8 +282,8 @@ internal static class SessionToolExecutionPipeline
             {
                 SessionId = sessionId,
                 Kind = "approval",
-                CallId = tc.CallId,
-                ToolName = ctx.ToolName,
+                CallId = new ToolCallId(tc.CallId),
+                ToolName = new ToolName(ctx.ToolName),
                 DisplayText = ctx.DisplayText,
                 RequesterSenderId = source?.SenderId,
                 RequesterPrincipal = source?.Principal,
@@ -421,7 +421,7 @@ internal static class SessionToolExecutionPipeline
         {
             Role = Protocol.ChatRole.Tool,
             Content = resultText,
-            ToolCallId = tc.CallId,
+            ToolCallId = new ToolCallId(tc.CallId),
             Name = tc.Name
         };
 
@@ -562,7 +562,7 @@ internal static class SessionToolExecutionPipeline
             {
                 Role = Protocol.ChatRole.Tool,
                 Content = "Error: background shell execution requires a 'command' parameter",
-                ToolCallId = tc.CallId,
+                ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             };
             return new ToolCallResult(message, [], [], []);
@@ -610,7 +610,7 @@ internal static class SessionToolExecutionPipeline
             {
                 Role = Protocol.ChatRole.Tool,
                 Content = resultText,
-                ToolCallId = tc.CallId,
+                ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             };
             return new ToolCallResult(resultMessage, [], [], []);
@@ -631,7 +631,7 @@ internal static class SessionToolExecutionPipeline
             {
                 Role = Protocol.ChatRole.Tool,
                 Content = $"Error submitting background job: {ex.Message}",
-                ToolCallId = tc.CallId,
+                ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             };
             return new ToolCallResult(errorMessage, [], [], []);
@@ -668,8 +668,8 @@ internal static class SessionToolExecutionPipeline
         ToolCallMeta? meta) => new()
     {
         SessionId = sessionId,
-        ToolName = tc.Name,
-        CallId = tc.CallId,
+        ToolName = new ToolName(tc.Name),
+        CallId = new ToolCallId(tc.CallId),
         Timestamp = timeProvider.GetUtcNow(),
         Allowed = false,
         Duration = duration,

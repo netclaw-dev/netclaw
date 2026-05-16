@@ -236,7 +236,7 @@ public sealed class SessionMessageAssemblerTests
             {
                 Role = ProtocolChatRole.Tool,
                 Name = "shell_execute",
-                ToolCallId = "call-1",
+                ToolCallId = new Netclaw.Tools.ToolCallId("call-1"),
                 Content = "<tool output>",
             });
 

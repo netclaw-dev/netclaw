@@ -87,7 +87,7 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         => new DiscordApprovalResponse(
             ChannelId: new DiscordChannelId("ch-test"),
             ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
-            CallId: callId,
+            CallId: new Netclaw.Tools.ToolCallId(callId),
             SelectedKey: selectedKey,
             SenderId: new DiscordUserId(senderId));
 

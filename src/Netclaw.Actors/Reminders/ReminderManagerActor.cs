@@ -180,7 +180,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (string.IsNullOrWhiteSpace(title))
         {
             replyTo.Tell(new ReminderSavedResponse(
-                new ReminderId(cmd.Definition.Id ?? "unknown"),
+                cmd.Definition.Id,
                 string.Empty,
                 Success: false,
                 NextFire: null,
@@ -189,8 +189,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             return;
         }
 
-        var id = !string.IsNullOrWhiteSpace(cmd.Definition.Id)
-            ? new ReminderId(cmd.Definition.Id)
+        var id = !string.IsNullOrWhiteSpace(cmd.Definition.Id.Value)
+            ? cmd.Definition.Id
             : ReminderIdGenerator.Generate(title);
 
         var exists = _definitionStore.Exists(id);
@@ -240,7 +240,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         var normalized = cmd.Definition with
         {
-            Id = id.Value,
+            Id = id,
             Title = title,
             Audience = effectiveAudience,
             Boundary = effectiveBoundary,
@@ -497,7 +497,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var infos = definitions
                 .Where(d => cmd.IncludeDisabled || d.Enabled)
                 .OrderBy(d => d.Title, StringComparer.OrdinalIgnoreCase)
-                .Select(d => ToReminderInfo(d, schedules.GetValueOrDefault(d.Id)))
+                .Select(d => ToReminderInfo(d, schedules.GetValueOrDefault(d.Id.Value)))
                 .ToList();
 
             replyTo.Tell(new ReminderListResponse(infos));
@@ -522,7 +522,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             }
 
             var schedules = await ListScheduledRemindersAsync();
-            var info = ToReminderInfo(definition, schedules.GetValueOrDefault(definition.Id));
+            var info = ToReminderInfo(definition, schedules.GetValueOrDefault(definition.Id.Value));
 
             replyTo.Tell(new GetReminderResponse(info));
         }
@@ -705,7 +705,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         {
             var scheduled = await ListScheduledRemindersAsync();
             var definitions = _definitionStore.List();
-            var definitionsById = definitions.ToDictionary(d => d.Id, StringComparer.Ordinal);
+            var definitionsById = definitions.ToDictionary(d => d.Id.Value, StringComparer.Ordinal);
 
             var cancelledOrphans = 0;
             foreach (var (id, _) in scheduled)
@@ -720,7 +720,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var restoredSchedules = 0;
             foreach (var definition in definitions.Where(d => d.Enabled))
             {
-                if (scheduled.ContainsKey(definition.Id))
+                if (scheduled.ContainsKey(definition.Id.Value))
                     continue;
 
                 var result = await ScheduleDefinitionAsync(definition, rescheduleFromNow: true);
@@ -736,9 +736,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             foreach (var definition in definitions.Where(d =>
                          d.Schedule.Type == ReminderScheduleType.OneShot &&
                          d.Schedule.FireAt <= now &&
-                         !scheduled.ContainsKey(d.Id)))
+                         !scheduled.ContainsKey(d.Id.Value)))
             {
-                await DeleteReminderInternalAsync(new ReminderId(definition.Id));
+                await DeleteReminderInternalAsync(definition.Id);
                 deletedOneShots++;
             }
 
@@ -749,7 +749,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
                          d.Schedule.Type is not ReminderScheduleType.OneShot &&
                          d.ExpiresAt is { } ea && ea <= now))
             {
-                await DisableReminderInternalAsync(new ReminderId(definition.Id));
+                await DisableReminderInternalAsync(definition.Id);
                 disabledExpired++;
             }
 
@@ -779,9 +779,9 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private void StartExecution(ReminderDefinition definition, ReminderEnvelope<ReminderPayload>? envelope = null)
     {
         var executionId = Guid.NewGuid();
-        _activeExecutions.Add(new ReminderId(definition.Id));
+        _activeExecutions.Add(definition.Id);
 
-        var actorName = $"exec-{SanitizeActorName(definition.Id)}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}";
+        var actorName = $"exec-{SanitizeActorName(definition.Id.Value)}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}";
         var executionActor = Context.ActorOf(
             ReminderExecutionActor.CreateProps(
                 executionId,
@@ -849,8 +849,8 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         if (_client is null)
             return ScheduleAttempt.Fail("Reminder client is not initialized.");
 
-        var id = new ReminderId(definition.Id);
-        var key = new ReminderKey(definition.Id);
+        var id = definition.Id;
+        var key = new ReminderKey(definition.Id.Value);
         var payload = new ReminderPayload { Id = id };
         var now = _timeProvider.GetUtcNow();
 
@@ -959,7 +959,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private static partial Regex InvalidActorNameChars();
 
     private static ReminderInfo ToReminderInfo(ReminderDefinition d, DateTimeOffset? nextFire) => new(
-        Id: new ReminderId(d.Id),
+        Id: d.Id,
         Title: d.Title,
         Instructions: d.Instructions,
         Delivery: d.Delivery,

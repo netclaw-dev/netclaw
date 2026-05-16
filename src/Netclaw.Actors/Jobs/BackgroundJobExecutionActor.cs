@@ -201,7 +201,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
         Context.Parent.Tell(new BackgroundJobCompleted
         {
-            JobId = new BackgroundJobId(_definition.Id),
+            JobId = _definition.Id,
             Status = status,
             ExitCode = exitCode,
             OutputTail = outputTail,

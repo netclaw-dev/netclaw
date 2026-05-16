@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
@@ -72,9 +74,9 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
 
         store.Save(new BackgroundJobDefinition
         {
-            Id = jobId,
+            Id = new BackgroundJobId(jobId),
             Command = "dotnet test",
-            SessionId = "C0ABC/1712000000.000001",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Status = BackgroundJobStatus.Pending,
             TimeoutSeconds = 300,
@@ -90,9 +92,53 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.NotNull(loaded);
         Assert.Equal(TrustAudience.Team, loaded!.Audience);
         Assert.Equal(SecurityPolicyDefaults.TeamBoundary, loaded.Boundary);
-        Assert.Equal(jobId, loaded.Id);
+        Assert.Equal(jobId, loaded.Id.Value);
         Assert.Equal("dotnet test", loaded.Command);
-        Assert.Equal("C0ABC/1712000000.000001", loaded.SessionId);
+        Assert.Equal("C0ABC/1712000000.000001", loaded.SessionId.Value);
+    }
+
+    /// <summary>
+    /// Byte-equality gate for issue #994 Pass 7b. Wrapping <c>BackgroundJobDefinition.Id</c>
+    /// in <see cref="BackgroundJobId"/> and <c>SessionId</c> in
+    /// <see cref="Netclaw.Actors.Protocol.SessionId"/> MUST NOT change the on-disk JSON:
+    /// both stay bare strings, never a nested <c>{ "value": ... }</c> object. The
+    /// <c>JsonConverter</c>s exist precisely so an upgraded daemon reads job
+    /// documents written by the old binary and vice versa.
+    /// </summary>
+    [Fact]
+    public void BackgroundJobDefinition_id_and_sessionId_serialize_as_bare_json_strings()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter() }
+        };
+
+        var definition = new BackgroundJobDefinition
+        {
+            Id = new BackgroundJobId("job-byte-eq"),
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Audience = TrustAudience.Team,
+            Boundary = SecurityPolicyDefaults.TeamBoundary
+        };
+
+        var json = JsonSerializer.Serialize(definition, options);
+
+        using var doc = JsonDocument.Parse(json);
+        var idElement = doc.RootElement.GetProperty("id");
+        var sessionElement = doc.RootElement.GetProperty("sessionId");
+
+        Assert.Equal(JsonValueKind.String, idElement.ValueKind);
+        Assert.Equal(JsonValueKind.String, sessionElement.ValueKind);
+        Assert.Equal("job-byte-eq", idElement.GetString());
+        Assert.Equal("C0ABC/1712000000.000001", sessionElement.GetString());
+
+        // Round-trip: the bare string deserializes back into the value object.
+        var loaded = JsonSerializer.Deserialize<BackgroundJobDefinition>(json, options);
+        Assert.NotNull(loaded);
+        Assert.Equal(new BackgroundJobId("job-byte-eq"), loaded!.Id);
+        Assert.Equal(new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"), loaded.SessionId);
     }
 
     public void Dispose()

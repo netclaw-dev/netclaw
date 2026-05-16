@@ -26,8 +26,8 @@ public interface IToolExecutor
 public sealed record ToolAuditEntry
 {
     public required SessionId SessionId { get; init; }
-    public required string ToolName { get; init; }
-    public required string CallId { get; init; }
+    public required ToolName ToolName { get; init; }
+    public required ToolCallId CallId { get; init; }
     public required DateTimeOffset Timestamp { get; init; }
     public required bool Allowed { get; init; }
     public string? DenyReason { get; init; }

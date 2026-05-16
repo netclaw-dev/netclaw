@@ -74,12 +74,12 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         gateway.Tell(new SlackApprovalResponse(
             new SlackChannelId("D1"),
             new SlackThreadTs("401.1"),
-            "call-1",
+            new Netclaw.Tools.ToolCallId("call-1"),
             ApprovalOptionKeys.ApproveOnce,
             "U1"));
 
         var routed = await sink.ExpectMsgAsync<SlackApprovalResponse>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("call-1", routed.CallId);
+        Assert.Equal("call-1", routed.CallId.Value);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, routed.SelectedKey);
         Assert.Equal("U1", routed.SenderId);
     }
@@ -105,13 +105,13 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         conversation.Tell(new SlackApprovalResponse(
             new SlackChannelId("C1"),
             new SlackThreadTs("999.1"),
-            "call-cold",
+            new Netclaw.Tools.ToolCallId("call-cold"),
             ApprovalOptionKeys.ApproveOnce,
             "U1"));
 
         var routed = await sink.ExpectMsgAsync<SlackApprovalResponse>(
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("call-cold", routed.CallId);
+        Assert.Equal("call-cold", routed.CallId.Value);
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, routed.SelectedKey);
         Assert.Equal("U1", routed.SenderId);
     }

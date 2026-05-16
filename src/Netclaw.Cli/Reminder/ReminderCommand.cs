@@ -423,7 +423,7 @@ internal static class ReminderCommand
 
     private static string? ValidateDefinition(ReminderDefinition definition)
     {
-        if (string.IsNullOrWhiteSpace(definition.Id))
+        if (string.IsNullOrWhiteSpace(definition.Id.Value))
             return "Reminder id is required.";
         if (string.IsNullOrWhiteSpace(definition.Title))
             return "Reminder title is required.";

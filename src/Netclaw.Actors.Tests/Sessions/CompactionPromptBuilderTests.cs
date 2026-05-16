@@ -40,8 +40,8 @@ public class CompactionPromptBuilderTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "call-1",
-                        Name = "web_search",
+                        CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                        Name = new Netclaw.Tools.ToolName("web_search"),
                         ArgumentsJson = """{"query": "netclaw docs"}"""
                     }
                 ]
@@ -76,8 +76,8 @@ public class CompactionPromptBuilderTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "call-1",
-                        Name = "shell_execute",
+                        CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                        Name = new Netclaw.Tools.ToolName("shell_execute"),
                         ArgumentsJson = """{"Command":"dotnet test"}""",
                         MetaJson = meta.ToJson()
                     }
@@ -103,8 +103,8 @@ public class CompactionPromptBuilderTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "call-1",
-                        Name = "web_search",
+                        CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                        Name = new Netclaw.Tools.ToolName("web_search"),
                         ArgumentsJson = """{"query":"test"}"""
                     }
                 ]

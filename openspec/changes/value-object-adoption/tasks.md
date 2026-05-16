@@ -45,23 +45,23 @@
 
 ## 4. Pass 7b — Wrap-with-existing cleanups
 
-- [ ] 4.1 Route the already-defined identifier value objects (`ToolCallId`,
+- [x] 4.1 Route the already-defined identifier value objects (`ToolCallId`,
   `ToolName`, `SessionId`, and — where they exist — `BackgroundJobId`,
   `ReminderId`, `MimeType`) through every protocol boundary that currently
   unwraps them to a primitive, per the audit's wrap-with-existing list.
-- [ ] 4.2 Route the existing enums (`TrustAudience`, `ChannelType`, memory
+- [x] 4.2 Route the existing enums (`TrustAudience`, `ChannelType`, memory
   enums) through fields that currently carry their wire string, excluding the
   two `ToolExecutionContext`/`RunSubAgent` audience fields already typed by
   issue #994.
-- [ ] 4.3 For every wrapped field on a `NetclawProtobufSerializer`-registered
+- [x] 4.3 For every wrapped field on a `NetclawProtobufSerializer`-registered
   type, update the `NetclawProtoMapper` `ToProto`/`FromProto` mapping so the
   `.proto` field stays a primitive; do not edit `.proto` schemas.
-- [ ] 4.4 For every wrapped field on a JSON-persisted type, add or extend the
+- [x] 4.4 For every wrapped field on a JSON-persisted type, add or extend the
   `JsonConverter<T>` so the document stores the bare primitive.
-- [ ] 4.5 Add byte-equality round-trip tests for each touched
+- [x] 4.5 Add byte-equality round-trip tests for each touched
   serializer-registered and JSON-persisted type.
-- [ ] 4.6 Fix callsite compiler errors and update affected tests.
-- [ ] 4.7 Verify Pass 7b: build clean, tests green, slopwatch clean, file
+- [x] 4.6 Fix callsite compiler errors and update affected tests.
+- [x] 4.7 Verify Pass 7b: build clean, tests green, slopwatch clean, file
   headers verified; behavioral review of any callsite that previously relied on
   an empty/null primitive.
 

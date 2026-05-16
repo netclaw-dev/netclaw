@@ -93,8 +93,8 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
 
         // First: subscriber receives tool call output
         var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("web_search", toolCall.ToolName);
-        Assert.Equal("call-1", toolCall.CallId);
+        Assert.Equal("web_search", toolCall.ToolName.Value);
+        Assert.Equal("call-1", toolCall.CallId.Value);
 
         // Drain the tool result output emitted after tool execution
         await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -114,7 +114,7 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
 
         // Audit logger recorded the invocation
         Assert.Single(_fakeAuditLogger.Entries);
-        Assert.Equal("web_search", _fakeAuditLogger.Entries[0].ToolName);
+        Assert.Equal("web_search", _fakeAuditLogger.Entries[0].ToolName.Value);
         Assert.True(_fakeAuditLogger.Entries[0].Allowed);
     }
 

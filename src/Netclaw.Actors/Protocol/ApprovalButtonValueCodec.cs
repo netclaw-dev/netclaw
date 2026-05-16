@@ -17,7 +17,7 @@ public static class ApprovalButtonValueCodec
     public const int MaxEncodedLength = 100;
 
     public static string Encode(ToolInteractionRequest request, ToolInteractionOption option)
-        => Encode(request.CallId, option.Key, request.RequesterSenderId);
+        => Encode(request.CallId.Value, option.Key, request.RequesterSenderId);
 
     public static string Encode(string callId, string optionKey, string? requesterSenderId)
     {

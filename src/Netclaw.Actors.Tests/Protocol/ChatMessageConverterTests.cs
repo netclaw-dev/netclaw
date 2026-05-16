@@ -139,10 +139,10 @@ public class ChatMessageConverterTests
 
         Assert.Equal(ChatRole.Assistant, msg.Role);
         Assert.Equal(2, msg.ToolCalls.Count);
-        Assert.Equal("call-1", msg.ToolCalls[0].CallId);
-        Assert.Equal("web_search", msg.ToolCalls[0].Name);
-        Assert.Equal("call-2", msg.ToolCalls[1].CallId);
-        Assert.Equal("fetch", msg.ToolCalls[1].Name);
+        Assert.Equal("call-1", msg.ToolCalls[0].CallId.Value);
+        Assert.Equal("web_search", msg.ToolCalls[0].Name.Value);
+        Assert.Equal("call-2", msg.ToolCalls[1].CallId.Value);
+        Assert.Equal("fetch", msg.ToolCalls[1].Name.Value);
     }
 
     [Fact]
@@ -155,8 +155,8 @@ public class ChatMessageConverterTests
             [
                 new SerializableToolCall
                 {
-                    CallId = "call-1",
-                    Name = "web_search",
+                    CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                    Name = new Netclaw.Tools.ToolName("web_search"),
                     ArgumentsJson = """{"query":"test"}"""
                 }
             ]
@@ -177,7 +177,7 @@ public class ChatMessageConverterTests
         {
             Role = ChatRole.Tool,
             Content = "Found 3 results",
-            ToolCallId = "call-1",
+            ToolCallId = new Netclaw.Tools.ToolCallId("call-1"),
             Name = "web_search"
         };
 
@@ -190,7 +190,7 @@ public class ChatMessageConverterTests
 
         var roundTripped = ChatMessageConverter.FromAiMessage(ai);
         Assert.Equal(ChatRole.Tool, roundTripped.Role);
-        Assert.Equal("call-1", roundTripped.ToolCallId);
+        Assert.Equal("call-1", roundTripped.ToolCallId?.Value);
         Assert.Equal("Found 3 results", roundTripped.Content);
     }
 
@@ -209,7 +209,7 @@ public class ChatMessageConverterTests
 
         Assert.Equal("Let me search for that.", msg.Content);
         Assert.Single(msg.ToolCalls);
-        Assert.Equal("web_search", msg.ToolCalls[0].Name);
+        Assert.Equal("web_search", msg.ToolCalls[0].Name.Value);
     }
 
     // ── Media / DataContent round-trip tests ──
@@ -230,7 +230,7 @@ public class ChatMessageConverterTests
 
         Assert.Equal("Check this image", msg.Content);
         Assert.Single(msg.MediaReferences);
-        Assert.Equal("image/png", msg.MediaReferences[0].MimeType);
+        Assert.Equal("image/png", msg.MediaReferences[0].MimeType.Value);
         Assert.Equal((int)MediaModality.Image, msg.MediaReferences[0].Modality);
         Assert.EndsWith(".png", msg.MediaReferences[0].RelativePath);
         // FileSizeBytes is populated at write time so compaction's token
@@ -262,7 +262,7 @@ public class ChatMessageConverterTests
                 new SerializableMediaReference
                 {
                     RelativePath = "test.jpg",
-                    MimeType = "image/jpeg",
+                    MimeType = new Netclaw.Security.MimeType("image/jpeg"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -317,7 +317,7 @@ public class ChatMessageConverterTests
                 new SerializableMediaReference
                 {
                     RelativePath = "nonexistent.png",
-                    MimeType = "image/png",
+                    MimeType = new Netclaw.Security.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]

@@ -335,7 +335,7 @@ public sealed class SessionPipeline : ISessionPipeline
                 mediaRefs.Add(new SerializableMediaReference
                 {
                     RelativePath = fileName,
-                    MimeType = mimeType,
+                    MimeType = new Netclaw.Security.MimeType(mimeType),
                     Modality = (int)ChatMessageConverter.MimeToModality(mimeType),
                     FileSizeBytes = bytes.Length
                 });

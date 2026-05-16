@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -58,9 +59,9 @@ public sealed record ThinkingDeltaOutput(string Delta) : SessionOutput;
 /// </summary>
 public sealed record ToolCallOutput : SessionOutput
 {
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
-    public required string ToolName { get; init; }
+    public required ToolName ToolName { get; init; }
 
     /// <summary>
     /// Tool arguments as a JSON string. Kept opaque at the protocol level —
@@ -75,9 +76,9 @@ public sealed record ToolCallOutput : SessionOutput
 /// </summary>
 public sealed record ToolResultOutput : SessionOutput
 {
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
-    public required string ToolName { get; init; }
+    public required ToolName ToolName { get; init; }
 
     public required string Result { get; init; }
 }
@@ -230,7 +231,7 @@ public sealed record FileOutput : SessionOutput
     public required string FileName { get; init; }
 
     /// <summary>MIME type of the file.</summary>
-    public required string MimeType { get; init; }
+    public required MimeType MimeType { get; init; }
 }
 
 /// <summary>
@@ -324,10 +325,10 @@ public sealed record ToolInteractionRequest : SessionOutput
     public required string Kind { get; init; }
 
     /// <summary>The tool call ID that triggered this interaction.</summary>
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
     /// <summary>The tool that requires interaction.</summary>
-    public required string ToolName { get; init; }
+    public required ToolName ToolName { get; init; }
 
     /// <summary>Human-readable description of what the tool wants to do.</summary>
     public required string DisplayText { get; init; }

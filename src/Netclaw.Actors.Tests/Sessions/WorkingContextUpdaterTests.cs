@@ -104,8 +104,8 @@ public class WorkingContextUpdaterTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "call-1",
-                        Name = "file_read",
+                        CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                        Name = new Netclaw.Tools.ToolName("file_read"),
                         ArgumentsJson = """{"path":"src/Rect.cs"}"""
                     }
                 ]
@@ -118,7 +118,7 @@ public class WorkingContextUpdaterTests
             {
                 Role = ChatRole.Tool,
                 Name = "file_read",
-                ToolCallId = "call-1",
+                ToolCallId = new Netclaw.Tools.ToolCallId("call-1"),
                 Content = "file contents..."
             }
         };
@@ -146,8 +146,8 @@ public class WorkingContextUpdaterTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "call-shell",
-                        Name = "shell_execute",
+                        CallId = new Netclaw.Tools.ToolCallId("call-shell"),
+                        Name = new Netclaw.Tools.ToolName("shell_execute"),
                         ArgumentsJson = """{"command":"ls"}"""
                     }
                 ]
@@ -160,7 +160,7 @@ public class WorkingContextUpdaterTests
             {
                 Role = ChatRole.Tool,
                 Name = "shell_execute",
-                ToolCallId = "call-shell",
+                ToolCallId = new Netclaw.Tools.ToolCallId("call-shell"),
                 Content = "a.txt b.txt"
             }
         };
@@ -182,7 +182,7 @@ public class WorkingContextUpdaterTests
             {
                 Role = ChatRole.Tool,
                 Name = "file_read",
-                ToolCallId = "call-orphan",
+                ToolCallId = new Netclaw.Tools.ToolCallId("call-orphan"),
                 Content = "..."
             }
         };
@@ -207,20 +207,20 @@ public class WorkingContextUpdaterTests
                 [
                     new SerializableToolCall
                     {
-                        CallId = "call-1",
-                        Name = "file_read",
+                        CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                        Name = new Netclaw.Tools.ToolName("file_read"),
                         ArgumentsJson = """{"path":"src/Rect.cs"}"""
                     },
                     new SerializableToolCall
                     {
-                        CallId = "call-2",
-                        Name = "file_read",
+                        CallId = new Netclaw.Tools.ToolCallId("call-2"),
+                        Name = new Netclaw.Tools.ToolName("file_read"),
                         ArgumentsJson = """{"path":"src/Thickness.cs"}"""
                     },
                     new SerializableToolCall
                     {
-                        CallId = "call-3",
-                        Name = "file_read",
+                        CallId = new Netclaw.Tools.ToolCallId("call-3"),
+                        Name = new Netclaw.Tools.ToolName("file_read"),
                         ArgumentsJson = """{"path":"src/Rect.cs"}"""
                     }
                 ]
@@ -229,9 +229,9 @@ public class WorkingContextUpdaterTests
 
         var results = new List<SerializableChatMessage>
         {
-            new() { Role = ChatRole.Tool, Name = "file_read", ToolCallId = "call-1", Content = "..." },
-            new() { Role = ChatRole.Tool, Name = "file_read", ToolCallId = "call-2", Content = "..." },
-            new() { Role = ChatRole.Tool, Name = "file_read", ToolCallId = "call-3", Content = "..." }
+            new() { Role = ChatRole.Tool, Name = "file_read", ToolCallId = new Netclaw.Tools.ToolCallId("call-1"), Content = "..." },
+            new() { Role = ChatRole.Tool, Name = "file_read", ToolCallId = new Netclaw.Tools.ToolCallId("call-2"), Content = "..." },
+            new() { Role = ChatRole.Tool, Name = "file_read", ToolCallId = new Netclaw.Tools.ToolCallId("call-3"), Content = "..." }
         };
 
         var updated = WorkingContextUpdater.UpdateFromToolResults(

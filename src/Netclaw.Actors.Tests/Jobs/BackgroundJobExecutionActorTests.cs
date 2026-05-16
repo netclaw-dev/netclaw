@@ -39,9 +39,9 @@ public class BackgroundJobExecutionActorTests : TestKit
 
     private BackgroundJobDefinition MakeDefinition(string command, int timeoutSeconds = 600) => new()
     {
-        Id = Guid.NewGuid().ToString("N")[..12],
+        Id = new BackgroundJobId(Guid.NewGuid().ToString("N")[..12]),
         Command = command,
-        SessionId = "test/thread",
+        SessionId = new Netclaw.Actors.Protocol.SessionId("test/thread"),
         Rationale = "test",
         Status = BackgroundJobStatus.Running,
         StartedAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
@@ -53,7 +53,7 @@ public class BackgroundJobExecutionActorTests : TestKit
 
     private IActorRef SpawnExecution(BackgroundJobDefinition definition, IActorRef probe)
     {
-        var outputPath = _store.GetOutputLogPath(new BackgroundJobId(definition.Id));
+        var outputPath = _store.GetOutputLogPath(definition.Id);
         var props = Props.Create(() => new BackgroundJobExecutionActor(definition, outputPath, TimeProvider.System));
         return Sys.ActorOf(ForwardingParent.Props(props, probe), $"exec-{definition.Id}");
     }
@@ -69,7 +69,7 @@ public class BackgroundJobExecutionActorTests : TestKit
             TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(new BackgroundJobId(definition.Id), completed.JobId);
+        Assert.Equal(definition.Id, completed.JobId);
         Assert.Equal(BackgroundJobStatus.Completed, completed.Status);
         Assert.Equal(0, completed.ExitCode);
         Assert.Contains("hello-world", completed.OutputTail ?? "");
@@ -86,7 +86,7 @@ public class BackgroundJobExecutionActorTests : TestKit
             TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(new BackgroundJobId(definition.Id), completed.JobId);
+        Assert.Equal(definition.Id, completed.JobId);
         Assert.Equal(BackgroundJobStatus.TimedOut, completed.Status);
     }
 
@@ -98,8 +98,8 @@ public class BackgroundJobExecutionActorTests : TestKit
         var actor = SpawnExecution(definition, probe);
 
         actor.Tell(new CancelBackgroundJob(
-            new BackgroundJobId(definition.Id),
-            new Netclaw.Actors.Protocol.SessionId(definition.SessionId),
+            definition.Id,
+            definition.SessionId,
             definition.Audience,
             definition.Boundary));
 
@@ -107,7 +107,7 @@ public class BackgroundJobExecutionActorTests : TestKit
             TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Equal(new BackgroundJobId(definition.Id), completed.JobId);
+        Assert.Equal(definition.Id, completed.JobId);
         Assert.Equal(BackgroundJobStatus.Cancelled, completed.Status);
     }
 

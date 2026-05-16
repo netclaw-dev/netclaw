@@ -192,7 +192,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("file context") { SessionId = sid },
-            new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = "application/pdf" },
+            new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = new Netclaw.Security.MimeType("application/pdf") },
             new TurnCompleted { SessionId = sid, TurnNumber = 1 }
         ]);
 
@@ -295,8 +295,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-1",
-                ToolName = "execute_shell",
+                CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "git push origin main",
                 Options =
                 [
@@ -328,8 +328,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-2",
-                ToolName = "execute_shell",
+                CallId = new Netclaw.Tools.ToolCallId("call-2"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "rm -rf /tmp",
                 RequesterSenderId = "user-1",
                 Options =
@@ -356,7 +356,7 @@ public abstract class SessionBindingContractTests : TestKit
         {
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
-            Assert.Equal("call-2", feedback[0].CallId);
+            Assert.Equal("call-2", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
         }, cancellationToken: ct);
     }
@@ -386,7 +386,7 @@ public abstract class SessionBindingContractTests : TestKit
         {
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
-            Assert.Equal("call-cold", feedback[0].CallId);
+            Assert.Equal("call-cold", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
             Assert.Equal("user-1", feedback[0].SenderId);
         }, cancellationToken: ct);
@@ -404,8 +404,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-3",
-                ToolName = "write_file",
+                CallId = new Netclaw.Tools.ToolCallId("call-3"),
+                ToolName = new Netclaw.Tools.ToolName("write_file"),
                 DisplayText = "write /etc/hosts",
                 RequesterSenderId = "user-1",
                 Options =
@@ -431,7 +431,7 @@ public abstract class SessionBindingContractTests : TestKit
         {
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
-            Assert.Equal("call-3", feedback[0].CallId);
+            Assert.Equal("call-3", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
         }, cancellationToken: ct);
     }
@@ -448,8 +448,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-stale",
-                ToolName = "execute_shell",
+                CallId = new Netclaw.Tools.ToolCallId("call-stale"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "some command",
                 Options =
                 [
@@ -479,7 +479,7 @@ public abstract class SessionBindingContractTests : TestKit
         await probe.ExpectTerminatedAsync(actor, cancellationToken: ct);
 
         var staleResponses = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()
-            .Where(f => f.CallId == "call-stale")
+            .Where(f => f.CallId.Value == "call-stale")
             .ToList();
         Assert.Empty(staleResponses);
     }
@@ -573,8 +573,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-auto-1",
-                ToolName = "execute_shell",
+                CallId = new Netclaw.Tools.ToolCallId("call-auto-1"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "scheduled backup",
                 RequesterSenderId = "reminder-system",
                 RequesterPrincipal = PrincipalClassification.VerifiedAutomation,
@@ -600,7 +600,7 @@ public abstract class SessionBindingContractTests : TestKit
         {
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
-            Assert.Equal("call-auto-1", feedback[0].CallId);
+            Assert.Equal("call-auto-1", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey);
             Assert.Equal("random-human-user", feedback[0].SenderId);
         }, cancellationToken: ct);
@@ -620,8 +620,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-wr-1",
-                ToolName = "execute_shell",
+                CallId = new Netclaw.Tools.ToolCallId("call-wr-1"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "rm -rf /tmp",
                 RequesterSenderId = "user-A",
                 Options =
@@ -669,8 +669,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-wr-2",
-                ToolName = "write_file",
+                CallId = new Netclaw.Tools.ToolCallId("call-wr-2"),
+                ToolName = new Netclaw.Tools.ToolName("write_file"),
                 DisplayText = "write /etc/passwd",
                 RequesterSenderId = "user-A",
                 Options =
@@ -720,8 +720,8 @@ public abstract class SessionBindingContractTests : TestKit
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = "call-deny-1",
-                ToolName = "execute_shell",
+                CallId = new Netclaw.Tools.ToolCallId("call-deny-1"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "dangerous command",
                 Options =
                 [
@@ -739,7 +739,7 @@ public abstract class SessionBindingContractTests : TestKit
         {
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
-            Assert.Equal("call-deny-1", feedback[0].CallId);
+            Assert.Equal("call-deny-1", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.Deny, feedback[0].SelectedKey);
         }, cancellationToken: ct);
 

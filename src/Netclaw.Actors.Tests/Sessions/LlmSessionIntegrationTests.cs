@@ -856,7 +856,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         // Then tool call
         var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
+        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName.Value);
 
         // Drain tool result output emitted after tool execution
         await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
@@ -911,7 +911,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         // Tool call output
         var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName);
+        Assert.Equal("browser_chrome_devtools/navigate_page", toolCall.ToolName.Value);
 
         // Drain tool result output emitted after tool execution
         await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);

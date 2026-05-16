@@ -630,13 +630,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-                    result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
+                    result.Name ?? "unknown", result.ToolCallId?.Value ?? "?", preview);
 
                 EmitOutput(new ToolResultOutput
                 {
                     SessionId = _sessionId,
-                    CallId = result.ToolCallId ?? string.Empty,
-                    ToolName = result.Name ?? "unknown",
+                    CallId = result.ToolCallId ?? new ToolCallId(string.Empty),
+                    ToolName = new ToolName(result.Name ?? "unknown"),
                     Result = result.Content ?? string.Empty
                 }, OutputFilter.ToolCalls);
             }
@@ -703,7 +703,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                     FilePath = file.FilePath,
                     FileName = file.FileName,
-                    MimeType = file.MimeType
+                    MimeType = new Netclaw.Security.MimeType(file.MimeType)
                 }, OutputFilter.Files);
             }
 
@@ -778,8 +778,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolInteractionRequest>(msg =>
         {
-            _pendingToolInteractions[msg.CallId] = new PendingToolInteraction(
-                msg.ToolName,
+            _pendingToolInteractions[msg.CallId.Value] = new PendingToolInteraction(
+                msg.ToolName.Value,
                 msg.Patterns,
                 msg.CandidateVerbs,
                 CurrentTurnAudience(),
@@ -792,14 +792,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.IsMessy,
                 msg.Candidates);
 
-            PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
+            PauseToolExecutionWatchdogForApprovalWait(msg.CallId.Value);
 
             EmitOutput(msg);
         });
 
         CommandAsync<ToolInteractionResponse>(async msg =>
         {
-            if (!_pendingToolInteractions.TryGetValue(msg.CallId, out var pending))
+            if (!_pendingToolInteractions.TryGetValue(msg.CallId.Value, out var pending))
             {
                 _log.Warning("Ignoring tool interaction response for unknown call {CallId}", msg.CallId);
                 return;
@@ -843,12 +843,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     CancellationToken.None);
             }
 
-            _pendingToolInteractions.Remove(msg.CallId);
+            _pendingToolInteractions.Remove(msg.CallId.Value);
 
             ResumeToolExecutionWatchdogAfterApprovalWait();
 
             // Complete the TCS so the blocked pipeline task can proceed
-            _approvalChannel.Complete(new ToolCallId(msg.CallId), decision);
+            _approvalChannel.Complete(msg.CallId, decision);
         });
 
         Command<LlmCallFailed>(msg =>
@@ -1637,8 +1637,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new ToolCallOutput
             {
                 SessionId = _sessionId,
-                CallId = tc.CallId,
-                ToolName = tc.Name,
+                CallId = new ToolCallId(tc.CallId),
+                ToolName = new ToolName(tc.Name),
                 ArgumentsJson = argsJson
             }, OutputFilter.ToolCalls);
 
@@ -2984,8 +2984,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     EmitOutput(new ToolCallOutput
                     {
                         SessionId = _sessionId,
-                        CallId = toolCall.CallId,
-                        ToolName = toolCall.Name,
+                        CallId = new ToolCallId(toolCall.CallId),
+                        ToolName = new ToolName(toolCall.Name),
                         ArgumentsJson = toolCall.Arguments is not null
                             ? JsonSerializer.Serialize(toolCall.Arguments)
                             : null
