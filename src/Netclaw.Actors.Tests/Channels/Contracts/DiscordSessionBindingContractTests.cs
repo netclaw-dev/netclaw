@@ -172,14 +172,14 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         SessionId sessionId,
         ISessionPipeline pipeline,
         ConfigurablePromptInjectionDetector detector,
-        IThreadHistoryFetcher? historyFetcher = null)
+        IThreadHistoryFetcher? historyFetcher = null,
+        DiscordChannelOptions? options = null)
     {
-        var options = new DiscordChannelOptions();
         var deps = new DiscordGatewayDependencies(
             Pipeline: pipeline,
             IngressGate: null,
             TimeProvider: TimeProvider.System,
-            Options: options,
+            Options: options ?? new DiscordChannelOptions(),
             DefaultChannelId: null,
             ReplyClient: _replyClient,
             ContentScanner: new NullContentScanner(),
@@ -196,5 +196,188 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             new DiscordThreadOrMessageId("thread-test"),
             rootMessageId: null,
             deps));
+    }
+
+    [Fact]
+    public async Task Deferred_hydration_completes_on_first_authorized_inbound()
+    {
+        // Discord parity for the proactive-thread deferral case: the binding
+        // actor's startup hydration sees only a non-authorized bot root, finds
+        // no authorized trigger, defers, and re-arms. The first authorized
+        // inbound completes the deferred hydration and adopts the bot root.
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-deferred-hydration");
+
+        const string botRootText = "scheduled report: nothing actionable";
+        var botRoot = MakeHistoryItem("bot-account", "900000000000000000", botRootText);
+        var reply = MakeHistoryItem("replier-user", "1000000000000000001", "same as yesterday?");
+
+        // Fetch #1 (startup hydration) sees only the bot root; fetch #2 (the
+        // re-armed hydration) sees the root plus the reply.
+        var fetcher = new CountingHistoryFetcher(call =>
+            call >= 2 ? [botRoot, reply] : [botRoot]);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+
+        // The bot ("bot-account") is not an allowed user, so the proactively
+        // posted root classifies as pending and startup hydration defers.
+        var actor = CreateActorCore(
+            sid, pipeline, detector, fetcher,
+            new DiscordChannelOptions { AllowedUserIds = ["replier-user"] });
+
+        await AwaitAssertAsync(() => Assert.Equal(1, fetcher.FetchCount), cancellationToken: ct);
+
+        actor.Tell(MakeInbound("1000000000000000001", "replier-user", "same as yesterday?"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.True(input.HasAdoptedContext);
+            var text = string.Join("\n", input.Contents
+                .OfType<Microsoft.Extensions.AI.TextContent>()
+                .Select(t => t.Text));
+            Assert.Contains("[adopted-context]", text, StringComparison.Ordinal);
+            Assert.Contains(botRootText, text, StringComparison.Ordinal);
+            Assert.Contains("same as yesterday?", text, StringComparison.Ordinal);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Deferred_hydration_stays_armed_for_unauthorized_inbound()
+    {
+        // An inbound from a non-allowed user while hydration is deferred must
+        // not perform the deferred hydration; it stays re-armed for the first
+        // authorized inbound.
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-deferred-unauthorized");
+
+        var botRoot = MakeHistoryItem("bot-account", "900000000000000000", "scheduled report");
+        var reply = MakeHistoryItem("replier-user", "1000000000000000002", "authorized reply");
+        var fetcher = new CountingHistoryFetcher(call =>
+            call >= 2 ? [botRoot, reply] : [botRoot]);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+        var actor = CreateActorCore(
+            sid, pipeline, detector, fetcher,
+            new DiscordChannelOptions { AllowedUserIds = ["replier-user"] });
+
+        await AwaitAssertAsync(() => Assert.Equal(1, fetcher.FetchCount), cancellationToken: ct);
+
+        // Unauthorized inbound: no deferred hydration, no re-fetch.
+        actor.Tell(MakeInbound("1000000000000000001", "intruder-user", "who are you"), TestActor);
+        await AwaitAssertAsync(
+            () => Assert.True(pipeline.CapturedInputs.Count >= 1), cancellationToken: ct);
+        Assert.Equal(1, fetcher.FetchCount);
+
+        // The first authorized inbound completes the still-armed hydration.
+        actor.Tell(MakeInbound("1000000000000000002", "replier-user", "authorized reply"), TestActor);
+        await AwaitAssertAsync(() => Assert.Equal(2, fetcher.FetchCount), cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Deferred_hydration_fetch_failure_executes_turn_and_stays_armed()
+    {
+        // If the re-armed thread-history fetch fails, the authorized inbound
+        // still executes (without an adopted window) and hydration stays
+        // re-armed so a later authorized inbound retries.
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-deferred-fetch-failure");
+
+        var botRoot = MakeHistoryItem("bot-account", "900000000000000000", "scheduled report");
+        var reply = MakeHistoryItem("replier-user", "1000000000000000003", "later reply");
+        var fetcher = new CountingHistoryFetcher(call => call switch
+        {
+            1 => [botRoot],
+            2 => throw new InvalidOperationException("history API down"),
+            _ => [botRoot, reply]
+        });
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput { SessionId = sid, Text = "reply" },
+            new TurnCompleted { SessionId = sid, TurnNumber = 1 }
+        ]);
+        var actor = CreateActorCore(
+            sid, pipeline, detector, fetcher,
+            new DiscordChannelOptions { AllowedUserIds = ["replier-user"] });
+
+        await AwaitAssertAsync(() => Assert.Equal(1, fetcher.FetchCount), cancellationToken: ct);
+
+        // Re-armed fetch throws: the turn still executes without adopted context.
+        actor.Tell(MakeInbound("1000000000000000001", "replier-user", "first reply"), TestActor);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(pipeline.CapturedInputs.TryPeek(out var input));
+            Assert.False(input.HasAdoptedContext);
+        }, cancellationToken: ct);
+
+        // Still re-armed: a later authorized inbound retries the fetch.
+        actor.Tell(MakeInbound("1000000000000000003", "replier-user", "later reply"), TestActor);
+        await AwaitAssertAsync(() => Assert.Equal(3, fetcher.FetchCount), cancellationToken: ct);
+    }
+
+    private static ChannelInput MakeHistoryItem(string senderId, string messageId, string text)
+        => new()
+        {
+            SenderId = senderId,
+            ChannelId = "ch-test",
+            MessageId = messageId,
+            Contents = [new Microsoft.Extensions.AI.TextContent(text)],
+            ReceivedAt = TimeProvider.System.GetUtcNow(),
+            Audience = TrustAudience.Team,
+            Boundary = SecurityPolicyDefaults.PublicBoundary,
+            Principal = PrincipalClassification.UntrustedExternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
+        };
+
+    private static DiscordThreadInbound MakeInbound(string eventId, string senderId, string text)
+        => new(
+            SessionId: new SessionId("ignored"),
+            ChannelId: new DiscordChannelId("ch-test"),
+            ReplyChannelId: new DiscordReplyChannelId("reply-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            RootMessageId: null,
+            EventId: new DiscordEventId(eventId),
+            SenderId: new DiscordUserId(senderId),
+            Audience: TrustAudience.Team,
+            Principal: PrincipalClassification.UntrustedExternal,
+            Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
+            {
+                SourceKind = "discord"
+            },
+            Text: text,
+            ReceivedAt: TimeProvider.System.GetUtcNow());
+
+    /// <summary>
+    /// History fetcher that returns a different result per call, keyed on the
+    /// 1-based call index — lets a test stage the proactive deferral (fetch #1)
+    /// separately from the re-armed completion (fetch #2). A <c>byCall</c> that
+    /// throws simulates a transient history-API failure.
+    /// </summary>
+    private sealed class CountingHistoryFetcher(Func<int, IReadOnlyList<ChannelInput>> byCall)
+        : IThreadHistoryFetcher
+    {
+        private int _count;
+
+        public int FetchCount => Volatile.Read(ref _count);
+
+        public async Task<IReadOnlyList<ChannelInput>> FetchThreadHistoryAsync(
+            SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            var call = Interlocked.Increment(ref _count);
+            await Task.Yield();
+            return byCall(call);
+        }
     }
 }

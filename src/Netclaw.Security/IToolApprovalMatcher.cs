@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
@@ -109,6 +110,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
     public static readonly ShellApprovalMatcher Instance = new();
 
+    // BashParser is immutable — Parse delegates to a pure static — so one
+    // shared instance is safe and avoids a per-evaluation allocation. The DI
+    // container registers it as a singleton for the same reason.
+    private static readonly ShellSyntaxTree.BashParser Parser = new();
+
     public string GetApprovalModeKey(ToolName toolName, IDictionary<string, object?>? arguments)
         => toolName.Value;
 
@@ -121,10 +127,29 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (string.IsNullOrWhiteSpace(command))
             return [];
 
+        var workingDirectory = GetWorkingDirectory(arguments);
         var patterns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        // POSIX commands route through BashParser so the approval units
+        // match the clause decomposition ExtractCandidates already uses — in
+        // particular a bare newline separates statements, so a multi-line
+        // command yields one unit per statement. Windows keeps the legacy
+        // ShellTokenizer path — ShellSyntaxTree is bash-only.
+        if (!OperatingSystem.IsWindows())
+        {
+            foreach (var unit in ExtractApprovalUnitsViaBashParser(command))
+            {
+                var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
+                if (!string.IsNullOrEmpty(normalized))
+                    patterns.Add(normalized);
+            }
+
+            return patterns.ToList();
+        }
+
         TraverseApprovalUnits(command, unit =>
         {
-            var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, GetWorkingDirectory(arguments));
+            var normalized = ShellTokenizer.NormalizeApprovalUnit(unit, workingDirectory);
             if (!string.IsNullOrEmpty(normalized))
                 patterns.Add(normalized);
         });
@@ -175,7 +200,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellSyntaxTree.ParsedCommand result;
         try
         {
-            result = new ShellSyntaxTree.BashParser().Parse(command);
+            result = Parser.Parse(command);
         }
         catch
         {
@@ -274,6 +299,116 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var cwdAttribution = clause.Args.FirstOrDefault(a => a.IsCwdAttribution);
         return cwdAttribution?.Resolved;
     }
+
+    /// <summary>
+    /// Splits a POSIX command into approval-unit strings via BashParser:
+    /// one unit per statement, with consecutive <c>|</c> clauses folded into
+    /// the same unit so <c>cat x | wc -l</c> stays a single decision.
+    /// Returns an empty list for messy, unparseable, or parser-rejected
+    /// commands — mirroring the legacy <see cref="ShellTokenizer.SplitCompoundCommand"/>
+    /// empty-result contract so the prompt builder offers only Once/Deny.
+    /// </summary>
+    private static IReadOnlyList<string> ExtractApprovalUnitsViaBashParser(string command)
+    {
+        // Messy commands (control-flow keywords, unbalanced brackets) cannot
+        // be cleanly decomposed into approval units; mirror the legacy
+        // splitter, which returns no units for them.
+        if (ShellTokenizer.IsMessyCompoundCommand(command))
+            return [];
+
+        try
+        {
+            var result = Parser.Parse(command);
+            if (result.IsUnparseable || result.Clauses.Count == 0)
+                return [];
+
+            var units = new List<string>();
+            var current = new StringBuilder();
+
+            foreach (var clause in result.Clauses)
+            {
+                // AndIf / OrIf / Sequence (and the leading None clause) each
+                // open a fresh approval unit; Pipe clauses fold into the unit
+                // in progress. A bare newline produces Sequence, so multi-line
+                // commands split here too.
+                if (clause.Operator != ShellSyntaxTree.CompoundOperator.Pipe && current.Length > 0)
+                {
+                    units.Add(current.ToString());
+                    current.Clear();
+                }
+
+                if (current.Length > 0)
+                    current.Append(" | ");
+
+                current.Append(ReconstructClauseText(clause));
+            }
+
+            if (current.Length > 0)
+                units.Add(current.ToString());
+
+            return units;
+        }
+        catch
+        {
+            // Defensive: a parser exception — or an unmapped redirect/clause
+            // shape from a future ShellSyntaxTree release — must not take
+            // down the approval prompt. Fail-empty so the matcher treats the
+            // command as messy (Once/Deny prompt only).
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds one clause's user-facing text from its parsed parts: verb
+    /// chain, positional/flag args, and redirects. Synthetic cd-attribution
+    /// args are dropped — they carry an inherited cwd, not a token the user
+    /// typed. The result is fed back through
+    /// <see cref="ShellTokenizer.NormalizeApprovalUnit"/> for path
+    /// normalization, so this only needs to emit a clean token sequence.
+    /// </summary>
+    private static string ReconstructClauseText(ShellSyntaxTree.Clause clause)
+    {
+        var sb = new StringBuilder(clause.Verb.Joined);
+
+        foreach (var arg in clause.Args)
+        {
+            if (arg.IsCwdAttribution || string.IsNullOrEmpty(arg.Raw))
+                continue;
+
+            if (sb.Length > 0)
+                sb.Append(' ');
+            sb.Append(arg.Raw);
+        }
+
+        // Redirect targets live outside Args; the legacy tokenizer kept them
+        // as plain `> /path` tokens, so preserve them in the display unit
+        // and the approve-once retry key.
+        foreach (var redirect in clause.Redirects)
+        {
+            if (string.IsNullOrEmpty(redirect.Target))
+                continue;
+
+            if (sb.Length > 0)
+                sb.Append(' ');
+            sb.Append(RedirectToken(redirect.Direction));
+            sb.Append(' ');
+            sb.Append(redirect.Target);
+        }
+
+        return sb.ToString();
+    }
+
+    private static string RedirectToken(ShellSyntaxTree.RedirectDirection direction) => direction switch
+    {
+        ShellSyntaxTree.RedirectDirection.In => "<",
+        ShellSyntaxTree.RedirectDirection.Out => ">",
+        ShellSyntaxTree.RedirectDirection.Append => ">>",
+        ShellSyntaxTree.RedirectDirection.ErrOut => "2>",
+        ShellSyntaxTree.RedirectDirection.ErrAppend => "2>>",
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(direction), direction,
+            "Unknown ShellSyntaxTree redirect direction — a package upgrade needs a matcher update."),
+    };
 
     public bool IsApproved(
         ToolName toolName,

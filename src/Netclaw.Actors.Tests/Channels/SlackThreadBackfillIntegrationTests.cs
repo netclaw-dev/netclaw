@@ -637,6 +637,137 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
     }
 
     [Fact]
+    public async Task Proactively_created_thread_adopts_bot_root_on_first_authorized_reply()
+    {
+        // The true proactive-bootstrap case: the binding actor is created by
+        // StartProactiveThread when the agent posts the thread root — before
+        // any human reply exists. Its one-shot hydration runs against a thread
+        // that contains only the bot-authored root, finds no authorized
+        // trigger, and defers. The first authorized human reply MUST complete
+        // that deferred hydration so the bot root is adopted as context.
+        // Regression: PR #990's once-per-lifetime hydration dropped this, so
+        // the reply landed with no anchor and the agent confabulated an
+        // unrelated topic. Unlike Bot_authored_thread_root_is_hydrated_for_-
+        // proactive_post_bootstrap (which materializes the actor on the user
+        // reply, so hydration already sees both messages), this test creates
+        // the actor at post time via StartProactiveThread.
+        const string botRootText = "scheduled NuGet report: 22,681,480 downloads";
+
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        // Stateful fetcher: the proactive startup hydration (fetch #1) sees
+        // only the bot root; the re-armed hydration after the reply (fetch #2)
+        // sees the root plus the reply. The binding actor serializes the two.
+        var fetchCount = 0;
+        var fetcher = new SlackThreadHistoryFetcher(
+            (channelId, threadTs, limit, cursor, ct) =>
+            {
+                var n = Interlocked.Increment(ref fetchCount);
+                var ts = threadTs.Value;
+                var messages = new List<SlackNet.Events.MessageEvent>
+                {
+                    new() { Ts = ts, User = "UBOT", BotId = "B_NETCLAW", Text = botRootText }
+                };
+                if (n >= 2)
+                {
+                    messages.Add(new SlackNet.Events.MessageEvent
+                    {
+                        Ts = $"{ts[..^1]}1",
+                        User = "U_REPLIER",
+                        Text = "same as yesterday?"
+                    });
+                }
+
+                return Task.FromResult(new SlackNet.WebApi.ConversationMessagesResponse
+                {
+                    Messages = messages
+                });
+            },
+            new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
+            httpClient,
+            new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
+            ToolAudienceProfileDefaults.CreateProfiles(),
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
+            NullLogger<SlackThreadHistoryFetcher>.Instance);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = true,
+                AllowedChannelIds = ["C_REARM"],
+                // The bot ("UBOT") is deliberately NOT an allowed user, so the
+                // proactively-posted root classifies as pending and the
+                // startup hydration defers — the condition this test exercises.
+                AllowedUserIds = ["U_REPLIER"],
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            HttpClient: httpClient,
+            ThreadHistoryFetcher: fetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-rearm");
+
+        // 1. The agent posts the thread root. The binding actor is created and
+        //    runs its one-shot hydration against the root-only thread (fetch #1).
+        gateway.Tell(new StartProactiveThread(
+            new SlackChannelId("C_REARM"),
+            new SlackThreadTs("8000.0"),
+            new SessionId("C_REARM/8000.0")));
+
+        // The ack is sent from HandleProactiveThreadAsync, which runs in the
+        // Active behavior — i.e. after the Hydrating behavior completed fetch #1.
+        await ExpectMsgAsync<ProactiveThreadAck>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // 2. The human replies in the proactively-created thread.
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("C_REARM:8000.1"),
+            ChannelId: new SlackChannelId("C_REARM"),
+            ThreadTs: new SlackThreadTs("8000.0"),
+            EventTs: new SlackEventTs("8000.1"),
+            UserId: new SlackUserId("U_REPLIER"),
+            BotId: null,
+            Text: "same as yesterday?",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_chatClient.CallCount > 0, "Expected at least one LLM call");
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var messages = _chatClient.LastMessages!;
+        var userMessages = messages.Where(m => m.Role == AiChatRole.User).ToList();
+        Assert.Single(userMessages);
+
+        var mergedText = string.Join("", userMessages[0].Contents.OfType<TextContent>().Select(t => t.Text));
+
+        // The deferred hydration completed on the reply: the bot-authored root
+        // is adopted, so the LLM has the anchor for "same as yesterday?".
+        Assert.Contains("[adopted-context]", mergedText, StringComparison.Ordinal);
+        Assert.Contains(botRootText, mergedText, StringComparison.Ordinal);
+
+        // The reply is the executable message, not part of adopted context.
+        Assert.Contains("same as yesterday?", mergedText, StringComparison.Ordinal);
+        Assert.Contains("[current-authorized-message author=U_REPLIER", mergedText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Older_out_of_order_live_event_is_dropped_after_cursor_advances()
     {
         var pipeline = Host.Services.GetRequiredService<SessionPipeline>();

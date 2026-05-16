@@ -138,6 +138,24 @@
       "codeSnippet": "catch\n        {\n            // best-effort cleanup\n        }",
       "message": "Empty catch block swallows exceptions without handling",
       "baselinedAt": "2026-05-12T17:20:55.7421299+00:00"
+    },
+    {
+      "hash": "05461b1bf2a3ad58",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherMultilineTests.cs",
+      "lineNumber": 30,
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
+      "message": "Test method 'ExtractPatterns_multiline_command_splits_one_unit_per_statement' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
+      "baselinedAt": "2026-05-16T00:00:00.0000000+00:00"
+    },
+    {
+      "hash": "a016290b3480868d",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Security.Tests/ShellApprovalMatcherMultilineTests.cs",
+      "lineNumber": 68,
+      "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only path semantics\")",
+      "message": "Test method 'ExtractCandidates_multiline_surfaces_each_verb' is disabled: POSIX-only path semantics",
+      "baselinedAt": "2026-05-16T00:00:00.0000000+00:00"
     }
   ]
 }
