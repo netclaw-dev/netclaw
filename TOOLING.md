@@ -60,16 +60,18 @@ relevant `--json` output.
 
 ## Install Script Smoke Test
 
-`scripts/smoke/install-smoke.sh` is a hermetic regression test for the
-`curl | bash` installer (`scripts/install.sh`). It needs no network, no
-`dotnet` build, and no running daemon — it serves a generated manifest and
-stand-in archives from `localhost`.
+`scripts/smoke/install-smoke.sh` and `scripts/smoke/install-smoke.ps1` are
+hermetic regression tests for the installers (`scripts/install.sh` and
+`scripts/install.ps1`). They need no network, no `dotnet` build, and no
+running daemon — each serves a generated manifest and stand-in archives
+from `localhost`.
 
 | Command | Purpose |
 |---------|---------|
-| `bash scripts/smoke/install-smoke.sh` | Run the full install-script smoke test |
+| `bash scripts/smoke/install-smoke.sh` | Smoke-test the `curl \| bash` installer (Linux/macOS) |
+| `pwsh scripts/smoke/install-smoke.ps1` | Smoke-test the PowerShell installer (Windows) |
 
-It covers two layers:
+`install-smoke.sh` covers two layers:
 
 - **Detection matrix** — runs `install.sh --dry-run` under `uname`/`sysctl`
   shims to assert every supported OS/arch resolves to the right RID
@@ -78,10 +80,15 @@ It covers two layers:
 - **Mechanical check** — one real install of a stand-in archive on the
   host's native RID, exercising download → checksum → `tar` extract → `cp`.
 
-The `install-smoke` job in `pr_validation.yml` runs it on both
-`ubuntu-latest` and `macos-latest` on every PR. `install.sh --dry-run` is
-also useful on its own — it reports which binary *would* be installed for
-the current platform without touching the system.
+`install-smoke.ps1` is the Windows counterpart: a `-DryRun` resolution
+check plus a real stand-in install exercising download → checksum →
+`Expand-Archive` → copy.
+
+The `install-smoke` job in `pr_validation.yml` runs these on
+`ubuntu-latest`, `macos-latest`, and `windows-latest` on every PR. Both
+installers also support `--dry-run` / `-DryRun` on their own — they report
+which binary *would* be installed for the current platform without
+touching the system.
 
 ## Source Control and CI Signals
 
