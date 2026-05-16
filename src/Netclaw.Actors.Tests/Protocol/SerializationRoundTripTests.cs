@@ -638,7 +638,7 @@ public sealed class SerializationRoundTripTests : TestKit
                     Rationale = "compile",
                     StartedAtMs = 1715520000000L,
                     Audience = (Serialization.Proto.TrustAudience)(int)Netclaw.Configuration.TrustAudience.Team,
-                    Boundary = "team"
+                    Boundary = Netclaw.Configuration.TrustBoundary.TeamValue
                 }
             }
         }.ToByteArray();
