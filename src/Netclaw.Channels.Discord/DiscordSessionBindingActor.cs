@@ -875,12 +875,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
 
     private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
-        DiscordUserId senderId, string? callId)
+        DiscordUserId senderId, Netclaw.Tools.ToolCallId? callId)
     {
-        if (callId is not null)
+        if (callId is { } resolvedCallId)
         {
             var byCallId = _pendingApprovalRequests.LastOrDefault(p =>
-                string.Equals(p.CallId, callId, StringComparison.Ordinal));
+                p.CallId == resolvedCallId);
             if (byCallId is null)
                 return (ApprovalLookupResult.NotFound, null);
             if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId?.Value, senderId.Value))
@@ -1085,10 +1085,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task SendApprovalDenyOnFailureAsync(string callId)
+    private async Task SendApprovalDenyOnFailureAsync(Netclaw.Tools.ToolCallId callId)
     {
         var pending = _pendingApprovalRequests.LastOrDefault(p =>
-            string.Equals(p.CallId, callId, StringComparison.Ordinal));
+            p.CallId == callId);
         if (pending is not null)
             _pendingApprovalRequests.Remove(pending);
 

@@ -6,6 +6,7 @@
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Serialization;
+using Google.Protobuf;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -31,6 +32,13 @@ public sealed class SerializationRoundTripTests : TestKit
         var bytes = serializer.ToBinary(value);
         var manifest = serializer is SerializerWithStringManifest swm ? swm.Manifest(value) : string.Empty;
         return (T)serialization.Deserialize(bytes, serializer.Identifier, manifest);
+    }
+
+    private byte[] Serialize<T>(T value)
+        where T : notnull
+    {
+        var serializer = Sys.Serialization.FindSerializerFor(value);
+        return serializer.ToBinary(value);
     }
 
     [Fact]
@@ -182,13 +190,13 @@ public sealed class SerializationRoundTripTests : TestKit
                 new SerializableMediaReference
                 {
                     RelativePath = "abc123.png",
-                    MimeType = "image/png",
+                    MimeType = new Netclaw.Security.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 },
                 new SerializableMediaReference
                 {
                     RelativePath = "def456.jpg",
-                    MimeType = "image/jpeg",
+                    MimeType = new Netclaw.Security.MimeType("image/jpeg"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -200,10 +208,10 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal("Check this image", result.Content);
         Assert.Equal(2, result.MediaReferences.Count);
         Assert.Equal("abc123.png", result.MediaReferences[0].RelativePath);
-        Assert.Equal("image/png", result.MediaReferences[0].MimeType);
+        Assert.Equal("image/png", result.MediaReferences[0].MimeType.Value);
         Assert.Equal((int)MediaModality.Image, result.MediaReferences[0].Modality);
         Assert.Equal("def456.jpg", result.MediaReferences[1].RelativePath);
-        Assert.Equal("image/jpeg", result.MediaReferences[1].MimeType);
+        Assert.Equal("image/jpeg", result.MediaReferences[1].MimeType.Value);
     }
 
     [Fact]
@@ -218,7 +226,7 @@ public sealed class SerializationRoundTripTests : TestKit
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
-                    MimeType = "image/png",
+                    MimeType = new Netclaw.Security.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -327,8 +335,8 @@ public sealed class SerializationRoundTripTests : TestKit
             [
                 new SerializableToolCall
                 {
-                    CallId = "call-1",
-                    Name = "shell_execute",
+                    CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                    Name = new Netclaw.Tools.ToolName("shell_execute"),
                     ArgumentsJson = """{"Command":"dotnet test"}""",
                     MetaJson = """{"rationale":"running tests","timeout_seconds":300}"""
                 }
@@ -338,8 +346,8 @@ public sealed class SerializationRoundTripTests : TestKit
         var result = RoundTrip(original);
 
         var tc = Assert.Single(result.ToolCalls);
-        Assert.Equal("call-1", tc.CallId);
-        Assert.Equal("shell_execute", tc.Name);
+        Assert.Equal("call-1", tc.CallId.Value);
+        Assert.Equal("shell_execute", tc.Name.Value);
         Assert.Equal("""{"Command":"dotnet test"}""", tc.ArgumentsJson);
         Assert.Equal("""{"rationale":"running tests","timeout_seconds":300}""", tc.MetaJson);
     }
@@ -354,8 +362,8 @@ public sealed class SerializationRoundTripTests : TestKit
             [
                 new SerializableToolCall
                 {
-                    CallId = "call-1",
-                    Name = "web_search",
+                    CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                    Name = new Netclaw.Tools.ToolName("web_search"),
                     ArgumentsJson = """{"query":"test"}"""
                 }
             ]
@@ -364,8 +372,8 @@ public sealed class SerializationRoundTripTests : TestKit
         var result = RoundTrip(original);
 
         var tc = Assert.Single(result.ToolCalls);
-        Assert.Equal("call-1", tc.CallId);
-        Assert.Equal("web_search", tc.Name);
+        Assert.Equal("call-1", tc.CallId.Value);
+        Assert.Equal("web_search", tc.Name.Value);
         Assert.Null(tc.MetaJson);
     }
 
@@ -509,6 +517,136 @@ public sealed class SerializationRoundTripTests : TestKit
             Assert.Equal(original.Proposals[i].Content, result.Proposals[i].Content);
         }
         Assert.Equal(original.TimestampMs, result.TimestampMs);
+    }
+
+    // ── Value-object wrap byte-equality (issue #994 Pass 7b) ──
+    //
+    // Pass 7b routes ToolCallId / ToolName / MimeType / BackgroundJobId value
+    // objects through protobuf-registered records. The wire bytes MUST stay
+    // byte-identical to the pre-wrap (raw-primitive) representation: a daemon
+    // running the new binary has to read journal entries written by the old
+    // one and vice versa. Each test below builds the proto message by hand
+    // with the bare primitive — exactly what the pre-wrap mapper emitted —
+    // and asserts the value-object record serializes to the same bytes.
+
+    [Fact]
+    public void SerializableToolCall_wrap_is_byte_identical_to_raw_primitive_proto()
+    {
+        var wrapped = new SerializableToolCall
+        {
+            CallId = new Netclaw.Tools.ToolCallId("call-77"),
+            Name = new Netclaw.Tools.ToolName("shell_execute"),
+            ArgumentsJson = """{"Command":"ls"}""",
+            MetaJson = """{"rationale":"list"}"""
+        };
+
+        var expected = new Serialization.Proto.SerializableToolCallProto
+        {
+            CallId = "call-77",
+            Name = "shell_execute",
+            ArgumentsJson = """{"Command":"ls"}""",
+            MetaJson = """{"rationale":"list"}"""
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new Netclaw.Tools.ToolCallId("call-77"), result.CallId);
+        Assert.Equal(new Netclaw.Tools.ToolName("shell_execute"), result.Name);
+    }
+
+    [Fact]
+    public void SerializableMediaReference_wrap_is_byte_identical_to_raw_primitive_proto()
+    {
+        var wrapped = new SerializableMediaReference
+        {
+            RelativePath = "photo.png",
+            MimeType = new Netclaw.Security.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 4096
+        };
+
+        var expected = new Serialization.Proto.SerializableMediaReferenceProto
+        {
+            RelativePath = "photo.png",
+            MimeType = "image/png",
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 4096
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new Netclaw.Security.MimeType("image/png"), result.MimeType);
+    }
+
+    [Fact]
+    public void SerializableChatMessage_tool_call_id_wrap_is_byte_identical_to_raw_primitive_proto()
+    {
+        var wrapped = new SerializableChatMessage
+        {
+            Role = ChatRole.Tool,
+            Content = "{\"ok\":true}",
+            Name = "shell_execute",
+            ToolCallId = new Netclaw.Tools.ToolCallId("call-88")
+        };
+
+        var expected = new Serialization.Proto.SerializableChatMessageProto
+        {
+            Role = (Serialization.Proto.ChatRole)(int)ChatRole.Tool,
+            Content = "{\"ok\":true}",
+            Name = "shell_execute",
+            ToolCallId = "call-88"
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new Netclaw.Tools.ToolCallId("call-88"), result.ToolCallId);
+    }
+
+    [Fact]
+    public void SessionSnapshot_active_job_id_wrap_is_byte_identical_to_raw_primitive_proto()
+    {
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 1,
+            History = [],
+            ActiveBackgroundJobs =
+            [
+                new Netclaw.Actors.Jobs.ActiveJobInfo
+                {
+                    JobId = new Netclaw.Actors.Jobs.BackgroundJobId("job-55"),
+                    Command = "dotnet build",
+                    Rationale = "compile",
+                    StartedAtMs = 1715520000000L,
+                    Audience = Netclaw.Configuration.TrustAudience.Team,
+                    Boundary = "team"
+                }
+            ]
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 1,
+            ActiveBackgroundJobs =
+            {
+                new Serialization.Proto.ActiveJobInfoProto
+                {
+                    JobId = "job-55",
+                    Command = "dotnet build",
+                    Rationale = "compile",
+                    StartedAtMs = 1715520000000L,
+                    Audience = (Serialization.Proto.TrustAudience)(int)Netclaw.Configuration.TrustAudience.Team,
+                    Boundary = "team"
+                }
+            }
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new Netclaw.Actors.Jobs.BackgroundJobId("job-55"), result.ActiveBackgroundJobs[0].JobId);
     }
 
     [Fact]

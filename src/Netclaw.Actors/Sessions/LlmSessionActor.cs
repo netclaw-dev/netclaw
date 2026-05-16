@@ -531,18 +531,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             switch (msg.Content)
             {
                 case TextContent text when !string.IsNullOrEmpty(text.Text):
-                    EmitOutput(new TextDeltaOutput
+                    EmitOutput(new TextDeltaOutput(text.Text)
                     {
-                        SessionId = _sessionId,
-                        Delta = text.Text
+                        SessionId = _sessionId
                     }, OutputFilter.TextStreaming);
                     break;
 
                 case TextReasoningContent thinking when !string.IsNullOrEmpty(thinking.Text):
-                    EmitOutput(new ThinkingDeltaOutput
+                    EmitOutput(new ThinkingDeltaOutput(thinking.Text)
                     {
-                        SessionId = _sessionId,
-                        Delta = thinking.Text
+                        SessionId = _sessionId
                     }, OutputFilter.Thinking);
                     break;
             }
@@ -632,13 +630,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-                    result.Name ?? "unknown", result.ToolCallId ?? "?", preview);
+                    result.Name ?? "unknown", result.ToolCallId?.Value ?? "?", preview);
 
                 EmitOutput(new ToolResultOutput
                 {
                     SessionId = _sessionId,
-                    CallId = result.ToolCallId ?? string.Empty,
-                    ToolName = result.Name ?? "unknown",
+                    CallId = result.ToolCallId ?? new ToolCallId(string.Empty),
+                    ToolName = new ToolName(result.Name ?? "unknown"),
                     Result = result.Content ?? string.Empty
                 }, OutputFilter.ToolCalls);
             }
@@ -705,7 +703,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                     FilePath = file.FilePath,
                     FileName = file.FileName,
-                    MimeType = file.MimeType
+                    MimeType = new Netclaw.Security.MimeType(file.MimeType)
                 }, OutputFilter.Files);
             }
 
@@ -756,7 +754,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
                     _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
                 _resumeToolLoopAfterCompaction = true;
-                Self.Tell(new CompactionTriggered { InputTokenCount = _lastInputTokenCount });
+                Self.Tell(new CompactionTriggered(_lastInputTokenCount));
                 TransitionTo(SessionPhase.Compacting);
                 return;
             }
@@ -780,8 +778,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolInteractionRequest>(msg =>
         {
-            _pendingToolInteractions[msg.CallId] = new PendingToolInteraction(
-                msg.ToolName,
+            _pendingToolInteractions[msg.CallId.Value] = new PendingToolInteraction(
+                msg.ToolName.Value,
                 msg.Patterns,
                 msg.CandidateVerbs,
                 CurrentTurnAudience(),
@@ -794,14 +792,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.IsMessy,
                 msg.Candidates);
 
-            PauseToolExecutionWatchdogForApprovalWait(msg.CallId);
+            PauseToolExecutionWatchdogForApprovalWait(msg.CallId.Value);
 
             EmitOutput(msg);
         });
 
         CommandAsync<ToolInteractionResponse>(async msg =>
         {
-            if (!_pendingToolInteractions.TryGetValue(msg.CallId, out var pending))
+            if (!_pendingToolInteractions.TryGetValue(msg.CallId.Value, out var pending))
             {
                 _log.Warning("Ignoring tool interaction response for unknown call {CallId}", msg.CallId);
                 return;
@@ -815,10 +813,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     msg.SenderId,
                     pending.RequesterSenderId);
 
-                EmitOutput(new TextOutput
+                EmitOutput(new TextOutput("Approval response ignored: only the requesting user can approve this tool action.")
                 {
-                    SessionId = _sessionId,
-                    Text = "Approval response ignored: only the requesting user can approve this tool action."
+                    SessionId = _sessionId
                 }, OutputFilter.Text);
                 return;
             }
@@ -846,12 +843,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     CancellationToken.None);
             }
 
-            _pendingToolInteractions.Remove(msg.CallId);
+            _pendingToolInteractions.Remove(msg.CallId.Value);
 
             ResumeToolExecutionWatchdogAfterApprovalWait();
 
             // Complete the TCS so the blocked pipeline task can proceed
-            _approvalChannel.Complete(new ToolCallId(msg.CallId), decision);
+            _approvalChannel.Complete(msg.CallId, decision);
         });
 
         Command<LlmCallFailed>(msg =>
@@ -893,7 +890,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // Use the configured context window as the token count estimate since
                 // the provider rejected the request without returning usage stats.
                 Timers.Cancel(StreamingRetryTimerKey);
-                Self.Tell(new CompactionTriggered { InputTokenCount = _model.ContextWindowTokens });
+                Self.Tell(new CompactionTriggered(_model.ContextWindowTokens));
                 TransitionTo(SessionPhase.Compacting);
                 return;
             }
@@ -1624,10 +1621,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (preambleText.Length > 0)
         {
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput(preambleText)
             {
-                SessionId = _sessionId,
-                Text = preambleText
+                SessionId = _sessionId
             }, OutputFilter.Text);
             EmitOutput(new BufferFlush { SessionId = _sessionId }, OutputFilter.TextStreaming);
         }
@@ -1641,8 +1637,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new ToolCallOutput
             {
                 SessionId = _sessionId,
-                CallId = tc.CallId,
-                ToolName = tc.Name,
+                CallId = new ToolCallId(tc.CallId),
+                ToolName = new ToolName(tc.Name),
                 ArgumentsJson = argsJson
             }, OutputFilter.ToolCalls);
 
@@ -1701,11 +1697,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Marshal child-actor spawning back onto the session actor thread.
         Func<object, string, CancellationToken, Task<object>> spawnChildActor = async (props, name, ct) =>
             await self.Ask<IActorRef>(
-                new SpawnChildActorRequest
-                {
-                    Props = (Props)props,
-                    ActorName = name
-                },
+                new SpawnChildActorRequest((Props)props, name),
                 timeout: toolExecutionTimeout,
                 cancellationToken: ct);
 
@@ -1819,7 +1811,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _log.Info("Compaction threshold reached ({InputTokens} tokens >= {Threshold} limit), starting compaction",
                     _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
-                Self.Tell(new CompactionTriggered { InputTokenCount = _lastInputTokenCount });
+                Self.Tell(new CompactionTriggered(_lastInputTokenCount));
                 TransitionTo(SessionPhase.Compacting);
                 return;
             }
@@ -2144,7 +2136,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _subscribers[cmd.Subscriber] = cmd.Filter;
                 Context.WatchWith(cmd.Subscriber,
-                    new LeaveSession { SessionId = _sessionId, Subscriber = cmd.Subscriber });
+                    new LeaveSession(cmd.Subscriber) { SessionId = _sessionId });
 
                 _log.Info("{Subscriber} joined (filter={Filter})", cmd.Subscriber, cmd.Filter);
             }
@@ -2366,11 +2358,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (content.Length > maxContentLength)
                 content = string.Concat(content.AsSpan(0, maxContentLength - 3), "...");
 
-            candidates.Add(new ChatMessageDto
-            {
-                Role = msg.Role == Protocol.ChatRole.User ? "user" : "assistant",
-                Content = content
-            });
+            candidates.Add(new ChatMessageDto(
+                msg.Role == Protocol.ChatRole.User ? "user" : "assistant",
+                content));
         }
 
         if (candidates.Count == 0)
@@ -2588,10 +2578,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var decision = SkillActivationRouter.Resolve(skill!);
             if (decision.IsError)
             {
-                EmitOutput(new TextOutput
+                EmitOutput(new TextOutput(decision.ErrorMessage!)
                 {
-                    SessionId = _sessionId,
-                    Text = decision.ErrorMessage!
+                    SessionId = _sessionId
                 }, OutputFilter.Text);
                 EmitOutput(new TurnCompleted
                 {
@@ -2618,7 +2607,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             errorMsg += hint is not null ? $"  {cmd} {hint}\n" : $"  {cmd}\n";
         }
 
-        EmitOutput(new TextOutput { SessionId = _sessionId, Text = errorMsg.TrimEnd() }, OutputFilter.Text);
+        EmitOutput(new TextOutput(errorMsg.TrimEnd()) { SessionId = _sessionId }, OutputFilter.Text);
         EmitOutput(new TurnCompleted
         {
             SessionId = _sessionId,
@@ -2642,10 +2631,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _log.Warning("Failed to read skill file for slash command /{SkillName}: {Error}",
                 skill.Name, ex.Message);
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.")
             {
-                SessionId = _sessionId,
-                Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
+                SessionId = _sessionId
             }, OutputFilter.Text);
             EmitOutput(new TurnCompleted
             {
@@ -2680,10 +2668,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         if (_subAgentRegistry is null || _subAgentSpawner is null)
         {
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput($"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime.")
             {
-                SessionId = _sessionId,
-                Text = $"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime."
+                SessionId = _sessionId
             }, OutputFilter.Text);
             EmitOutput(new TurnCompleted
             {
@@ -2701,10 +2688,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var profile = _subAgentRegistry.TryGetByName(routedSubagent);
         if (profile is null)
         {
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput(SkillActivationRouter.UnknownTargetError(skill.Name, routedSubagent))
             {
-                SessionId = _sessionId,
-                Text = SkillActivationRouter.UnknownTargetError(skill.Name, routedSubagent)
+                SessionId = _sessionId
             }, OutputFilter.Text);
             EmitOutput(new TurnCompleted
             {
@@ -2719,10 +2705,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (profile.Visibility != SubAgentVisibility.UserFacing)
         {
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput(SkillActivationRouter.InternalTargetError(skill.Name, routedSubagent))
             {
-                SessionId = _sessionId,
-                Text = SkillActivationRouter.InternalTargetError(skill.Name, routedSubagent)
+                SessionId = _sessionId
             }, OutputFilter.Text);
             EmitOutput(new TurnCompleted
             {
@@ -2745,10 +2730,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _log.Warning("Failed to read skill file for routed slash command /{SkillName}: {Error}",
                 skill.Name, ex.Message);
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.")
             {
-                SessionId = _sessionId,
-                Text = $"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted."
+                SessionId = _sessionId
             }, OutputFilter.Text);
             EmitOutput(new TurnCompleted
             {
@@ -2797,11 +2781,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             context.SpawnChildActor = async (props, name, ct) =>
                 await self.Ask<IActorRef>(
-                    new SpawnChildActorRequest
-                    {
-                        Props = (Props)props,
-                        ActorName = name
-                    },
+                    new SpawnChildActorRequest((Props)props, name),
                     timeout: _config.ToolExecutionTimeout,
                     cancellationToken: ct);
 
@@ -2881,10 +2861,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ProcessedReminderIds = processed
             };
 
-            EmitOutput(new TextOutput
+            EmitOutput(new TextOutput(msg.Result.Output)
             {
-                SessionId = _sessionId,
-                Text = msg.Result.Output
+                SessionId = _sessionId
             }, OutputFilter.Text);
 
             EmitOutput(new TurnCompleted
@@ -2995,10 +2974,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             switch (content)
             {
                 case TextReasoningContent thinking when includeThinking:
-                    EmitOutput(new ThinkingOutput
+                    EmitOutput(new ThinkingOutput(thinking.Text ?? string.Empty)
                     {
-                        SessionId = _sessionId,
-                        Text = thinking.Text ?? string.Empty
+                        SessionId = _sessionId
                     }, OutputFilter.Thinking);
                     break;
 
@@ -3006,8 +2984,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     EmitOutput(new ToolCallOutput
                     {
                         SessionId = _sessionId,
-                        CallId = toolCall.CallId,
-                        ToolName = toolCall.Name,
+                        CallId = new ToolCallId(toolCall.CallId),
+                        ToolName = new ToolName(toolCall.Name),
                         ArgumentsJson = toolCall.Arguments is not null
                             ? JsonSerializer.Serialize(toolCall.Arguments)
                             : null
@@ -3029,10 +3007,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (fullText.Length > 0)
             {
-                EmitOutput(new TextOutput
+                EmitOutput(new TextOutput(fullText)
                 {
-                    SessionId = _sessionId,
-                    Text = fullText
+                    SessionId = _sessionId
                 }, OutputFilter.Text);
             }
         }
@@ -3493,10 +3470,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Persist(evt, e =>
         {
             _state = _state.Apply(e);
-            EmitOutput(new SessionTitleOutput
+            EmitOutput(new SessionTitleOutput(title)
             {
-                SessionId = _sessionId,
-                Title = title
+                SessionId = _sessionId
             });
         });
     }

@@ -295,7 +295,7 @@ public sealed record SessionState
             builder[idx] = new SerializableChatMessage
             {
                 Role = ChatRole.Tool,
-                Content = $"[Tool result cleared — {msg.Name ?? "unknown"} call {msg.ToolCallId ?? "?"}]",
+                Content = $"[Tool result cleared — {msg.Name ?? "unknown"} call {msg.ToolCallId?.Value ?? "?"}]",
                 ToolCallId = msg.ToolCallId,
                 Name = msg.Name
             };

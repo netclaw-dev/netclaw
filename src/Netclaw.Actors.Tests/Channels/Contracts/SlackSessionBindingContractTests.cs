@@ -69,7 +69,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         => new SlackApprovalResponse(
             ChannelId: new SlackChannelId("C-test"),
             ThreadTs: new SlackThreadTs("1000.1"),
-            CallId: callId,
+            CallId: new Netclaw.Tools.ToolCallId(callId),
             SelectedKey: selectedKey,
             SenderId: senderId);
 

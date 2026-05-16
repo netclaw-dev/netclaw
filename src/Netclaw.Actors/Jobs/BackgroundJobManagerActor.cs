@@ -67,10 +67,10 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 
         var definition = new BackgroundJobDefinition
         {
-            Id = jobId.Value,
+            Id = jobId,
             Command = cmd.Command,
             WorkingDirectory = cmd.WorkingDirectory,
-            SessionId = cmd.SessionId.Value,
+            SessionId = cmd.SessionId,
             Rationale = cmd.Rationale,
             Status = BackgroundJobStatus.Pending,
             TimeoutSeconds = cmd.TimeoutSeconds,
@@ -124,7 +124,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             def = _store.Get(cmd.JobId);
 
         if (def is null
-            || def.SessionId != cmd.SessionId.Value
+            || def.SessionId != cmd.SessionId
             || def.Audience != cmd.Audience
             || def.Boundary != cmd.Boundary)
         {
@@ -166,7 +166,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
         }
 
         if (def is null
-            || def.SessionId != query.SessionId.Value
+            || def.SessionId != query.SessionId
             || def.Audience != query.Audience
             || def.Boundary != query.Boundary)
         {
@@ -242,7 +242,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
                     def.Id);
             }
 
-            _definitions[current.Id] = current;
+            _definitions[current.Id.Value] = current;
         }
 
         if (reconciled > 0)
@@ -278,11 +278,11 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     private void SpawnExecution(BackgroundJobDefinition definition)
     {
         var running = definition with { Status = BackgroundJobStatus.Running };
-        _definitions[running.Id] = running;
+        _definitions[running.Id.Value] = running;
         _store.Save(running);
-        _activeJobIds.Add(running.Id);
+        _activeJobIds.Add(running.Id.Value);
 
-        var outputLogPath = _store.GetOutputLogPath(new BackgroundJobId(running.Id));
+        var outputLogPath = _store.GetOutputLogPath(running.Id);
         var props = DependencyResolver.For(Context.System)
             .Props<BackgroundJobExecutionActor>(running, outputLogPath, _timeProvider);
         Context.ActorOf(props, $"job-{running.Id}");
@@ -305,7 +305,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
     {
         if (def is null) return;
 
-        var sessionId = new SessionId(def.SessionId);
+        var sessionId = def.SessionId;
         var originChannelType = def.OriginChannelType;
 
         var jobDeliveryKey = $"{JobDeliveryKeyPrefix}{def.Id}";

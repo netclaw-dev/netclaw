@@ -128,7 +128,7 @@ public sealed class ReminderDefinitionStore
         {
             Directory.CreateDirectory(_directory);
 
-            var path = GetPath(new ReminderId(definition.Id));
+            var path = GetPath(definition.Id);
             var tempPath = $"{path}.tmp";
             File.WriteAllText(tempPath, JsonSerializer.Serialize(definition, JsonOptions));
             File.Move(tempPath, path, overwrite: true);
@@ -231,7 +231,7 @@ public sealed class ReminderDefinitionStore
             }
 
             var definition = JsonSerializer.Deserialize<ReminderDefinition>(text, JsonOptions);
-            if (definition is null || string.IsNullOrWhiteSpace(definition.Id))
+            if (definition is null || string.IsNullOrWhiteSpace(definition.Id.Value))
             {
                 return new ReadResult(
                     null,

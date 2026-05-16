@@ -50,8 +50,8 @@ public static class SessionOutputDtoMapper
             Type = SessionOutputTypes.ToolCall,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
-            CallId = msg.CallId,
-            ToolName = msg.ToolName,
+            CallId = msg.CallId.Value,
+            ToolName = msg.ToolName.Value,
             ArgumentsJson = msg.ArgumentsJson
         },
 
@@ -60,8 +60,8 @@ public static class SessionOutputDtoMapper
             Type = SessionOutputTypes.ToolResult,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
-            CallId = msg.CallId,
-            ToolName = msg.ToolName,
+            CallId = msg.CallId.Value,
+            ToolName = msg.ToolName.Value,
             Result = msg.Result
         },
 
@@ -117,7 +117,7 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs,
             FilePath = msg.FilePath,
             FileName = msg.FileName,
-            MimeType = msg.MimeType
+            MimeType = msg.MimeType.Value
         },
 
         SubAgentOutput msg => new SessionOutputDto
@@ -161,11 +161,7 @@ public static class SessionOutputDtoMapper
             TimestampMs = msg.TimestampMs,
             Title = msg.Title,
             TurnCount = msg.TurnCount,
-            RecentMessages = msg.RecentMessages?.Select(m => new ChatMessageDto
-            {
-                Role = m.Role,
-                Content = m.Content
-            }).ToList()
+            RecentMessages = msg.RecentMessages?.Select(m => new ChatMessageDto(m.Role, m.Content)).ToList()
         },
 
         ToolInteractionRequest msg => new SessionOutputDto
@@ -174,8 +170,8 @@ public static class SessionOutputDtoMapper
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
             InteractionKind = msg.Kind,
-            CallId = msg.CallId,
-            ToolName = msg.ToolName,
+            CallId = msg.CallId.Value,
+            ToolName = msg.ToolName.Value,
             InteractionDisplayText = msg.DisplayText,
             RequesterSenderId = msg.RequesterSenderId,
             InteractionPatterns = [.. msg.Patterns],
@@ -202,44 +198,40 @@ public static class SessionOutputDtoMapper
 
         return dto.Type switch
         {
-            SessionOutputTypes.Text => new TextOutput
+            SessionOutputTypes.Text => new TextOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Text = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
-            SessionOutputTypes.TextDelta => new TextDeltaOutput
+            SessionOutputTypes.TextDelta => new TextDeltaOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Delta = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
-            SessionOutputTypes.Thinking => new ThinkingOutput
+            SessionOutputTypes.Thinking => new ThinkingOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Text = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
-            SessionOutputTypes.ThinkingDelta => new ThinkingDeltaOutput
+            SessionOutputTypes.ThinkingDelta => new ThinkingDeltaOutput(dto.Text ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Delta = dto.Text ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
             SessionOutputTypes.ToolCall => new ToolCallOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
-                CallId = dto.CallId ?? string.Empty,
-                ToolName = dto.ToolName ?? "unknown",
+                CallId = new Netclaw.Tools.ToolCallId(dto.CallId ?? string.Empty),
+                ToolName = new Netclaw.Tools.ToolName(dto.ToolName ?? "unknown"),
                 ArgumentsJson = dto.ArgumentsJson
             },
             SessionOutputTypes.ToolResult => new ToolResultOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
-                CallId = dto.CallId ?? string.Empty,
-                ToolName = dto.ToolName ?? "unknown",
+                CallId = new Netclaw.Tools.ToolCallId(dto.CallId ?? string.Empty),
+                ToolName = new Netclaw.Tools.ToolName(dto.ToolName ?? "unknown"),
                 Result = dto.Result ?? string.Empty
             },
             SessionOutputTypes.Usage => new UsageOutput
@@ -266,11 +258,10 @@ public static class SessionOutputDtoMapper
                     : TurnOutcome.Completed,
                 SourceReminderId = dto.SourceReminderId
             },
-            SessionOutputTypes.SessionTitle => new SessionTitleOutput
+            SessionOutputTypes.SessionTitle => new SessionTitleOutput(dto.Title ?? string.Empty)
             {
                 SessionId = sessionId,
-                TimestampMs = dto.TimestampMs,
-                Title = dto.Title ?? string.Empty
+                TimestampMs = dto.TimestampMs
             },
             SessionOutputTypes.Error => new ErrorOutput
             {
@@ -288,7 +279,7 @@ public static class SessionOutputDtoMapper
                 TimestampMs = dto.TimestampMs,
                 FilePath = dto.FilePath ?? string.Empty,
                 FileName = dto.FileName ?? "file",
-                MimeType = dto.MimeType ?? "application/octet-stream"
+                MimeType = new Netclaw.Security.MimeType(dto.MimeType)
             },
             SessionOutputTypes.SubAgent => new SubAgentOutput
             {
@@ -333,8 +324,8 @@ public static class SessionOutputDtoMapper
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
                 Kind = dto.InteractionKind ?? "approval",
-                CallId = dto.CallId ?? string.Empty,
-                ToolName = dto.ToolName ?? "unknown",
+                CallId = new Netclaw.Tools.ToolCallId(dto.CallId ?? string.Empty),
+                ToolName = new Netclaw.Tools.ToolName(dto.ToolName ?? "unknown"),
                 DisplayText = dto.InteractionDisplayText ?? string.Empty,
                 RequesterSenderId = dto.RequesterSenderId,
                 HasAdoptedContext = dto.InteractionHasAdoptedContext ?? false,

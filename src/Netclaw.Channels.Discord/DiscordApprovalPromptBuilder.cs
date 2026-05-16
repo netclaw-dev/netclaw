@@ -16,7 +16,7 @@ internal static class DiscordApprovalPromptBuilder
     {
         var sb = new StringBuilder();
         sb.AppendLine("Netclaw approval required:");
-        sb.Append("Tool: ").AppendLine(request.ToolName);
+        sb.Append("Tool: ").AppendLine(request.ToolName.Value);
         sb.Append("Action: ").AppendLine(request.DisplayText);
         sb.AppendLine(BuildApproveHeader(request));
 

@@ -29,16 +29,13 @@ namespace Netclaw.Configuration;
 /// record's built-in equality (e.g. <c>HashSet&lt;ApprovalEntry&gt;</c>,
 /// <c>Enumerable.Distinct()</c>) for that purpose.
 /// </remarks>
-public sealed record ApprovalEntry
+/// <param name="Verb">
+/// The verb chain (e.g. <c>git remote</c>, <c>freshdesk</c>). For
+/// <c>shell_execute</c> this is the prefix of non-flag tokens extracted
+/// from a command; for other tools it is the tool name.
+/// </param>
+public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string Verb)
 {
-    /// <summary>
-    /// The verb chain (e.g. <c>git remote</c>, <c>freshdesk</c>). For
-    /// <c>shell_execute</c> this is the prefix of non-flag tokens extracted
-    /// from a command; for other tools it is the tool name.
-    /// </summary>
-    [JsonPropertyName("verb")]
-    public required string Verb { get; init; }
-
     /// <summary>
     /// Absolute directory path the grant is scoped to, or <c>null</c> for
     /// the global wildcard. Trailing slashes are normalized away by the
@@ -101,7 +98,7 @@ public sealed record ApprovalEntry
                 error = "'<verb> anywhere' must include a verb.";
                 return false;
             }
-            entry = new ApprovalEntry { Verb = verb, Directory = null };
+            entry = new ApprovalEntry(verb) { Directory = null };
             return true;
         }
 
@@ -118,7 +115,7 @@ public sealed record ApprovalEntry
                 error = "'<verb> in <directory>' must include both verb and directory.";
                 return false;
             }
-            entry = new ApprovalEntry { Verb = verb, Directory = directory };
+            entry = new ApprovalEntry(verb) { Directory = directory };
             return true;
         }
 

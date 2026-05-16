@@ -178,7 +178,7 @@ internal static class ApprovalsCommand
         var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
         WarnIfQuarantined(store, writer);
 
-        var entry = new ApprovalEntry { Verb = opts.Verb, Directory = null };
+        var entry = new ApprovalEntry(opts.Verb) { Directory = null };
         var audienceWire = opts.Audience.ToWireValue();
 
         if (store.AddApproval(opts.Audience, opts.Tool, entry))

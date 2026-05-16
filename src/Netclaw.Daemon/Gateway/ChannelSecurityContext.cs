@@ -26,15 +26,13 @@ public enum SecurityTrust
 /// Security context attached to every gateway connection.
 /// Phase 1: all connections are <see cref="SecurityTrust.LocalOperator"/>.
 /// </summary>
-public sealed record ChannelSecurityContext
+public sealed record ChannelSecurityContext(SecurityTrust Trust)
 {
-    public required SecurityTrust Trust { get; init; }
-
     public string? SenderId { get; init; }
 
     /// <summary>
     /// Creates a local operator context (full trust, Phase 1 default).
     /// </summary>
     public static ChannelSecurityContext LocalOperator(string? senderId = null) =>
-        new() { Trust = SecurityTrust.LocalOperator, SenderId = senderId };
+        new(SecurityTrust.LocalOperator) { SenderId = senderId };
 }

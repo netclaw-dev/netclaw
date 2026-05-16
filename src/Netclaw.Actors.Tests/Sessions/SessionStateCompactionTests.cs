@@ -78,7 +78,7 @@ public class SessionStateCompactionTests
         Assert.Equal(2, cleared);
 
         var clearedMsg = result.History.First(m => m.Role == ChatRole.Tool);
-        Assert.Equal("call-0", clearedMsg.ToolCallId);
+        Assert.Equal("call-0", clearedMsg.ToolCallId?.Value);
         Assert.Equal("web_search", clearedMsg.Name);
     }
 
@@ -199,8 +199,8 @@ public class SessionStateCompactionTests
                     [
                         new SerializableToolCall
                         {
-                            CallId = $"call-{i}",
-                            Name = "web_search",
+                            CallId = new Netclaw.Tools.ToolCallId($"call-{i}"),
+                            Name = new Netclaw.Tools.ToolName("web_search"),
                             ArgumentsJson = $"{{\"query\":\"query {i}\"}}"
                         }
                     ]
@@ -214,7 +214,7 @@ public class SessionStateCompactionTests
                 {
                     Role = ChatRole.Tool,
                     Content = $"Tool result for call-{i}",
-                    ToolCallId = $"call-{i}",
+                    ToolCallId = new Netclaw.Tools.ToolCallId($"call-{i}"),
                     Name = "web_search"
                 })
             };

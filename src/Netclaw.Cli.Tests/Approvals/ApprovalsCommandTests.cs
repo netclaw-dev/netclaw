@@ -33,8 +33,8 @@ public sealed class ApprovalsCommandTests : IDisposable
         _dir.Dispose();
     }
 
-    private static ApprovalEntry Verb(string verb) => new() { Verb = verb, Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new() { Verb = verb, Directory = dir };
+    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
+    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
     private void SeedDefault()
     {

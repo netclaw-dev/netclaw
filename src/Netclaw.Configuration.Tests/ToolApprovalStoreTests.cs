@@ -27,8 +27,8 @@ public sealed class ToolApprovalStoreTests : IDisposable
         if (File.Exists(_store.V1QuarantinePath)) File.Delete(_store.V1QuarantinePath);
     }
 
-    private static ApprovalEntry Verb(string verb) => new() { Verb = verb, Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new() { Verb = verb, Directory = dir };
+    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
+    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
     [Fact]
     public void RemoveApproval_returns_false_when_file_is_empty()
@@ -310,7 +310,7 @@ public sealed class ToolApprovalStoreTests : IDisposable
     [Fact]
     public void ToolApprovalEntryComparer_treats_entries_differing_only_by_createdAt_as_equal()
     {
-        var early = new ApprovalEntry { Verb = "git push", Directory = "/repo", CreatedAt = _time.GetUtcNow() };
+        var early = new ApprovalEntry("git push") { Directory = "/repo", CreatedAt = _time.GetUtcNow() };
         var late = early with { CreatedAt = _time.GetUtcNow().AddYears(1) };
         var none = early with { CreatedAt = null };
 

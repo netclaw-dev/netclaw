@@ -55,7 +55,7 @@ internal static class NetclawProtoMapper
     internal static Proto.SerializableMediaReferenceProto ToProto(SerializableMediaReference r) => new()
     {
         RelativePath = r.RelativePath,
-        MimeType = r.MimeType,
+        MimeType = r.MimeType.Value,
         Modality = r.Modality,
         FileSizeBytes = r.FileSizeBytes
     };
@@ -63,7 +63,7 @@ internal static class NetclawProtoMapper
     internal static SerializableMediaReference FromProto(Proto.SerializableMediaReferenceProto proto) => new()
     {
         RelativePath = proto.RelativePath,
-        MimeType = proto.MimeType,
+        MimeType = new Netclaw.Security.MimeType(proto.MimeType),
         Modality = proto.Modality,
         FileSizeBytes = proto.FileSizeBytes
     };
@@ -74,8 +74,8 @@ internal static class NetclawProtoMapper
     {
         var proto = new Proto.SerializableToolCallProto
         {
-            CallId = tc.CallId,
-            Name = tc.Name,
+            CallId = tc.CallId.Value,
+            Name = tc.Name.Value,
             ArgumentsJson = tc.ArgumentsJson
         };
         if (tc.MetaJson is not null)
@@ -85,8 +85,8 @@ internal static class NetclawProtoMapper
 
     internal static SerializableToolCall FromProto(Proto.SerializableToolCallProto proto) => new()
     {
-        CallId = proto.CallId,
-        Name = proto.Name,
+        CallId = new Netclaw.Tools.ToolCallId(proto.CallId),
+        Name = new Netclaw.Tools.ToolName(proto.Name),
         ArgumentsJson = proto.ArgumentsJson,
         MetaJson = proto.HasMetaJson ? proto.MetaJson : null
     };
@@ -103,7 +103,7 @@ internal static class NetclawProtoMapper
         if (msg.Name is not null)
             proto.Name = msg.Name;
         if (msg.ToolCallId is not null)
-            proto.ToolCallId = msg.ToolCallId;
+            proto.ToolCallId = msg.ToolCallId.Value.Value;
         proto.ToolCalls.AddRange(msg.ToolCalls.Select(ToProto));
         proto.MediaReferences.AddRange(msg.MediaReferences.Select(ToProto));
         return proto;
@@ -114,7 +114,7 @@ internal static class NetclawProtoMapper
         Role = (ChatRole)(int)proto.Role,
         Content = proto.Content,
         Name = proto.HasName ? proto.Name : null,
-        ToolCallId = proto.HasToolCallId ? proto.ToolCallId : null,
+        ToolCallId = proto.HasToolCallId ? new Netclaw.Tools.ToolCallId(proto.ToolCallId) : null,
         ToolCalls = proto.ToolCalls.Select(FromProto).ToArray(),
         MediaReferences = proto.MediaReferences.Select(FromProto).ToArray()
     };
@@ -522,7 +522,7 @@ internal static class NetclawProtoMapper
 
     internal static Proto.ActiveJobInfoProto ToProto(ActiveJobInfo job) => new()
     {
-        JobId = job.JobId,
+        JobId = job.JobId.Value,
         Command = job.Command,
         Rationale = job.Rationale,
         StartedAtMs = job.StartedAtMs,
@@ -532,7 +532,7 @@ internal static class NetclawProtoMapper
 
     internal static ActiveJobInfo FromProto(Proto.ActiveJobInfoProto proto) => new()
     {
-        JobId = proto.JobId,
+        JobId = new BackgroundJobId(proto.JobId),
         Command = proto.Command,
         Rationale = proto.Rationale,
         StartedAtMs = proto.StartedAtMs,

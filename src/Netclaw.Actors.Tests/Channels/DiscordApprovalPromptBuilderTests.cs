@@ -18,8 +18,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-1",
-            ToolName = "git_push",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("git_push"),
             DisplayText = "push to origin/main",
             Patterns = ["origin/main"],
             Options = [
@@ -50,8 +50,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-2",
-            ToolName = "read_file",
+            CallId = new Netclaw.Tools.ToolCallId("call-2"),
+            ToolName = new Netclaw.Tools.ToolName("read_file"),
             DisplayText = "read config.json",
             Patterns = [],
             Options = [
@@ -90,8 +90,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-btn",
-            ToolName = "exec_shell",
+            CallId = new Netclaw.Tools.ToolCallId("call-btn"),
+            ToolName = new Netclaw.Tools.ToolName("exec_shell"),
             DisplayText = "rm -rf /tmp/test",
             Options =
             [
@@ -120,8 +120,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-rt",
-            ToolName = "tool",
+            CallId = new Netclaw.Tools.ToolCallId("call-rt"),
+            ToolName = new Netclaw.Tools.ToolName("tool"),
             DisplayText = "action",
             RequesterSenderId = "user-123",
             Options =
@@ -157,8 +157,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-nr",
-            ToolName = "tool",
+            CallId = new Netclaw.Tools.ToolCallId("call-nr"),
+            ToolName = new Netclaw.Tools.ToolName("tool"),
             DisplayText = "action",
             RequesterSenderId = null,
             Options =
@@ -181,8 +181,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-r1",
-            ToolName = "git_push",
+            CallId = new Netclaw.Tools.ToolCallId("call-r1"),
+            ToolName = new Netclaw.Tools.ToolName("git_push"),
             DisplayText = "push to origin/main",
             Patterns = ["origin/main"],
             Options = [new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)]
@@ -206,8 +206,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-r2",
-            ToolName = "rm_file",
+            CallId = new Netclaw.Tools.ToolCallId("call-r2"),
+            ToolName = new Netclaw.Tools.ToolName("rm_file"),
             DisplayText = "delete /etc/passwd",
             Options = [new ToolInteractionOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel)]
         };
@@ -228,8 +228,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-r3",
-            ToolName = "read_file",
+            CallId = new Netclaw.Tools.ToolCallId("call-r3"),
+            ToolName = new Netclaw.Tools.ToolName("read_file"),
             DisplayText = "read config.json",
             Patterns = [],
             Options = [new ToolInteractionOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)]
@@ -268,8 +268,8 @@ public sealed class DiscordApprovalPromptBuilderTests
         {
             SessionId = new SessionId("test/session"),
             Kind = "approval",
-            CallId = "call-1",
-            ToolName = "shell_execute",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = command,
             Patterns = verbs,
             CandidateVerbs = verbs,

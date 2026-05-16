@@ -108,7 +108,7 @@ public sealed class BackgroundJobDefinitionStore
                 {
                     var text = File.ReadAllText(file);
                     var def = Deserialize(text, file);
-                    if (def is not null && !string.IsNullOrWhiteSpace(def.Id))
+                    if (def is not null && !string.IsNullOrWhiteSpace(def.Id.Value))
                         list.Add(def);
                 }
                 catch // slopwatch-ignore: SW003 corrupt job JSON is benign — skip and continue listing
@@ -125,7 +125,7 @@ public sealed class BackgroundJobDefinitionStore
         lock (_sync)
         {
             Directory.CreateDirectory(_directory);
-            var path = GetPath(new BackgroundJobId(definition.Id));
+            var path = GetPath(definition.Id);
             var tempPath = $"{path}.tmp";
             File.WriteAllText(tempPath, JsonSerializer.Serialize(definition, JsonOptions));
             File.Move(tempPath, path, overwrite: true);

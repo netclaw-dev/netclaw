@@ -680,7 +680,7 @@ public class DispatchingToolExecutorTests
         {
             var store = new ToolApprovalStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry { Verb = "git status", Directory = null });
+                new ApprovalEntry("git status") { Directory = null });
 
             var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(store), "tool-approval");
             var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));

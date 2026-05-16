@@ -47,5 +47,5 @@
 
 - [ ] 5.1 Manual smoke: restart the daemon with the Personal-DM Slack configuration from PR #993; confirm `shell_execute` is permitted (no Public downgrade).
 - [ ] 5.2 Manual smoke: place a known legacy `*.job.json` / reminder document (no trust fields) in the persistence directory; confirm the store rejects it loudly (error logged, job/reminder not loaded) and leaves the file in place.
-- [ ] 5.3 Update operator-facing docs / runbook with the upgrade note: legacy job/reminder documents missing trust fields are rejected at load and must be recreated or have `audience`/`boundary` added.
-- [ ] 5.4 Run `/opsx-verify` against this change, then `/opsx-sync` and `/opsx-archive`.
+- [x] 5.3 Update operator-facing docs / runbook with the upgrade note: legacy job/reminder documents missing trust fields are rejected at load and must be recreated or have `audience`/`boundary` added.
+- [x] 5.4 Run `/opsx-verify` against this change, then `/opsx-sync` and `/opsx-archive`.

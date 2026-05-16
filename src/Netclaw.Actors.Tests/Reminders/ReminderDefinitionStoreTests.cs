@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Reminders;
 using Netclaw.Configuration;
@@ -47,7 +49,7 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
 
         seededStore.Save(new ReminderDefinition
         {
-            Id = "valid-reminder",
+            Id = new ReminderId("valid-reminder"),
             Title = "valid-reminder",
             Instructions = "check status",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
@@ -71,7 +73,7 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
         var reminders = reloadedStore.List();
 
         Assert.Single(reminders);
-        Assert.Equal("valid-reminder", reminders[0].Id);
+        Assert.Equal("valid-reminder", reminders[0].Id.Value);
         Assert.False(File.Exists(invalidPath));
     }
 
@@ -142,7 +144,7 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
 
         store.Save(new ReminderDefinition
         {
-            Id = id,
+            Id = new ReminderId(id),
             Title = "Round-trip check",
             Instructions = "Do the thing.",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
@@ -166,8 +168,46 @@ public sealed class ReminderDefinitionStoreTests : IDisposable
         Assert.NotNull(loaded);
         Assert.Equal(TrustAudience.Personal, loaded!.Audience);
         Assert.Equal(SecurityPolicyDefaults.PersonalBoundary, loaded.Boundary);
-        Assert.Equal(id, loaded.Id);
+        Assert.Equal(id, loaded.Id.Value);
         Assert.Equal("Round-trip check", loaded.Title);
+    }
+
+    /// <summary>
+    /// Byte-equality gate for issue #994 Pass 7b. Wrapping <c>ReminderDefinition.Id</c>
+    /// in <see cref="ReminderId"/> MUST NOT change the on-disk JSON: the <c>id</c>
+    /// property stays a bare string, never a nested <c>{ "value": ... }</c> object,
+    /// so an upgraded daemon reads reminder documents written by the old binary.
+    /// </summary>
+    [Fact]
+    public void ReminderDefinition_id_serializes_as_bare_json_string()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter() }
+        };
+        var now = TimeProvider.System.GetUtcNow();
+
+        var definition = new ReminderDefinition
+        {
+            Id = new ReminderId("reminder-byte-eq"),
+            Title = "Byte-equality check",
+            Instructions = "Do the thing.",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
+            Schedule = new ReminderSchedule { Type = ReminderScheduleType.OneShot, FireAt = now.AddHours(1) },
+            Audience = TrustAudience.Personal,
+            Boundary = SecurityPolicyDefaults.PersonalBoundary
+        };
+
+        var json = JsonSerializer.Serialize(definition, options);
+
+        using var doc = JsonDocument.Parse(json);
+        var idElement = doc.RootElement.GetProperty("id");
+        Assert.Equal(JsonValueKind.String, idElement.ValueKind);
+        Assert.Equal("reminder-byte-eq", idElement.GetString());
+
+        var loaded = JsonSerializer.Deserialize<ReminderDefinition>(json, options);
+        Assert.NotNull(loaded);
+        Assert.Equal(new ReminderId("reminder-byte-eq"), loaded!.Id);
     }
 
     public void Dispose()

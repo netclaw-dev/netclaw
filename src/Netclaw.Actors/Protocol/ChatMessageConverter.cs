@@ -33,7 +33,7 @@ public static class ChatMessageConverter
         // Tool result message: wrap content in FunctionResultContent
         if (msg.Role == ChatRole.Tool && msg.ToolCallId is not null)
         {
-            var resultContent = new FunctionResultContent(msg.ToolCallId, msg.Content);
+            var resultContent = new FunctionResultContent(msg.ToolCallId.Value.Value, msg.Content);
             return new AiChatMessage(role, [resultContent]);
         }
 
@@ -54,7 +54,7 @@ public static class ChatMessageConverter
                     args = JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                 }
 
-                contents.Add(new FunctionCallContent(tc.CallId, tc.Name, args));
+                contents.Add(new FunctionCallContent(tc.CallId.Value, tc.Name.Value, args));
             }
 
             return new AiChatMessage(role, contents);
@@ -77,7 +77,7 @@ public static class ChatMessageConverter
                 }
 
                 var bytes = File.ReadAllBytes(fullPath);
-                contents.Add(new DataContent(bytes, media.MimeType));
+                contents.Add(new DataContent(bytes, media.MimeType.Value));
             }
 
             if (contents.Count > 0)
@@ -124,8 +124,8 @@ public static class ChatMessageConverter
                     var (meta, cleanArgs) = ExtractMeta(toolCall.Arguments);
                     toolCalls.Add(new SerializableToolCall
                     {
-                        CallId = toolCall.CallId,
-                        Name = toolCall.Name,
+                        CallId = new Netclaw.Tools.ToolCallId(toolCall.CallId),
+                        Name = new Netclaw.Tools.ToolName(toolCall.Name),
                         ArgumentsJson = cleanArgs is not null
                             ? JsonSerializer.Serialize(cleanArgs)
                             : string.Empty,
@@ -158,7 +158,7 @@ public static class ChatMessageConverter
             Role = role,
             Content = content,
             ToolCalls = toolCalls,
-            ToolCallId = toolCallId,
+            ToolCallId = toolCallId is not null ? new Netclaw.Tools.ToolCallId(toolCallId) : null,
             MediaReferences = mediaRefs
         };
     }
@@ -183,7 +183,7 @@ public static class ChatMessageConverter
         return new SerializableMediaReference
         {
             RelativePath = fileName,
-            MimeType = mimeType,
+            MimeType = new Netclaw.Security.MimeType(mimeType),
             Modality = (int)modality,
             FileSizeBytes = bytes.Length
         };

@@ -69,7 +69,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             TimeSpan.FromSeconds(2),
             cancellationToken: TestContext.Current.CancellationToken);
 
-        approvalChannel.Complete(new ToolCallId(approvalRequest.CallId), ApprovalDecision.ApprovedOnce);
+        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedOnce);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
@@ -117,7 +117,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await AwaitAssertAsync(() =>
         {
             var firstRequest = Assert.Single(approvals);
-            approvalChannel.Complete(new ToolCallId(firstRequest.CallId), ApprovalDecision.ApprovedOnce);
+            approvalChannel.Complete(firstRequest.CallId, ApprovalDecision.ApprovedOnce);
         }, duration: TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
@@ -176,7 +176,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         Assert.Equal(cwd, approvalRequest.Cwd);
 
-        approvalChannel.Complete(new ToolCallId(approvalRequest.CallId), ApprovalDecision.ApprovedAlways);
+        approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedAlways);
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);

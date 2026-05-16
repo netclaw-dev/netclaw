@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Serialization;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -62,7 +63,7 @@ public sealed record ToolInteractionResponse : IWithSessionId, INoSerializationV
     public required SessionId SessionId { get; init; }
 
     /// <summary>The tool call ID from the original <see cref="ToolInteractionRequest"/>.</summary>
-    public required string CallId { get; init; }
+    public required ToolCallId CallId { get; init; }
 
     /// <summary>The selected option key. See <see cref="ApprovalOptionKeys"/>.</summary>
     public required string SelectedKey { get; init; }

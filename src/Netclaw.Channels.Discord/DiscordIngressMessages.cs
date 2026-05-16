@@ -6,6 +6,7 @@
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Channels.Discord;
 
@@ -33,7 +34,7 @@ public sealed record DiscordThreadInbound(
 public sealed record DiscordApprovalResponse(
     DiscordChannelId ChannelId,
     DiscordThreadOrMessageId ThreadOrMessageId,
-    string CallId,
+    ToolCallId CallId,
     string SelectedKey,
     DiscordUserId SenderId,
     DiscordUserId? RequesterSenderId = null);
@@ -41,7 +42,7 @@ public sealed record DiscordApprovalResponse(
 internal sealed class PendingApprovalRequest(ToolInteractionRequest request)
 {
     public ToolInteractionRequest Request { get; } = request;
-    public string CallId => Request.CallId;
+    public ToolCallId CallId => Request.CallId;
 
     public DiscordUserId? RequesterSenderId { get; } =
         request.RequesterSenderId is not null ? new DiscordUserId(request.RequesterSenderId) : null;

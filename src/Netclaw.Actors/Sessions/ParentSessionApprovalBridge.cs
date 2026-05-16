@@ -62,8 +62,8 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         {
             SessionId = _sessionId,
             Kind = "approval",
-            CallId = callId.Value,
-            ToolName = toolName,
+            CallId = callId,
+            ToolName = new Netclaw.Tools.ToolName(toolName),
             DisplayText = displayText,
             RequesterSenderId = _requesterSenderId,
             RequesterPrincipal = _requesterPrincipal,

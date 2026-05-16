@@ -38,8 +38,8 @@ public sealed class SlackApprovalBlockBuilderTests
         {
             SessionId = new SessionId("signalr/test"),
             Kind = "approval",
-            CallId = "call-1",
-            ToolName = "shell_execute",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
             DisplayText = command,
             RequesterSenderId = "device-1",
             Patterns = verbs,

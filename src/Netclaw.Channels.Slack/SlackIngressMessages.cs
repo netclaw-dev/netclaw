@@ -7,6 +7,7 @@ using Akka.Actor;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using SlackNet.Blocks;
 
 namespace Netclaw.Channels.Slack;
@@ -83,7 +84,7 @@ public sealed record ProactiveThreadAck(SessionId SessionId) : INoSerializationV
 public sealed record SlackApprovalResponse(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
-    string CallId,
+    ToolCallId CallId,
     string SelectedKey,
     string SenderId,
     string? RequesterSenderId = null) : INoSerializationVerificationNeeded;

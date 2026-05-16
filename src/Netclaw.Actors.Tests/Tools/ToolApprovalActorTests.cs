@@ -325,7 +325,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
             var store = new ToolApprovalStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry { Verb = "dotnet test", Directory = grantDir });
+                new ApprovalEntry("dotnet test") { Directory = grantDir });
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -361,7 +361,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
             var store = new ToolApprovalStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry { Verb = "cat", Directory = grantDir });
+                new ApprovalEntry("cat") { Directory = grantDir });
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -396,7 +396,7 @@ public sealed class ToolApprovalActorTests : TestKit
 
             var store = new ToolApprovalStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry { Verb = "git push", Directory = grantDir });
+                new ApprovalEntry("git push") { Directory = grantDir });
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
@@ -429,7 +429,7 @@ public sealed class ToolApprovalActorTests : TestKit
             // same-verb grant to explain.
             var store = new ToolApprovalStore(tempFile);
             store.AddApproval(TrustAudience.Personal, "shell_execute",
-                new ApprovalEntry { Verb = "npm install", Directory = null });
+                new ApprovalEntry("npm install") { Directory = null });
 
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);

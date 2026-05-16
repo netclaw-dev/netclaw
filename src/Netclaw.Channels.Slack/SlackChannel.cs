@@ -117,7 +117,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _gateway?.Tell(new SlackApprovalResponse(
             channelId,
             threadTs,
-            callId,
+            new Netclaw.Tools.ToolCallId(callId),
             selectedKey,
             senderId,
             requesterSenderId));

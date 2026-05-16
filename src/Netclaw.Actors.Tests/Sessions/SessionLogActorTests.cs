@@ -62,10 +62,9 @@ public sealed class SessionLogActorTests : TestKit
         {
             var dispatcher = SpawnDispatcher(Sys, basePath, timeProvider);
 
-            dispatcher.Tell(new ThinkingDeltaOutput
+            dispatcher.Tell(new ThinkingDeltaOutput("step by step")
             {
-                SessionId = sessionId,
-                Delta = "step by step"
+                SessionId = sessionId
             }, ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
@@ -96,7 +95,7 @@ public sealed class SessionLogActorTests : TestKit
         try
         {
             var dispatcher1 = SpawnDispatcher(Sys, basePath, timeProvider);
-            dispatcher1.Tell(new TextOutput { SessionId = sessionId, Text = "first" }, ActorRefs.NoSender);
+            dispatcher1.Tell(new TextOutput("first") { SessionId = sessionId }, ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
             {
@@ -110,7 +109,7 @@ public sealed class SessionLogActorTests : TestKit
             await ExpectTerminatedAsync(dispatcher1, cancellationToken: TestContext.Current.CancellationToken);
 
             var dispatcher2 = SpawnDispatcher(Sys, basePath, timeProvider);
-            dispatcher2.Tell(new TextOutput { SessionId = sessionId, Text = "second" }, ActorRefs.NoSender);
+            dispatcher2.Tell(new TextOutput("second") { SessionId = sessionId }, ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
             {
@@ -141,8 +140,8 @@ public sealed class SessionLogActorTests : TestKit
         {
             var dispatcher = SpawnDispatcher(Sys, basePath, timeProvider);
 
-            dispatcher.Tell(new TextOutput { SessionId = sessionA, Text = "alpha" }, ActorRefs.NoSender);
-            dispatcher.Tell(new TextOutput { SessionId = sessionB, Text = "beta" }, ActorRefs.NoSender);
+            dispatcher.Tell(new TextOutput("alpha") { SessionId = sessionA }, ActorRefs.NoSender);
+            dispatcher.Tell(new TextOutput("beta") { SessionId = sessionB }, ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
             {
@@ -174,13 +173,9 @@ public sealed class SessionLogActorTests : TestKit
         {
             var dispatcher = SpawnDispatcher(Sys, basePath, timeProvider);
 
-            dispatcher.Tell(new TextOutput { SessionId = sessionId, Text = "audit-line" }, ActorRefs.NoSender);
+            dispatcher.Tell(new TextOutput("audit-line") { SessionId = sessionId }, ActorRefs.NoSender);
             timeProvider.Advance(TimeSpan.FromMilliseconds(1));
-            dispatcher.Tell(new SessionLogDiagnostic
-            {
-                SessionId = sessionId,
-                Line = "[2026-05-07T13:30:00.001+00:00] Diagnostic: provider sent request"
-            }, ActorRefs.NoSender);
+            dispatcher.Tell(new SessionLogDiagnostic(sessionId, "[2026-05-07T13:30:00.001+00:00] Diagnostic: provider sent request"), ActorRefs.NoSender);
 
             await AwaitAssertAsync(async () =>
             {

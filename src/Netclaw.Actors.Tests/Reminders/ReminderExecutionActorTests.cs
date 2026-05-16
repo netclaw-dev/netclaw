@@ -92,8 +92,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             new ToolResultOutput
             {
                 SessionId = sessionId,
-                CallId = "call-1",
-                ToolName = "send_slack_message",
+                CallId = new Netclaw.Tools.ToolCallId("call-1"),
+                ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
                 Result = "Error parsing arguments for tool 'send_slack_message': Required parameter 'Message' is missing or empty."
             },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
@@ -120,8 +120,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             new ToolResultOutput
             {
                 SessionId = sessionId,
-                CallId = "call-2",
-                ToolName = "send_slack_message",
+                CallId = new Netclaw.Tools.ToolCallId("call-2"),
+                ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
                 Result = "Message sent to channel C1. Thread: C1/1234567890.000001"
             },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
@@ -145,7 +145,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TextOutput { SessionId = sessionId, Text = "No new opportunities found." },
+            new TextOutput("No new opportunities found.") { SessionId = sessionId },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
@@ -169,7 +169,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TextOutput { SessionId = sessionId, Text = "Some output." },
+            new TextOutput("Some output.") { SessionId = sessionId },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
         ]);
 
@@ -194,8 +194,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
             new ToolResultOutput
             {
                 SessionId = sessionId,
-                CallId = "call-err",
-                ToolName = "send_slack_message",
+                CallId = new Netclaw.Tools.ToolCallId("call-err"),
+                ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
                 Result = "Error: channel not found"
             },
             new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
@@ -243,7 +243,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         var now = TimeProvider.System.GetUtcNow();
         return new ReminderDefinition
         {
-            Id = id,
+            Id = new ReminderId(id),
             Title = $"Test Reminder {id}",
             Instructions = "Do something.",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },

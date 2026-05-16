@@ -1008,9 +1008,8 @@ static async Task RunAsync(string[] args)
             break;
 
         case "headless":
-            var headlessOpts = new HeadlessOptions
+            var headlessOpts = new HeadlessOptions(headlessPrompt!)
             {
-                Prompt = headlessPrompt!,
                 ResumeSessionId = resumeSessionId,
                 JsonOutput = chatJsonOutput,
             };
