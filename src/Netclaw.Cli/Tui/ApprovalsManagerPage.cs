@@ -50,7 +50,6 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
         return Layouts.Vertical()
             .WithSpacing(1)
             .WithChild(BuildContent())
-            .WithChild(Layouts.Empty().Fill())
             .WithChild(BuildStatusBar())
             .WithChild(BuildKeyBindings());
     }
@@ -75,7 +74,9 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
             .Subscribe(_ => _contentNode.Invalidate())
             .DisposeWith(Subscriptions);
 
-        return _contentNode;
+        // Fill the panel: the list view inside relies on a Fill-constrained
+        // ancestor to receive the terminal's full height (see BuildListView).
+        return _contentNode.Fill();
     }
 
     private LayoutNode BuildStatusBar()
@@ -151,7 +152,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
         return Layouts.Vertical()
             .WithChild(new TextNode($"  {"Audience",-10} {"Tool",-20} Approval")
                 .WithForeground(Color.White).Bold())
-            .WithChild(_approvalList);
+            .WithChild(new FillSelectionListNode<string>(_approvalList));
     }
 
     private ILayoutNode BuildRevokeConfirmView()
@@ -221,5 +222,53 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
             ViewModel.RequestRedraw();
             return;
         }
+    }
+}
+
+/// <summary>
+/// Fills all vertical space the parent allocates with a Termina
+/// <see cref="SelectionListNode{T}"/>. The stock node caps its own height at
+/// <c>_visibleRows</c> (default 10) and exposes no fill mode, so a long list
+/// renders only 10 rows regardless of terminal size — and its scroll math and
+/// scrollbar are both sized to that 10-row window. This adapter is
+/// <see cref="SizeConstraint.Fill"/>-constrained and pushes the row count the
+/// layout engine actually grants into <see cref="SelectionListNode{T}.WithVisibleRows"/>
+/// at measure/render time, so the list grows with the terminal and its
+/// scrollbar spans the full visible height.
+/// </summary>
+// TODO: remove this adapter once Termina ships a built-in fill mode for
+// SelectionListNode<T> — tracked at https://github.com/Aaronontheweb/termina/issues/207
+internal sealed class FillSelectionListNode<T> : LayoutNode, IInvalidatingNode
+{
+    private readonly SelectionListNode<T> _inner;
+
+    public FillSelectionListNode(SelectionListNode<T> inner)
+    {
+        _inner = inner;
+        Fill();
+        WidthFill();
+    }
+
+    public Observable<Unit> Invalidated => _inner.Invalidated;
+
+    public override Size Measure(Size available)
+    {
+        _inner.WithVisibleRows(available.Height);
+        return available;
+    }
+
+    public override void Render(IRenderContext context, Rect bounds)
+    {
+        // bounds.Height is the row count the layout engine actually granted;
+        // keep _visibleRows in sync so the list's scroll math and scrollbar
+        // match what's on screen.
+        _inner.WithVisibleRows(bounds.Height);
+        _inner.Render(context, bounds);
+    }
+
+    public override void Dispose()
+    {
+        _inner.Dispose();
+        base.Dispose();
     }
 }
