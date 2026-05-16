@@ -73,6 +73,30 @@ public class ShellToolTests
     }
 
     [Fact]
+    public async Task Caller_cancellation_returns_gracefully()
+    {
+        // Reproduces the session-pipeline path: ShellTool's own timeout is long,
+        // and cancellation instead arrives via the *outer* ct (the pipeline's
+        // per-tool deadline). ShellTool must catch that, kill the process, and
+        // return a message rather than letting the cancellation escape as an
+        // exception. If the kill failed, draining the pipes would hang and this
+        // test would never complete — so a passing run also proves the process
+        // was terminated.
+        var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 100 });
+        var args = ToolInput.Create("Command", "sleep 120");
+        var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Personal,
+            RequestedTimeoutSeconds = 100
+        };
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+
+        var result = await tool.ExecuteAsync(args, context, cts.Token);
+
+        Assert.Contains("cancelled", result);
+    }
+
+    [Fact]
     public async Task Output_truncation_applies()
     {
         var tool = new ShellTool(new ToolConfig { MaxOutputChars = 50 });

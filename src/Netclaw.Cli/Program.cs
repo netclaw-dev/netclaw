@@ -32,6 +32,7 @@ using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
+using Termina;
 using Termina.Diagnostics;
 using Termina.Hosting;
 
@@ -206,7 +207,7 @@ static async Task RunAsync(string[] args)
             });
 
             var initApp = builder.Build();
-            await initApp.RunAsync();
+            await RunTerminaHostAsync(initApp);
             return;
         }
 
@@ -437,7 +438,7 @@ static async Task RunAsync(string[] args)
             });
 
             var statsApp = builder.Build();
-            await statsApp.RunAsync();
+            await RunTerminaHostAsync(statsApp);
             return;
         }
 
@@ -646,7 +647,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/mcp-tools", t =>
                 t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -704,7 +705,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/provider", t =>
                 t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -733,7 +734,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/model", t =>
                 t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -762,7 +763,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/approvals", t =>
                 t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -786,7 +787,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTermina("/reminder", t =>
                 t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder"));
 
-            await builder.Build().RunAsync();
+            await RunTerminaHostAsync(builder.Build());
             return;
         }
 
@@ -1026,12 +1027,32 @@ static async Task RunAsync(string[] args)
     }
 
     var app = webBuilder.Build();
-    await app.RunAsync();
+    await RunTerminaHostAsync(app);
 }
 
 static void WriteCrashLog(Exception ex)
 {
     CrashLogWriter.Write(ex, "CLI");
+}
+
+// Canonical launch path for CLI hosts. A host that registered a Termina UI (via
+// AddTermina, which also registers TerminaApplication) drives an interactive
+// terminal: spawned by shell_execute or fed piped stdin it would render but
+// never receive a quit key — an un-killable subprocess. Fail fast in that case.
+// Non-Termina hosts (headless mode) carry no TerminaApplication and run unguarded.
+static async Task RunTerminaHostAsync(IHost host)
+{
+    if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+    {
+        Console.Error.WriteLine(
+            "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
+        Console.Error.WriteLine(
+            "Non-interactive alternatives: 'netclaw sessions --once [--json]' or 'netclaw chat -p \"...\"'.");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    await host.RunAsync();
 }
 
 static void WriteDaemonResult(DaemonResult result)
