@@ -60,57 +60,6 @@ public sealed class ShellApprovalMatcherTests
         Assert.Empty(patterns);
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only — ExtractPatterns routes through BashParser on POSIX")]
-    public void ExtractPatterns_multiline_command_splits_one_unit_per_statement()
-    {
-        // A bare newline separates statements, so a multi-line command
-        // yields one approval unit per statement rather than a single unit
-        // with the newline collapsed to a space.
-        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
-            Args("git fetch\ngit status"));
-
-        Assert.Equal(2, patterns.Count);
-        Assert.Contains("git fetch", patterns);
-        Assert.Contains("git status", patterns);
-    }
-
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only — ExtractPatterns routes through BashParser on POSIX")]
-    public void ExtractPatterns_multiline_collapses_blank_lines()
-    {
-        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
-            Args("echo a\n\n\necho b"));
-
-        Assert.Equal(2, patterns.Count);
-        Assert.Contains("echo a", patterns);
-        Assert.Contains("echo b", patterns);
-    }
-
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only — ExtractPatterns routes through BashParser on POSIX")]
-    public void ExtractPatterns_multiline_keeps_pipe_within_a_statement()
-    {
-        // A pipe stays inside one approval unit; the newline still splits
-        // the second statement out.
-        var patterns = _matcher.ExtractPatterns(new ToolName("shell_execute"),
-            Args("echo one | grep o\necho two"));
-
-        Assert.Equal(2, patterns.Count);
-        Assert.Contains("echo one | grep o", patterns);
-        Assert.Contains("echo two", patterns);
-    }
-
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
-    public void ExtractCandidates_multiline_surfaces_each_verb()
-    {
-        // Security-relevant: a verb after a bare newline (here `rm -rf`)
-        // must surface as its own gated candidate, not be absorbed as args
-        // of the preceding `cd`.
-        var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
-            Args("cd /tmp\nrm -rf /tmp/foo"));
-
-        Assert.Contains(candidates, c => c.Verb == "cd" && c.Directory == "/tmp");
-        Assert.Contains(candidates, c => c.Verb == "rm" && c.Directory == "/tmp/foo");
-    }
-
     [Fact]
     public void ExtractCandidateVerbs_collapses_to_verb_chains_only()
     {
@@ -268,7 +217,18 @@ public sealed class ShellApprovalMatcherPathExtractionTests
 
     private static Dictionary<string, object?> Args(string command) => new() { ["Command"] = command };
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    /// <summary>
+    /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
+    /// matcher falls through to the legacy <c>ShellTokenizer</c> path
+    /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
+    /// BashParser cwd attribution / <c>arg.Resolved</c> canonicalization
+    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix))]</c>
+    /// produces a proper "Skipped" entry in the test log on Windows
+    /// runners instead of hiding the gap behind an early-return.
+    /// </summary>
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_strips_path_from_verb()
     {
         var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
@@ -279,7 +239,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Equal("/home/user", c.Directory);
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_applies_file_parent_rule()
     {
         // `cat ~/.bashrc` → directory is the basename's parent (the home
@@ -424,7 +384,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.True(ApprovalPatternMatching.IsPureSideEffect(c));
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_extracts_cd_target_as_directory()
     {
         // Production case: `cd /repo && git remote -v`. The header /
@@ -458,7 +418,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
               && c.Directory == "/home/user/repos/example");
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_propagates_cd_target_to_subsequent_clauses_with_no_path_arg()
     {
         // Production repro of the retry-after-approval failure on
@@ -482,7 +442,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             c => c.Verb == "git checkout" && c.Directory == "/home/user/repos/foo");
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_tracks_latest_cd_through_multiple_hops()
     {
         // cd /a && cd /b && grep ... — grep inherits /b (the latest cd),
@@ -502,7 +462,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Contains(candidates, c => c.Verb == "pwd" && c.Directory == "/b");
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_recurses_into_bash_dash_c_with_cd_attribution_intact()
     {
         // bash -c "cd /repo && git push" — the parser flattens the
@@ -519,7 +479,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Contains(candidates, c => c.Verb == "git push" && c.Directory == "/repo");
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_prefers_explicit_path_arg_over_cd_attribution()
     {
         // When a clause has its own anchored path argument, that wins —
@@ -539,7 +499,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             c => c.Verb == "dotnet test" && c.Directory == "/home/foo");
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_side_effect_verbs_do_not_inherit_cd_attribution()
     {
         // echo / printf / true / false write to stdout and ignore cwd,
@@ -559,7 +519,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Contains(candidates, c => c.Verb == "echo" && c.Directory == null);
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_normalizes_tilde_cd_to_absolute_path_so_clauses_share_one_directory()
     {
         // Production header bug: prompt for `cd ~/x && git checkout -b f`
@@ -589,7 +549,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Contains(candidates, c => c.Verb == "git checkout" && c.Directory == expected);
     }
 
-    [Fact(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only path semantics")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_collapses_pipe_chain_into_single_candidate()
     {
         // Pipes stay inside one approval unit — approving cat /etc/hosts

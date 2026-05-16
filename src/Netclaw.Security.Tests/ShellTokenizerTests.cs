@@ -9,6 +9,15 @@ namespace Netclaw.Security.Tests;
 
 public sealed class ShellTokenizerTests
 {
+    /// <summary>
+    /// xunit.v3 <c>SkipUnless</c> hook for tests whose expected output
+    /// depends on POSIX <c>Path.GetDirectoryName</c> semantics —
+    /// Windows produces backslashed parents that don't match the
+    /// forward-slash expectations baked into the inline data.
+    /// </summary>
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
+
     public static TheoryData<string, bool> WindowsAnchoredPathCases
     {
         get
@@ -269,7 +278,7 @@ public sealed class ShellTokenizerTests
         Assert.Equal(expected, ShellTokenizer.ExtractFirstPathArgument(command));
     }
 
-    [Theory(SkipUnless = nameof(TestPlatform.IsPosix), SkipType = typeof(TestPlatform), Skip = "POSIX-only Path.GetDirectoryName semantics")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only Path.GetDirectoryName semantics")]
     // File path with extension → parent. Path.GetDirectoryName is
     // platform-aware: on Windows the parent uses backslashes which
     // doesn't match these forward-slash expectations, so the cases
