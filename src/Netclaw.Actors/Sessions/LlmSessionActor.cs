@@ -626,16 +626,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _state = _state with { History = _state.History.Add(result) };
 
+                // A tool result must correlate to a tool call. A null ToolCallId
+                // means the result was assembled wrong; fabricating an empty id
+                // would hand subscribers a non-correlatable id, so fail loud.
+                if (result.ToolCallId is not { } toolCallId)
+                    throw new InvalidOperationException(
+                        $"Tool-result message for tool '{result.Name ?? "unknown"}' has no ToolCallId.");
+
                 var preview = result.Content is { Length: > 200 }
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-                    result.Name ?? "unknown", result.ToolCallId?.Value ?? "?", preview);
+                    result.Name ?? "unknown", toolCallId.Value, preview);
 
                 EmitOutput(new ToolResultOutput
                 {
                     SessionId = _sessionId,
-                    CallId = result.ToolCallId ?? new ToolCallId(string.Empty),
+                    CallId = toolCallId,
                     ToolName = new ToolName(result.Name ?? "unknown"),
                     Result = result.Content ?? string.Empty
                 }, OutputFilter.ToolCalls);
