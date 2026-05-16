@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Approvals;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -16,13 +17,14 @@ public sealed class ApprovalsCommandTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly StringWriter _output = new();
+    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
     private readonly ToolApprovalStore _store;
 
     public ApprovalsCommandTests()
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
-        _store = new ToolApprovalStore(_paths.ToolApprovalsPath);
+        _store = new ToolApprovalStore(_paths.ToolApprovalsPath, _time);
     }
 
     public void Dispose()
@@ -89,6 +91,72 @@ public sealed class ApprovalsCommandTests : IDisposable
 
         var gitPush = personalShell.EnumerateArray().Single(e => e.GetProperty("verb").GetString() == "git push");
         Assert.False(gitPush.TryGetProperty("directory", out _));
+    }
+
+    [Fact]
+    public async Task List_shows_relative_creation_time()
+    {
+        // SeedDefault stamps entries at the fake clock; advancing it makes
+        // the rendered relative age deterministic.
+        SeedDefault();
+        _time.Advance(TimeSpan.FromDays(3));
+
+        var exit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output, _time);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("added 3 days ago", _output.ToString());
+    }
+
+    [Fact]
+    public async Task List_shows_placeholder_for_entry_without_a_timestamp()
+    {
+        // A v2 file written before timestamp tracking: the entry has no
+        // createdAt property.
+        File.WriteAllText(_paths.ToolApprovalsPath, """
+            {
+              "version": 2,
+              "audiences": { "personal": { "shell_execute": [ { "verb": "git push" } ] } }
+            }
+            """);
+
+        var exit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output, _time);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("added —", _output.ToString());
+    }
+
+    [Fact]
+    public async Task List_json_round_trips_createdAt()
+    {
+        File.WriteAllText(_paths.ToolApprovalsPath, """
+            {
+              "version": 2,
+              "audiences": {
+                "personal": {
+                  "shell_execute": [
+                    { "verb": "git push", "directory": null, "createdAt": "2026-05-01T12:00:00+00:00" },
+                    { "verb": "npm install", "directory": null }
+                  ]
+                }
+              }
+            }
+            """);
+
+        await ApprovalsCommand.RunAsync(["approvals", "list", "--json"], _paths, _output, _time);
+
+        using var doc = JsonDocument.Parse(_output.ToString());
+        var entries = doc.RootElement
+            .GetProperty("audiences").GetProperty("personal").GetProperty("shell_execute");
+
+        var stamped = entries.EnumerateArray().Single(e => e.GetProperty("verb").GetString() == "git push");
+        Assert.True(stamped.TryGetProperty("createdAt", out var createdAt));
+        Assert.Equal(
+            new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero),
+            createdAt.GetDateTimeOffset());
+
+        // An entry written before timestamp tracking omits the field.
+        var legacy = entries.EnumerateArray().Single(e => e.GetProperty("verb").GetString() == "npm install");
+        Assert.False(legacy.TryGetProperty("createdAt", out _));
     }
 
     [Fact]

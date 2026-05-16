@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.1.0"
+  version: "2.1.1"
 ---
 
 # Netclaw Operations
@@ -365,7 +365,9 @@ mutations take effect on the next prompt without a daemon restart.
 # Interactive TUI: see everything grouped by audience and tool
 netclaw approvals
 
-# List — human-readable. Entries print as "<verb> in <dir>" or "<verb> anywhere".
+# List — human-readable. Entries print as "<verb> in <dir>" or "<verb> anywhere",
+# each followed by when the grant was added ("added 3 days ago"; "added —" for
+# grants saved before timestamps were tracked).
 netclaw approvals list
 netclaw approvals list --audience personal --tool shell_execute
 

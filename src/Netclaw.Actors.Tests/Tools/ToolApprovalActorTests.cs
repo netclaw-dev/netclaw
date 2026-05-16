@@ -33,6 +33,9 @@ public sealed class ToolApprovalActorTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        // The near-miss diagnostic is emitted at Info; make the level
+        // explicit so the EventFilter assertion is deterministic.
+        builder.AddHocon("akka.loglevel = INFO", HoconAddMode.Prepend);
     }
 
     [Fact]
@@ -307,6 +310,71 @@ public sealed class ToolApprovalActorTests : TestKit
         var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Equal(["git push"], unapproved);
+    }
+
+    [Fact]
+    public async Task Directory_near_miss_is_logged_without_changing_the_decision()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            // Lexical containment only — the directories need not exist.
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-nearmiss", "grant");
+            var otherDir = Path.Combine(Path.GetTempPath(), "netclaw-nearmiss", "other");
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "git push", Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            IReadOnlyList<string> unapproved = [];
+            await EventFilter.Info(contains: "near-miss").ExpectOneAsync(async () =>
+            {
+                unapproved = await service.GetUnapprovedPatternsAsync(
+                    "session-a", TrustAudience.Personal, new ToolName("shell_execute"),
+                    ["git push"], cwd: otherDir, ct);
+            }, cancellationToken: ct);
+
+            // The diagnostic is read-only: the candidate is still unapproved.
+            Assert.Equal(["git push"], unapproved);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task First_time_prompt_emits_no_near_miss_diagnostic()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            // Store holds an unrelated verb, so the prompted verb has no
+            // same-verb grant to explain.
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "npm install", Directory = null });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            await EventFilter.Info(contains: "near-miss").ExpectAsync(0, async () =>
+            {
+                var unapproved = await service.GetUnapprovedPatternsAsync(
+                    "session-a", TrustAudience.Personal, new ToolName("shell_execute"),
+                    ["terraform apply"], cwd: null, ct);
+                Assert.Equal(["terraform apply"], unapproved);
+            }, cancellationToken: ct);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
     }
 
     private static AkkaToolApprovalService CreateService(IActorRef actor)

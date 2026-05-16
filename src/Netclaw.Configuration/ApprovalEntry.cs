@@ -48,6 +48,19 @@ public sealed record ApprovalEntry
     public string? Directory { get; init; }
 
     /// <summary>
+    /// When this grant was first persisted, or <c>null</c> for entries
+    /// written before approval timestamps were tracked. Stamped by
+    /// <see cref="ToolApprovalStore.AddApproval"/> at write time. This is an
+    /// additive, optional field — its presence does not change the on-disk
+    /// schema version. It is provenance only: it does NOT participate in
+    /// approval matching or in
+    /// <see cref="ToolApprovalEntryComparer.Equals(ApprovalEntry, ApprovalEntry)"/>,
+    /// so re-granting an existing approval keeps the original timestamp.
+    /// </summary>
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset? CreatedAt { get; init; }
+
+    /// <summary>
     /// The user-visible scope label emitted by <c>netclaw approvals list</c>
     /// and shown in the TUI. Folder-scoped entries render as
     /// <c>&lt;verb&gt; in &lt;dir&gt;</c>; global wildcards render as

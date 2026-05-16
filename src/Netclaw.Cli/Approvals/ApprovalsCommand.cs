@@ -28,27 +28,29 @@ internal static class ApprovalsCommand
     public static Task<int> RunAsync(
         string[] args,
         NetclawPaths paths,
-        TextWriter? output = null)
+        TextWriter? output = null,
+        TimeProvider? timeProvider = null)
     {
         var writer = output ?? Console.Out;
+        var clock = timeProvider ?? TimeProvider.System;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         return subcommand switch
         {
-            "list" => Task.FromResult(RunList(args, paths, writer)),
-            "revoke" => Task.FromResult(RunRevoke(args, paths, writer)),
-            "trust-verb" => Task.FromResult(RunTrustVerb(args, paths, writer)),
+            "list" => Task.FromResult(RunList(args, paths, writer, clock)),
+            "revoke" => Task.FromResult(RunRevoke(args, paths, writer, clock)),
+            "trust-verb" => Task.FromResult(RunTrustVerb(args, paths, writer, clock)),
             "help" or "-h" or "--help" => Task.FromResult(WriteHelp(writer)),
             _ => Task.FromResult(WriteHelp(writer)),
         };
     }
 
-    private static int RunList(string[] args, NetclawPaths paths, TextWriter writer)
+    private static int RunList(string[] args, NetclawPaths paths, TextWriter writer, TimeProvider clock)
     {
         if (TryParseListFlags(args, writer) is not { } opts)
             return 1;
 
-        var store = new ToolApprovalStore(paths.ToolApprovalsPath);
+        var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
         WarnIfQuarantined(store, writer);
 
         var view = BuildView(store.Snapshot(), opts.Audience, opts.Tool);
@@ -65,6 +67,7 @@ internal static class ApprovalsCommand
             return 0;
         }
 
+        var now = clock.GetUtcNow();
         var first = true;
         foreach (var (audienceKey, tools) in view.Audiences)
         {
@@ -72,8 +75,10 @@ internal static class ApprovalsCommand
             {
                 if (!first) writer.WriteLine();
                 writer.WriteLine($"{audienceKey} / {toolName}");
-                foreach (var entry in entries)
-                    writer.WriteLine($"  {entry.FormatScope()}");
+                var rows = entries.Select(e => (Scope: e.FormatScope(), e.CreatedAt)).ToList();
+                var scopeWidth = rows.Count == 0 ? 0 : rows.Max(r => r.Scope.Length);
+                foreach (var (scope, createdAt) in rows)
+                    writer.WriteLine($"  {scope.PadRight(scopeWidth)}   {ApprovalTimeText.Added(createdAt, now)}");
                 first = false;
             }
         }
@@ -81,7 +86,7 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static int RunRevoke(string[] args, NetclawPaths paths, TextWriter writer)
+    private static int RunRevoke(string[] args, NetclawPaths paths, TextWriter writer, TimeProvider clock)
     {
         if (TryParseRevokeFlags(args, writer) is not { } opts)
             return 1;
@@ -93,7 +98,7 @@ internal static class ApprovalsCommand
             return 1;
         }
 
-        var store = new ToolApprovalStore(paths.ToolApprovalsPath);
+        var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
         WarnIfQuarantined(store, writer);
 
         if (opts.RevokeAll)
@@ -150,7 +155,7 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static int RunTrustVerb(string[] args, NetclawPaths paths, TextWriter writer)
+    private static int RunTrustVerb(string[] args, NetclawPaths paths, TextWriter writer, TimeProvider clock)
     {
         if (TryParseTrustVerbFlags(args, writer) is not { } opts)
             return 1;
@@ -170,7 +175,7 @@ internal static class ApprovalsCommand
             return 1;
         }
 
-        var store = new ToolApprovalStore(paths.ToolApprovalsPath);
+        var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
         WarnIfQuarantined(store, writer);
 
         var entry = new ApprovalEntry { Verb = opts.Verb, Directory = null };

@@ -127,7 +127,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
     private ILayoutNode BuildListView()
     {
         var rows = ViewModel.DisplayApprovals
-            .Select(item => $"{item.AudienceWire,-10} {item.ToolName,-20} {item.DisplayText}")
+            .Select(item => $"{item.AudienceWire,-10} {item.ToolName,-20} {item.DisplayText,-44} {item.AddedText}")
             .ToList();
 
         _approvalList = Layouts.SelectionList(rows)
@@ -149,7 +149,7 @@ public sealed class ApprovalsManagerPage : ReactivePage<ApprovalsManagerViewMode
             .DisposeWith(_stepSubs);
 
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  {"Audience",-10} {"Tool",-20} Approval")
+            .WithChild(new TextNode($"  {"Audience",-10} {"Tool",-20} {"Approval",-44} Added")
                 .WithForeground(Color.White).Bold())
             .WithChild(_approvalList);
     }

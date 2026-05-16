@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Event;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -15,6 +16,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
 {
     private readonly ToolApprovalStore? _persistentStore;
     private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _sessionApprovals = new(StringComparer.Ordinal);
+    private readonly ILoggingAdapter _log = Context.GetLogger();
 
     public ToolApprovalActor(ToolApprovalStore? persistentStore = null)
     {
@@ -35,7 +37,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
             foreach (var pattern in msg.Patterns)
             {
                 if (!IsApproved(msg.SessionId, msg.Audience, msg.ToolName, pattern, msg.Cwd, approved))
+                {
                     unapproved.Add(pattern);
+                    LogApprovalNearMisses(msg.ToolName, pattern, msg.Cwd, approved);
+                }
             }
 
             Sender.Tell(new UnapprovedPatternsResponse(unapproved));
@@ -129,6 +134,34 @@ internal sealed class ToolApprovalActor : ReceiveActor
         => string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
             ? ApprovalPatternMatching.MatchesShellApproval(candidateVerb, cwd, approved)
             : ApprovalPatternMatching.MatchesAny(candidateVerb, approved);
+
+    /// <summary>
+    /// Emits a diagnostic when a shell pattern is prompted for despite a
+    /// persisted grant existing for the same verb — the operator's
+    /// "I already approved this" case. Read-only: it does not affect the
+    /// gate decision. Non-shell tools authorize on a verb match alone, so a
+    /// same-verb persisted entry would have approved them; nothing to explain.
+    /// </summary>
+    private void LogApprovalNearMisses(ToolName toolName, string candidateVerb, string? cwd, IReadOnlyList<ApprovalEntry> approved)
+    {
+        if (!string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
+            return;
+
+        var nearMisses = ApprovalPatternMatching.ExplainShellNearMisses(
+            candidateVerb, candidateDirectory: null, cwd, approved);
+
+        foreach (var miss in nearMisses)
+        {
+            _log.Info(
+                "Approval near-miss for {0} '{1}' (cwd '{2}'): prompted despite persisted grant '{3}' (added {4}) — {5}",
+                toolName.Value,
+                candidateVerb,
+                cwd ?? "(none)",
+                miss.Grant.FormatScope(),
+                miss.Grant.CreatedAt?.ToString("u") ?? "unknown",
+                miss.Describe());
+        }
+    }
 
     private static string BuildSessionKey(SessionId sessionId, TrustAudience audience)
         => $"{sessionId.Value}|{audience.ToWireValue()}";

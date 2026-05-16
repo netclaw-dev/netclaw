@@ -525,7 +525,7 @@ static void ConfigureDaemonServices(
         safeVerbs);
     services.AddSingleton(toolAccessPolicy);
 
-    var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath);
+    var toolApprovalStore = new ToolApprovalStore(paths.ToolApprovalsPath, TimeProvider.System);
     services.AddSingleton(toolApprovalStore);
     services.AddSingleton<IToolApprovalService, AkkaToolApprovalService>();
 

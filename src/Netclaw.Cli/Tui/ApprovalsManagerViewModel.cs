@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Approvals;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
@@ -20,7 +21,8 @@ public enum ApprovalsManagerState
 public sealed record ApprovalDisplayItem(
     TrustAudience Audience,
     string ToolName,
-    ApprovalEntry Entry)
+    ApprovalEntry Entry,
+    string AddedText)
 {
     public string AudienceWire => Audience.ToWireValue();
     public string DisplayText => Entry.FormatScope();
@@ -35,10 +37,12 @@ public sealed record ApprovalDisplayItem(
 public sealed class ApprovalsManagerViewModel : ReactiveViewModel
 {
     private readonly ToolApprovalStore _store;
+    private readonly TimeProvider _timeProvider;
 
-    public ApprovalsManagerViewModel(NetclawPaths paths)
+    public ApprovalsManagerViewModel(NetclawPaths paths, TimeProvider timeProvider)
     {
-        _store = new ToolApprovalStore(paths.ToolApprovalsPath);
+        _timeProvider = timeProvider;
+        _store = new ToolApprovalStore(paths.ToolApprovalsPath, timeProvider);
     }
 
     public ReactiveProperty<ApprovalsManagerState> CurrentState { get; } = new(ApprovalsManagerState.Loading);
@@ -60,6 +64,7 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
     {
         DisplayApprovals.Clear();
         var snapshot = _store.Snapshot();
+        var now = _timeProvider.GetUtcNow();
 
         foreach (var audienceKey in snapshot.Keys.OrderBy(k => k, StringComparer.Ordinal))
         {
@@ -73,7 +78,8 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
                     .OrderBy(static e => e.Verb, StringComparer.Ordinal)
                     .ThenBy(static e => e.Directory ?? string.Empty, StringComparer.Ordinal))
                 {
-                    DisplayApprovals.Add(new ApprovalDisplayItem(audience, toolName, entry));
+                    DisplayApprovals.Add(new ApprovalDisplayItem(
+                        audience, toolName, entry, ApprovalTimeText.Added(entry.CreatedAt, now)));
                 }
             }
         }
