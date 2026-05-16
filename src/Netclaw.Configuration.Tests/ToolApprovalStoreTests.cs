@@ -310,7 +310,7 @@ public sealed class ToolApprovalStoreTests : IDisposable
     [Fact]
     public void ToolApprovalEntryComparer_treats_entries_differing_only_by_createdAt_as_equal()
     {
-        var early = new ApprovalEntry { Verb = "git push", Directory = "/repo", CreatedAt = _time.GetUtcNow() };
+        var early = new ApprovalEntry("git push") { Directory = "/repo", CreatedAt = _time.GetUtcNow() };
         var late = early with { CreatedAt = _time.GetUtcNow().AddYears(1) };
         var none = early with { CreatedAt = null };
 
