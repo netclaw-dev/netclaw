@@ -126,6 +126,19 @@ public sealed class ToolExecutionContext
     public string? OneTimeApprovedToolName { get; set; }
 
     /// <summary>
+    /// Approval decision applied without an interactive prompt for this tool
+    /// call, used by the session audit trail to distinguish cached approvals
+    /// from tools that were never gated.
+    /// </summary>
+    public string? AppliedApprovalDecision { get; set; }
+
+    /// <summary>
+    /// Human-readable approval match scopes used by
+    /// <see cref="AppliedApprovalDecision"/>.
+    /// </summary>
+    public string? AppliedApprovalPattern { get; set; }
+
+    /// <summary>
     /// Approval patterns granted for a single retry of the current tool call.
     /// </summary>
     public IReadOnlySet<string> OneTimeApprovedPatterns

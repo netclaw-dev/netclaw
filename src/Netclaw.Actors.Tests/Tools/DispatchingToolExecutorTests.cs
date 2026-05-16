@@ -660,6 +660,67 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Persistent_approval_hit_records_audit_context_without_prompting()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+
+        var tempFile = Path.GetTempFileName();
+        var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "git status", Directory = null });
+
+            var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(store), "tool-approval");
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false)),
+                approvalService);
+
+            var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-audit", null)
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = SecurityPolicyDefaults.TrustedInstanceBoundary,
+                ChannelType = "signalr",
+                SupportsInteractiveApproval = true
+            };
+
+            var call = new FunctionCallContent(
+                "call-audit",
+                "shell_execute",
+                ToolInput.Create("Command", "git status"));
+
+            await executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
+
+            Assert.Equal("PreviouslyApproved", context.AppliedApprovalDecision);
+            Assert.Equal("git status [persistent: git status anywhere]", context.AppliedApprovalPattern);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+            await system.Terminate();
+        }
+    }
+
+    [Fact]
     public async Task Session_approval_allows_same_session_but_not_different_session()
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };

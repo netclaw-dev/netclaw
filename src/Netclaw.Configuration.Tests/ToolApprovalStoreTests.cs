@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests;
@@ -10,12 +11,13 @@ namespace Netclaw.Configuration.Tests;
 public sealed class ToolApprovalStoreTests : IDisposable
 {
     private readonly string _file;
+    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
     private readonly ToolApprovalStore _store;
 
     public ToolApprovalStoreTests()
     {
         _file = Path.Combine(Path.GetTempPath(), $"netclaw-approvals-{Guid.NewGuid():N}.json");
-        _store = new ToolApprovalStore(_file);
+        _store = new ToolApprovalStore(_file, _time);
     }
 
     public void Dispose()
@@ -254,5 +256,65 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.Equal(2, reloaded.Count);
         Assert.Contains(reloaded, e => e.Verb == "freshdesk" && e.Directory is null);
         Assert.Contains(reloaded, e => e.Verb == "grep" && e.Directory == "/home/user/logs");
+    }
+
+    [Fact]
+    public void AddApproval_stamps_createdAt_with_the_provider_clock()
+    {
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
+
+        var entry = Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(_time.GetUtcNow(), entry.CreatedAt);
+    }
+
+    [Fact]
+    public void AddApproval_persists_createdAt_to_disk()
+    {
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("freshdesk"));
+
+        Assert.Contains("\"createdAt\"", File.ReadAllText(_file));
+    }
+
+    [Fact]
+    public void AddApproval_idempotent_regrant_preserves_the_original_createdAt()
+    {
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
+        var firstStamp = _time.GetUtcNow();
+
+        _time.Advance(TimeSpan.FromDays(7));
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
+
+        var entry = Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(firstStamp, entry.CreatedAt);
+    }
+
+    [Fact]
+    public void Load_reads_v2_entries_without_createdAt_as_null_without_quarantine()
+    {
+        File.WriteAllText(_file, """
+            {
+              "version": 2,
+              "audiences": { "personal": { "shell_execute": [ { "verb": "git push" } ] } }
+            }
+            """);
+
+        var data = _store.Load();
+
+        Assert.Equal(ToolApprovalStore.CurrentSchemaVersion, data.Version);
+        var entry = Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Null(entry.CreatedAt);
+        Assert.True(File.Exists(_file));
+        Assert.False(File.Exists(_store.V1QuarantinePath));
+    }
+
+    [Fact]
+    public void ToolApprovalEntryComparer_treats_entries_differing_only_by_createdAt_as_equal()
+    {
+        var early = new ApprovalEntry { Verb = "git push", Directory = "/repo", CreatedAt = _time.GetUtcNow() };
+        var late = early with { CreatedAt = _time.GetUtcNow().AddYears(1) };
+        var none = early with { CreatedAt = null };
+
+        Assert.True(ToolApprovalEntryComparer.Equals(early, late));
+        Assert.True(ToolApprovalEntryComparer.Equals(early, none));
     }
 }

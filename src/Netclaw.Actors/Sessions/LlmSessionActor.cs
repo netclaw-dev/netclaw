@@ -3174,7 +3174,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             var fallbackCwd = globalWildcard ? null : pending.Cwd;
             await _approvalService.RecordApprovalAsync(
-                _sessionId.Value,
+                (ToolApprovalSessionId)_sessionId.Value,
                 pending.Audience,
                 new ToolName(pending.ToolName),
                 pending.CandidateVerbs,
@@ -3216,7 +3216,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var directory = string.IsNullOrEmpty(key) ? null : key;
 
             await _approvalService.RecordApprovalAsync(
-                _sessionId.Value,
+                (ToolApprovalSessionId)_sessionId.Value,
                 pending.Audience,
                 new ToolName(pending.ToolName),
                 verbs,

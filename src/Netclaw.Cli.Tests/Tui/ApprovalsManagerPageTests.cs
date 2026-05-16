@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -26,12 +27,13 @@ public sealed class ApprovalsManagerPageTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly ToolApprovalStore _store;
+    private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
 
     public ApprovalsManagerPageTests()
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
-        _store = new ToolApprovalStore(_paths.ToolApprovalsPath);
+        _store = new ToolApprovalStore(_paths.ToolApprovalsPath, _time);
     }
 
     public void Dispose() => _dir.Dispose();
@@ -75,6 +77,26 @@ public sealed class ApprovalsManagerPageTests : IDisposable
             $"Expected directory '/tmp/scratch'. Screen:\n{terminal}");
         Assert.True(terminal.Contains("ls anywhere"),
             $"Expected entry 'ls anywhere' (public audience). Screen:\n{terminal}");
+    }
+
+    [Fact]
+    public async Task ListView_ShowsRelativeCreationTime()
+    {
+        // The grant is stamped at the fake clock; advancing it makes the
+        // rendered relative age deterministic.
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
+        _time.Advance(TimeSpan.FromDays(3));
+
+        var (terminal, app, _) = CreateHeadlessApp(out var input);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("Added"),
+            $"Expected an 'Added' column header. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("added 3 days ago"),
+            $"Expected relative creation time 'added 3 days ago'. Screen:\n{terminal}");
     }
 
     [Fact]
@@ -185,7 +207,7 @@ public sealed class ApprovalsManagerPageTests : IDisposable
                 _ => new ApprovalsManagerPage(),
                 _ =>
                 {
-                    capturedVm = new ApprovalsManagerViewModel(_paths);
+                    capturedVm = new ApprovalsManagerViewModel(_paths, _time);
                     return capturedVm;
                 });
         });

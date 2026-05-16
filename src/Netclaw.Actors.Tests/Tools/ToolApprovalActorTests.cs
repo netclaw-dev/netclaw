@@ -33,6 +33,9 @@ public sealed class ToolApprovalActorTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        // The near-miss diagnostic is emitted at Info; make the level
+        // explicit so the EventFilter assertion is deterministic.
+        builder.AddHocon("akka.loglevel = INFO", HoconAddMode.Prepend);
     }
 
     [Fact]
@@ -307,6 +310,142 @@ public sealed class ToolApprovalActorTests : TestKit
         var unapproved = await service.GetUnapprovedPatternsAsync(subAgentScope, TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], cwd: null, ct);
 
         Assert.Equal(["git push"], unapproved);
+    }
+
+    [Fact]
+    public async Task Persistent_shell_approval_uses_candidate_directory_when_present()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
+            var candidateDir = Path.Combine(grantDir, "src");
+            var unrelatedCwd = Path.Combine(Path.GetTempPath(), "netclaw-approval", "other");
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "dotnet test", Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ApprovalCandidate("dotnet test", candidateDir)],
+                cwd: unrelatedCwd,
+                ct);
+
+            Assert.Empty(result.UnapprovedPatterns);
+            var match = Assert.Single(result.ApprovedMatches);
+            Assert.Equal("persistent", match.Source);
+            Assert.Equal($"dotnet test in {grantDir}", match.Scope);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Persistent_shell_approval_rejects_candidate_directory_outside_grant_even_when_cwd_matches()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
+            var outsideDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "outside");
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "cat", Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            var result = await service.CheckApprovalAsync(
+                "session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ApprovalCandidate("cat", outsideDir)],
+                cwd: grantDir,
+                ct);
+
+            Assert.Equal(["cat"], result.UnapprovedPatterns);
+            Assert.Empty(result.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task Directory_near_miss_is_logged_without_changing_the_decision()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            // Lexical containment only — the directories need not exist.
+            var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-nearmiss", "grant");
+            var otherDir = Path.Combine(Path.GetTempPath(), "netclaw-nearmiss", "other");
+
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "git push", Directory = grantDir });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            IReadOnlyList<string> unapproved = [];
+            await EventFilter.Info(contains: "approval_near_miss").ExpectAsync(2, async () =>
+            {
+                unapproved = await service.GetUnapprovedPatternsAsync(
+                    "session-a", TrustAudience.Personal, new ToolName("shell_execute"),
+                    ["git push"], cwd: otherDir, ct);
+            }, cancellationToken: ct);
+
+            // The diagnostic is read-only: the candidate is still unapproved.
+            Assert.Equal(["git push"], unapproved);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
+    public async Task First_time_prompt_emits_no_near_miss_diagnostic()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            // Store holds an unrelated verb, so the prompted verb has no
+            // same-verb grant to explain.
+            var store = new ToolApprovalStore(tempFile);
+            store.AddApproval(TrustAudience.Personal, "shell_execute",
+                new ApprovalEntry { Verb = "npm install", Directory = null });
+
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+
+            await EventFilter.Info(contains: "approval_near_miss").ExpectAsync(0, async () =>
+            {
+                var unapproved = await service.GetUnapprovedPatternsAsync(
+                    "session-a", TrustAudience.Personal, new ToolName("shell_execute"),
+                    ["terraform apply"], cwd: null, ct);
+                Assert.Equal(["terraform apply"], unapproved);
+            }, cancellationToken: ct);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
     }
 
     private static AkkaToolApprovalService CreateService(IActorRef actor)
