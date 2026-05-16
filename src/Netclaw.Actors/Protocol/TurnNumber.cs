@@ -22,22 +22,6 @@ public readonly record struct TurnNumber(int Value)
 }
 
 /// <summary>
-/// Serializes <see cref="TurnNumber"/> as its bare primitive integer so the
-/// on-wire JSON form is byte-identical to the pre-value-object representation
-/// (a raw number, never a nested <c>{ "Value": ... }</c> object).
-/// </summary>
-public sealed class TurnNumberJsonConverter : JsonConverter<TurnNumber>
-{
-    public override TurnNumber Read(
-        ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-        new(reader.GetInt32());
-
-    public override void Write(
-        Utf8JsonWriter writer, TurnNumber value, JsonSerializerOptions options) =>
-        writer.WriteNumberValue(value.Value);
-}
-
-/// <summary>
 /// Serializes a nullable <see cref="TurnNumber"/> as a bare primitive integer
 /// or JSON <c>null</c> — used on optional DTO fields so a missing turn ordinal
 /// stays a wire <c>null</c>, never a nested object. Mirrors the pre-value-object
