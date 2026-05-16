@@ -65,7 +65,8 @@ jobs:
         GITHUB_TOKEN: ${{ github.token }}
 
   # ────────────────────────────────────────────────────────────────────
-  # Job 2: Build self-contained binaries (matrix: linux-x64, linux-arm64, win-x64)
+  # Job 2: Build self-contained binaries
+  # (matrix: linux-x64, linux-arm64, win-x64, osx-arm64)
   # ────────────────────────────────────────────────────────────────────
   publish-binaries:
     name: Build ${{ matrix.rid }}
@@ -84,6 +85,9 @@ jobs:
           - os: windows-latest
             rid: win-x64
             archive_ext: zip
+          - os: macos-latest
+            rid: osx-arm64
+            archive_ext: tar.gz
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -120,8 +124,14 @@ jobs:
         /p:Version=${{ github.ref_name }}
         -o ./publish/daemon
 
-    - name: Package archives (Linux)
-      if: runner.os == 'Linux'
+    - name: Smoke-test published binary (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        chmod +x ./publish/cli/netclaw
+        ./publish/cli/netclaw version
+
+    - name: Package archives (Unix)
+      if: runner.os != 'Windows'
       run: |
         VERSION="${{ github.ref_name }}"
         RID="${{ matrix.rid }}"

@@ -58,6 +58,38 @@ default surface, no `Screenshot` directives, pair every non-trivial tape
 with an assertion script that re-validates `netclaw doctor` and the
 relevant `--json` output.
 
+## Install Script Smoke Test
+
+`scripts/smoke/install-smoke.sh` and `scripts/smoke/install-smoke.ps1` are
+hermetic regression tests for the installers (`scripts/install.sh` and
+`scripts/install.ps1`). They need no network, no `dotnet` build, and no
+running daemon — each serves a generated manifest and stand-in archives
+from `localhost`.
+
+| Command | Purpose |
+|---------|---------|
+| `bash scripts/smoke/install-smoke.sh` | Smoke-test the `curl \| bash` installer (Linux/macOS) |
+| `pwsh scripts/smoke/install-smoke.ps1` | Smoke-test the PowerShell installer (Windows) |
+
+`install-smoke.sh` covers two layers:
+
+- **Detection matrix** — runs `install.sh --dry-run` under `uname`/`sysctl`
+  shims to assert every supported OS/arch resolves to the right RID
+  (`linux-x64`, `linux-arm64`, `osx-arm64`) and that Intel Macs and
+  unsupported OSes are rejected cleanly. This runs identically on any host.
+- **Mechanical check** — one real install of a stand-in archive on the
+  host's native RID, exercising download → checksum → `tar` extract → `cp`.
+
+`install-smoke.ps1` is the Windows counterpart: a `-DryRun` resolution
+check plus a real stand-in install exercising download → checksum →
+`Expand-Archive` → copy.
+
+The `install-smoke` job in `pr_validation.yml` runs these on
+`ubuntu-latest`, `macos-latest`, and `windows-latest` on every PR. Both
+installers also support `--dry-run` / `-DryRun` on their own — they report
+which binary *would* be installed for the current platform without
+touching the system.
+
 ## Source Control and CI Signals
 
 - `git` repository with active `dev` branch

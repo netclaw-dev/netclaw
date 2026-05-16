@@ -5,6 +5,7 @@
 #   .\install.ps1 -Component cli
 #   .\install.ps1 -Component daemon
 #   .\install.ps1 -InstallDir C:\tools\netclaw
+#   .\install.ps1 -DryRun
 
 param(
     [ValidateSet("all", "cli", "daemon")]
@@ -12,7 +13,10 @@ param(
 
     [string]$InstallDir = "",
 
-    [string]$Version = ""
+    [string]$Version = "",
+
+    # Resolve and report what would be installed, but install nothing.
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,7 +77,9 @@ function Invoke-DownloadWithProgress {
     }
 }
 
-$ManifestUrl = "https://releases.netclaw.dev/manifest.json"
+# MANIFEST_URL is overridable so the script can be pointed at a local manifest
+# (smoke tests) or a private mirror.
+$ManifestUrl = if ($env:MANIFEST_URL) { $env:MANIFEST_URL } else { "https://releases.netclaw.dev/manifest.json" }
 $DefaultInstallDir = Join-Path $env:LOCALAPPDATA "Programs\netclaw"
 
 if (-not $InstallDir) {
@@ -83,6 +89,9 @@ if (-not $InstallDir) {
 Write-Host "Netclaw installer"
 Write-Host "  Platform: win-x64"
 Write-Host "  Install dir: $InstallDir"
+if ($DryRun) {
+    Write-Host "  Mode: dry run (no changes will be made)"
+}
 Write-Host ""
 
 # Fetch manifest
@@ -129,6 +138,11 @@ try {
         if (-not $asset) {
             Write-Warning "No $ComponentName binary found for $rid in version $targetVersion"
             return $false
+        }
+
+        if ($DryRun) {
+            Write-Host "  DRY RUN: would install $ComponentName from $($asset.url)"
+            return $true
         }
 
         $fileName = [System.IO.Path]::GetFileName([Uri]::new($asset.url).AbsolutePath)
@@ -182,6 +196,12 @@ try {
         Write-Host ""
         Write-Error "Some components failed to install."
         exit 1
+    }
+
+    if ($DryRun) {
+        Write-Host ""
+        Write-Host "Dry run complete - nothing was installed."
+        return
     }
 
     # Check PATH

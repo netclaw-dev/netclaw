@@ -48,8 +48,22 @@ public sealed class ToolPathPolicy
 
     private static HashSet<string> BuildNormalizedSet(IEnumerable<string> paths)
     {
-        var normalized = paths.Select(PathUtility.Normalize);
-        return new HashSet<string>(normalized, StringComparer.OrdinalIgnoreCase);
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            var normalized = PathUtility.Normalize(path);
+            set.Add(normalized);
+
+            // macOS keeps /etc, /var, /tmp as symlinks into /private, so a denied
+            // path that traverses one resolves to a different real path. The deny
+            // checks canonicalize the *candidate* path (TryResolveSymlinksInPath /
+            // TryResolveSymlinkTarget); without the resolved denied form here, a
+            // candidate resolving to /private/etc/... would slip past a /etc deny.
+            if (TryResolveSymlinksInPath(normalized, out var canonical))
+                set.Add(canonical);
+        }
+
+        return set;
     }
 
     private static HashSet<string> BuildCommandIndicators(IEnumerable<string> paths)

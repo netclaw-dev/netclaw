@@ -22,8 +22,15 @@ jobs:
     timeout-minutes: 30
 
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: windows-latest
+            rid: win-x64
+          - os: macos-latest
+            rid: osx-arm64
 
     steps:
       - name: "Checkout"
@@ -61,11 +68,11 @@ jobs:
         run: dotnet test -c Release
 
       - name: "Publish CLI (single-file, self-contained)"
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         run: >
           dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
           -c Release
-          -r linux-x64
+          -r ${{ matrix.rid }}
           --self-contained true
           /p:PublishSingleFile=true
           /p:EnableCompressionInSingleFile=true
@@ -73,7 +80,7 @@ jobs:
           -o ./publish/cli
 
       - name: "Package and stage CLI binary (simulate release install)"
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p ./archives ./install-test
@@ -81,7 +88,7 @@ jobs:
           tar xzf ./archives/netclaw-test.tar.gz -C ./install-test
 
       - name: "CLI smoke tests"
-        if: runner.os == 'Linux'
+        if: runner.os != 'Windows'
         shell: bash
         run: bash scripts/smoke/cli-smoke.sh
         env:
@@ -123,3 +130,29 @@ jobs:
 
       - name: "slopwatch analyze"
         run: dotnet slopwatch analyze
+
+  install-smoke:
+    name: Install Script Smoke-${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: "install.sh smoke test"
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash scripts/smoke/install-smoke.sh
+
+      - name: "install.ps1 smoke test"
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/smoke/install-smoke.ps1
