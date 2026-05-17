@@ -190,8 +190,6 @@ public sealed class SubAgentSpawner
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile)
     {
-        var isUserFacing = profile.Visibility == SubAgentVisibility.UserFacing;
-
         // When no tools specified, inherit all registered tools (matches Claude Code behavior).
         // When tools are specified, use them as a whitelist to limit access.
         IEnumerable<INetclawTool> candidates;
@@ -220,14 +218,12 @@ public sealed class SubAgentSpawner
             candidates = resolved;
         }
 
-        if (!isUserFacing)
-            return candidates.ToList();
-
-        // User-facing subagents are restricted to SubAgentToolPolicy's safe list.
+        // Sub-agents inherit the parent session's runtime tool policy. The only
+        // static sub-agent-specific filter prevents recursive spawn_agent calls.
         var tools = new List<INetclawTool>();
         foreach (var tool in candidates)
         {
-            if (SubAgentToolPolicy.IsAllowedForUserFacing(tool.Name))
+            if (SubAgentToolPolicy.IsAllowedForSubAgent(tool.Name))
             {
                 tools.Add(tool);
             }

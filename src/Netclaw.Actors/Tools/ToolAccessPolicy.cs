@@ -293,16 +293,6 @@ public sealed class ToolAccessPolicy
         if (mode == ToolApprovalMode.Auto)
             return ToolAccessDecision.Allow();
 
-        // Non-interactive channels (reminders, webhooks, sub-agents without parent
-        // approval channel): tools on the safe list are auto-granted. Everything else
-        // falls through to the normal approval extraction path — the executor will
-        // check the persistent approval store and allow if all patterns are pre-approved.
-        if (context?.SupportsInteractiveApproval == false
-            && SubAgentToolPolicy.IsAllowedForUserFacing(toolName.Value))
-        {
-            return ToolAccessDecision.Allow();
-        }
-
         // Approval prompts carry three views of the invocation:
         // - `patterns`: the exact blocked units shown to the user and reused by
         //   approve-once retries.

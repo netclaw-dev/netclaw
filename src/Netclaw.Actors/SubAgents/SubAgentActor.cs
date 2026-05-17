@@ -35,7 +35,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private const string EmptyResponseMarker = "(no response)";
     private const string BackstopTimerKey = "subagent-backstop";
     private const string HeartbeatTimerKey = "subagent-heartbeat";
-    private const string SpawnAgentToolName = "spawn_agent";
     private static readonly TimeSpan MaxHeartbeatInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan MinHeartbeatInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ActivityPingInterval = TimeSpan.FromSeconds(1);
@@ -99,21 +98,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _approvalService = approvalService;
         _log = Context.GetLogger();
 
-        // Build a private ToolRegistry for this subagent's tool subset.
-        // spawn_agent is filtered unconditionally: a sub-agent must never spawn
-        // another sub-agent — that would allow unbounded nesting and recursive
-        // watchdog/heartbeat chains with no depth limit.
+        // Build a private ToolRegistry for this subagent's already-resolved tool subset.
         _toolRegistry = new ToolRegistry();
         foreach (var tool in definition.Tools)
         {
-            if (string.Equals(tool.Name, SpawnAgentToolName, StringComparison.Ordinal))
-            {
-                _log.Warning(
-                    "SubAgent [{AgentName}] tool '{ToolName}' filtered — sub-agents cannot spawn sub-agents",
-                    definition.Name, tool.Name);
-                continue;
-            }
-
             _toolRegistry.Register(tool);
         }
 

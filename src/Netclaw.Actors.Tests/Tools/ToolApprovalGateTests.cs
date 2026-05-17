@@ -494,7 +494,7 @@ public sealed class ToolApprovalGateTests
     // ── Subagent approval gate (SupportsInteractiveApproval=false) ──
 
     [Fact]
-    public void Safe_list_tool_auto_grants_when_interactive_approval_unsupported()
+    public void Non_interactive_tool_returns_requires_approval_when_policy_requires_approval()
     {
         var config = new ToolConfig();
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -514,8 +514,9 @@ public sealed class ToolApprovalGateTests
 
         var decision = policy.AuthorizeInvocation(tool, subagentCtx);
 
-        Assert.True(decision.Allowed);
-        Assert.False(decision.NeedsApproval);
+        Assert.True(decision.NeedsApproval);
+        Assert.NotNull(decision.ApprovalContext);
+        Assert.Equal("file_read", decision.ApprovalContext!.ToolName);
     }
 
     [Fact]

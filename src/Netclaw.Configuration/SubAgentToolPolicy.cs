@@ -6,23 +6,20 @@
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// Central policy for tools exposed to user-facing subagents.
-/// File-authored agents are intentionally constrained to a conservative,
-/// read-oriented tool set so they do not bypass the main session's safety model.
+/// Central policy for tools exposed to sub-agents. Sub-agents inherit the parent
+/// session's audience, boundary, approval, and shell policies; this static deny
+/// list only prevents recursive delegation loops.
 /// </summary>
 public static class SubAgentToolPolicy
 {
-    private static readonly HashSet<string> SafeUserFacingToolNames = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> DeniedSubAgentToolNames = new(StringComparer.Ordinal)
     {
-        "attach_file",
-        "file_read",
-        "web_fetch",
-        "web_search"
+        "spawn_agent"
     };
 
-    public static bool IsAllowedForUserFacing(string toolName)
-        => SafeUserFacingToolNames.Contains(toolName);
+    public static bool IsAllowedForSubAgent(string toolName)
+        => !DeniedSubAgentToolNames.Contains(toolName);
 
-    public static IReadOnlyList<string> GetAllowedUserFacingTools()
-        => SafeUserFacingToolNames.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    public static IReadOnlyList<string> GetDeniedSubAgentTools()
+        => DeniedSubAgentToolNames.OrderBy(x => x, StringComparer.Ordinal).ToArray();
 }

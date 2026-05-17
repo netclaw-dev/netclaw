@@ -649,23 +649,55 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Nested_spawn_agent_tool_is_filtered_from_subagent()
+    public async Task Spawner_filters_spawn_agent_but_preserves_other_profile_tools()
     {
-        // A sub-agent must never be able to spawn another sub-agent. spawn_agent
-        // is stripped from its tool set even if the definition lists it.
-        var spawnAgentTool = new FakeNetclawTool("spawn_agent", "should never be offered");
-        var webSearchTool = new FakeNetclawTool("web_search", "ok");
+        // Tool filtering belongs at sub-agent tool resolution. User-facing
+        // sub-agents inherit the parent runtime policy; only recursive
+        // spawn_agent delegation is statically denied.
         var fakeClient = new FakeChatClient();
-        var definition = CreateDefinition([spawnAgentTool, webSearchTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+        var registry = new ToolRegistry();
+        registry.Register(new FakeNetclawTool("spawn_agent", "should never be offered"));
+        registry.Register(new FakeNetclawTool("shell_execute", "allowed by parent policy"));
 
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Do the thing", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var spawner = new SubAgentSpawner(
+            new SingleClientProvider(fakeClient),
+            registry,
+            new ToolAccessPolicy(
+                new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+                new EffectivePolicyDefaults(
+                    DeploymentPosture.Personal,
+                    TrustAudience.Personal,
+                    ShellExecutionMode.HostAllowed,
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy()),
+            approvalService: null,
+            new StaticSystemPromptProvider("main prompt"),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SubAgentSpawner>.Instance);
+
+        var profile = new SubAgentProfile
+        {
+            Name = "test-agent",
+            Description = "Test agent",
+            SystemPrompt = "You are a test agent.",
+            ToolNames = ["spawn_agent", "shell_execute"],
+            Visibility = SubAgentVisibility.UserFacing
+        };
+        var context = new ToolExecutionContext("session-1", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Personal,
+            SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name))
+        };
+
+        var result = await spawner.SpawnAsync(
+            profile,
+            "Do the thing",
+            runtimeContext: null,
+            context,
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.NotNull(fakeClient.LastOfferedToolNames);
-        Assert.Contains("web_search", fakeClient.LastOfferedToolNames!);
+        Assert.Contains("shell_execute", fakeClient.LastOfferedToolNames!);
         Assert.DoesNotContain("spawn_agent", fakeClient.LastOfferedToolNames!);
     }
 
