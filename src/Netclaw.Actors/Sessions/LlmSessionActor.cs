@@ -799,8 +799,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 msg.IsMessy,
                 msg.Candidates);
 
-            PauseToolExecutionWatchdogForApprovalWait(msg.CallId.Value);
-
             EmitOutput(msg);
         });
 
@@ -851,8 +849,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _pendingToolInteractions.Remove(msg.CallId.Value);
-
-            ResumeToolExecutionWatchdogAfterApprovalWait();
 
             // Complete the TCS so the blocked pipeline task can proceed
             _approvalChannel.Complete(msg.CallId, decision);
@@ -1681,9 +1677,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var tp = _timeProvider;
         var sessionDir = GetSessionDirectory();
         var maxInlineToolResultChars = _config.Tuning.MaxInlineToolResultChars;
+        // Per-call inactivity watchdogs in the tool-execution pipeline govern
+        // tool liveness; the session ProcessingWatchdog covers only LLM calls
+        // and compaction, so no batch tool-execution watchdog is armed here.
         var toolExecutionTimeout = _config.ToolExecutionTimeout;
-
-        _watchdog.Start(ProcessingWatchdog.ToolExecution, toolExecutionTimeout, Timers);
 
         // Capture subscriber snapshot for subagent activity notifications.
         // These are emitted directly from the tool execution thread via Tell(),
@@ -3065,30 +3062,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             PromptMs = promptMs,
             PredictedPerSecond = predictedPerSec,
         }, OutputFilter.Usage);
-    }
-
-    private void PauseToolExecutionWatchdogForApprovalWait(string callId)
-    {
-        if (!string.Equals(_watchdog.CurrentOperationName, ProcessingWatchdog.ToolExecution, StringComparison.Ordinal))
-            return;
-
-        _watchdog.Stop(Timers);
-        _log.Info("Paused tool-execution watchdog while waiting for approval for call {CallId}", callId);
-    }
-
-    private void ResumeToolExecutionWatchdogAfterApprovalWait()
-    {
-        if (_pendingToolInteractions.Count > 0)
-            return;
-
-        if (_currentPhase != SessionPhase.Processing)
-            return;
-
-        if (_watchdog.CurrentOperationName is not null)
-            return;
-
-        _watchdog.Start(ProcessingWatchdog.ToolExecution, _config.ToolExecutionTimeout, Timers);
-        _log.Info("Resumed tool-execution watchdog after approval response");
     }
 
     private void FailCurrentTurn(string errorMessage, Exception cause, ErrorCategory category = ErrorCategory.Unknown)

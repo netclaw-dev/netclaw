@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
@@ -48,4 +49,20 @@ public interface INetclawTool
     /// </summary>
     Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
         => ExecuteAsync(arguments, ct);
+
+    /// <summary>
+    /// Execute the tool as a stream of <see cref="ToolCallUpdate"/> items: zero
+    /// or more non-terminal <see cref="ToolActivityUpdate"/> items, then exactly
+    /// one terminal <see cref="ToolCompletedUpdate"/>. The default implementation
+    /// runs the non-streaming context overload and yields its result as a single
+    /// completion item, so tools that do not stream behave identically. Long-
+    /// running tools override this to emit liveness/progress while they work.
+    /// </summary>
+    async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        yield return new ToolCompletedUpdate(await ExecuteAsync(arguments, context, ct));
+    }
 }
