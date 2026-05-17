@@ -179,7 +179,7 @@ public sealed class OpenAiCodexTests
             Assert.True(result.Success);
             Assert.Null(result.ErrorMessage);
             Assert.NotEmpty(result.Models);
-            Assert.Contains(result.Models, m => m.ModelId == "o3");
+            Assert.Contains(result.Models, m => m.ModelId.Value == "o3");
 
             // All curated models should have context windows and modalities populated
             Assert.All(result.Models, m =>
@@ -302,7 +302,7 @@ public sealed class OpenAiCodexTests
         {
             foreach (var model in OpenAiDescriptor.CuratedModels)
             {
-                var result = await _resolver.ResolveAsync(model.ModelId, TestContext.Current.CancellationToken);
+                var result = await _resolver.ResolveAsync(model.ModelId.Value, TestContext.Current.CancellationToken);
                 Assert.NotNull(result);
                 Assert.NotNull(result.ContextWindowTokens);
                 Assert.True(result.ContextWindowTokens > 32_768);

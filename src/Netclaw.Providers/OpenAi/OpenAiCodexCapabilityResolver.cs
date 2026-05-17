@@ -16,9 +16,9 @@ public sealed class OpenAiCodexCapabilityResolver : IModelCapabilityResolver
 {
     private static readonly Dictionary<string, ResolvedModelCapabilities> Catalog =
         OpenAiDescriptor.CuratedModels.ToDictionary(
-            m => m.ModelId,
+            m => m.ModelId.Value,
             m => new ResolvedModelCapabilities(
-                m.ModelId,
+                m.ModelId.Value,
                 m.InputModalities,
                 m.OutputModalities,
                 m.ContextWindowTokens));

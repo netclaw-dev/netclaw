@@ -45,7 +45,7 @@ public sealed record SlackThreadInbound(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
     SlackEventId EventId,
-    string TurnId,
+    TurnId TurnId,
     SenderId SenderId,
     TrustAudience Audience,
     PrincipalClassification Principal,

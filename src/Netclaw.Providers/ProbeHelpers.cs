@@ -31,7 +31,7 @@ internal static class ProbeHelpers
             {
                 if (model.TryGetProperty("id", out var id))
                 {
-                    models.Add(new DiscoveredModel { ModelId = id.GetString()! });
+                    models.Add(new DiscoveredModel { ModelId = new(id.GetString()!) });
                 }
             }
         }

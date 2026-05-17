@@ -438,7 +438,7 @@ public sealed class SlackActorHierarchyTests(ITestOutputHelper output) : TestKit
         Principal = PrincipalClassification.VerifiedAutomation,
         Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
         {
-            SourceKind = "reminder"
+            SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
         },
         ReceivedAt = DateTimeOffset.UtcNow,
         ReminderId = reminderId

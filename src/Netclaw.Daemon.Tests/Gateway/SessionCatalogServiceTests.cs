@@ -376,7 +376,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         service.OnOutput(new TurnCompleted
         {
             SessionId = sessionId,
-            TurnNumber = 0,
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(0),
             Outcome = TurnOutcome.Skipped
         });
 
@@ -397,7 +397,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         service.OnOutput(new TurnCompleted
         {
             SessionId = sessionId,
-            TurnNumber = 1,
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
             Outcome = TurnOutcome.Failed
         });
 
@@ -418,7 +418,7 @@ public sealed class SessionCatalogServiceTests : IDisposable
         service.OnOutput(new TurnCompleted
         {
             SessionId = sessionId,
-            TurnNumber = 1
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1)
         });
 
         var beforeResume = service.ListRecent().Single().LastActivity;

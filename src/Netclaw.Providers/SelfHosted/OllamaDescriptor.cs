@@ -54,7 +54,7 @@ public sealed class OllamaDescriptor : IProviderDescriptor
             {
                 if (model.TryGetProperty("name", out var name))
                 {
-                    models.Add(new DiscoveredModel { ModelId = name.GetString()! });
+                    models.Add(new DiscoveredModel { ModelId = new(name.GetString()!) });
                 }
             }
         }

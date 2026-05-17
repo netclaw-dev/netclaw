@@ -92,7 +92,7 @@ public class BackgroundJobIntegrationTests : TestKit
         Assert.Equal(TrustAudience.Personal, delivered.Source.Audience);
         Assert.Equal(TrustBoundary.Personal, delivered.Source.Boundary);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
-        Assert.Equal("background-job", delivered.Source.Provenance.SourceKind);
+        Assert.Equal("background-job", delivered.Source.Provenance.SourceKind?.Value);
         Assert.NotNull(delivered.Source.BackgroundJobId);
         Assert.StartsWith("bg-job:", delivered.Source.BackgroundJobId);
 

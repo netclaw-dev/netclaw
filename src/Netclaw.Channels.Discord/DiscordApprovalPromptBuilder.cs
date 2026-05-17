@@ -55,7 +55,7 @@ internal static class DiscordApprovalPromptBuilder
             .Select(option => new DiscordButtonSpec(
                 CustomId: BuildButtonValue(request, option),
                 Label: option.Label,
-                Style: GetButtonStyle(option.Key)))
+                Style: GetButtonStyle(option.Key.Value)))
             .ToList();
 
         return (sb.ToString().TrimEnd(), buttons);

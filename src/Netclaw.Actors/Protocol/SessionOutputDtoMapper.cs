@@ -252,7 +252,7 @@ public static class SessionOutputDtoMapper
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
-                TurnNumber = dto.TurnNumber ?? 0,
+                TurnNumber = dto.TurnNumber ?? new TurnNumber(0),
                 Outcome = Enum.TryParse<TurnOutcome>(dto.TurnOutcome, ignoreCase: true, out var outcome)
                     ? outcome
                     : TurnOutcome.Completed,

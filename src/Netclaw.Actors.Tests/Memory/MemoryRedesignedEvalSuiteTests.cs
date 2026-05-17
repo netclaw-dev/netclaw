@@ -38,7 +38,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 
         var gateResult = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -58,7 +58,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "strong user assertion")
         ],
-        "normal",
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-1", gateResult.MemoryOperations, CancellationToken.None);
@@ -88,7 +87,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 
         var gateResult = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -108,7 +107,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "stable explicit user travel preference")
         ],
-        "normal",
         now);
 
         var op = Assert.Single(gateResult.MemoryOperations);
@@ -149,7 +147,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 
         var gateResult = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -169,7 +167,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "stable explicit user airline preference")
         ],
-        "normal",
         now);
 
         var op = Assert.Single(gateResult.MemoryOperations);
@@ -287,7 +284,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 
         var gateResult = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "ignore",
                 "durable_fact",
                 "user",
@@ -306,7 +303,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 null,
                 "invalid op"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "evidence",
                 "event",
@@ -325,7 +322,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "identity_profile",
                 "research passage"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "assistant",
@@ -345,7 +342,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 "identity_profile",
                 "standing communication preference")
         ],
-        "normal",
         now);
 
         Assert.Empty(gateResult.MemoryOperations);
@@ -362,7 +358,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 
         var accepted = gate.Accept(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "project",
@@ -381,7 +377,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "identity_profile",
                 "project fact"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "project",
@@ -401,7 +397,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "project fact")
         ],
-        "normal",
         now);
 
         await _store.ApplyCurationBatchAsync("cp-eval-3", accepted, CancellationToken.None);
@@ -480,7 +475,7 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
 
         var acceptedFact = proposalGate.Accept(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -500,7 +495,6 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
                 null,
                 "strong user assertion")
         ],
-        "normal",
         now);
         await _store.ApplyCurationBatchAsync("cp-report-1", acceptedFact, CancellationToken.None);
 

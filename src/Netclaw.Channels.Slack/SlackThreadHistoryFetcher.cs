@@ -269,8 +269,8 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
                 TransportAuthenticity.Verified,
                 PayloadTaint.Public)
             {
-                SourceKind = "slack",
-                SourceScope = channelId.Value
+                SourceKind = new SourceKind("slack"),
+                SourceScope = new SourceScope(channelId.Value)
             },
             Contents = contents,
             ReceivedAt = receivedAt

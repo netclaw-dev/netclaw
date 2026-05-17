@@ -15,11 +15,11 @@ internal sealed class DeliveryRetryHandler
 {
     public const int MaxRetries = 2;
 
-    private int? _eligibleTurnNumber;
+    private TurnNumber? _eligibleTurnNumber;
     private int _retryCount;
     private bool _chainActive;
 
-    public int? EligibleTurnNumber => _eligibleTurnNumber;
+    public TurnNumber? EligibleTurnNumber => _eligibleTurnNumber;
     public int RetryCount => _retryCount;
     public bool ChainActive => _chainActive;
 
@@ -37,7 +37,7 @@ internal sealed class DeliveryRetryHandler
     /// <summary>
     /// Mark the given turn as eligible for delivery retries.
     /// </summary>
-    public void MarkEligible(int turnNumber)
+    public void MarkEligible(TurnNumber turnNumber)
     {
         _eligibleTurnNumber = turnNumber;
         if (!_chainActive)

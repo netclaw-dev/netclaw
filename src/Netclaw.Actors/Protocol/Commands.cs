@@ -66,7 +66,7 @@ public sealed record ToolInteractionResponse : IWithSessionId, INoSerializationV
     public required ToolCallId CallId { get; init; }
 
     /// <summary>The selected option key. See <see cref="ApprovalOptionKeys"/>.</summary>
-    public required string SelectedKey { get; init; }
+    public required ApprovalOptionKey SelectedKey { get; init; }
 
     /// <summary>
     /// Identity of the user who selected the option. Used to bind approvals to

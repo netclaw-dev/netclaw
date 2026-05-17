@@ -255,7 +255,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         var displayCount = Math.Min(models.Count, MaxDisplayedModels);
         for (var i = 0; i < displayCount; i++)
-            items.Add(models[i].ModelId);
+            items.Add(models[i].ModelId.Value);
 
         if (models.Count > MaxDisplayedModels)
             items.Add($"... and {models.Count - MaxDisplayedModels} more (enter manually)");
