@@ -125,8 +125,8 @@ public static class WebhookEndpointRouteBuilderExtensions
             var sessionId = new SessionId($"webhook/{registeredRoute.Name}/{SanitizeWebhookId(deliveryKey)}");
             var invocation = new WebhookInvocation(
                 registeredRoute,
-                verification.EventType,
-                verification.DeliveryId,
+                verification.EventType is { } eventType ? new WebhookEventType(eventType) : null,
+                verification.DeliveryId is { } deliveryId ? new WebhookDeliveryId(deliveryId) : null,
                 bodyRead.BodyJson!,
                 sessionId,
                 now);

@@ -96,7 +96,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
                 Result = "Error parsing arguments for tool 'send_slack_message': Required parameter 'Message' is missing or empty."
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("notify-fail-test");
@@ -124,7 +124,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
                 Result = "Message sent to channel C1. Thread: C1/1234567890.000001"
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("notify-success-test");
@@ -146,7 +146,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
             new TextOutput("No new opportunities found.") { SessionId = sessionId },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("conditional-no-notify") with
@@ -170,7 +170,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
             new TextOutput("Some output.") { SessionId = sessionId },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         // Default policy is Required — should fail when no notification tool is invoked
@@ -198,7 +198,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
                 ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
                 Result = "Error: channel not found"
             },
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("conditional-notify-error") with
@@ -222,7 +222,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("filter-check") with { DeliveryInstructions = string.Empty };
@@ -338,7 +338,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("audience-override") with
@@ -367,7 +367,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("audience-team-default") with
@@ -391,7 +391,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         var definition = CreateDefinition("boundary-preserved") with
@@ -418,7 +418,7 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     {
         var pipeline = new ScriptedSessionPipeline(sessionId =>
         [
-            new TurnCompleted { SessionId = sessionId, TurnNumber = 1 }
+            new TurnCompleted { SessionId = sessionId, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 
         // Use Kind = None so success is not gated on send_slack_message

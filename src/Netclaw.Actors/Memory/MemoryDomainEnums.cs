@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
 namespace Netclaw.Actors.Memory;
 
 /// <summary>
@@ -10,6 +13,7 @@ namespace Netclaw.Actors.Memory;
 /// </summary>
 public enum MemoryClass
 {
+    Unknown,
     DurableFact,
     Evidence,
     Trace
@@ -30,6 +34,7 @@ public enum MemoryKind
 /// </summary>
 public enum MemoryRecallMode
 {
+    Unknown,
     Auto,
     Searchable,
     Never,
@@ -41,6 +46,7 @@ public enum MemoryRecallMode
 /// </summary>
 public enum MemorySensitivity
 {
+    Unknown,
     Normal,
     Secret
 }
@@ -276,4 +282,86 @@ public static class MemoryDomainEnumExtensions
         value = default;
         return false;
     }
+}
+
+// ── JSON converters ────────────────────────────────────────────────────
+// These keep the snake/kebab-case wire discriminators on the JSON document
+// while the in-memory field carries the enum. LLM-emitted proposal values are
+// tolerant: unknown discriminators deserialize to Unknown so the proposal gate
+// can reject only the bad proposal and preserve per-reason telemetry. Persisted
+// checkpoint trigger values remain strict because there is no safe fallback path.
+
+/// <summary>JSON converter that round-trips <see cref="MemoryClass"/> via its wire string.</summary>
+public sealed class MemoryClassJsonConverter : JsonConverter<MemoryClass>
+{
+    public override MemoryClass Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var wire = reader.GetString();
+        if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out MemoryClass value))
+            return value;
+        return MemoryClass.Unknown;
+    }
+
+    public override void Write(Utf8JsonWriter writer, MemoryClass value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToWireValue());
+}
+
+/// <summary>JSON converter that round-trips <see cref="MemoryRecallMode"/> via its wire string.</summary>
+public sealed class MemoryRecallModeJsonConverter : JsonConverter<MemoryRecallMode>
+{
+    public override MemoryRecallMode Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var wire = reader.GetString();
+        if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out MemoryRecallMode value))
+            return value;
+        return MemoryRecallMode.Unknown;
+    }
+
+    public override void Write(Utf8JsonWriter writer, MemoryRecallMode value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToWireValue());
+}
+
+/// <summary>JSON converter that round-trips <see cref="MemorySensitivity"/> via its wire string.</summary>
+public sealed class MemorySensitivityJsonConverter : JsonConverter<MemorySensitivity>
+{
+    public override MemorySensitivity Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var wire = reader.GetString();
+        if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out MemorySensitivity value))
+            return value;
+        return MemorySensitivity.Unknown;
+    }
+
+    public override void Write(Utf8JsonWriter writer, MemorySensitivity value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToWireValue());
+}
+
+/// <summary>JSON converter that round-trips <see cref="CheckpointTriggerType"/> via its wire string.</summary>
+public sealed class CheckpointTriggerTypeJsonConverter : JsonConverter<CheckpointTriggerType>
+{
+    public override CheckpointTriggerType Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var wire = reader.GetString();
+        if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out CheckpointTriggerType value))
+            return value;
+        throw new JsonException($"Unknown {nameof(CheckpointTriggerType)} wire value '{wire}'.");
+    }
+
+    public override void Write(Utf8JsonWriter writer, CheckpointTriggerType value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToWireValue());
+}
+
+/// <summary>JSON converter that round-trips <see cref="Sessions.MemoryProposalOperation"/> via its wire string.</summary>
+public sealed class MemoryProposalOperationJsonConverter : JsonConverter<Sessions.MemoryProposalOperation>
+{
+    public override Sessions.MemoryProposalOperation Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        var wire = reader.GetString();
+        if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out Sessions.MemoryProposalOperation value))
+            return value;
+        return Sessions.MemoryProposalOperation.Unknown;
+    }
+
+    public override void Write(Utf8JsonWriter writer, Sessions.MemoryProposalOperation value, JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToWireValue());
 }

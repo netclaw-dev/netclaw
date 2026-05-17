@@ -44,22 +44,24 @@ public sealed class ModelCapabilityActor : UntypedActor
 
     private void HandleQuery(GetModelCapabilities query)
     {
+        var modelKey = query.ModelId.Value;
+
         // Cache hit — respond immediately
-        if (_cache.TryGetValue(query.ModelId, out var cached))
+        if (_cache.TryGetValue(modelKey, out var cached))
         {
             Sender.Tell(cached);
             return;
         }
 
         // Already in-flight — add sender to waiting list
-        if (_pending.TryGetValue(query.ModelId, out var waiters))
+        if (_pending.TryGetValue(modelKey, out var waiters))
         {
             waiters.Add(Sender);
             return;
         }
 
         // First query for this model — start resolution
-        _pending[query.ModelId] = [Sender];
+        _pending[modelKey] = [Sender];
         var self = Self;
 
         _ = Task.Run(async () =>
@@ -67,7 +69,7 @@ public sealed class ModelCapabilityActor : UntypedActor
             try
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-                var result = await _resolver.ResolveAsync(query.ModelId, cts.Token);
+                var result = await _resolver.ResolveAsync(query.ModelId.Value, cts.Token);
 
                 var input = result?.InputModalities ?? ModelModality.Text;
                 var output = result?.OutputModalities ?? ModelModality.Text;
@@ -86,7 +88,7 @@ public sealed class ModelCapabilityActor : UntypedActor
         var response = new ModelCapabilitiesResponse(
             resolved.ModelId, resolved.InputModalities, resolved.OutputModalities);
 
-        _cache[resolved.ModelId] = response;
+        _cache[resolved.ModelId.Value] = response;
 
         if (!resolved.Success)
         {
@@ -98,7 +100,7 @@ public sealed class ModelCapabilityActor : UntypedActor
                 resolved.ModelId, resolved.InputModalities, resolved.OutputModalities);
         }
 
-        if (_pending.Remove(resolved.ModelId, out var waiters))
+        if (_pending.Remove(resolved.ModelId.Value, out var waiters))
         {
             foreach (var waiter in waiters)
                 waiter.Tell(response);

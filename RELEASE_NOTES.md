@@ -1,3 +1,36 @@
+#### 0.18.1 May 16 2026 ####
+
+Netclaw v0.18.1 — macOS binaries, provider renaming, shell subprocess cleanup, and stream stability fixes
+
+**Features**
+
+* **macOS (Apple Silicon) support** — Netclaw now ships `osx-arm64` self-contained binaries, and the install script supports macOS installs end-to-end with a Rosetta guard and an explicit Intel-Mac rejection. This is the first release to publish macOS binaries. Path-security checks were also corrected for macOS's `/private` symlink layout. launchd service install and notarization are tracked as follow-ups ([#1015](https://github.com/netclaw-dev/netclaw/issues/1015), [#1016](https://github.com/netclaw-dev/netclaw/issues/1016)). ([#1018](https://github.com/netclaw-dev/netclaw/pull/1018))
+
+* **Editable provider names + rename action** — the provider add flow now opens with a dedicated Name step pre-filled with a suggested default, so multiple self-hosted endpoints (vLLM, llama.cpp) and aggregator accounts are no longer stuck with auto-generated names like `my-vllm-2`. A new `[N] Rename` action and CLI subcommand rename existing providers, cascading the change to `Models.{Main,Fallback,Compaction}.Provider` role references in the same atomic write. ([#997](https://github.com/netclaw-dev/netclaw/pull/997))
+
+* **Approval creation timestamps + gate near-miss diagnostics** — persisted tool approvals now carry an optional `createdAt` timestamp, surfaced as a relative creation time in `netclaw approvals list`, its `--json` output, and the approvals TUI. When a shell pattern is prompted despite a same-verb persisted grant, the daemon now logs why it did not match (directory not under grant, symlink segment, verb-case mismatch). The on-disk schema is unchanged and existing approval files load without migration. ([#1010](https://github.com/netclaw-dev/netclaw/pull/1010))
+
+**Bug Fixes**
+
+* **`shell_execute` no longer orphans subprocesses** — `shell_execute` could leave a subprocess running indefinitely when the kill branch was skipped on a timeout, and interactive Termina commands launched by a non-interactive caller would hang forever. Process kill is now driven off the linked cancellation token, and a remaining gap where `ShellTool.Kill` throwing `Win32Exception` left pipe reads hung at EOF is also closed. ([#1019](https://github.com/netclaw-dev/netclaw/pull/1019))
+
+* **Tool results without a ToolCallId now fail loud** — a missing `ToolCallId` is no longer coalesced to an empty value that handed approval matching and channel rendering a non-correlatable id; the session actor throws instead, surfacing the assembly bug. ([#1023](https://github.com/netclaw-dev/netclaw/pull/1023))
+
+* **Proactive thread hydration re-armed** — a proactively-created channel thread (such as a reminder posting via `send_slack_message`) no longer loses the message that opened it; a deferred hydration is now re-armed so the first authorized inbound completes it. ([#1008](https://github.com/netclaw-dev/netclaw/pull/1008))
+
+* **Cached shell approval matches audited** — cached shell approvals are now evaluated with full approval candidates and record `PreviouslyApproved` audit context.
+
+* **`netclaw approvals list` fills the terminal** — the approvals list previously showed only 10 of 100+ entries with a scrollbar floating in an empty panel; it now grows with the terminal height. ([#1005](https://github.com/netclaw-dev/netclaw/pull/1005))
+
+* **Daemon no longer crashes on discarded stream tasks** — Akka.Streams stages discarded internal `Task<Done>` instances that surfaced as daemon-unobserved crash logs during hot reload and idle passivation; those tasks are now observed. ([#998](https://github.com/netclaw-dev/netclaw/pull/998))
+
+* **Session log writes deterministic under Windows share-mode races** — `SessionLogFile.AppendLine` now retries transient sharing violations with backoff and uses the canonical `FileShare.ReadWrite|Delete` mask, so concurrent readers no longer cause silently-dropped audit lines on Windows. ([#996](https://github.com/netclaw-dev/netclaw/pull/996))
+
+**Dependencies**
+
+* Upgraded `ShellSyntaxTree` to 0.1.5 and routed `ExtractPatterns` through `BashParser`. ([#1007](https://github.com/netclaw-dev/netclaw/pull/1007), [#1020](https://github.com/netclaw-dev/netclaw/pull/1020))
+* Bumped `ModelContextProtocol.Core` from 1.2.0 to 1.3.0. ([#992](https://github.com/netclaw-dev/netclaw/pull/992))
+
 #### 0.18.0 2026-05-14 ####
 
 Netclaw v0.18.0 — Directory-scoped approvals, sub-agent reloads, vLLM support, channel reliability, and security hardening

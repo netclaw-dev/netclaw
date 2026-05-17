@@ -104,7 +104,7 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
         var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(1, completed.TurnNumber);
+        Assert.Equal(1, completed.TurnNumber.Value);
 
         // Two LLM calls: first returned tool call, second returned text
         Assert.Equal(2, _fakeChatClient.CallCount);

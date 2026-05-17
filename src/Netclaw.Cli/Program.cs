@@ -82,10 +82,11 @@ static async Task RunAsync(string[] args)
             break;
     }
 
-    // Kick off the update check in the background. The notice is buffered
-    // and emitted by EmitPendingNoticeIfReady in Main's finally — safe for
-    // every mode including TUIs, because we only print after the mode
-    // handler returns and the alt screen has been torn down.
+    // Kick off the update check only for modes that do not boot Termina or
+    // otherwise own the current command's startup flow. Buffering the notice
+    // protects active TUIs from stray stderr, but it does not make the
+    // background network probe itself safe during interactive startup.
+    if (UpdateCommand.ShouldRunStartupUpdateCheck(mode, args))
     {
         var backgroundUpdateConfig = BuildCliConfig();
         var backgroundDaemonConfig = DaemonConfig.BindFromConfiguration(backgroundUpdateConfig.GetSection("Daemon"));

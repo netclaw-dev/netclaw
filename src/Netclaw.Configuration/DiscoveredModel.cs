@@ -13,7 +13,7 @@ namespace Netclaw.Configuration;
 public sealed record DiscoveredModel
 {
     /// <summary>Model identifier as used in API calls.</summary>
-    public required string ModelId { get; init; }
+    public required ModelId ModelId { get; init; }
 
     /// <summary>Maximum context window size in tokens, if known.</summary>
     public int? ContextWindowTokens { get; init; }

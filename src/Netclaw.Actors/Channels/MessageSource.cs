@@ -48,7 +48,7 @@ public sealed record MessageSource
     /// Correlation identifier for this turn. Propagated across session logs
     /// and actor boundaries for end-to-end traceability.
     /// </summary>
-    public string? TurnId { get; init; }
+    public Protocol.TurnId? TurnId { get; init; }
 
     /// <summary>
     /// Effective source audience attached to the inbound message before any runtime

@@ -27,8 +27,8 @@ public sealed record EffectiveTrustContext(
     PrincipalClassification Principal,
     TransportAuthenticity TransportAuthenticity,
     PayloadTaint PayloadTaint,
-    string? SourceScope,
-    string? SourceKind,
+    SourceScope? SourceScope,
+    SourceKind? SourceKind,
     bool UsedStrictFallback,
     bool WasDowngraded,
     string? DowngradeReason);

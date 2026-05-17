@@ -650,6 +650,54 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void SessionSnapshot_eligible_turn_number_wrap_is_byte_identical_to_raw_primitive_proto()
+    {
+        // Pass 7d wraps SessionSnapshot.EligibleDeliveryTurnNumber in the
+        // TurnNumber value object. The proto field stays a primitive int32, so
+        // the journal bytes must be identical to the pre-wrap representation.
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 7,
+            History = [],
+            EligibleDeliveryTurnNumber = new TurnNumber(7)
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 7,
+            EligibleDeliveryTurnNumber = 7
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Equal(new TurnNumber(7), result.EligibleDeliveryTurnNumber);
+    }
+
+    [Fact]
+    public void SessionSnapshot_null_eligible_turn_number_omits_proto_field()
+    {
+        // A null EligibleDeliveryTurnNumber must leave the optional proto field
+        // unset — byte-identical to the pre-wrap int? null representation.
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 3,
+            History = [],
+            EligibleDeliveryTurnNumber = null
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 3
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+
+        var result = RoundTrip(wrapped);
+        Assert.Null(result.EligibleDeliveryTurnNumber);
+    }
+
+    [Fact]
     public void AdoptedContextRecorded_sender_id_wrap_is_byte_identical_to_raw_primitive_proto()
     {
         // Pass 7c wraps the adopted-context SenderId / AuthorizerSenderId fields

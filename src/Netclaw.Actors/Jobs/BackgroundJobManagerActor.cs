@@ -316,7 +316,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
             ChannelType = originChannelType,
             SenderId = new Protocol.SenderId(SystemSenderId),
             MessageId = jobDeliveryKey,
-            TurnId = jobDeliveryKey,
+            TurnId = new Protocol.TurnId(jobDeliveryKey),
             Audience = def.Audience,
             Boundary = def.Boundary,
             Principal = PrincipalClassification.VerifiedAutomation,
@@ -324,7 +324,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
                 TransportAuthenticity.LocalProcess,
                 PayloadTaint.Trusted)
             {
-                SourceKind = SourceKind
+                SourceKind = new SourceKind(BackgroundJobManagerActor.SourceKind)
             },
             ReceivedAt = _timeProvider.GetUtcNow(),
             BackgroundJobId = jobDeliveryKey

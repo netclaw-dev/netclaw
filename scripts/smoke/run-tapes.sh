@@ -9,7 +9,8 @@
 #
 # Flags:
 #   --keep-stack    don't bring the smoke compose stack down at end
-#                   (useful for inner-loop tape iteration)
+#                   (useful for inner-loop tape iteration; prints the exact
+#                   teardown command when finished)
 #   --no-up         assume the smoke stack is already running; skip up.sh
 #
 # By default this script:
@@ -145,6 +146,8 @@ done
 # 5) teardown unless --keep-stack.
 if [[ $keep_stack -eq 1 ]]; then
   echo "==> --keep-stack: leaving smoke compose stack running."
+  echo "==> Stop it when you're done with:"
+  echo "    docker compose -p \"${PROJECT_NAME}\" -f \"${COMPOSE_FILE}\" down"
 else
   echo "==> Tearing down smoke compose stack..."
   SMOKE_REMOVE_VOLUMES="${SMOKE_REMOVE_VOLUMES:-1}" \

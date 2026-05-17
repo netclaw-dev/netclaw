@@ -47,7 +47,7 @@ public sealed class TrustContextDeriverTests
             Principal = PrincipalClassification.TrustedInternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                SourceKind = "slack"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("slack")
             },
             ReceivedAt = DateTimeOffset.UtcNow
         });
@@ -74,7 +74,7 @@ public sealed class TrustContextDeriverTests
             Principal = PrincipalClassification.Operator,
             Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
             {
-                SourceKind = "signalr"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("signalr")
             },
             ReceivedAt = DateTimeOffset.UtcNow
         }, new WorkingContextOverride(TrustAudience.Team, "sensitive-read"));
@@ -102,7 +102,7 @@ public sealed class TrustContextDeriverTests
             Principal = PrincipalClassification.TrustedInternal,
             Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community)
             {
-                SourceKind = "slack"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("slack")
             },
             ReceivedAt = DateTimeOffset.UtcNow
         }, new WorkingContextOverride(TrustAudience.Personal, "broader-than-source"));

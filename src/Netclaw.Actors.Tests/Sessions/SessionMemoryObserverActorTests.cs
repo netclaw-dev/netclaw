@@ -386,7 +386,6 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new MemoryProposalGate();
         var gateResult = gate.Evaluate(
             reply.Proposals,
-            "normal",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
         var persistProbe = CreateTestProbe("persist-before-reply-ack");
@@ -472,7 +471,6 @@ public sealed class SessionMemoryObserverActorTests : TestKit
         var gate = new MemoryProposalGate();
         var gateResult = gate.Evaluate(
             reply.Proposals,
-            "normal",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
 
         var persistProbe = CreateTestProbe("accepted-only-persist-probe");

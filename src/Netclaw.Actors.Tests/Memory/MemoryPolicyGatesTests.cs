@@ -20,7 +20,7 @@ public sealed class MemoryPolicyGatesTests
 
         var result = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -39,7 +39,7 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 null,
                 "stable preference"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "append_record",
                 "evidence",
                 "event",
@@ -58,7 +58,7 @@ public sealed class MemoryPolicyGatesTests
                 now + 86400000,
                 null,
                 "one-off research"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "assistant",
@@ -77,7 +77,7 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "identity_profile",
                 "standing communication preference"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -97,7 +97,6 @@ public sealed class MemoryPolicyGatesTests
                 "identity_profile",
                 "identity path")
         ],
-        "normal",
         now);
 
         Assert.Single(result.MemoryOperations);
@@ -119,7 +118,7 @@ public sealed class MemoryPolicyGatesTests
 
         var result = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -139,7 +138,6 @@ public sealed class MemoryPolicyGatesTests
                 "identity_profile",
                 "Stable personal fact useful for future recall")
         ],
-        "normal",
         now);
 
         var identityUpdate = Assert.Single(result.IdentityUpdates);
@@ -160,7 +158,7 @@ public sealed class MemoryPolicyGatesTests
 
         var result = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -180,7 +178,6 @@ public sealed class MemoryPolicyGatesTests
                 "identity_profile",
                 "Current temporary status update")
         ],
-        "normal",
         now);
 
         Assert.Single(result.IdentityUpdates);
@@ -195,7 +192,7 @@ public sealed class MemoryPolicyGatesTests
 
         var accepted = gate.Accept(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "append_record",
                 "evidence",
                 "event",
@@ -214,7 +211,7 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 null,
                 "one-off research"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "append_record",
                 "trace",
                 "event",
@@ -234,7 +231,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "execution trace")
         ],
-        "normal",
         now);
 
         var evidence = Assert.Single(accepted, x => x.MemoryClass == "evidence");
@@ -253,7 +249,7 @@ public sealed class MemoryPolicyGatesTests
 
         var accepted = gate.Accept(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -273,7 +269,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "missing retrieval metadata")
         ],
-        "normal",
         now);
 
         Assert.Empty(accepted);
@@ -318,7 +313,7 @@ public sealed class MemoryPolicyGatesTests
 
         var accepted = gate.Accept(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document", // LLM incorrectly chose upsert_document
                 "evidence",        // but memoryClass is evidence
                 "project",
@@ -338,7 +333,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "agent research finding")
         ],
-        "normal",
         now);
 
         var op = Assert.Single(accepted);
@@ -355,7 +349,7 @@ public sealed class MemoryPolicyGatesTests
 
         var result = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -375,7 +369,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "stable preference")
         ],
-        "normal",
         now,
         boundary: TrustBoundary.PersonalValue,
         audience: TrustAudience.Personal);
@@ -393,7 +386,7 @@ public sealed class MemoryPolicyGatesTests
 
         var result = gate.Evaluate(
         [
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -412,7 +405,7 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 null,
                 null),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -431,7 +424,7 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 null,
                 null),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "assistant",
@@ -450,7 +443,7 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 "identity_profile",
                 "standing communication preference"),
-            new MemoryProposal(
+            MemoryProposalTestFactory.FromWire(
                 "upsert_document",
                 "durable_fact",
                 "user",
@@ -470,7 +463,6 @@ public sealed class MemoryPolicyGatesTests
                 null,
                 null)
         ],
-        "normal",
         now);
 
         Assert.Equal(3, result.AcceptedProposals.Count);

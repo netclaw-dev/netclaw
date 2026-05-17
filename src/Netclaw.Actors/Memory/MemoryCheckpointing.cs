@@ -10,7 +10,7 @@ namespace Netclaw.Actors.Memory;
 
 public sealed record MemoryCheckpointRequest(
     SessionId SessionId,
-    string? TurnId,
+    Protocol.TurnId? TurnId,
     CheckpointTriggerType TriggerType,
     int Priority,
     object Payload);
@@ -60,7 +60,7 @@ public sealed class SQLiteMemoryCheckpointSink(
         await store.EnqueueCheckpointAsync(new SQLiteMemoryCheckpoint(
             CheckpointId: checkpointId,
             SessionId: request.SessionId.Value,
-            TurnId: request.TurnId,
+            TurnId: request.TurnId?.Value,
             TriggerType: request.TriggerType.ToWireValue(),
             Priority: request.Priority,
             Status: "pending",

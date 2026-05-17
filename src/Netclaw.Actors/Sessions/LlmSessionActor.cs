@@ -132,7 +132,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool _anyContentStreamed;
 
     // Per-turn diagnostic correlation (ephemeral)
-    private string? _activeTurnId;
+    private Protocol.TurnId? _activeTurnId;
     private string? _activeMessageId;
     private Channels.ChannelType? _activeChannelType;
     private AutomaticRecallResult? _activeRecall;
@@ -566,13 +566,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
                         Success = true,
                         Duration = finding.Duration,
-                        MemoryDecision = finding.Decision,
+                        MemoryDecision = finding.Decision.ToWireValue(),
                         MemoryDecisionReason = finding.DecisionReason,
                         FindingsCount = runSummary?.FindingsCount ?? 1
                     }, OutputFilter.ToolCalls);
                 }
 
-                if (!string.Equals(finding.Decision, "accepted", StringComparison.OrdinalIgnoreCase))
+                if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
                     continue;
 
                 EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
@@ -593,8 +593,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         HasAcceptedSubAgentFinding: true,
                         Boundary: CurrentMemoryBoundary(),
                         Audience: CurrentMemoryAudience(),
-                        Sensitivity: finding.Sensitivity,
-                        RecallMode: finding.RecallMode,
+                        Sensitivity: finding.Sensitivity.ToWireValue(),
+                        RecallMode: finding.RecallMode.ToWireValue(),
                         Confidence: finding.Confidence,
                         Title: finding.Title,
                         Kind: finding.Kind,
@@ -626,16 +626,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             {
                 _state = _state with { History = _state.History.Add(result) };
 
+                // A tool result must correlate to a tool call. A null ToolCallId
+                // means the result was assembled wrong; fabricating an empty id
+                // would hand subscribers a non-correlatable id, so fail loud.
+                if (result.ToolCallId is not { } toolCallId)
+                    throw new InvalidOperationException(
+                        $"Tool-result message for tool '{result.Name ?? "unknown"}' has no ToolCallId.");
+
                 var preview = result.Content is { Length: > 200 }
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
                 _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-                    result.Name ?? "unknown", result.ToolCallId?.Value ?? "?", preview);
+                    result.Name ?? "unknown", toolCallId.Value, preview);
 
                 EmitOutput(new ToolResultOutput
                 {
                     SessionId = _sessionId,
-                    CallId = result.ToolCallId ?? new ToolCallId(string.Empty),
+                    CallId = toolCallId,
                     ToolName = new ToolName(result.Name ?? "unknown"),
                     Result = result.Content ?? string.Empty
                 }, OutputFilter.ToolCalls);
@@ -820,7 +827,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            var decision = msg.SelectedKey switch
+            var decision = msg.SelectedKey.Value switch
             {
                 ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
                 ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
@@ -1024,7 +1031,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             var gateResult = _memoryProposalGate.Evaluate(
                 msg.Proposals,
-                Memory.MemorySensitivity.Normal.ToWireValue(),
                 NowMs(),
                 boundary: CurrentMemoryBoundary(),
                 audience: CurrentTurnAudience());
@@ -1804,7 +1810,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Title: "turn-completion",
                     UpdateSemantics: "append-document")));
 
-            _deliveryRetry.MarkEligible(_state.TurnCount);
+            _deliveryRetry.MarkEligible(new TurnNumber(_state.TurnCount));
 
             // Check if compaction should trigger
             if (ShouldCompact())
@@ -2585,7 +2591,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 EmitOutput(new TurnCompleted
                 {
                     SessionId = _sessionId,
-                    TurnNumber = _state.TurnCount,
+                    TurnNumber = new TurnNumber(_state.TurnCount),
                     Outcome = TurnOutcome.Skipped,
                     SourceReminderId = _currentTurnSource?.ReminderId
                 });
@@ -2611,7 +2617,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         EmitOutput(new TurnCompleted
         {
             SessionId = _sessionId,
-            TurnNumber = _state.TurnCount,
+            TurnNumber = new TurnNumber(_state.TurnCount),
             Outcome = TurnOutcome.Skipped,
             SourceReminderId = _currentTurnSource?.ReminderId
         });
@@ -2638,7 +2644,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new TurnCompleted
             {
                 SessionId = _sessionId,
-                TurnNumber = _state.TurnCount,
+                TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
                 SourceReminderId = _currentTurnSource?.ReminderId
             });
@@ -2675,7 +2681,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new TurnCompleted
             {
                 SessionId = _sessionId,
-                TurnNumber = _state.TurnCount,
+                TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
                 SourceReminderId = _currentTurnSource?.ReminderId
             });
@@ -2695,7 +2701,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new TurnCompleted
             {
                 SessionId = _sessionId,
-                TurnNumber = _state.TurnCount,
+                TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
                 SourceReminderId = _currentTurnSource?.ReminderId
             });
@@ -2712,7 +2718,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new TurnCompleted
             {
                 SessionId = _sessionId,
-                TurnNumber = _state.TurnCount,
+                TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
                 SourceReminderId = _currentTurnSource?.ReminderId
             });
@@ -2737,7 +2743,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new TurnCompleted
             {
                 SessionId = _sessionId,
-                TurnNumber = _state.TurnCount,
+                TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
                 SourceReminderId = _currentTurnSource?.ReminderId
             });
@@ -2869,7 +2875,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new TurnCompleted
             {
                 SessionId = _sessionId,
-                TurnNumber = _state.TurnCount,
+                TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Completed,
                 SourceReminderId = _currentTurnSource?.ReminderId
             });
@@ -3022,7 +3028,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         EmitOutput(new TurnCompleted
         {
             SessionId = _sessionId,
-            TurnNumber = _state.TurnCount,
+            TurnNumber = new TurnNumber(_state.TurnCount),
             SourceReminderId = _currentTurnSource?.ReminderId
         });
     }
@@ -3112,7 +3118,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         EmitOutput(new TurnCompleted
         {
             SessionId = _sessionId,
-            TurnNumber = _state.TurnCount,
+            TurnNumber = new TurnNumber(_state.TurnCount),
             Outcome = TurnOutcome.Failed,
             SourceReminderId = _currentTurnSource?.ReminderId
         });
@@ -3378,13 +3384,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var sourceMessageId = source?.MessageId;
         _activeMessageId = sourceMessageId;
         _activeTurnId = source?.TurnId
-            ?? sourceMessageId
-            ?? IdGen.ShortId();
+            ?? new Protocol.TurnId(sourceMessageId ?? IdGen.ShortId());
         _activeChannelType = source?.ChannelType;
 
         CrashContextSnapshot.Update(
             _sessionId.Value,
-            _activeTurnId,
+            _activeTurnId?.Value,
             _activeMessageId,
             _activeChannelType?.ToWireValue(),
             _timeProvider.GetUtcNow());
@@ -3394,8 +3399,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         var log = _log;
 
-        if (!string.IsNullOrWhiteSpace(_activeTurnId))
-            log = log.WithContext("TurnId", _activeTurnId);
+        if (_activeTurnId is { Value: { Length: > 0 } turnIdValue })
+            log = log.WithContext("TurnId", turnIdValue);
 
         if (!string.IsNullOrWhiteSpace(_activeMessageId))
             log = log.WithContext("MessageId", _activeMessageId);

@@ -54,13 +54,13 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             ChannelId: new SlackChannelId("C-test"),
             ThreadTs: new SlackThreadTs("1000.1"),
             EventId: new SlackEventId($"evt-{Guid.NewGuid():N}"),
-            TurnId: Guid.NewGuid().ToString("N"),
+            TurnId: new Netclaw.Actors.Protocol.TurnId(Guid.NewGuid().ToString("N")),
             SenderId: new SenderId(senderId),
             Audience: TrustAudience.Team,
             Principal: PrincipalClassification.UntrustedExternal,
             Provenance: new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
             {
-                SourceKind = "slack"
+                SourceKind = new Netclaw.Actors.Channels.SourceKind("slack")
             },
             Text: text,
             ReceivedAt: TimeProvider.System.GetUtcNow());

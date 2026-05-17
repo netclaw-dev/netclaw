@@ -95,46 +95,69 @@
 
 ## 6. Pass 7d — Remaining new value objects
 
-- [ ] 6.1 Create `ModelId` (`Netclaw.Configuration`) and replace `string`
+- [x] 6.1 Create `ModelId` (`Netclaw.Configuration`) and replace `string`
   model-id fields on `GetModelCapabilities`, `ModelCapabilitiesResponse`,
   `CapabilityResolved`, `DiscoveredModel`.
-- [ ] 6.2 Create `TurnNumber` and `TurnId` (`Netclaw.Actors.Protocol`); confirm
+- [x] 6.2 Create `TurnNumber` and `TurnId` (`Netclaw.Actors.Protocol`); confirm
   both have real callsites before creating the second, then replace the ordinal
   / correlation fields on `TurnCompleted`, `DeliveryFailed`,
   `SessionSnapshot.EligibleDeliveryTurnNumber`, `SessionOutputDto.TurnNumber`.
-- [ ] 6.3 Create `ApprovalOptionKey`, `ApprovalVerb`, `SkillName`,
-  `WebhookEventType`, `WebhookDeliveryId`, `SourceScope`, `SourceKind` in their
-  domain-owning namespaces and replace the corresponding primitive fields.
-- [ ] 6.4 Update `NetclawProtoMapper` mappings and JSON converters for touched
+  `TurnId` has genuine distinct callsites (`MessageSource.TurnId`,
+  `_activeTurnId`, `MemoryCheckpointRequest.TurnId`, `SlackThreadInbound.TurnId`)
+  and was created.
+- [x] 6.3 Create `ApprovalOptionKey`, `WebhookEventType`, `WebhookDeliveryId`,
+  `SourceScope`, `SourceKind` in their domain-owning namespaces and replace the
+  corresponding primitive fields. `ApprovalVerb` and `SkillName` were SKIPPED:
+  `ApprovalVerb` is a free-form extracted command head on the persisted
+  `tool-approvals.json` schema (audit "leave-as-string"), and no actor/protocol
+  record carries a `SkillName` identity field with type-confusion risk (only the
+  nullable diagnostic label `SkillScanIssue.SkillName` and the config-bound
+  `SkillEntry.Name`).
+- [x] 6.4 Update `NetclawProtoMapper` mappings and JSON converters for touched
   serializer-registered and JSON-persisted types; add byte-equality round-trip
   tests.
-- [ ] 6.5 Fix callsite compiler errors and update affected tests.
-- [ ] 6.6 Verify Pass 7d: build clean, tests green, slopwatch clean, file
+- [x] 6.5 Fix callsite compiler errors and update affected tests.
+- [x] 6.6 Verify Pass 7d: build clean, tests green, slopwatch clean, file
   headers verified.
 
 ## 7. Pass 7e — Memory / sub-agent finding enum unwrap fixes
 
-- [ ] 7.1 Tighten `MemoryProposal` to carry its existing enums (`MemoryClass`,
+- [x] 7.1 Tighten `MemoryProposal` to carry its existing enums (`MemoryClass`,
   `MemorySensitivity`, `MemoryRecallMode`, `MemoryProposalOperation`,
-  `SubjectKind`) instead of wire strings.
-- [ ] 7.2 Tighten `ObservedMemoryCheckpointPayload` to carry
-  `CheckpointTriggerType` instead of a wire string, and `AcceptedSubAgentFinding`
-  to carry its typed enum.
-- [ ] 7.3 Update serializer/JSON mappings for the touched types; add
-  byte-equality round-trip tests.
-- [ ] 7.4 Fix callsite compiler errors and update affected tests.
-- [ ] 7.5 Verify Pass 7e: build clean, tests green, slopwatch clean, file
+  `SubjectKind`) instead of wire strings. `Operation`, `MemoryClass`,
+  `RecallMode`, and `Sensitivity` were retyped to their enums. `SubjectKind` was
+  SKIPPED and left `string`: the distillation prompt instructs the model to emit
+  subject identifiers (`"project"`, `"event"`) that fall outside the three-member
+  `SubjectKind` enum, so retyping would silently drop wire data — the gate
+  already parses it leniently with `TryFromWireValue`.
+- [x] 7.2 Tighten `ObservedMemoryCheckpointPayload` to carry
+  `CheckpointTriggerType` (and `MemorySensitivity`) instead of wire strings, and
+  `AcceptedSubAgentFinding` to carry its typed enums (`SubAgentFindingShape`,
+  `SubAgentFindingSensitivity`, `SubAgentFindingRecallMode`,
+  `SubAgentFindingDurability`, `SubAgentFindingReusability`,
+  `SubAgentFindingReviewDecision`). `Kind`/`UpdateSemantics` stayed `string` — no
+  matching enum.
+- [x] 7.3 Update serializer/JSON mappings for the touched types; add
+  byte-equality round-trip tests. Added wire-preserving `JsonConverter<T>` types
+  for the memory enums; `AcceptedSubAgentFinding` is
+  `INoSerializationVerificationNeeded` and never persisted (no converter needed).
+- [x] 7.4 Fix callsite compiler errors and update affected tests.
+- [x] 7.5 Verify Pass 7e: build clean, tests green, slopwatch clean, file
   headers verified.
 
 ## 8. Cross-cutting verification and close-out
 
-- [ ] 8.1 Confirm every `NetclawProtobufSerializer`-registered type touched by
+- [x] 8.1 Confirm every `NetclawProtobufSerializer`-registered type touched by
   Passes 7b–7e has a passing byte-equality round-trip test, and that a legacy
   on-disk job/reminder document still deserializes unchanged.
-- [ ] 8.2 Run the eval suite (`./evals/run-evals.sh`) if any tool-facing
-  surface (`ToolExecutionContext`, tool definitions) changed in a way the eval
-  triggers list covers; record the result.
-- [ ] 8.3 Final `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1
+- [x] 8.2 Eval suite not run: Passes 5-7 are behavior-preserving type
+  refactors (value-object wrapping, primary-constructor/`required` shape
+  changes). No tool schema, grant category, system prompt, skill, or
+  memory-routing *behavior* changed — the eval triggers cover behavior
+  changes, not internal type tightening. The unit/integration suite
+  (3,760 tests incl. memory + byte-equality round-trip coverage) is the
+  appropriate gate and is green.
+- [x] 8.3 Final `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1
   -Verify` across the whole change.
-- [ ] 8.4 Run `/opsx-verify` against this change, then `/opsx-sync` and
+- [x] 8.4 Run `/opsx-verify` against this change, then `/opsx-sync` and
   `/opsx-archive`.

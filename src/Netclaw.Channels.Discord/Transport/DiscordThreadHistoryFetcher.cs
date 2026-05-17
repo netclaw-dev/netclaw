@@ -230,8 +230,8 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
                 TransportAuthenticity.Verified,
                 PayloadTaint.Public)
             {
-                SourceKind = "discord",
-                SourceScope = threadChannelId.ToString()
+                SourceKind = new SourceKind("discord"),
+                SourceScope = new SourceScope(threadChannelId.ToString())
             },
             Contents = contents,
             ReceivedAt = message.Timestamp

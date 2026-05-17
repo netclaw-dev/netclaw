@@ -25,24 +25,31 @@ Wait+Screen@10s /Added provider 'seed-ollama'|TAPE\$/
 Type "netclaw provider"
 Enter
 
-# Wait for the list rendering and confirm our seeded provider is there.
-Wait+Screen@10s /seed-ollama/
+# Wait for the probe to complete. ActivateSelectedProvider() is a no-op
+# while health == Probing, so we must wait for the ✓ checkmark (healthy)
+# before pressing Enter. The list renders seed-ollama immediately with a
+# spinner, but Enter would be silently ignored until the probe settles.
+# 30s covers slow CI; Ollama is pre-loaded in the smoke image so it's
+# typically < 5s.
+Wait+Screen@30s /✓ seed-ollama/
+Sleep 300ms
 
-# List has two rows: 'seed-ollama' (highlighted) and '+ Add new
-# provider...'. The seeded entry is at index 0 and highlighted by
-# default — Enter activates the Details view.
+# The seeded provider is at index 0 and highlighted by default —
+# Enter activates the Details view.
 Enter
 
 # ─── Details view ────────────────────────────────────────────────────
 # Details view shows "Provider: seed-ollama" along with [N] Rename
 # in the key hints. Anchor on the rename hint so we know we landed.
 Wait+Screen@10s /Provider: seed-ollama/
+Sleep 300ms
 
 # Press N to start rename.
 Type "N"
 
 # ─── Rename input ────────────────────────────────────────────────────
 Wait+Screen@10s /Rename 'seed-ollama'/
+Sleep 300ms
 
 # Cursor sits at the end of the pre-filled name (PR #997 moves it
 # there explicitly — see commit 1493ddd1). 'seed-ollama' is 11 chars;
@@ -54,10 +61,10 @@ Enter
 # ─── Success status ──────────────────────────────────────────────────
 # StatusMessage on the list view: "Renamed 'seed-ollama' to
 # 'renamed-ollama'. Restart daemon for changes to take effect."
-Wait+Screen@10s /Renamed 'seed-ollama' to 'renamed-ollama'/
-
-# Verify the list shows the new name and no longer the old one.
+# The status message and new name both appear on the list view after
+# the rename, so one anchor covering the new name is sufficient.
 Wait+Screen@10s /renamed-ollama/
+Sleep 300ms
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q

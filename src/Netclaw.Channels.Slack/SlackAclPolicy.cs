@@ -55,8 +55,8 @@ public static class SlackAclPolicy
                 TransportAuthenticity.Verified,
                 PayloadTaint.Public)
             {
-                SourceKind = "slack",
-                SourceScope = message.ChannelId.Value
+                SourceKind = new SourceKind("slack"),
+                SourceScope = new SourceScope(message.ChannelId.Value)
             });
     }
 

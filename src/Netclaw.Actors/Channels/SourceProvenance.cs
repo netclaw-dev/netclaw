@@ -19,10 +19,10 @@ public sealed record SourceProvenance(
     /// <summary>
     /// Optional scope identifier such as repository, environment, or tenant.
     /// </summary>
-    public string? SourceScope { get; init; }
+    public SourceScope? SourceScope { get; init; }
 
     /// <summary>
     /// Optional source object identifier such as a webhook event type.
     /// </summary>
-    public string? SourceKind { get; init; }
+    public SourceKind? SourceKind { get; init; }
 }

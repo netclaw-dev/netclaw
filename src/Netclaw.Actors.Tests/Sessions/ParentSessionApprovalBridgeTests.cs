@@ -51,8 +51,8 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.Equal(["user-123", "user-456"], emitted.AdoptedSpeakerIds);
         Assert.Equal(["grep timeout logs/app.log | wc -l"], emitted.Patterns);
         Assert.Equal(["grep timeout logs/app.log"], emitted.CandidateVerbs);
-        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, emitted.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, emitted.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
     }
 
     [Fact]

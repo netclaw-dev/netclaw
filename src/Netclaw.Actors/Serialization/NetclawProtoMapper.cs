@@ -221,7 +221,7 @@ internal static class NetclawProtoMapper
         if (snap.Title is not null)
             proto.Title = snap.Title;
         if (snap.EligibleDeliveryTurnNumber is not null)
-            proto.EligibleDeliveryTurnNumber = snap.EligibleDeliveryTurnNumber.Value;
+            proto.EligibleDeliveryTurnNumber = snap.EligibleDeliveryTurnNumber.Value.Value;
         if (snap.WorkingContext is not null)
             proto.WorkingContext = ToProto(snap.WorkingContext);
         proto.History.AddRange(snap.History.Select(ToProto));
@@ -234,7 +234,9 @@ internal static class NetclawProtoMapper
     {
         TurnCount = proto.TurnCount,
         Title = proto.HasTitle ? proto.Title : null,
-        EligibleDeliveryTurnNumber = proto.HasEligibleDeliveryTurnNumber ? proto.EligibleDeliveryTurnNumber : null,
+        EligibleDeliveryTurnNumber = proto.HasEligibleDeliveryTurnNumber
+            ? new TurnNumber(proto.EligibleDeliveryTurnNumber)
+            : null,
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),

@@ -793,8 +793,8 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
-        var sessionOption = options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession);
-        var alwaysOption = options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways);
+        var sessionOption = options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession);
+        var alwaysOption = options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, alwaysOption.Label);
     }
@@ -809,8 +809,8 @@ public sealed class ToolApprovalGateTests
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
-        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
     }
 
     [Fact]
@@ -838,10 +838,10 @@ public sealed class ToolApprovalGateTests
             // button caps make dynamic labels structurally unsafe.
             Assert.Equal(
                 ApprovalOptionKeys.ApproveSessionLabel,
-                decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
+                decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
             Assert.Equal(
                 ApprovalOptionKeys.ApproveAlwaysLabel,
-                decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways).Label);
+                decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
         }
         finally
         {
@@ -865,8 +865,8 @@ public sealed class ToolApprovalGateTests
         // specific arg shape (`git push origin main *`) rather than the
         // verb family (`git push *`), making them safer by construction.
         Assert.Equal(["git push origin main"], decision.ApprovalContext!.CandidateVerbs);
-        var sessionOption = decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession);
-        var alwaysOption = decision.ApprovalContext.Options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways);
+        var sessionOption = decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession);
+        var alwaysOption = decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, alwaysOption.Label);
     }
@@ -889,9 +889,9 @@ public sealed class ToolApprovalGateTests
         Assert.All(options, option => Assert.True(
             option.Label.Length <= ApprovalOptionKeys.MaxLabelLength,
             $"Option '{option.Key}' label '{option.Label}' is {option.Label.Length} chars; must stay within {ApprovalOptionKeys.MaxLabelLength}."));
-        Assert.Equal(ApprovalOptionKeys.ApproveOnceLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveOnce).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveSession).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key == ApprovalOptionKeys.ApproveAlways).Label);
-        Assert.Equal(ApprovalOptionKeys.DenyLabel, options.Single(o => o.Key == ApprovalOptionKeys.Deny).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnceLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveOnce).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
+        Assert.Equal(ApprovalOptionKeys.DenyLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.Deny).Label);
     }
 }

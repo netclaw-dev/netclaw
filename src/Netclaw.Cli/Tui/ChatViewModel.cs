@@ -239,7 +239,7 @@ public partial class ChatViewModel : ReactiveViewModel
         if (option is null)
             return Task.CompletedTask;
 
-        return SubmitInteractionSelectionAsync(option.Key);
+        return SubmitInteractionSelectionAsync(option.Key.Value);
     }
 
     public string GetApprovalPrompt()

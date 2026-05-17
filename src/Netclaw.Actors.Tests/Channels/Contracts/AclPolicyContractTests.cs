@@ -225,6 +225,6 @@ public abstract class AclPolicyContractTests
         };
         var result = EvaluateChannel("ch-1", "user-1", options);
         Assert.True(result.IsAllowed);
-        Assert.Equal(ExpectedSourceKind, result.Provenance.SourceKind);
+        Assert.Equal(ExpectedSourceKind, result.Provenance.SourceKind?.Value);
     }
 }

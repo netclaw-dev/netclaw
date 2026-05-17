@@ -95,8 +95,9 @@ internal sealed class WebhookExecutionActor : ReceiveActor
                     TransportAuthenticity.Verified,
                     ToPayloadTaint(routeAudience))
                 {
-                    SourceKind = _invocation.EventType ?? _invocation.Route.Name,
-                    SourceScope = _invocation.Route.Name
+                    SourceKind = new SourceKind(
+                        _invocation.EventType?.Value ?? _invocation.Route.Name),
+                    SourceScope = new SourceScope(_invocation.Route.Name)
                 },
                 Contents = [new TextContent(WebhookPayloadFormatter.Format(_invocation))],
                 ReceivedAt = _invocation.ReceivedAt
