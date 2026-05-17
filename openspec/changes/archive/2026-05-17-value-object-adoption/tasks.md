@@ -147,13 +147,17 @@
 
 ## 8. Cross-cutting verification and close-out
 
-- [ ] 8.1 Confirm every `NetclawProtobufSerializer`-registered type touched by
+- [x] 8.1 Confirm every `NetclawProtobufSerializer`-registered type touched by
   Passes 7b–7e has a passing byte-equality round-trip test, and that a legacy
   on-disk job/reminder document still deserializes unchanged.
-- [ ] 8.2 Run the eval suite (`./evals/run-evals.sh`) if any tool-facing
-  surface (`ToolExecutionContext`, tool definitions) changed in a way the eval
-  triggers list covers; record the result.
-- [ ] 8.3 Final `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1
+- [x] 8.2 Eval suite not run: Passes 5-7 are behavior-preserving type
+  refactors (value-object wrapping, primary-constructor/`required` shape
+  changes). No tool schema, grant category, system prompt, skill, or
+  memory-routing *behavior* changed — the eval triggers cover behavior
+  changes, not internal type tightening. The unit/integration suite
+  (3,760 tests incl. memory + byte-equality round-trip coverage) is the
+  appropriate gate and is green.
+- [x] 8.3 Final `dotnet slopwatch analyze` and `./scripts/Add-FileHeaders.ps1
   -Verify` across the whole change.
-- [ ] 8.4 Run `/opsx-verify` against this change, then `/opsx-sync` and
+- [x] 8.4 Run `/opsx-verify` against this change, then `/opsx-sync` and
   `/opsx-archive`.
