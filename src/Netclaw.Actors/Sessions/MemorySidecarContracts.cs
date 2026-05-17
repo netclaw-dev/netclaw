@@ -10,6 +10,7 @@ namespace Netclaw.Actors.Sessions;
 
 public enum MemoryProposalOperation
 {
+    Unknown,
     UpsertDocument,
     AppendRecord,
     Ignore

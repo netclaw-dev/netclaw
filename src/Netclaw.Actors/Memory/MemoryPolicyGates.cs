@@ -74,13 +74,30 @@ public sealed class MemoryProposalGate
             }
 
             var operation = proposal.Operation;
-            if (operation == MemoryProposalOperation.Ignore)
+            if (operation is MemoryProposalOperation.Unknown or MemoryProposalOperation.Ignore)
             {
                 CountReject("invalid-operation");
                 continue;
             }
 
             var memoryClass = proposal.MemoryClass;
+            if (memoryClass == MemoryClass.Unknown)
+            {
+                CountReject("invalid-memory-class");
+                continue;
+            }
+
+            if (proposal.RecallMode == MemoryRecallMode.Unknown)
+            {
+                CountReject("invalid-recall-mode");
+                continue;
+            }
+
+            if (proposal.Sensitivity == MemorySensitivity.Unknown)
+            {
+                CountReject("invalid-sensitivity");
+                continue;
+            }
 
             if (!HasRequiredRetrievalMetadata(proposal, memoryClass))
             {

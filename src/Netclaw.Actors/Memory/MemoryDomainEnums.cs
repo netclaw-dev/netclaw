@@ -13,6 +13,7 @@ namespace Netclaw.Actors.Memory;
 /// </summary>
 public enum MemoryClass
 {
+    Unknown,
     DurableFact,
     Evidence,
     Trace
@@ -33,6 +34,7 @@ public enum MemoryKind
 /// </summary>
 public enum MemoryRecallMode
 {
+    Unknown,
     Auto,
     Searchable,
     Never,
@@ -44,6 +46,7 @@ public enum MemoryRecallMode
 /// </summary>
 public enum MemorySensitivity
 {
+    Unknown,
     Normal,
     Secret
 }
@@ -283,9 +286,10 @@ public static class MemoryDomainEnumExtensions
 
 // ── JSON converters ────────────────────────────────────────────────────
 // These keep the snake/kebab-case wire discriminators on the JSON document
-// while the in-memory field carries the enum. An unknown discriminator throws
-// JsonException — the same failure channel as any other malformed property, so
-// a bad value drops the document instead of silently coercing to a default.
+// while the in-memory field carries the enum. LLM-emitted proposal values are
+// tolerant: unknown discriminators deserialize to Unknown so the proposal gate
+// can reject only the bad proposal and preserve per-reason telemetry. Persisted
+// checkpoint trigger values remain strict because there is no safe fallback path.
 
 /// <summary>JSON converter that round-trips <see cref="MemoryClass"/> via its wire string.</summary>
 public sealed class MemoryClassJsonConverter : JsonConverter<MemoryClass>
@@ -295,7 +299,7 @@ public sealed class MemoryClassJsonConverter : JsonConverter<MemoryClass>
         var wire = reader.GetString();
         if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out MemoryClass value))
             return value;
-        throw new JsonException($"Unknown {nameof(MemoryClass)} wire value '{wire}'.");
+        return MemoryClass.Unknown;
     }
 
     public override void Write(Utf8JsonWriter writer, MemoryClass value, JsonSerializerOptions options)
@@ -310,7 +314,7 @@ public sealed class MemoryRecallModeJsonConverter : JsonConverter<MemoryRecallMo
         var wire = reader.GetString();
         if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out MemoryRecallMode value))
             return value;
-        throw new JsonException($"Unknown {nameof(MemoryRecallMode)} wire value '{wire}'.");
+        return MemoryRecallMode.Unknown;
     }
 
     public override void Write(Utf8JsonWriter writer, MemoryRecallMode value, JsonSerializerOptions options)
@@ -325,7 +329,7 @@ public sealed class MemorySensitivityJsonConverter : JsonConverter<MemorySensiti
         var wire = reader.GetString();
         if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out MemorySensitivity value))
             return value;
-        throw new JsonException($"Unknown {nameof(MemorySensitivity)} wire value '{wire}'.");
+        return MemorySensitivity.Unknown;
     }
 
     public override void Write(Utf8JsonWriter writer, MemorySensitivity value, JsonSerializerOptions options)
@@ -355,7 +359,7 @@ public sealed class MemoryProposalOperationJsonConverter : JsonConverter<Session
         var wire = reader.GetString();
         if (MemoryDomainEnumExtensions.TryFromWireValue(wire, out Sessions.MemoryProposalOperation value))
             return value;
-        throw new JsonException($"Unknown {nameof(Sessions.MemoryProposalOperation)} wire value '{wire}'.");
+        return Sessions.MemoryProposalOperation.Unknown;
     }
 
     public override void Write(Utf8JsonWriter writer, Sessions.MemoryProposalOperation value, JsonSerializerOptions options)

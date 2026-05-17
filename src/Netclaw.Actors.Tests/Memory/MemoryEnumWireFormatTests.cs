@@ -118,7 +118,7 @@ public sealed class MemoryEnumWireFormatTests
     }
 
     [Fact]
-    public void MemoryProposal_rejects_unknown_enum_wire_value()
+    public void MemoryProposal_deserializes_unknown_enum_wire_value_for_gate_rejection()
     {
         const string badJson = """
             {
@@ -134,8 +134,84 @@ public sealed class MemoryEnumWireFormatTests
             }
             """;
 
-        Assert.Throws<JsonException>(
-            () => JsonSerializer.Deserialize<MemoryProposal>(badJson, ParseOptions));
+        var proposal = JsonSerializer.Deserialize<MemoryProposal>(badJson, ParseOptions)!;
+
+        Assert.Equal(MemoryProposalOperation.Unknown, proposal.Operation);
+    }
+
+    [Fact]
+    public void MemoryProposalGate_rejects_bad_proposal_without_dropping_valid_siblings()
+    {
+        const string sidecarJson = """
+            {
+              "proposals": [
+                {
+                  "operation": "not_a_real_operation",
+                  "memoryClass": "durable_fact",
+                  "subjectKind": "user",
+                  "subjectValue": "self",
+                  "anchor": { "canonicalName": "bad-op", "anchorType": "user" },
+                  "title": "Bad operation",
+                  "content": "This proposal should be rejected individually.",
+                  "aliases": ["bad op"],
+                  "facets": ["test"],
+                  "recallMode": "auto",
+                  "sensitivity": "normal",
+                  "confidence": 0.5
+                },
+                {
+                  "operation": "upsert_document",
+                  "memoryClass": "durable_fact",
+                  "subjectKind": "user",
+                  "subjectValue": "self",
+                  "anchor": { "canonicalName": "preferred-editor", "anchorType": "user" },
+                  "title": "Preferred editor",
+                  "content": "The user prefers Vim keybindings.",
+                  "aliases": ["editor preference"],
+                  "facets": ["development_tools"],
+                  "recallMode": "auto",
+                  "sensitivity": "normal",
+                  "confidence": 0.9
+                }
+              ]
+            }
+            """;
+
+        var response = JsonSerializer.Deserialize<DistillationResponseFixture>(sidecarJson, ParseOptions)!;
+        var result = new MemoryProposalGate().Evaluate(response.Proposals!, nowMs: 123L);
+
+        Assert.Equal(2, result.Summary.Total);
+        Assert.Equal(1, result.Summary.Accepted);
+        Assert.Single(result.MemoryOperations);
+        Assert.Equal(1, result.Summary.RejectionReasons["invalid-operation"]);
+    }
+
+    [Fact]
+    public void MemoryProposalGate_reports_unknown_memory_class_rejection()
+    {
+        const string badJson = """
+            {
+              "operation": "upsert_document",
+              "memoryClass": "preference",
+              "subjectKind": "user",
+              "subjectValue": "self",
+              "anchor": { "canonicalName": "preferred-editor", "anchorType": "user" },
+              "title": "Preferred editor",
+              "content": "The user prefers Vim keybindings.",
+              "aliases": ["editor preference"],
+              "facets": ["development_tools"],
+              "recallMode": "auto",
+              "sensitivity": "normal",
+              "confidence": 0.9
+            }
+            """;
+
+        var proposal = JsonSerializer.Deserialize<MemoryProposal>(badJson, ParseOptions)!;
+        var result = new MemoryProposalGate().Evaluate([proposal], nowMs: 123L);
+
+        Assert.Equal(MemoryClass.Unknown, proposal.MemoryClass);
+        Assert.Empty(result.MemoryOperations);
+        Assert.Equal(1, result.Summary.RejectionReasons["invalid-memory-class"]);
     }
 
     [Fact]
@@ -181,4 +257,6 @@ public sealed class MemoryEnumWireFormatTests
         Assert.Equal(CheckpointTriggerType.ObservedMemoryProposals, payload.TriggerType);
         Assert.Equal(MemorySensitivity.Normal, payload.Sensitivity);
     }
+
+    private sealed record DistillationResponseFixture(IReadOnlyList<MemoryProposal>? Proposals);
 }
