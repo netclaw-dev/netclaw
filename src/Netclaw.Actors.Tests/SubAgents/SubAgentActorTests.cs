@@ -694,6 +694,13 @@ public class SubAgentActorTests : TestKit
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
+        var startHeartbeat = await heartbeatSink.ExpectMsgAsync<SubAgentHeartbeat>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("test-agent", startHeartbeat.AgentName.Value);
+        Assert.Equal("run-xyz", startHeartbeat.RunId);
+        Assert.Equal(7, startHeartbeat.ParentWatchdogOpId);
+        Assert.Equal(SubAgentHeartbeatPhase.LlmStreaming, startHeartbeat.Phase);
+
         var heartbeat = await heartbeatSink.ExpectMsgAsync<SubAgentHeartbeat>(
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("test-agent", heartbeat.AgentName.Value);

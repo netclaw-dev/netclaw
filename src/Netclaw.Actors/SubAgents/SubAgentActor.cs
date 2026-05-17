@@ -36,7 +36,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private const string BackstopTimerKey = "subagent-backstop";
     private const string HeartbeatTimerKey = "subagent-heartbeat";
     private const string SpawnAgentToolName = "spawn_agent";
-    private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MaxHeartbeatInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan MinHeartbeatInterval = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ActivityPingInterval = TimeSpan.FromSeconds(1);
 
     private readonly SubAgentDefinition _definition;
@@ -186,7 +187,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // spawn_agent tool-execution watchdog refreshed while this sub-agent
             // is alive. Skipped when there is no parent sink (standalone run).
             if (_heartbeatSink is not null)
-                Timers.StartPeriodicTimer(HeartbeatTimerKey, SubAgentHeartbeatTick.Instance, HeartbeatInterval);
+            {
+                EmitHeartbeat(SubAgentHeartbeatPhase.LlmStreaming);
+                Timers.StartPeriodicTimer(
+                    HeartbeatTimerKey,
+                    SubAgentHeartbeatTick.Instance,
+                    ComputeHeartbeatInterval(_budget.ToolExecutionTimeout));
+            }
 
             // Build initial conversation: system prompt (from file, verbatim) + task as user message.
             // If the caller supplied runtime context, prefix it onto the user message so the
@@ -454,6 +461,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         });
 
         Context.Stop(Self);
+    }
+
+    private static TimeSpan ComputeHeartbeatInterval(TimeSpan toolExecutionTimeout)
+    {
+        var halfBudget = TimeSpan.FromTicks(Math.Max(1, toolExecutionTimeout.Ticks / 2));
+        if (halfBudget < MinHeartbeatInterval)
+            return MinHeartbeatInterval;
+        return halfBudget < MaxHeartbeatInterval ? halfBudget : MaxHeartbeatInterval;
     }
 
     private List<SubAgentFinding> BuildFindings(string output, string? sessionId)

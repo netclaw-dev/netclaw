@@ -46,6 +46,8 @@ internal sealed record SubAgentExecutionWiring(
 /// </summary>
 internal static class SessionToolExecutionPipeline
 {
+    private const string SpawnAgentToolName = "spawn_agent";
+
     public static async Task ExecuteToolsAsync(
         IToolExecutor executor,
         List<FunctionCallContent> toolCalls,
@@ -278,7 +280,8 @@ internal static class SessionToolExecutionPipeline
                 }
             }
 
-            resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
+            var attemptTimeout = GetAttemptTimeout(tc.Name, timeout);
+            resultText = await ExecuteToolAttemptAsync(executor, tc, context, attemptTimeout, ct);
             sw.Stop();
 
             auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
@@ -356,7 +359,8 @@ internal static class SessionToolExecutionPipeline
                         string.Join(", ", ctx.Patterns));
                 }
 
-                resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
+                var attemptTimeout = GetAttemptTimeout(tc.Name, timeout);
+                resultText = await ExecuteToolAttemptAsync(executor, tc, context, attemptTimeout, ct);
                 sw.Stop();
 
                 var patternStr = string.Join(", ", ctx.Patterns);
@@ -496,6 +500,11 @@ internal static class SessionToolExecutionPipeline
             }
         }
     }
+
+    private static TimeSpan GetAttemptTimeout(string toolName, TimeSpan timeout)
+        => string.Equals(toolName, SpawnAgentToolName, StringComparison.Ordinal)
+            ? Timeout.InfiniteTimeSpan
+            : timeout;
 
     private static bool SetsEqual(IReadOnlySet<string> left, IReadOnlySet<string> right)
     {

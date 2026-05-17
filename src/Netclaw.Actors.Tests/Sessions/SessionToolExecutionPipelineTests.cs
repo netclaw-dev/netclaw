@@ -183,6 +183,33 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Spawn_agent_tool_attempt_is_not_cancelled_by_parent_tool_timeout()
+    {
+        var executor = new SlowSuccessExecutor(TimeSpan.FromMilliseconds(200));
+
+        var result = await SessionToolExecutionPipeline.ExecuteSingleToolAsync(
+            executor,
+            new FunctionCallContent("call-spawn", "spawn_agent", new Dictionary<string, object?>
+            {
+                ["agent"] = "researcher",
+                ["task"] = "Investigate the issue"
+            }),
+            new SessionId("D1/spawn-timeout-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            timeout: TimeSpan.FromMilliseconds(50),
+            ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("slow-success", result.Message.Content);
+        Assert.False(executor.WasCancelled);
+    }
+
     private sealed class ApprovalThenSuccessExecutor : IToolExecutor
     {
         private int _attempt;
@@ -243,6 +270,29 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("ok");
+        }
+    }
+
+    private sealed class SlowSuccessExecutor(TimeSpan delay) : IToolExecutor
+    {
+        public bool WasCancelled { get; private set; }
+
+        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public async Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+        {
+            try
+            {
+                await Task.Delay(delay, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                WasCancelled = true;
+                throw;
+            }
+
+            return "slow-success";
         }
     }
 }
