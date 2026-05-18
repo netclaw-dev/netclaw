@@ -15,7 +15,10 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     private readonly DiscordSocketClient _client;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DiscordNetGatewayClient> _logger;
-    private readonly TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    // Reassigned per ConnectAsync call so the channel can retry a transient
+    // failure with a fresh readiness signal. Read by Discord.Net event threads.
+    private volatile TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
@@ -36,21 +39,28 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
 
         _client.Log += OnDiscordLog;
         _client.Ready += OnReadyAsync;
+        _client.Disconnected += OnDisconnectedAsync;
         _client.MessageReceived += OnMessageReceivedAsync;
         _client.ButtonExecuted += OnButtonExecutedAsync;
     }
 
     public async Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
     {
+        // Fresh readiness signal per attempt so a retry after a transient
+        // failure is not satisfied by a stale result or fault.
+        var readyTcs = _readyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
         await _client.LoginAsync(TokenType.Bot, botToken);
         await _client.StartAsync();
 
         // Wait for the READY event so that CurrentUser is populated before
         // we start processing messages. Without this, BotUserId and
         // _botMentionTag would be null and mention detection would fail.
+        // OnDisconnectedAsync faults this task on a fatal close (e.g. disallowed
+        // intents), so a misconfiguration fails fast instead of hitting the timeout.
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         linkedCts.CancelAfter(TimeSpan.FromSeconds(30));
-        await _readyTcs.Task.WaitAsync(linkedCts.Token);
+        await readyTcs.Task.WaitAsync(linkedCts.Token);
     }
 
     private Task OnReadyAsync()
@@ -66,6 +76,23 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         return Task.CompletedTask;
     }
 
+    private Task OnDisconnectedAsync(Exception exception)
+    {
+        // A fatal close (bad token, disallowed/invalid intents) is not something
+        // Discord.Net will retry, so surface it to ConnectAsync immediately
+        // instead of letting the caller block on the 30s readiness timeout.
+        // Transient drops are left alone — Discord.Net reconnects on its own,
+        // and OnReadyAsync will complete the readiness signal when it recovers.
+        var classified = DiscordConnectFailureClassifier.Classify(exception);
+        if (classified.IsFatal)
+        {
+            _logger.LogError(classified, "Discord gateway closed fatally: {Reason}", classified.Message);
+            _readyTcs.TrySetException(classified);
+        }
+
+        return Task.CompletedTask;
+    }
+
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
         await _client.StopAsync();
@@ -76,6 +103,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     {
         _client.Log -= OnDiscordLog;
         _client.Ready -= OnReadyAsync;
+        _client.Disconnected -= OnDisconnectedAsync;
         _client.MessageReceived -= OnMessageReceivedAsync;
         _client.ButtonExecuted -= OnButtonExecutedAsync;
     }
