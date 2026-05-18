@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.2.0"
+  version: "2.3.0"
 ---
 
 # Netclaw Operations
@@ -328,10 +328,16 @@ The approval gate runs three layers in order:
 
 1. **Hard-deny list** — system-protected paths. Always blocks.
 2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated
-   safe list (`ls`, `grep`, `cat`, `git status`, `git log`, …) AND the
-   effective directory (path arg or cwd) is under your declared safe space
-   (`session_dir` or `project_dir`), the call auto-runs with no prompt.
-   Mutating verbs (`git push`, `rm`, `sed -i`) are never on the list.
+   safe list AND the effective directory (path arg or cwd) is under your
+   declared safe space (`session_dir` or `project_dir`), the call auto-runs
+   with no prompt. The list covers demonstrably read-only verbs: file readers
+   (`ls`, `grep`, `cat`, …), system/info verbs (`date`, `whoami`, `uname`,
+   `uptime`, …), and read-only `git`/`gh` queries (`git status`, `git log`,
+   `gh pr view`, `gh run list`, …). Mutating verbs (`git push`, `git fetch`,
+   `rm`, `sed -i`), command-prefixing verbs (`env`, `xargs`, `sudo`),
+   network-writing verbs (`gh api`, `curl`), and environment/process-inspection
+   verbs (`printenv`, `ps`) are never on the list — the safe-space gate
+   cannot scope a verb that dumps the environment or the process table.
 3. **Interactive prompt** — everything else. Five buttons:
    - **Once** — run this one time, persist nothing.
    - **This chat** — allow the verbs in this directory for the rest of the

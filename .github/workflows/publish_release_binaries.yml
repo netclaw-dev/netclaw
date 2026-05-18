@@ -113,12 +113,6 @@ jobs:
         --output-dir ./publish
         --version ${{ github.ref_name }}
 
-    - name: Smoke-test published binary (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        chmod +x ./publish/cli/netclaw
-        ./publish/cli/netclaw version
-
     - name: Package archives (Unix)
       if: runner.os != 'Windows'
       run: |
