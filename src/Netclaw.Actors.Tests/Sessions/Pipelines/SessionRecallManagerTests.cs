@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Tests.Sessions.Pipelines;
 public class SessionRecallManagerTests
 {
     [Fact]
-    public void ResolveForTurn_ReturnsEmptyForPublicAudience()
+    public async Task ResolveForTurnAsync_ReturnsEmptyForPublicAudience()
     {
         var manager = new SessionRecallManager();
         var source = new MessageSource
@@ -29,7 +29,7 @@ public class SessionRecallManagerTests
         };
         var state = SessionState.Empty.AddUserMessage("Tell me a secret");
 
-        var result = manager.ResolveForTurn(
+        var result = await manager.ResolveForTurnAsync(
             recallQuery: null,
             state,
             new SessionId("slack/thread-1"),
@@ -42,7 +42,7 @@ public class SessionRecallManagerTests
     }
 
     [Fact]
-    public void ResolveForTurn_ReturnsEmptyWhenMemoryDisabled()
+    public async Task ResolveForTurnAsync_ReturnsEmptyWhenMemoryDisabled()
     {
         var manager = new SessionRecallManager();
         var source = new MessageSource
@@ -56,7 +56,7 @@ public class SessionRecallManagerTests
         };
         var state = SessionState.Empty.AddUserMessage("Search for memories");
 
-        var result = manager.ResolveForTurn(
+        var result = await manager.ResolveForTurnAsync(
             recallQuery: null,
             state,
             new SessionId("tui/session-1"),
@@ -69,7 +69,7 @@ public class SessionRecallManagerTests
     }
 
     [Fact]
-    public void ResolveForTurn_InvokesCoordinatorForPersonalAudience()
+    public async Task ResolveForTurnAsync_InvokesCoordinatorForPersonalAudience()
     {
         var manager = new SessionRecallManager();
         var coordinator = new TrackingCoordinator();
@@ -84,7 +84,7 @@ public class SessionRecallManagerTests
         };
         var state = SessionState.Empty.AddUserMessage("What do you remember about the project?");
 
-        var result = manager.ResolveForTurn(
+        var result = await manager.ResolveForTurnAsync(
             recallQuery: null,
             state,
             new SessionId("tui/session-1"),
@@ -97,14 +97,14 @@ public class SessionRecallManagerTests
     }
 
     [Fact]
-    public void ResolveForTurn_FallsBackToPublicWhenSourceNull()
+    public async Task ResolveForTurnAsync_FallsBackToPublicWhenSourceNull()
     {
         var manager = new SessionRecallManager();
         var coordinator = new TrackingCoordinator();
         // No source — the session ID prefix is "webhook" which resolves to Public
         var state = SessionState.Empty.AddUserMessage("test query");
 
-        var result = manager.ResolveForTurn(
+        var result = await manager.ResolveForTurnAsync(
             recallQuery: null,
             state,
             new SessionId("webhook/delivery-1"),

@@ -32,6 +32,30 @@ internal sealed record LlmResponseReceived : INoSerializationVerificationNeeded
 }
 
 /// <summary>
+/// Internal message delivered back to the session actor when off-thread memory
+/// recall completes. Recall does SQLite I/O, so it runs via <c>PipeTo</c>
+/// instead of blocking the actor mailbox thread; the turn continues from the
+/// handler for this message.
+/// </summary>
+internal sealed record RecallResolved : INoSerializationVerificationNeeded
+{
+    /// <summary>The resolved recall bundle (degraded/empty on failure).</summary>
+    public required AutomaticRecallResult Result { get; init; }
+
+    /// <summary>Whether the originating turn disabled tools.</summary>
+    public required bool ForceNoTools { get; init; }
+
+    /// <summary>Wall-clock duration of the recall call, for turn logging.</summary>
+    public required TimeSpan RecallDuration { get; init; }
+
+    /// <summary>
+    /// Correlation ID matching <see cref="LlmSessionActor._activeCallId"/>.
+    /// A recall result for a superseded turn is ignored.
+    /// </summary>
+    public required long CallId { get; init; }
+}
+
+/// <summary>
 /// Incremental streaming delta emitted while an LLM response is in-flight.
 /// </summary>
 internal sealed record LlmResponseDeltaReceived(AIContent Content) : INoSerializationVerificationNeeded

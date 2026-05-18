@@ -439,6 +439,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
 
+        Command<RecallResolved>(msg =>
+        {
+            if (msg.CallId != _activeCallId) return; // recall for a superseded turn
+            ContinueAfterRecall(msg);
+        });
+
         Command<LlmResponseReceived>(msg =>
         {
             if (msg.CallId != _activeCallId) return; // stale response from cancelled call
@@ -2423,41 +2429,84 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _turnState.ForceNoToolsActive = forceNoTools;
 
-        // Recall: only resolve on turn-start calls, reuse cache for tool-loop follow-ups
+        // Recall: tool-loop follow-ups reuse the cached bundle and continue
+        // synchronously. Turn-start calls resolve recall OFF the mailbox thread
+        // (RecallAsync does SQLite I/O — blocking the actor thread on it
+        // starves the dispatcher), then continue from the RecallResolved
+        // handler, correlated by call id so a superseded turn is dropped.
         if (_recallManager.TurnRecallCache is null)
         {
+            var callId = _activeCallId;
             var recallSw = Stopwatch.StartNew();
-            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator, _memoryConfig.Enabled);
-            recallSw.Stop();
-
-            resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
-
-            // Persist recalled memories into session history so they survive
-            // across turns. Without this, recalled memories are transient system
-            // messages that vanish after one turn, and the exclusion set prevents
-            // re-injection — making the memory invisible for the rest of the session.
-            if (resolved.Items.Count > 0)
-            {
-                var recallContent = SessionRecallManager.FormatForHistory(resolved);
-                _state = _state.AddSystemNudge(recallContent);
-                _observerActor?.Tell(new ObserverSystemContext("recalled-memory", recallContent));
-            }
-
-            var recallIds = resolved.Items.Count == 0
-                ? "-"
-                : string.Join(",", resolved.Items.Select(i => i.Id));
-            TurnLog().Info(
-                "turn_memory_recall degraded={Degraded} stage={Stage} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
-                resolved.Degraded,
-                resolved.DegradeStage ?? "-",
-                recallSw.ElapsedMilliseconds,
-                resolved.Items.Count,
-                recallIds);
-
-            if (resolved.Items.Count > 0)
-                _sessionMetrics?.RecordMemoriesRecalled(resolved.Items.Count);
+            _recallManager
+                .ResolveForTurnAsync(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator, _memoryConfig.Enabled)
+                .PipeTo(
+                    Self,
+                    success: result => new RecallResolved
+                    {
+                        Result = result,
+                        ForceNoTools = forceNoTools,
+                        RecallDuration = recallSw.Elapsed,
+                        CallId = callId,
+                    },
+                    failure: ex => new RecallResolved
+                    {
+                        Result = new AutomaticRecallResult([], true, ex.Message, "resolution"),
+                        ForceNoTools = forceNoTools,
+                        RecallDuration = recallSw.Elapsed,
+                        CallId = callId,
+                    });
+            return;
         }
 
+        ContinueLlmCall(forceNoTools);
+    }
+
+    /// <summary>
+    /// Applies progressive-recall filtering to a just-resolved recall bundle,
+    /// persists recalled memories into session history, then continues the
+    /// turn. Invoked from the <see cref="RecallResolved"/> handler on the
+    /// mailbox thread.
+    /// </summary>
+    private void ContinueAfterRecall(RecallResolved msg)
+    {
+        var resolved = _recallManager.ApplyProgressiveRecall(msg.Result, _log);
+
+        // Persist recalled memories into session history so they survive
+        // across turns. Without this, recalled memories are transient system
+        // messages that vanish after one turn, and the exclusion set prevents
+        // re-injection — making the memory invisible for the rest of the session.
+        if (resolved.Items.Count > 0)
+        {
+            var recallContent = SessionRecallManager.FormatForHistory(resolved);
+            _state = _state.AddSystemNudge(recallContent);
+            _observerActor?.Tell(new ObserverSystemContext("recalled-memory", recallContent));
+        }
+
+        var recallIds = resolved.Items.Count == 0
+            ? "-"
+            : string.Join(",", resolved.Items.Select(i => i.Id));
+        TurnLog().Info(
+            "turn_memory_recall degraded={Degraded} stage={Stage} durationMs={DurationMs} itemCount={ItemCount} itemIds={ItemIds}",
+            resolved.Degraded,
+            resolved.DegradeStage ?? "-",
+            (long)msg.RecallDuration.TotalMilliseconds,
+            resolved.Items.Count,
+            recallIds);
+
+        if (resolved.Items.Count > 0)
+            _sessionMetrics?.RecordMemoriesRecalled(resolved.Items.Count);
+
+        ContinueLlmCall(msg.ForceNoTools);
+    }
+
+    /// <summary>
+    /// Assembles the prompt and fires the async LLM call for the current turn.
+    /// Runs on the mailbox thread; recall must already be resolved (cached, or
+    /// applied via <see cref="ContinueAfterRecall"/>).
+    /// </summary>
+    private void ContinueLlmCall(bool forceNoTools)
+    {
         _activeRecall = _recallManager.TurnRecallCache;
 
         // Build the full message list via the cache-stable assembler.
@@ -2485,6 +2534,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Audience: CurrentTurnAudience(),
             SkillHint: skillHint));
         _startupContextInjected = true;
+
+        // Volatile per-turn tail content is consumed once by the assembler
+        // above. Clear it here — after assembly — so it is not re-injected by
+        // tool-loop follow-up calls, and so the clear cannot race the deferred
+        // (off-thread recall) continuation. The caller must not clear it.
+        _turnRestartNotice = null;
+        _slashCommandSkillContent = null;
 
         var self = Self;
         var client = _chatClient;
@@ -2660,7 +2716,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _slashCommandSkillContent = skillBody;
         FireInitialTurnLlmCall(effectiveUserContent);
-        _slashCommandSkillContent = null;
 
         TransitionTo(SessionPhase.Processing);
         return true;
@@ -3405,17 +3460,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FireInitialTurnLlmCall(string? recallQuery)
     {
+        // _turnRestartNotice (and, for slash commands, _slashCommandSkillContent)
+        // are cleared by ContinueLlmCall after the assembler consumes them —
+        // recall now resolves off-thread, so FireLlmCall returns before assembly.
         _turnRestartNotice = _pendingRestartNotice;
         _pendingRestartNotice = null;
-
-        try
-        {
-            FireLlmCall(recallQuery);
-        }
-        finally
-        {
-            _turnRestartNotice = null;
-        }
+        FireLlmCall(recallQuery);
     }
 
     private void TryReplyAck()

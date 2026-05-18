@@ -13,8 +13,11 @@ using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 namespace Netclaw.Actors.Sessions.Pipelines;
 
 /// <summary>
-/// Manages per-turn memory recall state. Owns the turn recall cache and the
-/// progressive recall exclusion set. Only accessed from the actor's mailbox thread.
+/// Manages per-turn memory recall state. The turn recall cache and the
+/// progressive-recall exclusion set are mutated only on the actor's mailbox
+/// thread (<see cref="ApplyProgressiveRecall"/> and the reset methods).
+/// <see cref="ResolveForTurnAsync"/> is stateless and runs off the mailbox
+/// thread, so it must not touch that state.
 /// </summary>
 internal sealed class SessionRecallManager
 {
@@ -27,11 +30,13 @@ internal sealed class SessionRecallManager
     public AutomaticRecallResult? TurnRecallCache => _turnRecallCache;
 
     /// <summary>
-    /// Resolves the recall bundle for the current turn. Caches the result so
-    /// subsequent calls within the same turn reuse it.
-    /// Returns empty when the memory subsystem is disabled or the audience is Public.
+    /// Resolves the recall bundle for the current turn by querying the memory
+    /// coordinator. Returns empty when the memory subsystem is disabled or the
+    /// audience is Public. Stateless and runs off the actor mailbox thread; the
+    /// caller feeds the result into <see cref="ApplyProgressiveRecall"/> (which
+    /// owns caching) back on the mailbox thread.
     /// </summary>
-    public AutomaticRecallResult ResolveForTurn(
+    public async Task<AutomaticRecallResult> ResolveForTurnAsync(
         string? recallQuery,
         SessionState state,
         SessionId sessionId,
@@ -79,9 +84,7 @@ internal sealed class SessionRecallManager
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
-            return coordinator.RecallAsync(request, cts.Token)
-                .GetAwaiter()
-                .GetResult();
+            return await coordinator.RecallAsync(request, cts.Token);
         }
         catch (Exception ex)
         {
