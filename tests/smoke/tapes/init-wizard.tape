@@ -119,7 +119,10 @@ Enter
 # with Ctrl+Q to drop back to the shell. The post-tape assertion runs
 # `netclaw doctor` against the config the wizard wrote, which is the
 # real signal — vhs only proves we got this far.
-Wait+Screen@120s /Ready  \|  qwen2:0.5b/
+#
+# Generous timeout: this step covers a daemon cold-start, an Ollama
+# model load, and the chat-page transition — slow on a loaded CI runner.
+Wait+Screen@240s /Ready  \|  qwen2:0.5b/
 Ctrl+Q
 
 Wait+Screen@10s /TAPE\$/

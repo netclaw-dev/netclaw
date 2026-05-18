@@ -120,6 +120,13 @@ OLLAMA_ENDPOINT="${SMOKE_OLLAMA_ENDPOINT:-http://localhost:11434}"
 # nc — run the netclaw CLI under the per-step timeout.
 nc() { run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" "$@"; }
 
+# nc_chat — run `netclaw chat` under the chat timeout. A chat turn is far
+# slower than a normal CLI step: a cold model load plus (for tool calls)
+# several inference rounds easily exceed STEP_TIMEOUT_SECONDS, especially
+# for the larger tool-calling model on a CPU CI runner.
+CHAT_TIMEOUT_SECONDS="${CHAT_TIMEOUT_SECONDS:-600}"
+nc_chat() { run_timed "$CHAT_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" chat "$@"; }
+
 # die <msg> — record a failure, print the summary, exit non-zero.
 die() { fail "$1"; summarize || true; exit 1; }
 

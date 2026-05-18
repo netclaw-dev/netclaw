@@ -27,7 +27,7 @@ wait_for_health || die "daemon health endpoint not ready"
 RESUME_SESSION="smoke/chat-completion-$$"
 
 log "Turn 1: headless --json --resume $RESUME_SESSION..."
-turn1="$(nc chat -p --json --resume "$RESUME_SESSION" "Reply with the single word: ready" 2>/dev/null || true)"
+turn1="$(nc_chat -p --json --resume "$RESUME_SESSION" "Reply with the single word: ready" 2>/dev/null || true)"
 echo "$turn1"
 
 if ! echo "$turn1" | jq -e . >/dev/null 2>&1; then
@@ -76,7 +76,7 @@ fi
 
 # ── Turn 2: --resume keeps the same session id ──
 log "Turn 2: --resume $RESUME_SESSION (must keep the same session id)..."
-turn2="$(nc chat -p --json --resume "$RESUME_SESSION" "Reply with the single word: again" 2>/dev/null || true)"
+turn2="$(nc_chat -p --json --resume "$RESUME_SESSION" "Reply with the single word: again" 2>/dev/null || true)"
 echo "$turn2"
 
 if ! echo "$turn2" | jq -e . >/dev/null 2>&1; then

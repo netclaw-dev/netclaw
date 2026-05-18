@@ -36,7 +36,7 @@ start_daemon || die "daemon did not start"
 wait_for_health || die "daemon health endpoint not ready"
 
 log "Sending a headless prompt and parsing the --json envelope..."
-json_output="$(nc chat -p --json "Reply with the single word: ready" 2>/dev/null || true)"
+json_output="$(nc_chat -p --json "Reply with the single word: ready" 2>/dev/null || true)"
 echo "$json_output"
 
 if ! echo "$json_output" | jq -e . >/dev/null 2>&1; then

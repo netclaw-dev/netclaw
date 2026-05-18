@@ -74,7 +74,7 @@ wait_for_health || die "daemon health endpoint not ready"
 
 # ── Drive the agent to use the add tool ──
 log "Prompting the agent to use the add tool (2 + 2)..."
-json_output="$(nc chat -p --json \
+json_output="$(nc_chat -p --json \
   "Use the add tool to add 2 and 2. Reply with only the number." 2>/dev/null || true)"
 echo "$json_output"
 
