@@ -62,45 +62,24 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
             return error;
 
         var result = await _spawner.SpawnAsync(profile!, args.Task, args.Context, context, ct);
-        return result.Success
-            ? result.Output
-            : $"Subagent '{args.Agent}' failed: {result.Output}";
+        return FormatResult(args.Agent, result);
     }
 
     /// <summary>
     /// Streaming entry point: the sub-agent's liveness/progress activity is
     /// surfaced as the tool call's stream, so the parent's per-call watchdog
-    /// keeps a long-but-healthy delegated run alive. The terminal item carries
-    /// the sub-agent's final result.
+    /// keeps a long-but-healthy delegated run alive.
     /// </summary>
     public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
         ToolExecutionContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        Params? args = null;
-        string? failure = null;
-        if (arguments is null)
-        {
-            failure = $"Error: No arguments provided for tool '{Name}'.";
-        }
-        else
-        {
-            try
-            {
-                args = ParseArguments(arguments);
-            }
-            catch (Exception ex)
-            {
-                failure = $"Error parsing arguments for tool '{Name}': {ex.Message}";
-            }
-        }
+        var (failure, args) = TryParse(arguments);
 
         SubAgentProfile? profile = null;
         if (failure is null)
-        {
             (failure, profile) = Resolve(args!, context);
-        }
 
         if (failure is not null)
         {
@@ -113,16 +92,23 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
         var spawnTask = _spawner.SpawnAsync(
             profile!, args!.Task, args.Context, context, ct, activitySink: channel.Writer);
+        try
+        {
+            await foreach (var activity in channel.Reader.ReadAllAsync(ct))
+                yield return activity;
 
-        await foreach (var activity in channel.Reader.ReadAllAsync(ct))
-            yield return activity;
-
-        var result = await spawnTask;
-        yield return new ToolCompletedUpdate(
-            result.Success
-                ? result.Output
-                : $"Subagent '{args.Agent}' failed: {result.Output}");
+            yield return new ToolCompletedUpdate(FormatResult(args.Agent, await spawnTask));
+        }
+        finally
+        {
+            // Observe the spawn even when enumeration is abandoned (cancellation),
+            // so the sub-agent is stopped before this tool call returns.
+            await spawnTask;
+        }
     }
+
+    private static string FormatResult(string agent, SubAgentResult result)
+        => result.Success ? result.Output : $"Subagent '{agent}' failed: {result.Output}";
 
     /// <summary>
     /// Validate the invocation and resolve the requested agent. Returns an error

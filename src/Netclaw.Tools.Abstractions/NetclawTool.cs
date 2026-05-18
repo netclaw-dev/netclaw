@@ -56,20 +56,28 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     /// <inheritdoc />
     public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolExecutionContext context, CancellationToken ct = default)
     {
-        if (arguments is null)
-            return $"Error: No arguments provided for tool '{Name}'.";
+        var (error, args) = TryParse(arguments);
+        return error is not null ? error : await ExecuteAsync(args!, context, ct);
+    }
 
-        TParams args;
+    /// <summary>
+    /// Deserialize raw LLM arguments, returning a tool-result error string
+    /// instead of throwing. Shared by the string-returning and streaming
+    /// execution paths so their argument-error wording cannot drift.
+    /// </summary>
+    protected (string? Error, TParams? Args) TryParse(IDictionary<string, object?>? arguments)
+    {
+        if (arguments is null)
+            return ($"Error: No arguments provided for tool '{Name}'.", null);
+
         try
         {
-            args = ParseArguments(arguments);
+            return (null, ParseArguments(arguments));
         }
         catch (Exception ex)
         {
-            return $"Error parsing arguments for tool '{Name}': {ex.Message}";
+            return ($"Error parsing arguments for tool '{Name}': {ex.Message}", null);
         }
-
-        return await ExecuteAsync(args, context, ct);
     }
 
     // Partial method — implemented by the source generator

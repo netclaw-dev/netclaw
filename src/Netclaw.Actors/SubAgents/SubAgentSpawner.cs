@@ -64,6 +64,7 @@ public sealed class SubAgentSpawner
         if (context.SpawnChildActor is null)
         {
             _logger.LogWarning("SubAgent [{AgentName}] cannot spawn — no session context available", profile.Name);
+            activitySink?.TryComplete();
             return new SubAgentResult
             {
                 Success = false,
@@ -76,6 +77,7 @@ public sealed class SubAgentSpawner
         if (tools.Count == 0)
         {
             _logger.LogWarning("SubAgent [{AgentName}] has no resolvable tools — cannot spawn", profile.Name);
+            activitySink?.TryComplete();
             return new SubAgentResult
             {
                 Success = false,
@@ -135,10 +137,12 @@ public sealed class SubAgentSpawner
                     ApprovalBridge = context.ApprovalBridge,
                     ActivitySink = activitySink
                 },
-                // No Ask timeout: the sub-agent self-bounds via its inactivity
-                // watchdog and tool-iteration cap (it always replies), and ct —
-                // the spawning tool call's token, governed by the parent's
-                // per-call watchdog — cancels a fully-wedged run.
+                // No Ask timeout: a healthy run is inactivity-bounded, not
+                // wall-clock-bounded (like the parent LLM session), so any finite
+                // ceiling could pre-empt a legitimately long run. A stalled run
+                // self-completes via the sub-agent's inactivity watchdog; a wedged
+                // run is cancelled through ct — the spawning tool call's token,
+                // governed by the parent's per-call watchdog.
                 timeout: Timeout.InfiniteTimeSpan,
                 cancellationToken: ct);
 
