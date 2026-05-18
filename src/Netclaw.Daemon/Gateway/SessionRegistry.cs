@@ -226,7 +226,7 @@ public sealed class SessionRegistry
                 identity.Transport,
                 PayloadTaint.Trusted)
             {
-                SourceKind = "signalr"
+                SourceKind = new SourceKind("signalr")
             },
             Contents = [new TextContent(text)],
             ReceivedAt = _timeProvider.GetUtcNow()
@@ -263,7 +263,7 @@ public sealed class SessionRegistry
         {
             SessionId = requestedSessionId,
             CallId = new Netclaw.Tools.ToolCallId(callId),
-            SelectedKey = selectedKey,
+            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
             SenderId = identity.SenderId
         });
     }

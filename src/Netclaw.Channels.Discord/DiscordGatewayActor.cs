@@ -74,6 +74,17 @@ public sealed class DiscordGatewayActor : ReceiveActor
                 message.SessionId.Value, channelId.Value);
             conversation.Forward(message);
         });
+
+        // Proactively-posted thread: the message is already in Discord; route
+        // the wiring request to the per-channel conversation actor. Forward so
+        // the ProactiveThreadAck reply flows back to the original asker.
+        Receive<StartProactiveThread>(message =>
+        {
+            var conversation = GetOrCreateConversationActor(message.ChannelId);
+
+            _log.Debug("Routing proactive thread to conversation {0}", message.ChannelId.Value);
+            conversation.Forward(message);
+        });
     }
 
     public static Props CreateProps(DiscordGatewayDependencies dependencies) =>

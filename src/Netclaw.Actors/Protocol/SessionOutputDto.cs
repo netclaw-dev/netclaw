@@ -76,7 +76,8 @@ public sealed record SessionOutputDto
     public double? PredictedPerSecond { get; init; }
 
     // Turn Completed
-    public int? TurnNumber { get; init; }
+    [System.Text.Json.Serialization.JsonConverter(typeof(NullableTurnNumberJsonConverter))]
+    public TurnNumber? TurnNumber { get; init; }
     public string? TurnOutcome { get; init; }
     public string? SourceReminderId { get; init; }
 

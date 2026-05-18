@@ -846,7 +846,7 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
-    public async Task Resolves_discord_user_target_with_discord_transport()
+    public async Task Rejects_discord_user_target_with_discord_transport()
     {
         var probe = CreateTestProbe();
         var resolver = new TestResolver
@@ -858,34 +858,23 @@ public class SetReminderToolTests : TestKit
         };
         var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig(), [resolver]);
 
-        var execution = Task.Run(async () =>
+        var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
-            return await tool.ExecuteAsync(new Dictionary<string, object?>
-            {
-                ["Id"] = "discord-user-target",
-                ["Name"] = "discord-user-target",
-                ["Prompt"] = "Send results",
-                ["ScheduleType"] = "once",
-                ["Schedule"] = "15m",
-                ["DeliveryKind"] = "channel",
-                ["DeliveryTransport"] = "discord",
-                ["DeliveryAddress"] = "<@129847561203948576>"
-            });
-        });
+            ["Id"] = "discord-user-target",
+            ["Name"] = "discord-user-target",
+            ["Prompt"] = "Send results",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "15m",
+            ["DeliveryKind"] = "channel",
+            ["DeliveryTransport"] = "discord",
+            ["DeliveryAddress"] = "<@129847561203948576>"
+        }, TestContext.Current.CancellationToken);
 
-        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
-        Assert.Equal("discord", cmd.Definition.Delivery.Transport);
-        Assert.Equal("129847561203948576", cmd.Definition.Delivery.Address);
+        Assert.StartsWith("Error:", result);
+        Assert.Contains("guild text-channel targets only", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("channel:<channelId>", result, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, resolver.CallCount);
-
-        probe.Reply(new ReminderSavedResponse(
-            cmd.Definition.Id,
-            cmd.Definition.Title,
-            Success: true,
-            NextFire: _timeProvider.GetUtcNow().AddMinutes(15)));
-
-        await execution;
+        await probe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken);
     }
 
     [Fact]

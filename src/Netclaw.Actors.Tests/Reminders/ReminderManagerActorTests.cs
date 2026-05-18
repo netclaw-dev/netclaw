@@ -500,7 +500,7 @@ public class ReminderManagerActorTests : TestKit
         Assert.NotNull(delivered.Source.ReminderId);
         Assert.StartsWith("mode-b-anchor:", delivered.Source.ReminderId);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, delivered.Source.Principal);
-        Assert.Equal("reminder", delivered.Source.Provenance.SourceKind);
+        Assert.Equal("reminder", delivered.Source.Provenance.SourceKind?.Value);
 
         // Probe receiving the DeliverTrustedSessionTurn is the anchor
         // assertion: it proves the manager branched on OriginChannelType,

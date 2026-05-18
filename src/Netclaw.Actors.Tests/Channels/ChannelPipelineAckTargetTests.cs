@@ -103,7 +103,7 @@ public sealed class ChannelPipelineAckTargetTests : TestKit
         var source = MessageSourceFactory.Create(
             input,
             new SessionPipelineOptions { ChannelType = ChannelType.Slack },
-            "turn-1");
+            new Netclaw.Actors.Protocol.TurnId("turn-1"));
 
         return new SendUserMessage
         {

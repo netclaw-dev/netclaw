@@ -77,6 +77,52 @@ public sealed class UpdateCommandTests : IDisposable
         }
     }
 
+    [Theory]
+    [MemberData(nameof(StartupUpdateSkippedCases))]
+    public void ShouldRunStartupUpdateCheck_ReturnsFalse_ForInteractiveOrSelfUpdateFlows(string[] args)
+    {
+        Assert.False(UpdateCommand.ShouldRunStartupUpdateCheck(args[0], args));
+    }
+
+    [Theory]
+    [MemberData(nameof(StartupUpdateAllowedCases))]
+    public void ShouldRunStartupUpdateCheck_ReturnsTrue_ForNonInteractiveFlows(string[] args)
+    {
+        Assert.True(UpdateCommand.ShouldRunStartupUpdateCheck(args[0], args));
+    }
+
+    public static IEnumerable<object[]> StartupUpdateSkippedCases()
+    {
+        yield return [new[] { "init" }];
+        yield return [new[] { "update" }];
+        yield return [new[] { "chat" }];
+        yield return [new[] { "chat", "-p", "hello" }];
+        yield return [new[] { "sessions" }];
+        yield return [new[] { "sessions", "--once" }];
+        yield return [new[] { "stats", "--tui" }];
+        yield return [new[] { "mcp", "tools" }];
+        yield return [new[] { "mcp", "permissions" }];
+        yield return [new[] { "provider" }];
+        yield return [new[] { "model" }];
+        yield return [new[] { "approvals" }];
+        yield return [new[] { "approvals", "tui" }];
+        yield return [new[] { "reminder", "ui" }];
+        yield return [new[] { "reminder", "tui" }];
+    }
+
+    public static IEnumerable<object[]> StartupUpdateAllowedCases()
+    {
+        yield return [new[] { "status" }];
+        yield return [new[] { "doctor" }];
+        yield return [new[] { "stats", "--json" }];
+        yield return [new[] { "mcp", "list" }];
+        yield return [new[] { "mcp", "tools", "allow", "shell" }];
+        yield return [new[] { "provider", "list" }];
+        yield return [new[] { "model", "list" }];
+        yield return [new[] { "approvals", "list" }];
+        yield return [new[] { "reminder", "validate" }];
+    }
+
     private FakeHttpMessageHandler CreateSignedHandler(BinaryFeedManifest manifest)
     {
         var handler = new FakeHttpMessageHandler();

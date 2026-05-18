@@ -18,6 +18,33 @@ internal static class UpdateCommand
 {
     internal static Func<HttpMessageHandler>? TestHttpMessageHandlerFactory { get; set; }
 
+    internal static bool ShouldRunStartupUpdateCheck(string mode, string[] args)
+    {
+        switch (mode)
+        {
+            case "init":
+            case "update":
+            case "chat":
+            case "sessions":
+            case "headless":
+                return false;
+            case "stats":
+                return !args.Contains("--tui", StringComparer.Ordinal);
+            case "mcp":
+                var mcpSubcommand = args.Length > 1 ? args[1] : "help";
+                return !((mcpSubcommand is "tools" or "permissions") && args.Length <= 2);
+            case "provider":
+            case "model":
+                return args.Length > 1;
+            case "approvals":
+                return !(args.Length == 1 || (args.Length > 1 && args[1] is "tui"));
+            case "reminder":
+                return !(args.Length > 1 && args[1] is ("ui" or "tui"));
+            default:
+                return true;
+        }
+    }
+
     public static async Task<int> RunAsync(string[] args, NetclawPaths paths, bool selfUpdateDisabled = false)
     {
         var checkOnly = false;

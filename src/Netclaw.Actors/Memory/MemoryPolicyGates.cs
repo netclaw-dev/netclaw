@@ -50,15 +50,13 @@ public sealed class MemoryProposalGate
 
     public IReadOnlyList<SQLiteMemoryCurationOperation> Accept(
         IReadOnlyList<MemoryProposal> proposals,
-        string defaultSensitivity,
         long nowMs,
         string? boundary = null,
         TrustAudience audience = TrustAudience.Public)
-        => Evaluate(proposals, defaultSensitivity, nowMs, boundary, audience).MemoryOperations;
+        => Evaluate(proposals, nowMs, boundary, audience).MemoryOperations;
 
     public MemoryProposalGateResult Evaluate(
         IReadOnlyList<MemoryProposal> proposals,
-        string defaultSensitivity,
         long nowMs,
         string? boundary = null,
         TrustAudience audience = TrustAudience.Public)
@@ -75,16 +73,29 @@ public sealed class MemoryProposalGate
                 continue;
             }
 
-            if (!MemoryDomainEnumExtensions.TryFromWireValue(proposal.Operation, out MemoryProposalOperation operation)
-                || operation == MemoryProposalOperation.Ignore)
+            var operation = proposal.Operation;
+            if (operation is MemoryProposalOperation.Unknown or MemoryProposalOperation.Ignore)
             {
                 CountReject("invalid-operation");
                 continue;
             }
 
-            if (!MemoryDomainEnumExtensions.TryFromWireValue(proposal.MemoryClass, out MemoryClass memoryClass))
+            var memoryClass = proposal.MemoryClass;
+            if (memoryClass == MemoryClass.Unknown)
             {
                 CountReject("invalid-memory-class");
+                continue;
+            }
+
+            if (proposal.RecallMode == MemoryRecallMode.Unknown)
+            {
+                CountReject("invalid-recall-mode");
+                continue;
+            }
+
+            if (proposal.Sensitivity == MemorySensitivity.Unknown)
+            {
+                CountReject("invalid-sensitivity");
                 continue;
             }
 
@@ -107,15 +118,13 @@ public sealed class MemoryProposalGate
                     proposal.Content,
                     proposal.Rationale);
 
-                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, defaultSensitivity, nowMs, boundary, audience);
+                var mirrorOperation = TryBuildIdentityMirrorOperation(proposal, operation, memoryClass, nowMs, boundary, audience);
                 accepted.Add(new AcceptedProposal(proposal, mirrorOperation, identityUpdate, index));
 
                 continue;
             }
 
-            var sensitivity = string.IsNullOrWhiteSpace(proposal.Sensitivity)
-                ? defaultSensitivity
-                : proposal.Sensitivity;
+            var sensitivity = proposal.Sensitivity;
 
             var recallMode = ResolveRecallMode(memoryClass, sensitivity);
             var freshnessAt = proposal.FreshUntilMs ?? nowMs;
@@ -181,10 +190,9 @@ public sealed class MemoryProposalGate
             => rejectionReasons[reason] = rejectionReasons.TryGetValue(reason, out var current) ? current + 1 : 1;
     }
 
-    private static MemoryRecallMode ResolveRecallMode(MemoryClass memoryClass, string sensitivity)
+    private static MemoryRecallMode ResolveRecallMode(MemoryClass memoryClass, MemorySensitivity sensitivity)
     {
-        if (MemoryDomainEnumExtensions.TryFromWireValue(sensitivity, out MemorySensitivity sens)
-            && sens == MemorySensitivity.Secret)
+        if (sensitivity == MemorySensitivity.Secret)
             return MemoryRecallMode.Never;
 
         return memoryClass switch
@@ -237,7 +245,6 @@ public sealed class MemoryProposalGate
         MemoryProposal proposal,
         MemoryProposalOperation operation,
         MemoryClass memoryClass,
-        string defaultSensitivity,
         long nowMs,
         string? boundary,
         TrustAudience audience)
@@ -254,12 +261,9 @@ public sealed class MemoryProposalGate
         if (VolatileIdentityPattern.IsMatch(identityText))
             return null;
 
-        var sensitivity = string.IsNullOrWhiteSpace(proposal.Sensitivity)
-            ? defaultSensitivity
-            : proposal.Sensitivity;
+        var sensitivity = proposal.Sensitivity;
 
-        if (MemoryDomainEnumExtensions.TryFromWireValue(sensitivity, out MemorySensitivity sens)
-            && sens == MemorySensitivity.Secret)
+        if (sensitivity == MemorySensitivity.Secret)
             return null;
 
         var freshnessAt = proposal.FreshUntilMs ?? nowMs;
@@ -272,7 +276,7 @@ public sealed class MemoryProposalGate
         MemoryProposal proposal,
         MemoryProposalOperation operation,
         MemoryClass memoryClass,
-        string sensitivity,
+        MemorySensitivity sensitivity,
         MemoryRecallMode recallMode,
         long freshnessAt,
         long? expiry,
@@ -314,7 +318,7 @@ public sealed class MemoryProposalGate
             UpdateSemantics: updateSemantics.ToWireValue(),
             Boundary: MemoryPolicyScopeResolver.ResolveBoundary(boundary),
             Audience: audience,
-            Sensitivity: sensitivity,
+            Sensitivity: sensitivity.ToWireValue(),
             RecallMode: recallMode.ToWireValue(),
             Confidence: Math.Clamp(proposal.Confidence, 0.0, 1.0),
             FreshnessAtMs: freshnessAt,

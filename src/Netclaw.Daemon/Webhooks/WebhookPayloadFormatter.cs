@@ -22,11 +22,11 @@ public static class WebhookPayloadFormatter
         builder.AppendLine();
         builder.AppendLine($"Route: {invocation.Route.Name}");
 
-        if (!string.IsNullOrWhiteSpace(invocation.EventType))
-            builder.AppendLine($"Event: {invocation.EventType}");
+        if (invocation.EventType is { Value: { Length: > 0 } eventType })
+            builder.AppendLine($"Event: {eventType}");
 
-        if (!string.IsNullOrWhiteSpace(invocation.DeliveryId))
-            builder.AppendLine($"Delivery ID: {invocation.DeliveryId}");
+        if (invocation.DeliveryId is { Value: { Length: > 0 } deliveryId })
+            builder.AppendLine($"Delivery ID: {deliveryId}");
 
         builder.AppendLine($"Received At (UTC): {invocation.ReceivedAt:u}");
         builder.AppendLine();

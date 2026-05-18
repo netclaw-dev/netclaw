@@ -33,7 +33,7 @@ public sealed record DeliveryFailed : IWithSessionId, INoSerializationVerificati
     /// Completed turn number whose output failed delivery.
     /// Used to reject stale feedback after a newer user turn has started.
     /// </summary>
-    public required int TurnNumber { get; init; }
+    public required TurnNumber TurnNumber { get; init; }
 
     /// <summary>
     /// Channel adapter identifier.

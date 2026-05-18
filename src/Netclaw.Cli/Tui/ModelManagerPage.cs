@@ -268,7 +268,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
         // Build model list with manual entry option
         var items = ViewModel.DiscoveredModels
-            .Select(m => m.ModelId)
+            .Select(m => m.ModelId.Value)
             .OrderBy(id => id, StringComparer.OrdinalIgnoreCase)
             .ToList();
         items.Add("Enter model ID manually...");

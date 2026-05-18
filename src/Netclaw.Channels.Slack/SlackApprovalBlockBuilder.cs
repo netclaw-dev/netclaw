@@ -97,10 +97,10 @@ internal static class SlackApprovalBlockBuilder
             Elements = [.. request.Options
                 .Select(option => (IActionElement)new Button
                 {
-                    ActionId = BuildActionId(option.Key),
+                    ActionId = BuildActionId(option.Key.Value),
                     Text = new PlainText(option.Label),
                     Value = BuildButtonValue(request, option),
-                    Style = GetButtonStyle(option.Key),
+                    Style = GetButtonStyle(option.Key.Value),
                     AccessibilityLabel = option.Label
                 })]
         });

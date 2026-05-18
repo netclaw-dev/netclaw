@@ -11,13 +11,13 @@ namespace Netclaw.Actors.Protocol;
 /// <summary>
 /// Query the <see cref="ModelCapabilityActor"/> for a model's capabilities.
 /// </summary>
-public sealed record GetModelCapabilities(string ModelId) : INoSerializationVerificationNeeded;
+public sealed record GetModelCapabilities(ModelId ModelId) : INoSerializationVerificationNeeded;
 
 /// <summary>
 /// Response from the capability cache containing resolved modalities.
 /// </summary>
 public sealed record ModelCapabilitiesResponse(
-    string ModelId,
+    ModelId ModelId,
     ModelModality InputModalities,
     ModelModality OutputModalities) : INoSerializationVerificationNeeded;
 
@@ -25,7 +25,7 @@ public sealed record ModelCapabilitiesResponse(
 /// Internal message piped back from async resolution to the actor.
 /// </summary>
 internal sealed record CapabilityResolved(
-    string ModelId,
+    ModelId ModelId,
     ModelModality InputModalities,
     ModelModality OutputModalities,
     bool Success) : INoSerializationVerificationNeeded;

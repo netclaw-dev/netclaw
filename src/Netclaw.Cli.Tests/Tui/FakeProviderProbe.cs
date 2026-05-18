@@ -31,8 +31,8 @@ public sealed class FakeProviderProbe : IProviderProbe
     public ProviderProbeResult NextResult { get; set; } = new(
         true, null,
         [
-            new DiscoveredModel { ModelId = "model-a" },
-            new DiscoveredModel { ModelId = "model-b" }
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-a") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-b") }
         ]);
 
     /// <summary>

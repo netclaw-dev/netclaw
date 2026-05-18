@@ -24,17 +24,6 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         _client = client;
     }
 
-    private static async Task<IThreadChannel?> FindExistingThreadAsync(
-        ITextChannel textChannel, ulong anchorMessageId)
-    {
-        var anchorMsg = await textChannel.GetMessageAsync(anchorMessageId);
-        if (anchorMsg?.Thread is { } thread)
-            return thread;
-
-        var activeThreads = await textChannel.GetActiveThreadsAsync();
-        return activeThreads.FirstOrDefault(t => t.Id == anchorMessageId);
-    }
-
     public async Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
     {
         var channelId = ParseSnowflake(message.ReplyChannelId.Value, "reply channel ID");
@@ -64,7 +53,7 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
             {
                 // Thread already exists on this message (race between two simultaneous
                 // messages). Try to find and use the existing thread.
-                var existingThread = await FindExistingThreadAsync(textChannel, anchorId);
+                var existingThread = await DiscordThreadHelpers.FindExistingThreadAsync(textChannel, anchorId);
                 if (existingThread is null)
                     throw new InvalidOperationException(
                         $"Failed to create thread on message {threadAnchor.Value} and could not find existing thread.",

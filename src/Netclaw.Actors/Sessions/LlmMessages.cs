@@ -75,19 +75,22 @@ internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNee
     public required string RunId { get; init; }
     public required SubAgents.AgentName AgentName { get; init; }
     public required TimeSpan Duration { get; init; }
-    public required string Shape { get; init; }
+    public required SubAgentFindingShape Shape { get; init; }
     public required string Title { get; init; }
     public required string Content { get; init; }
+
+    // Kind / UpdateSemantics stay string: the source SubAgentFinding carries
+    // them as free-form wire strings with no matching enum.
     public required string Kind { get; init; }
-    public required string Sensitivity { get; init; }
-    public required string RecallMode { get; init; }
+    public required SubAgentFindingSensitivity Sensitivity { get; init; }
+    public required SubAgentFindingRecallMode RecallMode { get; init; }
     public required string UpdateSemantics { get; init; }
     public required double Confidence { get; init; }
-    public required string Durability { get; init; }
-    public required string Reusability { get; init; }
+    public required SubAgentFindingDurability Durability { get; init; }
+    public required SubAgentFindingReusability Reusability { get; init; }
     public IReadOnlyList<string> Evidence { get; init; } = [];
     public long? FreshnessAtMs { get; init; }
-    public required string Decision { get; init; }
+    public required SubAgentFindingReviewDecision Decision { get; init; }
     public string? DecisionReason { get; init; }
 }
 

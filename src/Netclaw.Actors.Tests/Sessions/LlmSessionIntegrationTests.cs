@@ -128,13 +128,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 SenderId = new SenderId("webhook:test"),
                 ChannelId = "github-issues",
                 MessageId = "delivery-1",
-                TurnId = "delivery-1",
+                TurnId = new Netclaw.Actors.Protocol.TurnId("delivery-1"),
                 Audience = TrustAudience.Public,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Public),
                 Principal = PrincipalClassification.VerifiedAutomation,
                 Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
                 {
-                    SourceKind = "issues"
+                    SourceKind = new Netclaw.Actors.Channels.SourceKind("issues")
                 },
                 ReceivedAt = _timeProvider.GetUtcNow()
             }
@@ -178,13 +178,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 SenderId = new SenderId("U123"),
                 ChannelId = "C1234567890",
                 MessageId = "evt-1",
-                TurnId = "turn-1",
+                TurnId = new Netclaw.Actors.Protocol.TurnId("turn-1"),
                 Audience = TrustAudience.Team,
                 Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Team),
                 Principal = PrincipalClassification.TrustedInternal,
                 Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted)
                 {
-                    SourceKind = "slack"
+                    SourceKind = new Netclaw.Actors.Channels.SourceKind("slack")
                 },
                 ReceivedAt = _timeProvider.GetUtcNow()
             }
@@ -228,7 +228,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, completed.SessionId);
-        Assert.Equal(1, completed.TurnNumber);
+        Assert.Equal(1, completed.TurnNumber.Value);
     }
 
     [Fact]
@@ -984,7 +984,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
 
         var completed = await recoverSub.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(3, completed.TurnNumber); // Continues from recovered state
+        Assert.Equal(3, completed.TurnNumber.Value); // Continues from recovered state
     }
 
     [Fact]
@@ -1158,7 +1158,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         sessionManager.Tell(new DeliveryFailed
         {
             SessionId = sessionId,
-            TurnNumber = 999,
+            TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(999),
             ChannelType = ChannelType.Slack,
             FailureKind = DeliveryFailureKind.MessageTooLarge,
             ErrorMessage = "msg_too_long"
@@ -1680,7 +1680,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Principal = PrincipalClassification.VerifiedAutomation,
         Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
         {
-            SourceKind = "reminder"
+            SourceKind = new Netclaw.Actors.Channels.SourceKind("reminder")
         },
         ReceivedAt = _timeProvider.GetUtcNow(),
         ReminderId = reminderId

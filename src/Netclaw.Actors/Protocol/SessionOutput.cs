@@ -150,7 +150,7 @@ public enum TurnOutcome
 /// </summary>
 public sealed record TurnCompleted : SessionOutput
 {
-    public required int TurnNumber { get; init; }
+    public required TurnNumber TurnNumber { get; init; }
 
     /// <summary>
     /// How the turn ended. Defaults to <see cref="TurnOutcome.Completed"/> for backward compatibility.
@@ -415,4 +415,4 @@ public sealed record ToolInteractionRequest : SessionOutput
 /// <summary>
 /// An option presented to the user in a <see cref="ToolInteractionRequest"/>.
 /// </summary>
-public sealed record ToolInteractionOption(string Key, string Label);
+public sealed record ToolInteractionOption(ApprovalOptionKey Key, string Label);

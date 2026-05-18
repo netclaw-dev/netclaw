@@ -57,7 +57,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
-    private int _turnNumber;
+    private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
     private ulong? _pendingCursorSnowflake;
@@ -202,6 +202,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         CommandAsync<DiscordThreadInbound>(HandleInboundAsync);
         CommandAsync<DiscordApprovalResponse>(HandleApprovalResponseAsync);
         CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
+        CommandAsync<StartProactiveThread>(HandleProactiveThreadAsync);
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
 
         Command<OutputStreamTerminated>(msg =>
@@ -245,6 +246,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         });
 
         Context.SetReceiveTimeout(IdlePassivationTimeout);
+    }
+
+    /// <summary>
+    /// Wires a proactively-created thread: ensures the session pipeline is
+    /// initialized and acknowledges. The thread root (the bot's posted message)
+    /// is recovered as adopted context on the first authorized reply via the
+    /// deferred re-armed hydration path — see <see cref="PerformOneShotHydrationAsync"/>.
+    /// </summary>
+    private async Task HandleProactiveThreadAsync(StartProactiveThread message)
+    {
+        _replyChannelId = message.ReplyChannelId;
+        _threadCreated = true;
+        _rootMessageId = null;
+
+        _log.Info("Initializing proactive thread pipeline for session {0}", message.SessionId.Value);
+        await EnsureInitializedAsync();
+        Sender.Tell(new ProactiveThreadAck(message.SessionId));
     }
 
     private async Task EnsureInitializedAsync()
@@ -722,7 +740,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             SessionId = _sessionId,
             CallId = pending!.CallId,
-            SelectedKey = selectedKey,
+            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
@@ -754,7 +772,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             SessionId = _sessionId,
             CallId = message.CallId,
-            SelectedKey = message.SelectedKey,
+            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
@@ -1098,7 +1116,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             {
                 SessionId = _sessionId,
                 CallId = callId,
-                SelectedKey = ApprovalOptionKeys.Deny,
+                SelectedKey = ApprovalOptionKeys.DenyKey,
                 SenderId = new Netclaw.Actors.Protocol.SenderId("system")
             });
         }

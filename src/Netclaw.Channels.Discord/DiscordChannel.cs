@@ -79,6 +79,13 @@ public sealed class DiscordChannel : IChannel
 
     public string DisplayName => "Discord";
 
+    /// <summary>
+    /// The gateway actor ref, exposed so that proactive tools can send
+    /// <see cref="StartProactiveThread"/> messages to wire up the actor
+    /// hierarchy. Null until <see cref="StartAsync"/> completes.
+    /// </summary>
+    internal IActorRef? Gateway => _gateway;
+
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)
