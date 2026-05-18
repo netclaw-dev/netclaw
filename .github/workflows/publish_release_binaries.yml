@@ -85,7 +85,7 @@ jobs:
           - os: windows-latest
             rid: win-x64
             archive_ext: zip
-          - os: macos-latest
+          - os: macos-26
             rid: osx-arm64
             archive_ext: tar.gz
     steps:
@@ -112,12 +112,6 @@ jobs:
         --component all
         --output-dir ./publish
         --version ${{ github.ref_name }}
-
-    - name: Smoke-test published binary (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        chmod +x ./publish/cli/netclaw
-        ./publish/cli/netclaw version
 
     - name: Package archives (Unix)
       if: runner.os != 'Windows'

@@ -62,54 +62,54 @@ execution.
 - `IMPLEMENTATION_PLAN.md` — RALPH task queue
 - `BACKLOG_PARKING_LOT.md` — parked items requiring human decisions
 
-## Smoke Sandbox (Docker)
+## Native Smoke Harness
 
-Developer-only integration sandbox for daemon lifecycle and gateway checks.
-This is intentionally script-driven (not a user-facing `netclaw test smoke`
-command yet).
+Developer-only integration harness for daemon lifecycle, gateway checks,
+and interactive TUI flows. It runs the real `netclaw` / `netclawd`
+binaries natively — no Docker for the binary — against a native Ollama
+process. It is script-driven (not a user-facing `netclaw test smoke`
+command).
 
 ```bash
-# Start sandbox (build local image + start Ollama + pull tiny model)
-scripts/smoke/up.sh
+# Light suite: all PR-gating flow tapes + non-interactive scenarios.
+# Publishes the binary, installs vhs, starts Ollama, and pulls the
+# smoke models automatically.
+scripts/smoke/run-smoke.sh light
 
-# Start without rebuilding image (useful after pre-building or in CI)
-SMOKE_BUILD=0 scripts/smoke/up.sh
+# Single tape or scenario by short name (fastest inner loop).
+scripts/smoke/run-smoke.sh init-wizard
 
-# Run smoke checks (daemon start/status/health/stop)
-scripts/smoke/check.sh
-
-# Tear down sandbox
-scripts/smoke/down.sh
-
-# Optional: remove volumes too
-SMOKE_REMOVE_VOLUMES=1 scripts/smoke/down.sh
+# Screenshot regression: capture + byte-compare against the baselines.
+scripts/smoke/run-smoke.sh screenshots
 ```
 
 Optional model override:
 
 ```bash
-SMOKE_OLLAMA_MODEL=qwen2:0.5b scripts/smoke/up.sh
+SMOKE_OLLAMA_MODEL=qwen2:0.5b scripts/smoke/run-smoke.sh light
 ```
 
-Useful timeout overrides for `scripts/smoke/check.sh`:
+To iterate against a binary you already built, export its path so the
+harness skips the publish step:
 
 ```bash
-# Wait up to 20 minutes for model pull/bootstrap (default: 1200)
-INIT_TIMEOUT_SECONDS=1200 scripts/smoke/check.sh
-
-# Per-command timeout inside sandbox (default: 120)
-STEP_TIMEOUT_SECONDS=120 scripts/smoke/check.sh
+NETCLAW_SMOKE_CLI=./publish/cli/netclaw \
+NETCLAW_SMOKE_DAEMON=./publish/daemon/netclawd \
+  scripts/smoke/run-smoke.sh light
 ```
 
 ### CI Smoke Workflow
 
-`smoke_sandbox` is available in GitHub Actions:
+`smoke.yml` runs the harness on every pull request to `dev`, on `dev`
+pushes, and nightly. It has three legs, all running in parallel:
 
-- Runs manually via `workflow_dispatch`.
-- Runs on every pull request update.
-- Uses Docker Buildx + GitHub Actions cache for smoke image layers.
-- Always uploads `smoke-logs-*` artifact (including `check.log`, container
-  logs, compose status, daemon log, PID snapshot) for debugging.
+- **`Native Smoke (Linux)`** — flow tapes + non-interactive scenarios.
+- **`Screenshot Regression (Linux)`** — TUI screenshot byte-comparison.
+- **`Native Smoke (macOS)`** — the Apple Silicon leg (flow tapes +
+  scenarios; screenshots stay Linux-only).
+
+Each leg uploads a `smoke-*logs-*` artifact (run log, daemon logs,
+failure GIFs, screenshot diffs) for debugging.
 
 ## Project Structure
 

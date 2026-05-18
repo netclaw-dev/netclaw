@@ -173,21 +173,21 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
   - Use Akka.TestKit's `AwaitAssertAsync` for polling assertions on async state.
   - `Task.Delay` in fake/mock services to simulate latency is acceptable only in
     the fake itself, never in test orchestration logic.
-- **TUI / Termina changes MUST be validated with the interactive tape
+- **TUI / Termina changes MUST be validated with the native smoke
   harness** before being marked done. xUnit cannot drive Spectre-style
-  prompts and `scripts/smoke/check.sh` only covers the HTTP/JSON surface,
-  so a Termina change that breaks the wizard, model picker, provider
-  picker, or any other prompt flow will pass every other gate. Run:
+  prompts, and the non-interactive smoke scenarios only cover the
+  HTTP/JSON surface, so a Termina change that breaks the wizard, model
+  picker, provider picker, or any other prompt flow will pass every
+  other gate. Run:
 
   ```bash
-  ./scripts/smoke/run-tapes.sh light --keep-stack    # all PR-gating tapes
-  ./scripts/smoke/run-tapes.sh init-wizard --no-up --keep-stack   # one tape, fastest loop
+  ./scripts/smoke/run-smoke.sh light          # all PR-gating tapes + scenarios
+  ./scripts/smoke/run-smoke.sh init-wizard    # one tape, fastest loop
   ```
 
   See `TOOLING.md` § Interactive CLI Smoke Tests for the full set of
-  commands and `tests/smoke-interactive/tapes/README.md` for tape
-  authoring conventions (no `Sleep`, anchor every step, pair with an
-  assertion).
+  commands and `tests/smoke/tapes/README.md` for tape authoring
+  conventions (no `Sleep`, anchor every step, pair with an assertion).
 
 ## Post-Code Quality Check
 
