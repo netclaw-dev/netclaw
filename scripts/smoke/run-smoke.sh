@@ -57,6 +57,7 @@ LIGHT_TAPES=(help init-wizard provider-add provider-rename tui-cleanup)
 FULL_TAPES=("${LIGHT_TAPES[@]}")
 
 LIGHT_SCENARIOS=(
+  doctor
   daemon-lifecycle
   provider-model-cli
   context-window
