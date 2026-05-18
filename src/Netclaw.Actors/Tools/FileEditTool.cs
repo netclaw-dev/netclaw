@@ -68,41 +68,46 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
 
         try
         {
-            var content = await File.ReadAllTextAsync(authorizedPath, Encoding.UTF8, ct);
-
-            var replaceAll = args.ReplaceAll == true;
-            var occurrences = CountOccurrences(content, args.OldString);
-
-            if (occurrences == 0)
-                return $"Error: The specified text was not found in {authorizedPath}";
-
-            if (occurrences > 1 && !replaceAll)
-                return $"Error: OldString matches {occurrences} locations in {authorizedPath}. " +
-                       "Provide more surrounding context to create a unique match, or set ReplaceAll=true.";
-
-            string newContent;
-            int replacementCount;
-
-            if (replaceAll)
+            // Serialize the read-modify-write so concurrent same-file edits in
+            // one turn apply sequentially instead of clobbering each other.
+            return await FileMutationGate.RunExclusiveAsync(authorizedPath, async () =>
             {
-                newContent = content.Replace(args.OldString, args.NewString, StringComparison.Ordinal);
-                replacementCount = occurrences;
-            }
-            else
-            {
-                // Single replacement at first occurrence
-                var index = content.IndexOf(args.OldString, StringComparison.Ordinal);
-                newContent = string.Concat(
-                    content.AsSpan(0, index),
-                    args.NewString,
-                    content.AsSpan(index + args.OldString.Length));
-                replacementCount = 1;
-            }
+                var content = await File.ReadAllTextAsync(authorizedPath, Encoding.UTF8, ct);
 
-            var bytes = Encoding.UTF8.GetBytes(newContent);
-            await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
+                var replaceAll = args.ReplaceAll == true;
+                var occurrences = CountOccurrences(content, args.OldString);
 
-            return $"Successfully edited {authorizedPath}: replaced {replacementCount} occurrence(s)";
+                if (occurrences == 0)
+                    return $"Error: The specified text was not found in {authorizedPath}";
+
+                if (occurrences > 1 && !replaceAll)
+                    return $"Error: OldString matches {occurrences} locations in {authorizedPath}. " +
+                           "Provide more surrounding context to create a unique match, or set ReplaceAll=true.";
+
+                string newContent;
+                int replacementCount;
+
+                if (replaceAll)
+                {
+                    newContent = content.Replace(args.OldString, args.NewString, StringComparison.Ordinal);
+                    replacementCount = occurrences;
+                }
+                else
+                {
+                    // Single replacement at first occurrence
+                    var index = content.IndexOf(args.OldString, StringComparison.Ordinal);
+                    newContent = string.Concat(
+                        content.AsSpan(0, index),
+                        args.NewString,
+                        content.AsSpan(index + args.OldString.Length));
+                    replacementCount = 1;
+                }
+
+                var bytes = Encoding.UTF8.GetBytes(newContent);
+                await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
+
+                return $"Successfully edited {authorizedPath}: replaced {replacementCount} occurrence(s)";
+            }, ct);
         }
         catch (UnauthorizedAccessException)
         {
