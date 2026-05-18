@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Threading.Channels;
 using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Tools;
@@ -57,7 +58,8 @@ public sealed class SubAgentSpawner
         string? runtimeContext,
         ToolExecutionContext context,
         CancellationToken ct = default,
-        string? systemPromptOverlay = null)
+        string? systemPromptOverlay = null,
+        ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
         if (context.SpawnChildActor is null)
         {
@@ -130,9 +132,14 @@ public sealed class SubAgentSpawner
                     ParentSessionDirectory = context.SessionDirectory,
                     ParentProjectDirectory = context.ProjectDirectory,
                     Cancellation = ct,
-                    ApprovalBridge = context.ApprovalBridge
+                    ApprovalBridge = context.ApprovalBridge,
+                    ActivitySink = activitySink
                 },
-                timeout: subAgentTimeout.Add(TimeSpan.FromSeconds(5)),
+                // No Ask timeout: the sub-agent self-bounds via its inactivity
+                // watchdog and tool-iteration cap (it always replies), and ct —
+                // the spawning tool call's token, governed by the parent's
+                // per-call watchdog — cancels a fully-wedged run.
+                timeout: Timeout.InfiniteTimeSpan,
                 cancellationToken: ct);
 
             sw.Stop();
@@ -176,12 +183,15 @@ public sealed class SubAgentSpawner
                 AgentName = new AgentName(profile.Name)
             };
         }
+        finally
+        {
+            // Terminate the streaming caller's activity reader even on failure.
+            activitySink?.TryComplete();
+        }
     }
 
     private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile)
     {
-        var isUserFacing = profile.Visibility == SubAgentVisibility.UserFacing;
-
         // When no tools specified, inherit all registered tools (matches Claude Code behavior).
         // When tools are specified, use them as a whitelist to limit access.
         IEnumerable<INetclawTool> candidates;
@@ -210,21 +220,19 @@ public sealed class SubAgentSpawner
             candidates = resolved;
         }
 
-        if (!isUserFacing)
-            return candidates.ToList();
-
-        // User-facing subagents are restricted to SubAgentToolPolicy's safe list.
+        // Sub-agents inherit the parent session's runtime tool policy; the only
+        // static sub-agent-specific filter denies recursive spawn_agent delegation.
         var tools = new List<INetclawTool>();
         foreach (var tool in candidates)
         {
-            if (SubAgentToolPolicy.IsAllowedForUserFacing(tool.Name))
+            if (SubAgentToolPolicy.IsAllowedForSubAgent(tool.Name))
             {
                 tools.Add(tool);
             }
             else
             {
                 _logger.LogDebug(
-                    "SubAgent [{AgentName}] tool '{ToolName}' filtered by SubAgentToolPolicy",
+                    "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy",
                     profile.Name, tool.Name);
             }
         }

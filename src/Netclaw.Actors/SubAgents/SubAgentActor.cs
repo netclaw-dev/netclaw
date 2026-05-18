@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using System.Text;
+using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
@@ -32,6 +34,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private const int MaxToolIterations = 10;
     private const string EmptyResponseMarker = "(no response)";
     private const string TimeoutTimerKey = "subagent-timeout";
+    private static readonly TimeSpan StreamPingInterval = TimeSpan.FromSeconds(2);
 
     private readonly SubAgentDefinition _definition;
     private readonly IChatClient _chatClient;
@@ -48,6 +51,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private IActorRef _replyTo = ActorRefs.Nobody;
     private CancellationTokenSource? _executionCts;
     private IParentApprovalBridge? _approvalBridge;
+    private ChannelWriter<ToolActivityUpdate>? _activitySink;
+    private TimeSpan _inactivityBudget;
 
     public ITimerScheduler Timers { get; set; } = null!;
     private CancellationTokenRegistration _externalCancellationRegistration;
@@ -134,8 +139,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
 
-            // Schedule wall-clock timeout
-            Timers.StartSingleTimer(TimeoutTimerKey, SubAgentTimeout.Instance, msg.Timeout);
+            // The run is bounded by an inactivity watchdog re-armed on every
+            // progress event (LLM response, tool batch, streaming ping), so a
+            // sub-agent making progress is never killed and a stalled one is.
+            _activitySink = msg.ActivitySink;
+            _inactivityBudget = msg.Timeout;
+            ArmInactivityTimer();
 
             // Build initial conversation: system prompt (from file, verbatim) + task as user message.
             // If the caller supplied runtime context, prefix it onto the user message so the
@@ -155,6 +164,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         Receive<LlmResponseReceived>(msg =>
         {
+            ArmInactivityTimer();
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
 
@@ -184,6 +194,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         Receive<ToolExecutionCompleted>(msg =>
         {
+            RecordProgress("processing tool results");
+
             // Append tool results as MEAI messages and log each result
             foreach (var result in msg.ToolResults)
             {
@@ -232,10 +244,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         Receive<SubAgentTimeout>(_ =>
         {
             _executionCts?.Cancel();
-            _log.Warning("SubAgent [{AgentName}] timed out after {Iterations} tool iterations",
-                _definition.Name, _toolIterationCount);
-            Complete(false, "Subagent timed out");
+            _log.Warning(
+                "SubAgent [{AgentName}] timed out: no activity for {Budget}s after {Iterations} tool iterations",
+                _definition.Name, _inactivityBudget.TotalSeconds, _toolIterationCount);
+            Complete(false, $"Subagent timed out: no activity for {_inactivityBudget.TotalSeconds:F0}s.");
         });
+
+        // Throttled liveness ping from a streaming LLM call — progress, even
+        // before the full response message arrives.
+        Receive<SubAgentStreamPing>(_ => RecordProgress("the model is responding"));
     }
 
     private void HandleToolCalls(AiChatMessage assistantMessage, List<FunctionCallContent> toolCalls)
@@ -244,6 +261,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _history.Add(assistantMessage);
 
         var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
+        RecordProgress($"running tools: {toolNames}");
         _log.Info("SubAgent [{AgentName}] calling tools: [{ToolNames}]",
             _definition.Name, toolNames);
 
@@ -261,6 +279,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void FireLlmCall(bool forceNoTools = false)
     {
+        RecordProgress("calling the model");
         var self = Self;
         var client = _chatClient;
         var messages = new List<AiChatMessage>(_history);
@@ -303,6 +322,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         });
 
         Context.Stop(Self);
+    }
+
+    /// <summary>Re-arm the inactivity watchdog (Akka replaces the same-key timer).</summary>
+    private void ArmInactivityTimer()
+        => Timers.StartSingleTimer(TimeoutTimerKey, SubAgentTimeout.Instance, _inactivityBudget);
+
+    /// <summary>Emit a liveness/progress item to the spawning tool's stream, if any.</summary>
+    private void EmitActivity(string phase)
+        => _activitySink?.TryWrite(new ToolActivityUpdate(phase));
+
+    /// <summary>Record forward progress: re-arm the inactivity watchdog and emit activity.</summary>
+    private void RecordProgress(string phase)
+    {
+        ArmInactivityTimer();
+        EmitActivity(phase);
     }
 
     private List<SubAgentFinding> BuildFindings(string output, string? sessionId)
@@ -395,9 +429,18 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // only in streaming mode), leaving the assistant message with no
             // TextContent and causing the subagent to report empty "(no response)".
             var updates = new List<ChatResponseUpdate>();
+            var pingThrottle = Stopwatch.StartNew();
             await foreach (var update in client.GetStreamingResponseAsync(messages, options, ct))
             {
                 updates.Add(update);
+
+                // Throttled liveness ping so the actor re-arms its inactivity
+                // watchdog and surfaces activity during a long streaming call.
+                if (pingThrottle.Elapsed >= StreamPingInterval)
+                {
+                    pingThrottle.Restart();
+                    self.Tell(SubAgentStreamPing.Instance);
+                }
             }
 
             var response = updates.ToChatResponse();
@@ -531,7 +574,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return SystemPromptAssembler.Assemble(agents: definition.SystemPrompt, projectInstructions: definition.ProjectInstructions);
     }
 
-    /// <summary>Singleton timeout marker message.</summary>
+    /// <summary>Singleton inactivity-watchdog marker message.</summary>
     private sealed class SubAgentTimeout
     {
         public static readonly SubAgentTimeout Instance = new();
@@ -542,6 +585,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         public static readonly SubAgentCancelled Instance = new();
         private SubAgentCancelled() { }
+    }
+
+    /// <summary>Throttled self-message: the streaming LLM call is still producing output.</summary>
+    private sealed class SubAgentStreamPing
+    {
+        public static readonly SubAgentStreamPing Instance = new();
+        private SubAgentStreamPing() { }
     }
 
     // ── Reuse LlmSessionActor's internal message types ──

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Threading.Channels;
 using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
@@ -98,6 +99,13 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     /// approval requests back to the interactive user instead of auto-denying.
     /// </summary>
     public IParentApprovalBridge? ApprovalBridge { get; init; }
+
+    /// <summary>
+    /// Optional sink for liveness/progress activity emitted while the sub-agent
+    /// runs. The spawning tool surfaces these as its tool-call stream so the
+    /// parent's per-call watchdog sees a long-but-healthy run as alive.
+    /// </summary>
+    public ChannelWriter<ToolActivityUpdate>? ActivitySink { get; init; }
 }
 
 /// <summary>

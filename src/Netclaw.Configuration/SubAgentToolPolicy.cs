@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SubAgentToolPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -6,23 +6,22 @@
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// Central policy for tools exposed to user-facing subagents.
-/// File-authored agents are intentionally constrained to a conservative,
-/// read-oriented tool set so they do not bypass the main session's safety model.
+/// Central policy for tools exposed to sub-agents. Sub-agents inherit the parent
+/// session's audience, boundary, approval, and shell policies; this static deny
+/// list only prevents recursive delegation loops.
 /// </summary>
 public static class SubAgentToolPolicy
 {
-    private static readonly HashSet<string> SafeUserFacingToolNames = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> DeniedSubAgentToolNames = new(StringComparer.Ordinal)
     {
-        "attach_file",
-        "file_read",
-        "web_fetch",
-        "web_search"
+        "spawn_agent"
     };
 
-    public static bool IsAllowedForUserFacing(string toolName)
-        => SafeUserFacingToolNames.Contains(toolName);
+    /// <summary>True unless the tool is statically denied to sub-agents.</summary>
+    public static bool IsAllowedForSubAgent(string toolName)
+        => !DeniedSubAgentToolNames.Contains(toolName);
 
-    public static IReadOnlyList<string> GetAllowedUserFacingTools()
-        => SafeUserFacingToolNames.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    /// <summary>The tools statically denied to sub-agents, sorted.</summary>
+    public static IReadOnlyList<string> GetDeniedSubAgentTools()
+        => DeniedSubAgentToolNames.OrderBy(x => x, StringComparer.Ordinal).ToArray();
 }

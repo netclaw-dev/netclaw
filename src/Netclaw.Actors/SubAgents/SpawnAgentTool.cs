@@ -1,9 +1,11 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SpawnAgentTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 
@@ -55,16 +57,90 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
 
     protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
-        // Defense-in-depth: block subagent spawning for Public audience or when subagent subsystem is disabled
-        var audience = context.Audience;
-        if (audience == TrustAudience.Public || !_subAgentConfig.Enabled)
-            return "Error: This tool is not available.";
+        var (error, profile) = Resolve(args, context);
+        if (error is not null)
+            return error;
+
+        var result = await _spawner.SpawnAsync(profile!, args.Task, args.Context, context, ct);
+        return result.Success
+            ? result.Output
+            : $"Subagent '{args.Agent}' failed: {result.Output}";
+    }
+
+    /// <summary>
+    /// Streaming entry point: the sub-agent's liveness/progress activity is
+    /// surfaced as the tool call's stream, so the parent's per-call watchdog
+    /// keeps a long-but-healthy delegated run alive. The terminal item carries
+    /// the sub-agent's final result.
+    /// </summary>
+    public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        Params? args = null;
+        string? failure = null;
+        if (arguments is null)
+        {
+            failure = $"Error: No arguments provided for tool '{Name}'.";
+        }
+        else
+        {
+            try
+            {
+                args = ParseArguments(arguments);
+            }
+            catch (Exception ex)
+            {
+                failure = $"Error parsing arguments for tool '{Name}': {ex.Message}";
+            }
+        }
+
+        SubAgentProfile? profile = null;
+        if (failure is null)
+        {
+            (failure, profile) = Resolve(args!, context);
+        }
+
+        if (failure is not null)
+        {
+            yield return new ToolCompletedUpdate(failure);
+            yield break;
+        }
+
+        // The spawner writes the sub-agent's activity into this channel and
+        // completes it (even on failure) when the run ends.
+        var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
+        var spawnTask = _spawner.SpawnAsync(
+            profile!, args!.Task, args.Context, context, ct, activitySink: channel.Writer);
+
+        await foreach (var activity in channel.Reader.ReadAllAsync(ct))
+            yield return activity;
+
+        var result = await spawnTask;
+        yield return new ToolCompletedUpdate(
+            result.Success
+                ? result.Output
+                : $"Subagent '{args.Agent}' failed: {result.Output}");
+    }
+
+    /// <summary>
+    /// Validate the invocation and resolve the requested agent. Returns an error
+    /// string (and a null profile) when the spawn must be refused, otherwise a
+    /// null error and the resolved profile.
+    /// </summary>
+    private (string? Error, SubAgentProfile? Profile) Resolve(Params args, ToolExecutionContext context)
+    {
+        // Defense-in-depth: block subagent spawning for Public audience or when
+        // the subagent subsystem is disabled.
+        if (context.Audience == TrustAudience.Public || !_subAgentConfig.Enabled)
+            return ("Error: This tool is not available.", null);
 
         if (string.IsNullOrWhiteSpace(args.Agent))
-            return "Error: 'agent' parameter is required.";
+            return ("Error: 'agent' parameter is required.", null);
 
         if (string.IsNullOrWhiteSpace(args.Task))
-            return "Error: 'task' parameter is required.";
+            return ("Error: 'task' parameter is required.", null);
 
         _loader?.SyncInto(_registry);
 
@@ -73,16 +149,12 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         {
             var available = _registry.GetUserFacing();
             if (available.Count == 0)
-                return $"Error: No subagents are available. Agent '{args.Agent}' not found. Author one at {_paths.AgentsDirectory}/*.md or define a skill with metadata.subagent once #661 lands.";
+                return ($"Error: No subagents are available. Agent '{args.Agent}' not found. Author one at {_paths.AgentsDirectory}/*.md or define a skill with metadata.subagent once #661 lands.", null);
 
             var names = string.Join(", ", available.Select(a => a.Name));
-            return $"Error: Unknown agent '{args.Agent}'. Available agents: {names}";
+            return ($"Error: Unknown agent '{args.Agent}'. Available agents: {names}", null);
         }
 
-        var result = await _spawner.SpawnAsync(profile, args.Task, args.Context, context!, ct);
-
-        return result.Success
-            ? result.Output
-            : $"Subagent '{args.Agent}' failed: {result.Output}";
+        return (null, profile);
     }
 }

@@ -54,14 +54,15 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
     {
         if (agents.Count == 0)
         {
-            var allowedTools = string.Join(", ", SubAgentToolPolicy.GetAllowedUserFacingTools());
+            var deniedTools = string.Join(", ", SubAgentToolPolicy.GetDeniedSubAgentTools());
             return string.Join('\n',
             [
                 "[available-subagents — use spawn_agent to delegate]",
                 string.Empty,
                 "No user-facing subagents are currently registered.",
                 $"Agents directory: {agentsDirectory}",
-                $"Allowed tools for user-facing agents: {allowedTools}",
+                "Sub-agents inherit the parent session's tool policy.",
+                $"Denied tools for sub-agents: {deniedTools}",
                 string.Empty,
                 "To add one: create an agent definition at <agents-directory>/<name>.md. The next turn or subagent lookup reloads it automatically.",
                 "Then call `spawn_agent(agent: \"<name>\", task: \"<specific task>\", context: \"<optional background>\")`."
@@ -79,8 +80,8 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
             lines.Add($"## {agent.Name}");
             lines.Add(agent.Description);
             lines.Add(agent.ToolNames.Count == 0
-                ? "Tools: all registered tools, then filtered for user-facing safety"
-                : $"Tools: {string.Join(", ", agent.ToolNames)}");
+                ? "Tools: inherited from parent session policy, except denied sub-agent tools"
+                : $"Tools: {string.Join(", ", agent.ToolNames)} (except denied sub-agent tools)");
             lines.Add($"Timeout: {agent.TimeoutSeconds}s");
             lines.Add(string.Empty);
         }
