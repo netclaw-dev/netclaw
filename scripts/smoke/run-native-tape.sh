@@ -129,7 +129,7 @@ vhs_status=0
 if command -v timeout >/dev/null 2>&1; then
   timeout --foreground "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
 elif command -v gtimeout >/dev/null 2>&1; then
-  gtimeout "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
+  gtimeout --foreground "${TAPE_TIMEOUT_S}" vhs "$combined" || vhs_status=$?
 else
   echo "ERROR: no timeout tool (timeout/gtimeout) found; refusing to run vhs unbounded." >&2
   exit 1

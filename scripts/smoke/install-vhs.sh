@@ -48,14 +48,16 @@ case "${uname_s}/${uname_m}" in
     if ! have brew; then
       cat >&2 <<'EOF'
 ERROR: vhs is not installed and Homebrew ('brew') is not on PATH.
-GitHub macos-latest runners ship Homebrew; for a local macOS run install it
+GitHub macOS runners ship Homebrew; for a local macOS run install it
 from https://brew.sh first, then re-run. To install vhs manually:
-    brew install vhs ttyd ffmpeg
+    brew install vhs ttyd ffmpeg coreutils
 EOF
       exit 1
     fi
-    echo "Installing vhs + runtime deps (ttyd, ffmpeg) via Homebrew..."
-    brew install vhs ttyd ffmpeg
+    # coreutils provides `gtimeout` — stock macOS has no `timeout`, and
+    # run-native-tape.sh needs one to bound the vhs run.
+    echo "Installing vhs + runtime deps (ttyd, ffmpeg, coreutils) via Homebrew..."
+    brew install vhs ttyd ffmpeg coreutils
     if ! have vhs; then
       echo "ERROR: 'brew install vhs' completed but 'vhs' is still not on PATH." >&2
       exit 1

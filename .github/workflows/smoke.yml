@@ -37,7 +37,7 @@ jobs:
         include:
           - os: ubuntu-latest
             rid: linux-x64
-          - os: macos-latest
+          - os: macos-26
             rid: osx-arm64
 
     steps:
@@ -121,7 +121,7 @@ jobs:
   smoke-macos:
     name: Native Smoke (macOS)
     needs: publish
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 45
 
     env:

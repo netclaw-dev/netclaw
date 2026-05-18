@@ -85,7 +85,7 @@ jobs:
           - os: windows-latest
             rid: win-x64
             archive_ext: zip
-          - os: macos-latest
+          - os: macos-26
             rid: osx-arm64
             archive_ext: tar.gz
     steps:
