@@ -41,6 +41,10 @@ Enter
 # success message auto-advances to the model list quickly enough that vhs
 # can miss it; wait directly for the model selection header instead.
 Wait+Screen@45s /Select a model/
+# The model list renders right after the network probe; Termina needs a
+# beat to wire up the list's key handler. Without this pause the Down is
+# dropped and the wizard selects the first model (all-minilm) instead.
+Sleep 1s
 # Models are alphabetical: all-minilm first, qwen2 second. Move to qwen2:0.5b.
 Down
 Enter

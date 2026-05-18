@@ -15,9 +15,9 @@ command -v jq >/dev/null 2>&1 || die "jq is required for chat-completion.sh"
 
 trap stop_daemon EXIT
 
-log "Seeding provider + tool model ($SMOKE_TOOL_MODEL)..."
+log "Seeding provider + model ($SMOKE_MODEL)..."
 nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
-nc model set main local-ollama "$SMOKE_TOOL_MODEL"
+nc model set main local-ollama "$SMOKE_MODEL"
 
 log "Starting daemon..."
 start_daemon || die "daemon did not start"

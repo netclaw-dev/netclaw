@@ -2,7 +2,7 @@
 # provider-connect.sh — goal: Netclaw connects to Ollama and a model responds.
 #
 # Verifies the full provider path end-to-end: a seeded Ollama provider is
-# reachable, model discovery sees the tool model, the daemon starts healthy,
+# reachable, model discovery sees the model, the daemon starts healthy,
 # and a headless prompt returns a non-empty assistant response. Structural
 # only — never asserts on the model's prose, which is non-deterministic.
 
@@ -19,17 +19,17 @@ trap stop_daemon EXIT
 log "Seeding Ollama provider..."
 nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
 
-log "Discovering models on local-ollama (expecting $SMOKE_TOOL_MODEL)..."
+log "Discovering models on local-ollama (expecting $SMOKE_MODEL)..."
 discover_output="$(nc model discover local-ollama 2>/dev/null || true)"
 echo "$discover_output"
-if [[ "$discover_output" == *"$SMOKE_TOOL_MODEL"* ]]; then
-  pass "model discover: lists $SMOKE_TOOL_MODEL"
+if [[ "$discover_output" == *"$SMOKE_MODEL"* ]]; then
+  pass "model discover: lists $SMOKE_MODEL"
 else
-  die "model discover: expected $SMOKE_TOOL_MODEL in discovery output"
+  die "model discover: expected $SMOKE_MODEL in discovery output"
 fi
 
-log "Setting main model to $SMOKE_TOOL_MODEL..."
-nc model set main local-ollama "$SMOKE_TOOL_MODEL"
+log "Setting main model to $SMOKE_MODEL..."
+nc model set main local-ollama "$SMOKE_MODEL"
 
 log "Starting daemon..."
 start_daemon || die "daemon did not start"

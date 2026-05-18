@@ -35,7 +35,6 @@
 #   SMOKE_RID                publish RID            (default: linux-x64)
 #   SMOKE_OLLAMA_MODEL       primary model          (default: qwen2:0.5b)
 #   SMOKE_OLLAMA_ALT_MODEL   alternate model        (default: all-minilm:latest)
-#   SMOKE_OLLAMA_TOOL_MODEL  tool-calling model     (default: qwen3.5:0.8b)
 #   SMOKE_LOG_DIR            artifact dir           (default: ./smoke-logs)
 #   KEEP_RUN_ROOT            set 1 to keep the temp run root
 
@@ -248,7 +247,6 @@ ollama_serve_start
 echo "==> Pulling smoke models..."
 ollama_pull "$SMOKE_OLLAMA_MODEL"
 ollama_pull "$SMOKE_OLLAMA_ALT_MODEL"
-ollama_pull "$SMOKE_OLLAMA_TOOL_MODEL"
 
 # ── 3) Ensure vhs ────────────────────────────────────────────────────────────
 
