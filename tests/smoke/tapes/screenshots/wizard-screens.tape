@@ -1,4 +1,4 @@
-# wizard-screens.tape (screenshot) — walk `netclaw init` and capture three
+# wizard-screens.tape (screenshot) — walk `netclaw init` and capture two
 # settled wizard states as PNGs.
 #
 # Capture-only tape: NO post-tape assertion. The screenshots mode in
@@ -9,16 +9,16 @@
 #   shot-wizard-provider-picker  — "Choose your LLM provider:" list
 #   shot-wizard-security-posture — "Who will interact with this Netclaw
 #                                   instance" posture list
-#   shot-wizard-identity         — the "Agent name:" identity step
+#
+# The identity ("Agent name:") step is deliberately NOT screenshotted: it
+# is a text-input step, and Termina blinks the input caret on its own
+# timer. VHS's `Set CursorBlink false` only governs VHS's own terminal
+# cursor, so the app-drawn caret cell is not byte-stable across runs.
 #
 # Navigation + anchors mirror tapes/init-wizard.tape; see that file and
 # src/Netclaw.Cli/Tui/Wizard/Steps/*StepView.cs for the synchronization
 # rationale. Each Screenshot is bracketed by Sleep 1s — VHS can otherwise
 # capture an unsettled frame, or let the next keystroke leak into the shot.
-#
-# Determinism note: these three screens carry no version string, timestamp,
-# spinner, or token counter. The model-discovery screen IS skipped here —
-# its "Connected! Found N models" line is transient and dynamic.
 #
 # Prepended preamble: tapes/screenshot-preamble.tape (determinism-pinned).
 
@@ -62,33 +62,10 @@ Wait+Screen@10s /Who will interact with this Netclaw instance/
 Sleep 1s
 Screenshot "/tmp/shot-wizard-security-posture.png"
 Sleep 1s
-# Personal is the first / default-highlighted option.
-Enter
 
-# ─── Channel picker ──────────────────────────────────────────────────
-Wait+Screen@10s /Which channels would you like to connect/
-# 'd' = done without selecting any channels.
-Type "d"
-
-# ─── Web search ──────────────────────────────────────────────────────
-Wait+Screen@10s /Choose your web search provider/
-# DuckDuckGo is the first / default option.
-Enter
-
-# ─── Browser automation ──────────────────────────────────────────────
-Wait+Screen@10s /Enable browser automation/
-# "No" is the first / default option.
-Enter
-
-# ─── Frame 3: Identity (Agent name) ──────────────────────────────────
-Wait+Screen@10s /Agent name:/
-Sleep 1s
-Screenshot "/tmp/shot-wizard-identity.png"
-Sleep 1s
-
-# We have the three frames we came for; abandon the wizard. Ctrl+C drops
-# out of the interactive prompt back to the shell — there is no config to
-# validate, this is a capture-only tape.
+# Both frames captured; abandon the wizard. Ctrl+C drops out of the
+# interactive prompt back to the shell — capture-only tape, no config to
+# validate.
 Ctrl+C
 Wait+Screen@10s /TAPE\$/
 

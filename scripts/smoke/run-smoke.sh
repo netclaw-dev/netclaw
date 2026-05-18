@@ -77,9 +77,7 @@ SHOT_FRAMES=(
   help
   wizard-provider-picker
   wizard-security-posture
-  wizard-identity
   provider-manager-empty
-  provider-manager-add-name
 )
 
 usage() {

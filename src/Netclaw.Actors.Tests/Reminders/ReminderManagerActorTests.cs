@@ -792,16 +792,6 @@ public class ReminderManagerActorTests : TestKit
                 manager.Tell(CreateEnvelope(id));
             }
 
-            await AwaitAssertAsync(async () =>
-            {
-                var health = await manager.Ask<ReminderHealthResponse>(
-                    GetReminderHealthQuery.Instance,
-                    TimeSpan.FromSeconds(3),
-                    TestContext.Current.CancellationToken);
-
-                Assert.Equal(ReminderManagerActor.MaxConcurrentExecutions, health.ActiveExecutions);
-            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-
             var now = TimeProvider.System.GetUtcNow();
             var expiringId = "queued-expiring";
             var expiringReminder = new ReminderDefinition
@@ -827,6 +817,16 @@ public class ReminderManagerActorTests : TestKit
             _definitionStore.Save(expiringReminder);
 
             manager.Tell(CreateEnvelope(expiringId));
+
+            await AwaitAssertAsync(async () =>
+            {
+                var health = await manager.Ask<ReminderHealthResponse>(
+                    GetReminderHealthQuery.Instance,
+                    TimeSpan.FromSeconds(3),
+                    TestContext.Current.CancellationToken);
+
+                Assert.Equal(ReminderManagerActor.MaxConcurrentExecutions, health.ActiveExecutions);
+            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
             await AwaitAssertAsync(async () =>
             {
