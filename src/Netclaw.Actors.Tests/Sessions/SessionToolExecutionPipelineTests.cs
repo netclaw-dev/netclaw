@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Runtime.CompilerServices;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
@@ -181,6 +182,79 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_stalled_tool_call_times_out_without_failing_its_healthy_sibling()
+    {
+        var executor = new ParallelStreamingExecutor();
+        var probe = CreateTestProbe("parallel-tool-probe");
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-fast", "fast_tool", new Dictionary<string, object?>()),
+            new("call-slow", "slow_tool", new Dictionary<string, object?>())
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            new SessionId("D1/parallel-watchdog-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(1),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()));
+
+        // Real-time: the slow tool's per-call watchdog trips ~1-2s in (1s budget
+        // plus the 1s poll interval). The ceiling stays tight so a regression —
+        // a watchdog that never fires — surfaces fast rather than hanging.
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(8),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        // Each call has its own watchdog: the stalled one is timed out
+        // independently, the healthy one returns, and the batch is not failed
+        // wholesale — both produce a tool-result message.
+        Assert.Equal(2, completed.ToolResults.Count);
+        var fast = completed.ToolResults.Single(r => r.Name == "fast_tool");
+        var slow = completed.ToolResults.Single(r => r.Name == "slow_tool");
+        Assert.Equal("fast_tool-ok", fast.Content);
+        Assert.Contains("slow_tool", slow.Content);
+        Assert.Contains("no activity", slow.Content);
+    }
+
+    /// <summary>
+    /// Streaming executor: <c>slow_tool</c> never produces an item (its per-call
+    /// watchdog must time it out); every other tool completes immediately.
+    /// </summary>
+    private sealed class ParallelStreamingExecutor : IToolExecutor
+    {
+        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => throw new NotSupportedException("ParallelStreamingExecutor is streaming-only.");
+
+        public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            if (toolCall.Name == "slow_tool")
+            {
+                // Never produces an item — the per-call watchdog must time it out.
+                await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
+            }
+
+            await Task.Yield();
+            yield return new ToolCompletedUpdate($"{toolCall.Name}-ok");
+        }
     }
 
     private sealed class ApprovalThenSuccessExecutor : IToolExecutor
