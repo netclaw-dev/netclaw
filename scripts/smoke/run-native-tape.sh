@@ -43,6 +43,10 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TAPES_DIR="${ROOT_DIR}/tests/smoke/tapes"
 ASSERT_DIR="${ROOT_DIR}/tests/smoke/assertions"
 
+# Shared daemon-lifecycle helpers — provides ensure_daemon_port_free / log.
+# shellcheck source=lib/common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+
 TAPE_TIMEOUT_S="${TAPE_TIMEOUT_S:-600}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-${ROOT_DIR}/smoke-logs/tapes/${TAPE_NAME}}"
 
@@ -81,6 +85,11 @@ tmp_dir="$(mktemp -d)"
 combined="${tmp_dir}/${TAPE_NAME}.tape"
 
 cleanup() {
+  # A tape (e.g. init-wizard) may leave a daemon running. Stop it and free
+  # the shared port 5199 so it cannot squat into the next tape/scenario —
+  # `daemon stop` is keyed to this tape's NETCLAW_HOME PID file.
+  NETCLAW_HOME="$NETCLAW_HOME" "$NETCLAW_SMOKE_CLI" daemon stop >/dev/null 2>&1 || true
+  ensure_daemon_port_free || true
   if [[ "${KEEP_TEMP:-0}" == "1" ]]; then
     echo "KEEP_TEMP=1 — combined tape retained at: $combined"
   else
