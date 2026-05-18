@@ -27,9 +27,18 @@ permissions:
 
 jobs:
   publish:
-    name: Publish native binaries
-    runs-on: ubuntu-latest
+    name: Publish native binaries (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+          - os: macos-26
+            rid: osx-arm64
 
     steps:
       - name: Checkout
@@ -45,7 +54,7 @@ jobs:
         run: |
           chmod +x scripts/build/publish-binaries.sh
           scripts/build/publish-binaries.sh \
-            --rid linux-x64 --component all --output-dir ./publish
+            --rid ${{ matrix.rid }} --component all --output-dir ./publish
 
       # The mcp-setup scenario registers this as a stdio MCP server. Published
       # self-contained single-file so the SDK-less smoke job can run it.
@@ -53,13 +62,13 @@ jobs:
         shell: bash
         run: >
           dotnet publish tests/Netclaw.SmokeMcpServer
-          -c Release -r linux-x64 --self-contained /p:PublishSingleFile=true
+          -c Release -r ${{ matrix.rid }} --self-contained /p:PublishSingleFile=true
           -o ./publish/mcp-server
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
-          name: netclaw-native-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          name: netclaw-native-binaries-${{ matrix.rid }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             publish/cli/netclaw
             publish/daemon/netclawd
@@ -84,7 +93,7 @@ jobs:
       - name: Download binary artifact
         uses: actions/download-artifact@v7
         with:
-          name: netclaw-native-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          name: netclaw-native-binaries-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: ./publish
 
       - name: Mark binaries executable
@@ -105,7 +114,51 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: smoke-native-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          name: smoke-native-logs-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-logs
+          if-no-files-found: warn
+
+  smoke-macos:
+    name: Native Smoke (macOS)
+    needs: publish
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    env:
+      SMOKE_OLLAMA_MODEL: qwen2:0.5b
+      SMOKE_OLLAMA_ALT_MODEL: all-minilm:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: netclaw-native-binaries-osx-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ./publish
+
+      - name: Mark binaries executable
+        run: |
+          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer
+          echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_MCP_SERVER=$(pwd)/publish/mcp-server/Netclaw.SmokeMcpServer" >> "$GITHUB_ENV"
+
+      # Screenshots stay Linux-only (VHS renders identically across OSes); the
+      # macOS leg runs the flow tapes + scenarios, which assert on exit codes.
+      - name: Run native smoke (light)
+        shell: bash
+        run: |
+          mkdir -p smoke-logs
+          set -o pipefail
+          scripts/smoke/run-smoke.sh light 2>&1 | tee smoke-logs/run-smoke.log
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-native-logs-macos-${{ github.run_id }}-${{ github.run_attempt }}
           path: smoke-logs
           if-no-files-found: warn
 
@@ -126,7 +179,7 @@ jobs:
       - name: Download binary artifact
         uses: actions/download-artifact@v7
         with:
-          name: netclaw-native-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          name: netclaw-native-binaries-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: ./publish
 
       - name: Mark binaries executable

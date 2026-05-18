@@ -39,10 +39,18 @@ ollama_ensure_installed() {
       echo "Installing ollama via official install script..."
       curl -fsSL https://ollama.com/install.sh | sh
       ;;
+    Darwin)
+      if ! command -v brew >/dev/null 2>&1; then
+        echo "ERROR: ollama is not installed and Homebrew ('brew') is not on PATH." >&2
+        echo "       Install Homebrew from https://brew.sh, then: brew install ollama" >&2
+        return 1
+      fi
+      echo "Installing ollama via Homebrew..."
+      brew install ollama
+      ;;
     *)
-      echo "ERROR: ollama is not installed and automatic install is Linux-only." >&2
-      echo "       On macOS install with: brew install ollama" >&2
-      echo "       See https://ollama.com/download for other platforms." >&2
+      echo "ERROR: ollama is not installed and automatic install is not supported on ${uname_s}." >&2
+      echo "       See https://ollama.com/download for supported platforms." >&2
       return 1
       ;;
   esac
