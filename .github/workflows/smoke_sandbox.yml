@@ -52,7 +52,7 @@ jobs:
             scripts/docker/build-image.sh local --publish-only
 
       - name: Build smoke sandbox image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/Dockerfile
