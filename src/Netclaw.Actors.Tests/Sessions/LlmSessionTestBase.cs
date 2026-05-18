@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
 
@@ -47,6 +48,14 @@ public abstract class LlmSessionTestBase : TestKit
         services.AddTestNetclawPaths();
         services.AddSingleton(SecurityPolicyDefaults.Resolve(null));
         services.AddSingleton<BackgroundJobDefinitionStore>();
+        // WithNetclawActors() starts ReminderManagerActor, which resolves these
+        // from DI (see Netclaw.Daemon Program.cs). Without them the actor fails
+        // activation on every session test. Registered before
+        // ConfigureSessionServices so a derived class can still override.
+        services.AddSingleton(new SchedulingConfig());
+        services.AddSingleton<ReminderDefinitionStore>();
+        services.AddSingleton<ReminderHistoryStore>();
+        services.AddSingleton<IOperationalNotificationSink>(NullNotificationSink.Instance);
         ConfigureSessionServices(services);
         services.AddLlmSessionCompositeRecords();
     }
