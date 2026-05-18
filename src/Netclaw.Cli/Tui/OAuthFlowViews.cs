@@ -83,6 +83,33 @@ internal static class OAuthFlowViews
     }
 
     /// <summary>
+    /// Try to open a URL in the default browser. Returns true if the launch
+    /// was dispatched (not whether the browser actually opened). Bound to the
+    /// "[O] open in browser" hotkey on the device-flow auth screen — terminal
+    /// alt-screen mode usually defeats Cmd/Ctrl-click on raw URL text, so a
+    /// hotkey is the most reliable way to give the user one-key access.
+    /// </summary>
+    public static bool TryOpenInBrowser(string? url)
+    {
+        if (string.IsNullOrEmpty(url) || !BrowserDetection.CanOpenBrowser())
+        {
+            return false;
+        }
+
+        try
+        {
+            // TODO: update to use enhanced functionality provided in .NET 11
+            System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Build the browser OAuth flow view with three fallback layers.
     /// </summary>
     public static ILayoutNode BuildBrowserOAuthFlow(

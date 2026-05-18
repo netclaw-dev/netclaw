@@ -501,7 +501,8 @@ internal static class ProviderCommand
     internal static ProviderDescriptorRegistry CreateDefaultRegistry()
     {
         var httpClient = new HttpClient();
-        var catalog = ProviderDescriptorCatalog.Create(httpClient);
+        var copilotTokenExchanger = new Netclaw.Providers.GitHubCopilot.CopilotTokenExchanger(httpClient);
+        var catalog = ProviderDescriptorCatalog.Create(httpClient, copilotTokenExchanger);
         return new ProviderDescriptorRegistry(catalog.All);
     }
 }

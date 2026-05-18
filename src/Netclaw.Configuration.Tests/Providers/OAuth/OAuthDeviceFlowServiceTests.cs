@@ -104,7 +104,7 @@ public class OAuthDeviceFlowServiceTests
 
         var timeProvider = new FakeTimeProvider();
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
-        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
+        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://example.com/v", 60, 1);
 
         var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
 
@@ -127,7 +127,7 @@ public class OAuthDeviceFlowServiceTests
 
         var timeProvider = new FakeTimeProvider();
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
-        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
+        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://example.com/v", 60, 1);
 
         var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
@@ -143,7 +143,7 @@ public class OAuthDeviceFlowServiceTests
 
         var timeProvider = new FakeTimeProvider();
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
-        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
+        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://example.com/v", 60, 1);
 
         var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
         timeProvider.Advance(TimeSpan.FromSeconds(1));
@@ -159,7 +159,7 @@ public class OAuthDeviceFlowServiceTests
 
         var timeProvider = new FakeTimeProvider();
         var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
-        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://x.com/v", 60, 1);
+        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://example.com/v", 60, 1);
 
         using var cts = new CancellationTokenSource();
         var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: cts.Token);
@@ -209,6 +209,87 @@ public class OAuthDeviceFlowServiceTests
             new SensitiveString("expired-refresh-token"), TestContext.Current.CancellationToken);
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task StartDeviceAuthorization_SendsAcceptJsonHeader()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedRequest = request;
+            return JsonResponse(new
+            {
+                device_code = "dc",
+                user_code = "UC",
+                verification_uri = "https://auth.example.com/verify",
+                expires_in = 300,
+                interval = 5,
+            });
+        });
+
+        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+
+        await service.StartDeviceAuthorizationAsync(TestConfig, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Contains(capturedRequest!.Headers.Accept,
+            h => h.MediaType == "application/json");
+    }
+
+    [Fact]
+    public async Task PollForToken_GitHubStyle_200WithErrorBody_KeepsPolling()
+    {
+        // GitHub deviates from RFC 8628 §3.5 by returning HTTP 200 with
+        // { "error": "authorization_pending" } instead of 400. Earlier code
+        // assumed IsSuccessStatusCode meant "token present" and threw
+        // KeyNotFoundException trying to read access_token from the pending body.
+        var callCount = 0;
+        var handler = new FakeHttpMessageHandler(_ =>
+        {
+            callCount++;
+            return callCount <= 2
+                ? JsonResponse(new { error = "authorization_pending" }, HttpStatusCode.OK)
+                : JsonResponse(new { access_token = "at-secret", expires_in = 3600 }, HttpStatusCode.OK);
+        });
+
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
+        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://example.com/v", 30, 1);
+
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
+        for (var i = 0; i < 3; i++)
+        {
+            timeProvider.Advance(TimeSpan.FromSeconds(1));
+        }
+
+        var result = await pollTask;
+
+        Assert.Equal("at-secret", result.AccessToken.Value);
+        Assert.Equal(3, callCount);
+    }
+
+    [Fact]
+    public async Task PollForToken_SendsAcceptJsonHeader()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedRequest = request;
+            return JsonResponse(new { access_token = "at", expires_in = 3600 });
+        });
+
+        var timeProvider = new FakeTimeProvider();
+        var service = new OAuthDeviceFlowService(new HttpClient(handler), timeProvider);
+        var deviceAuth = new DeviceAuthorizationResponse("dc", "UC", "https://example.com/v", 60, 1);
+
+        var pollTask = service.PollForTokenAsync(TestConfig, deviceAuth, ct: TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(1));
+        await pollTask;
+
+        Assert.NotNull(capturedRequest);
+        Assert.Contains(capturedRequest!.Headers.Accept,
+            h => h.MediaType == "application/json");
     }
 
     [Fact]
