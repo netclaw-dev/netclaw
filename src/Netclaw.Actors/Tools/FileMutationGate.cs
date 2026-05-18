@@ -32,12 +32,20 @@ internal static class FileMutationGate
 {
     private const int StripeCount = 64;
 
+    // 64 process-lifetime stripes, allocated once and rooted in this static
+    // field. Disposed on process exit (see the static constructor).
     private static readonly SemaphoreSlim[] Stripes = CreateStripes();
 
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
+
+    static FileMutationGate()
+    {
+        // Stripe semaphores live for the whole process; release them on exit.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => DisposeStripes();
+    }
 
     /// <summary>
     /// Runs <paramref name="action"/> while holding the exclusive lock for
@@ -70,5 +78,11 @@ internal static class FileMutationGate
         for (var i = 0; i < StripeCount; i++)
             stripes[i] = new SemaphoreSlim(1, 1);
         return stripes;
+    }
+
+    private static void DisposeStripes()
+    {
+        foreach (var stripe in Stripes)
+            stripe.Dispose();
     }
 }
