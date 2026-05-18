@@ -58,7 +58,10 @@ internal static class SessionToolExecutionPipeline
     {
         try
         {
-            // Execute all tool calls in parallel -- each is independent
+            // Execute all tool calls in parallel. Calls are not always
+            // independent -- e.g. two file_edit calls on the same file -- so
+            // file-mutating tools serialize their read-modify-write per target
+            // path via FileMutationGate to avoid lost-update races here.
             var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
                 executor,
                 tc,

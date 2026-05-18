@@ -61,9 +61,14 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
                 Directory.CreateDirectory(directory);
 
             var bytes = Encoding.UTF8.GetBytes(args.Content);
-            await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
 
-            return $"Successfully wrote {bytes.Length} bytes to {authorizedPath}";
+            // Serialize with file_edit / other file_write calls on this path so
+            // a concurrent same-file write cannot clobber an in-flight edit.
+            return await FileMutationGate.RunExclusiveAsync(authorizedPath, async () =>
+            {
+                await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
+                return $"Successfully wrote {bytes.Length} bytes to {authorizedPath}";
+            }, ct);
         }
         catch (UnauthorizedAccessException)
         {
