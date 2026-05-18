@@ -28,4 +28,7 @@
     <Project Path="src/Netclaw.Security/Netclaw.Security.csproj" />
     <Project Path="src/Netclaw.Security.Tests/Netclaw.Security.Tests.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj" />
+  </Folder>
 </Solution>

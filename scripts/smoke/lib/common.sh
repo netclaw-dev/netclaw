@@ -112,6 +112,9 @@ stop_daemon() {
 # Smoke model + Ollama endpoint defaults — shared by every scenario so
 # they cannot drift apart.
 SMOKE_MODEL="${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}"
+# Tool-calling model — qwen2:0.5b is too small to emit tool calls reliably,
+# so the Phase 4 goal scenarios use a modern small model instead.
+SMOKE_TOOL_MODEL="${SMOKE_OLLAMA_TOOL_MODEL:-qwen3.5:0.8b}"
 OLLAMA_ENDPOINT="${SMOKE_OLLAMA_ENDPOINT:-http://localhost:11434}"
 
 # nc — run the netclaw CLI under the per-step timeout.

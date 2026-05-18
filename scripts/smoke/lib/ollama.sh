@@ -11,13 +11,20 @@
 #   ollama_pull <model>       pull a model with retries (top flake source)
 #
 # Environment knobs:
-#   SMOKE_OLLAMA_MODEL      primary model       (default: qwen2:0.5b)
-#   SMOKE_OLLAMA_ALT_MODEL  alternate model     (default: all-minilm:latest)
-#   OLLAMA_HOST             host:port to bind   (default: 127.0.0.1:11434)
-#   RUN_ROOT                run-scoped temp dir (set by run-smoke.sh)
+#   SMOKE_OLLAMA_MODEL       primary model       (default: qwen2:0.5b)
+#   SMOKE_OLLAMA_ALT_MODEL   alternate model     (default: all-minilm:latest)
+#   SMOKE_OLLAMA_TOOL_MODEL  tool-calling model  (default: qwen3.5:0.8b)
+#   OLLAMA_HOST              host:port to bind   (default: 127.0.0.1:11434)
+#   RUN_ROOT                 run-scoped temp dir (set by run-smoke.sh)
+#
+# qwen2:0.5b is too small to emit tool calls reliably; the Phase 4 goal
+# scenarios (provider-connect, mcp-setup, chat-completion) use the modern
+# qwen3.5:0.8b instead. The Phase 2-3 scenarios + the init-wizard tape and
+# screenshot baselines stay pinned to qwen2:0.5b and MUST NOT be migrated.
 
 SMOKE_OLLAMA_MODEL="${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}"
 SMOKE_OLLAMA_ALT_MODEL="${SMOKE_OLLAMA_ALT_MODEL:-all-minilm:latest}"
+SMOKE_OLLAMA_TOOL_MODEL="${SMOKE_OLLAMA_TOOL_MODEL:-qwen3.5:0.8b}"
 export OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
 
 # Endpoint derived from OLLAMA_HOST; the smoke API probes always use 127.0.0.1.

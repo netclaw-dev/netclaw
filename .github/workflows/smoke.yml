@@ -47,6 +47,15 @@ jobs:
           scripts/build/publish-binaries.sh \
             --rid linux-x64 --component all --output-dir ./publish
 
+      # The mcp-setup scenario registers this as a stdio MCP server. Published
+      # self-contained single-file so the SDK-less smoke job can run it.
+      - name: Publish smoke MCP server
+        shell: bash
+        run: >
+          dotnet publish tests/Netclaw.SmokeMcpServer
+          -c Release -r linux-x64 --self-contained /p:PublishSingleFile=true
+          -o ./publish/mcp-server
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
@@ -54,6 +63,7 @@ jobs:
           path: |
             publish/cli/netclaw
             publish/daemon/netclawd
+            publish/mcp-server/Netclaw.SmokeMcpServer
           retention-days: 1
           if-no-files-found: error
 
@@ -79,9 +89,10 @@ jobs:
 
       - name: Mark binaries executable
         run: |
-          chmod +x publish/cli/netclaw publish/daemon/netclawd
+          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer
           echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_MCP_SERVER=$(pwd)/publish/mcp-server/Netclaw.SmokeMcpServer" >> "$GITHUB_ENV"
 
       - name: Run native smoke (light)
         shell: bash

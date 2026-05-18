@@ -31,9 +31,11 @@
 #
 # Environment knobs:
 #   NETCLAW_SMOKE_CLI / NETCLAW_SMOKE_DAEMON  pre-built binary paths
+#   NETCLAW_SMOKE_MCP_SERVER pre-published Netclaw.SmokeMcpServer executable
 #   SMOKE_RID                publish RID            (default: linux-x64)
 #   SMOKE_OLLAMA_MODEL       primary model          (default: qwen2:0.5b)
 #   SMOKE_OLLAMA_ALT_MODEL   alternate model        (default: all-minilm:latest)
+#   SMOKE_OLLAMA_TOOL_MODEL  tool-calling model     (default: qwen3.5:0.8b)
 #   SMOKE_LOG_DIR            artifact dir           (default: ./smoke-logs)
 #   KEEP_RUN_ROOT            set 1 to keep the temp run root
 
@@ -63,6 +65,9 @@ LIGHT_SCENARIOS=(
   stats
   reminders
   pairing
+  provider-connect
+  mcp-setup
+  chat-completion
 )
 FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")
 
@@ -203,6 +208,32 @@ export NETCLAW_DAEMON_PATH="$NETCLAW_SMOKE_DAEMON"
 echo "    NETCLAW_SMOKE_CLI=${NETCLAW_SMOKE_CLI}"
 echo "    NETCLAW_SMOKE_DAEMON=${NETCLAW_SMOKE_DAEMON}"
 
+# ── 1b) Resolve the deterministic test MCP server ────────────────────────────
+
+# The mcp-setup scenario registers Netclaw.SmokeMcpServer as a stdio MCP
+# server. `dotnet run` is unusable as the MCP command — its build chatter
+# corrupts the stdio JSON-RPC channel — so a self-contained published
+# executable is required. Honor a pre-published path from CI; otherwise
+# publish one into the run root.
+if [[ -n "${NETCLAW_SMOKE_MCP_SERVER:-}" ]]; then
+  echo "==> Using pre-published smoke MCP server from environment."
+else
+  echo "==> Publishing smoke MCP server (rid=${SMOKE_RID})..."
+  mcp_out="${RUN_ROOT}/mcp-server"
+  dotnet publish "${ROOT_DIR}/tests/Netclaw.SmokeMcpServer" \
+    -c Release -r "$SMOKE_RID" --self-contained /p:PublishSingleFile=true \
+    -o "$mcp_out"
+  NETCLAW_SMOKE_MCP_SERVER="${mcp_out}/Netclaw.SmokeMcpServer"
+fi
+
+NETCLAW_SMOKE_MCP_SERVER="$(cd "$(dirname "$NETCLAW_SMOKE_MCP_SERVER")" && pwd)/$(basename "$NETCLAW_SMOKE_MCP_SERVER")"
+if [[ ! -x "$NETCLAW_SMOKE_MCP_SERVER" ]]; then
+  echo "ERROR: smoke MCP server not found / not executable: $NETCLAW_SMOKE_MCP_SERVER" >&2
+  exit 1
+fi
+export NETCLAW_SMOKE_MCP_SERVER
+echo "    NETCLAW_SMOKE_MCP_SERVER=${NETCLAW_SMOKE_MCP_SERVER}"
+
 # ── 2) Provision native Ollama ───────────────────────────────────────────────
 
 # shellcheck source=lib/ollama.sh
@@ -217,6 +248,7 @@ ollama_serve_start
 echo "==> Pulling smoke models..."
 ollama_pull "$SMOKE_OLLAMA_MODEL"
 ollama_pull "$SMOKE_OLLAMA_ALT_MODEL"
+ollama_pull "$SMOKE_OLLAMA_TOOL_MODEL"
 
 # ── 3) Ensure vhs ────────────────────────────────────────────────────────────
 
