@@ -944,7 +944,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             var timeout = msg.OperationName switch
             {
-                ProcessingWatchdog.ToolExecution => _config.ToolExecutionTimeout,
                 ProcessingWatchdog.LlmCall => _config.FirstTokenTimeout,
                 _ => _config.TurnLlmTimeout
             };

@@ -49,9 +49,11 @@ public sealed record SessionConfig
     public TimeSpan TurnLlmTimeout { get; init; } = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// Timeout for one tool-execution batch (all tool calls emitted
-    /// by a single assistant response). Prevents indefinite hangs when one or
-    /// more tools block forever.
+    /// Per-tool-call inactivity budget. Each tool call is consumed as a stream
+    /// under its own watchdog: the call must produce its first item within this
+    /// budget, and each later item resets it. A non-streaming tool emits only
+    /// its single result, so it must finish within this budget. Enforced per
+    /// call, so a stuck tool is caught without affecting siblings in the batch.
     /// </summary>
     public TimeSpan ToolExecutionTimeout { get; init; } = TimeSpan.FromSeconds(90);
 

@@ -449,17 +449,14 @@ internal static class SessionToolExecutionPipeline
 
         try
         {
-            // The tool call is consumed as a stream under a per-call inactivity
-            // watchdog. A non-streaming tool emits only the terminal completion
-            // item, so the watchdog reduces to the former flat timeout for it;
-            // a streaming tool stays alive while it reports activity. Inactivity
-            // surfaces as TimeoutException, which the caller turns into a
-            // per-tool error result without faulting sibling tool calls.
+            // Consumed as a stream under a per-call inactivity watchdog. A
+            // non-streaming tool emits only the terminal item, so a flat budget
+            // is equivalent to the former timeout; inactivity throws
+            // TimeoutException, which the caller turns into a per-tool error.
             return await StreamingToolWatchdog.ConsumeAsync(
                 executor.ExecuteStreamAsync(toolCall, context, cancellationToken),
                 toolCall.Name,
-                firstItemBudget: timeout,
-                interItemBudget: timeout,
+                ToolWatchdogBudget.Flat(timeout),
                 timeProvider,
                 onActivity: null,
                 cancellationToken);

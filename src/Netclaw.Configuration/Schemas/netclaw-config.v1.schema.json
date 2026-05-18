@@ -133,7 +133,7 @@
         "ToolExecutionTimeoutSeconds": {
           "type": "integer",
           "minimum": 1,
-          "description": "Timeout in seconds for one tool-execution batch."
+          "description": "Per-tool-call inactivity budget in seconds: a tool call must produce its first result (or stream item) within this time, and each later item resets it."
         },
         "SidecarLlmTimeoutSeconds": {
           "type": "integer",

@@ -8,49 +8,67 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Sessions.Pipelines;
 
 /// <summary>
-/// Consumes a single tool call's <see cref="ToolCallUpdate"/> stream under a
-/// per-call, two-phase inactivity watchdog: the call must produce its first
-/// item within <c>firstItemBudget</c>, and every subsequent item resets the
-/// timer to <c>interItemBudget</c>. Inactivity past the current budget cancels
-/// the call and surfaces a <see cref="TimeoutException"/>.
+/// Inactivity budget for one tool call: <see cref="FirstItem"/> bounds the wait
+/// for the first <see cref="ToolCallUpdate"/>, <see cref="InterItem"/> the gap
+/// between later items. <see cref="Flat"/> uses one value for both. A
+/// non-positive budget disables the watchdog.
+/// </summary>
+internal readonly record struct ToolWatchdogBudget(TimeSpan FirstItem, TimeSpan InterItem)
+{
+    public static ToolWatchdogBudget Flat(TimeSpan budget) => new(budget, budget);
+}
+
+/// <summary>
+/// Consumes one tool call's <see cref="ToolCallUpdate"/> stream under a per-call
+/// inactivity watchdog and returns the terminal completion result.
 ///
 /// This is the only liveness control for a tool call — there is no batch-level
-/// watchdog. Each call has its own watchdog, so a healthy parallel call cannot
-/// extend (or mask) a stalled sibling. The timer is created through the supplied
-/// <see cref="TimeProvider"/> so it can be virtualized in tests.
+/// watchdog, so a healthy parallel call cannot extend (or mask) a stalled
+/// sibling. A periodic timer polls a last-activity timestamp rather than being
+/// reset on each item: resetting a timer cannot recall an already-elapsed
+/// callback, so a reset racing the callback could cancel a still-live call —
+/// polling has no such race. The timer comes from the supplied
+/// <see cref="TimeProvider"/> so it can be virtualized in tests. A tool whose
+/// iterator ignores the enumerator's cancellation token cannot be force-stopped.
 /// </summary>
 internal static class StreamingToolWatchdog
 {
-    /// <summary>
-    /// Enumerate <paramref name="stream"/> under the inactivity watchdog and
-    /// return the terminal completion result. Activity items reset the watchdog
-    /// and are forwarded to <paramref name="onActivity"/>; only the terminal
-    /// <see cref="ToolCompletedUpdate"/> contributes the returned result.
-    /// </summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(1);
+
     public static async Task<string> ConsumeAsync(
         IAsyncEnumerable<ToolCallUpdate> stream,
         string toolName,
-        TimeSpan firstItemBudget,
-        TimeSpan interItemBudget,
+        ToolWatchdogBudget budget,
         TimeProvider timeProvider,
         Action<ToolActivityUpdate>? onActivity,
         CancellationToken ct)
     {
         using var watchdogCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
-        // `await using` the timer: ITimer.DisposeAsync waits for any in-flight
-        // callback to finish before `watchdogCts` (declared above it, so disposed
-        // after it) is disposed, so the callback's Cancel() can never race a
-        // disposed token source.
+        // Shared with the timer callback. Both are long fields (atomic reads/
+        // writes); the consumer writes them on each item, the callback reads them.
+        var lastActivity = timeProvider.GetTimestamp();
+        var budgetTicks = budget.FirstItem.Ticks;
+
+        // `await using`, declared after watchdogCts so it disposes first:
+        // ITimer.DisposeAsync waits for any in-flight callback to finish, so the
+        // callback's Cancel() can never race a disposed token source. The
+        // callback never touches the timer, so there is no reset/disposal race.
         await using var timer = timeProvider.CreateTimer(
-            static state => ((CancellationTokenSource)state!).Cancel(),
-            watchdogCts,
-            firstItemBudget,
-            Timeout.InfiniteTimeSpan);
+            _ =>
+            {
+                var allowed = TimeSpan.FromTicks(Volatile.Read(ref budgetTicks));
+                if (allowed > TimeSpan.Zero
+                    && timeProvider.GetElapsedTime(Volatile.Read(ref lastActivity)) >= allowed)
+                {
+                    watchdogCts.Cancel();
+                }
+            },
+            state: null,
+            PollInterval,
+            PollInterval);
 
-        var currentBudget = firstItemBudget;
         string? result = null;
-
         var enumerator = stream.GetAsyncEnumerator(watchdogCts.Token);
         try
         {
@@ -64,19 +82,19 @@ internal static class StreamingToolWatchdog
                 catch (OperationCanceledException)
                     when (watchdogCts.IsCancellationRequested && !ct.IsCancellationRequested)
                 {
+                    // Watchdog fired (not caller cancellation): report a timeout.
+                    var stalled = TimeSpan.FromTicks(Volatile.Read(ref budgetTicks));
                     throw new TimeoutException(
-                        $"Tool '{toolName}' produced no activity for "
-                        + $"{currentBudget.TotalSeconds:F0}s and was stopped. It may be stuck — "
-                        + "please try again, or simplify the request.");
+                        $"Tool '{toolName}' produced no activity for {stalled.TotalSeconds:F0}s "
+                        + "and was stopped. It may be stuck — please try again, or simplify the request.");
                 }
 
                 if (!hasNext)
                     break;
 
-                // Any item — activity or completion — is liveness: reset the
-                // watchdog to the (tighter) inter-item budget.
-                currentBudget = interItemBudget;
-                timer.Change(interItemBudget, Timeout.InfiniteTimeSpan);
+                // Any item is liveness; later items are held to the tighter budget.
+                Volatile.Write(ref budgetTicks, budget.InterItem.Ticks);
+                Volatile.Write(ref lastActivity, timeProvider.GetTimestamp());
 
                 switch (enumerator.Current)
                 {
@@ -94,6 +112,9 @@ internal static class StreamingToolWatchdog
             await enumerator.DisposeAsync();
         }
 
-        return result ?? $"Tool '{toolName}' completed without producing a result.";
+        // A stream that ends with no completion item violates the tool-call
+        // contract — fail loudly rather than synthesizing a result.
+        return result ?? throw new InvalidOperationException(
+            $"Tool '{toolName}' stream ended without a completion item.");
     }
 }

@@ -8,13 +8,13 @@ using Akka.Actor;
 namespace Netclaw.Actors.Sessions.Handlers;
 
 /// <summary>
-/// Manages the processing watchdog timer that detects stuck LLM calls,
-/// tool executions, and compaction operations.
+/// Manages the processing watchdog timer that detects stuck LLM calls and
+/// compaction operations. Tool-call liveness is handled per call by the
+/// tool-execution pipeline, not here.
 /// </summary>
 internal sealed class ProcessingWatchdog
 {
     public const string LlmCall = "llm-call";
-    public const string ToolExecution = "tool-execution";
     public const string Compaction = "compaction";
 
     private static readonly object TimerKey = new();
