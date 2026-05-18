@@ -69,7 +69,13 @@ COMMON=(
 # Per-platform single-file compression. Kept centralized here so the release
 # pipeline and the smoke harness publish with identical flags.
 case "$RID" in
-  osx-arm64)  COMPRESS=true ;;
+  osx-arm64)
+    # dotnet/runtime #123324: EnableCompressionInSingleFile corrupts memory
+    # via the MAP_JIT RW->RWX transition on Apple Silicon during single-file
+    # self-extract — surfaces as a fatal AccessViolationException (netclaw
+    # #1036). Upstream fix dotnet/runtime #127355 ships in .NET 11; re-converge
+    # this arm with the others when it backports to .NET 10 servicing.
+    COMPRESS=false ;;
   linux-x64|linux-arm64|win-x64) COMPRESS=true ;;
   *) echo "ERROR: unsupported RID '$RID'" >&2; exit 2 ;;
 esac
