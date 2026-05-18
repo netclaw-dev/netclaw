@@ -98,16 +98,17 @@ NETCLAW_SMOKE_DAEMON=./publish/daemon/netclawd \
   scripts/smoke/run-smoke.sh light
 ```
 
-### CI Smoke Workflows
+### CI Smoke Workflow
 
-- **`smoke.yml`** — the Linux leg. Runs on every pull request to `dev`
-  (and on `dev` pushes); the `Native Smoke (Linux)` and `Screenshot
-  Regression (Linux)` checks gate merges.
-- **`smoke-macos.yml`** — the Apple Silicon leg. Runs nightly, on demand
-  (`workflow_dispatch`), and on release tags. It does not gate PRs —
-  macOS runners are ~10x the cost.
+`smoke.yml` runs the harness on every pull request to `dev`, on `dev`
+pushes, and nightly. It has three legs, all running in parallel:
 
-Both always upload a `smoke-*logs-*` artifact (run log, daemon logs,
+- **`Native Smoke (Linux)`** — flow tapes + non-interactive scenarios.
+- **`Screenshot Regression (Linux)`** — TUI screenshot byte-comparison.
+- **`Native Smoke (macOS)`** — the Apple Silicon leg (flow tapes +
+  scenarios; screenshots stay Linux-only).
+
+Each leg uploads a `smoke-*logs-*` artifact (run log, daemon logs,
 failure GIFs, screenshot diffs) for debugging.
 
 ## Project Structure

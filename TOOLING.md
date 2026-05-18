@@ -35,7 +35,7 @@ wizard flows, model/provider/webhook TUIs). It drives the **real native
 binary** — no Docker. Tape bodies live at `tests/smoke/tapes/<name>.tape`;
 sibling assertion scripts at `tests/smoke/assertions/<name>.sh` validate
 the artefacts each tape produced. The same `run-smoke.sh` entrypoint runs
-in CI (`smoke.yml` / `smoke-macos.yml`) and locally — agents working on
+in CI (`smoke.yml`) and locally — agents working on
 TUI code SHOULD run the harness before declaring a change done.
 
 | Command | Purpose |
