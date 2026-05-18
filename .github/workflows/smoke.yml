@@ -1,0 +1,112 @@
+name: smoke
+
+# Native smoke harness — runs the real netclaw / netclawd binaries
+# natively (no Docker for the binary) against a native Ollama process.
+# Runs in parallel with smoke_sandbox.yml during the bake-in period.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - dev
+    # No `labeled` — it caused duplicate cancelled runs on smoke_sandbox.
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+concurrency:
+  group: smoke-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish native binaries
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v5.2.0
+        with:
+          global-json-file: ./global.json
+
+      - name: Publish binaries
+        shell: bash
+        run: |
+          chmod +x scripts/build/publish-binaries.sh
+          scripts/build/publish-binaries.sh \
+            --rid linux-x64 --component all --output-dir ./publish
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: netclaw-native-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            publish/cli/netclaw
+            publish/daemon/netclawd
+          retention-days: 1
+          if-no-files-found: error
+
+  smoke-linux:
+    name: Native Smoke (Linux)
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      SMOKE_OLLAMA_MODEL: qwen2:0.5b
+      SMOKE_OLLAMA_ALT_MODEL: all-minilm:latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download binary artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: netclaw-native-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ./publish
+
+      - name: Mark binaries executable
+        run: |
+          chmod +x publish/cli/netclaw publish/daemon/netclawd
+          echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
+
+      - name: Cache Ollama model store
+        uses: actions/cache@v4
+        with:
+          path: ~/.ollama/models
+          key: ollama-models-${{ env.SMOKE_OLLAMA_MODEL }}-${{ env.SMOKE_OLLAMA_ALT_MODEL }}
+
+      - name: Run native smoke (light)
+        shell: bash
+        run: |
+          mkdir -p smoke-logs
+          set -o pipefail
+          scripts/smoke/run-smoke.sh light 2>&1 | tee smoke-logs/run-smoke.log
+
+      - name: Collect smoke artifacts
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p smoke-logs
+          scripts/smoke/collect-artifacts.sh smoke-logs || true
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-native-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: smoke-logs
+          if-no-files-found: warn
