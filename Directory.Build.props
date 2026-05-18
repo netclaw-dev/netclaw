@@ -8,7 +8,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.18.1</VersionPrefix>
+    <VersionPrefix>0.18.2</VersionPrefix>
     <PackageReleaseNotes>Netclaw v0.18.1 — macOS binaries, provider renaming, shell subprocess cleanup, and stream stability fixes
 
 **Features**
