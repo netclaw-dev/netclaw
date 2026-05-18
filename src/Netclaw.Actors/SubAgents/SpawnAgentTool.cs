@@ -75,11 +75,9 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         ToolExecutionContext context,
         [EnumeratorCancellation] CancellationToken ct = default)
     {
-        var (failure, args) = TryParse(arguments);
-
         SubAgentProfile? profile = null;
-        if (failure is null)
-            (failure, profile) = Resolve(args!, context);
+        if (TryParse(arguments, out var failure, out var args))
+            (failure, profile) = Resolve(args, context);
 
         if (failure is not null)
         {

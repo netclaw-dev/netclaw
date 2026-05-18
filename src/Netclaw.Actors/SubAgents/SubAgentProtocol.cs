@@ -102,8 +102,9 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
 
     /// <summary>
     /// Optional sink for liveness/progress activity emitted while the sub-agent
-    /// runs. The spawning tool surfaces these as its tool-call stream so the
-    /// parent's per-call watchdog sees a long-but-healthy run as alive.
+    /// runs. Streaming <c>spawn_agent</c> calls provide this so the parent's
+    /// per-call watchdog sees a long-but-healthy run as alive. Non-streaming
+    /// callers leave it null because no parent stream is observing activity.
     /// </summary>
     public ChannelWriter<ToolActivityUpdate>? ActivitySink { get; init; }
 }
@@ -132,4 +133,3 @@ public sealed record SubAgentResult : INoSerializationVerificationNeeded
     /// </summary>
     public int FindingsCount { get; init; }
 }
-

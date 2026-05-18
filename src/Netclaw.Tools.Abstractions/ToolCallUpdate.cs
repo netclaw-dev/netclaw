@@ -10,7 +10,7 @@ namespace Netclaw.Tools;
 /// more non-terminal <see cref="ToolActivityUpdate"/> items followed by exactly
 /// one terminal <see cref="ToolCompletedUpdate"/>.
 /// </summary>
-public abstract record ToolCallUpdate;
+public interface ToolCallUpdate;
 
 /// <summary>
 /// A non-terminal progress/liveness signal emitted while a tool is still

@@ -135,6 +135,9 @@ public sealed class SubAgentSpawner
                     ParentProjectDirectory = context.ProjectDirectory,
                     Cancellation = ct,
                     ApprovalBridge = context.ApprovalBridge,
+                    // Null for non-streaming callers such as routed skills and
+                    // the legacy ExecuteAsync path. Streaming spawn_agent calls
+                    // pass a real sink so parent tool liveness sees progress.
                     ActivitySink = activitySink
                 },
                 // No Ask timeout: a healthy run is inactivity-bounded, not
