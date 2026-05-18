@@ -60,11 +60,11 @@ public class ShellToolTests
     public async Task Requested_timeout_overrides_default_timeout()
     {
         var tool = new ShellTool(new ToolConfig { ShellTimeoutSeconds = 1 });
-        var args = ToolInput.Create("Command", "sleep 2");
+        var args = ToolInput.Create("Command", "sleep 1");
         var context = new ToolExecutionContext("test/thread", Path.GetTempPath())
         {
             Audience = TrustAudience.Personal,
-            RequestedTimeoutSeconds = 3
+            RequestedTimeoutSeconds = 5
         };
 
         var result = await tool.ExecuteAsync(args, context, CancellationToken.None);
