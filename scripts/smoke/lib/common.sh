@@ -61,10 +61,42 @@ run_timed() {
 
 # ── Daemon lifecycle ─────────────────────────────────────────────────────────
 
+# ensure_daemon_port_free — block until 127.0.0.1:5199 has no LISTEN socket.
+# Every tape and scenario daemon binds the same fixed port; a daemon orphaned
+# by an earlier NETCLAW_HOME is invisible to `netclaw daemon stop` (which only
+# signals the PID in the current home's PID file) and will squat the port,
+# making every later daemon crash on bind. Hard-kill any such straggler.
+# Returns non-zero if the port is still held after the timeout.
+ensure_daemon_port_free() {
+  local port=5199
+  local deadline=$((SECONDS + 30))
+  while (( SECONDS < deadline )); do
+    local holders
+    holders="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
+    [[ -z "$holders" ]] && return 0
+    # Allow a graceful exit a moment before resorting to a hard kill.
+    sleep 1
+    holders="$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null || true)"
+    [[ -z "$holders" ]] && return 0
+    log "port ${port} still held by PID(s): ${holders} — hard-killing."
+    # shellcheck disable=SC2086 # word-split is intended: holders may be multi-PID
+    kill -9 $holders 2>/dev/null || pkill -9 -f netclawd 2>/dev/null || true
+    sleep 1
+  done
+  log "ERROR: port ${port} never freed."
+  return 1
+}
+
 # start_daemon — launch the native daemon detached and poll until it reports
 # running. Returns non-zero on timeout.
 start_daemon() {
   : "${NETCLAW_SMOKE_CLI:?NETCLAW_SMOKE_CLI must be set}"
+  # Defense in depth: a daemon orphaned by an earlier tape/scenario would still
+  # hold :5199 and make this start crash on bind. Clear it before launching.
+  if ! ensure_daemon_port_free; then
+    log "ERROR: daemon port not free; refusing to start."
+    return 1
+  fi
   log "Starting daemon (detached) ..."
   # Detach so the CLI's `daemon start` does not hold our stdio.
   run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" daemon start >/dev/null 2>&1 || true
@@ -105,6 +137,10 @@ wait_for_health() {
 stop_daemon() {
   : "${NETCLAW_SMOKE_CLI:?NETCLAW_SMOKE_CLI must be set}"
   run_timed "$STOP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" daemon stop >/dev/null 2>&1 || true
+  # `daemon stop` only signals the PID in this NETCLAW_HOME's PID file; make
+  # sure the listening socket is actually released before the next daemon
+  # tries to bind it.
+  ensure_daemon_port_free || true
 }
 
 # ── Scenario helpers ─────────────────────────────────────────────────────────
