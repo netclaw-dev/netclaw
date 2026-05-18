@@ -21,6 +21,26 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("sed -n"));
         Assert.False(list.Contains("git push"));
         Assert.False(list.Contains("rm"));
+
+        // Read-only system/info verbs and read-only git/gh queries added by
+        // the safe-verb expansion.
+        Assert.True(list.Contains("date"));
+        Assert.True(list.Contains("uname"));
+        Assert.True(list.Contains("whoami"));
+        Assert.True(list.Contains("git describe"));
+        Assert.True(list.Contains("gh pr view"));
+        Assert.True(list.Contains("gh run list"));
+
+        // Excluded on purpose: env can prefix an arbitrary command; git fetch
+        // mutates the object store; gh api can issue any HTTP method; printenv
+        // and ps dump environment/process state the safe-space gate cannot
+        // scope; gh auth status --show-token would print the GitHub token.
+        Assert.False(list.Contains("env"));
+        Assert.False(list.Contains("git fetch"));
+        Assert.False(list.Contains("gh api"));
+        Assert.False(list.Contains("printenv"));
+        Assert.False(list.Contains("ps"));
+        Assert.False(list.Contains("gh auth status"));
     }
 
     [Fact]
@@ -34,6 +54,19 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("Test-Path"));
         Assert.True(list.Contains("git status"));
         Assert.False(list.Contains("Remove-Item"));
+
+        // Read-only verbs added by the safe-verb expansion.
+        Assert.True(list.Contains("Get-Date"));
+        Assert.True(list.Contains("whoami"));
+        Assert.True(list.Contains("git describe"));
+        Assert.True(list.Contains("gh pr view"));
+
+        // Excluded on purpose: gh api can issue any HTTP method; Get-Process
+        // exposes other processes' state; gh auth status --show-token would
+        // print the GitHub token.
+        Assert.False(list.Contains("gh api"));
+        Assert.False(list.Contains("Get-Process"));
+        Assert.False(list.Contains("gh auth status"));
     }
 
     [Fact]

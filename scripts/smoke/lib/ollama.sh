@@ -11,10 +11,10 @@
 #   ollama_pull <model>       pull a model with retries (top flake source)
 #
 # Environment knobs:
-#   SMOKE_OLLAMA_MODEL      primary model       (default: qwen2:0.5b)
-#   SMOKE_OLLAMA_ALT_MODEL  alternate model     (default: all-minilm:latest)
-#   OLLAMA_HOST             host:port to bind   (default: 127.0.0.1:11434)
-#   RUN_ROOT                run-scoped temp dir (set by run-smoke.sh)
+#   SMOKE_OLLAMA_MODEL       primary model       (default: qwen2:0.5b)
+#   SMOKE_OLLAMA_ALT_MODEL   alternate model     (default: all-minilm:latest)
+#   OLLAMA_HOST              host:port to bind   (default: 127.0.0.1:11434)
+#   RUN_ROOT                 run-scoped temp dir (set by run-smoke.sh)
 
 SMOKE_OLLAMA_MODEL="${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}"
 SMOKE_OLLAMA_ALT_MODEL="${SMOKE_OLLAMA_ALT_MODEL:-all-minilm:latest}"
@@ -39,10 +39,18 @@ ollama_ensure_installed() {
       echo "Installing ollama via official install script..."
       curl -fsSL https://ollama.com/install.sh | sh
       ;;
+    Darwin)
+      if ! command -v brew >/dev/null 2>&1; then
+        echo "ERROR: ollama is not installed and Homebrew ('brew') is not on PATH." >&2
+        echo "       Install Homebrew from https://brew.sh, then: brew install ollama" >&2
+        return 1
+      fi
+      echo "Installing ollama via Homebrew..."
+      brew install ollama
+      ;;
     *)
-      echo "ERROR: ollama is not installed and automatic install is Linux-only." >&2
-      echo "       On macOS install with: brew install ollama" >&2
-      echo "       See https://ollama.com/download for other platforms." >&2
+      echo "ERROR: ollama is not installed and automatic install is not supported on ${uname_s}." >&2
+      echo "       See https://ollama.com/download for supported platforms." >&2
       return 1
       ;;
   esac

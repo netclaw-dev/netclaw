@@ -16,11 +16,6 @@ screenshot-capture mechanism for the native harness — see the
 distinct from the pretty marketing screenshots in
 `netclaw-website/screenshots/tapes/`.
 
-This is the native successor to `tests/smoke-interactive/tapes/`, which
-runs everything inside a Docker container. The two systems run in
-parallel during a bake-in period; the Docker one is retired in a later
-phase.
-
 ## Running locally
 
 ```bash

@@ -54,6 +54,33 @@ public static class ShellTokenizer
     };
 
     /// <summary>
+    /// Single-token commands with no sub-command grammar — any positional
+    /// operand is call-specific, not part of the verb. <see cref="ApplyVerbShortCircuit"/>
+    /// caps these at depth 1; without that, greedy extraction bakes the
+    /// operand into a safe-verb/approval key the entry can never match.
+    ///
+    /// Distinct from <see cref="PathAwareVerbs"/> (these do not consume a
+    /// path) and <see cref="SingleTokenSideEffectVerbs"/> (these are not
+    /// stdout-only side effects). Uses <c>OrdinalIgnoreCase</c> — matching
+    /// <see cref="PathAwareVerbs"/> — because the set also holds PowerShell
+    /// cmdlets (<c>Get-Date</c>); this is verb-chain normalization only, so
+    /// case folding is safe — authorization still routes through the
+    /// platform-correct comparer in <c>SafeVerbList</c>.
+    ///
+    /// SECURITY: every verb here must be unable to execute its arguments — a
+    /// verb that can prefix another command (<c>env</c>, <c>xargs</c>,
+    /// <c>sudo</c>, <c>timeout</c>, <c>nohup</c>) MUST NOT be added, because
+    /// depth-1 capping would let <c>env rm -rf ~</c> resolve to the verb
+    /// <c>env</c>.
+    /// </summary>
+    internal static readonly HashSet<string> SingleTokenCommandVerbs = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "date", "whoami", "id", "groups", "hostname", "uname", "uptime",
+        "free", "nproc", "which",
+        "Get-Date", "Get-ComputerInfo",
+    };
+
+    /// <summary>
     /// Tokenizes a shell command string, respecting single and double quotes.
     /// Strips quote delimiters from tokens.
     /// </summary>
@@ -386,11 +413,12 @@ public static class ShellTokenizer
 
     /// <summary>
     /// Caps a verb chain at depth 1 when the first token is a path-aware
-    /// verb (cat, grep, find, ls, ...) or a single-token side-effect verb
-    /// (echo, printf, ...). This prevents call-specific positional
-    /// arguments — search patterns, file targets — from baking into
-    /// persisted approval keys, so <c>grep secret /etc/passwd</c> and
-    /// <c>grep "TODO" file.cs</c> both persist as the verb <c>grep</c>.
+    /// verb (cat, grep, find, ls, ...), a single-token side-effect verb
+    /// (echo, printf, ...), or a single-token command verb (date, ps,
+    /// which, ...). This prevents call-specific positional arguments —
+    /// search patterns, file targets, format strings — from baking into
+    /// persisted approval keys, so <c>grep secret /etc/passwd</c> persists
+    /// as <c>grep</c> and <c>date +%Y-%m-%d</c> as <c>date</c>.
     /// </summary>
     internal static string ApplyVerbShortCircuit(string? rawVerb)
     {
@@ -400,7 +428,8 @@ public static class ShellTokenizer
         var firstSpace = rawVerb.IndexOf(' ', StringComparison.Ordinal);
         var firstToken = firstSpace < 0 ? rawVerb : rawVerb[..firstSpace];
         if (PathAwareVerbs.Contains(firstToken)
-            || SingleTokenSideEffectVerbs.Contains(firstToken))
+            || SingleTokenSideEffectVerbs.Contains(firstToken)
+            || SingleTokenCommandVerbs.Contains(firstToken))
             return firstToken;
 
         return rawVerb;

@@ -2,8 +2,8 @@ name: validate_docker_image
 
 # Builds and smoke-tests the release netclawd Docker image on every PR
 # and dev/main/master push. Intentionally separate from pr_validation.yml
-# (unit/integration tests + slopwatch) and smoke_sandbox.yml (Ollama-in-Docker
-# end-to-end smoke) because image construction is its own concern — when it
+# (unit/integration tests + slopwatch) and smoke.yml (the native end-to-end
+# smoke harness) because image construction is its own concern — when it
 # breaks, the fix lives in the Dockerfile or the shared build script, not
 # the .NET test suites.
 
