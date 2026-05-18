@@ -1,25 +1,35 @@
 name: smoke
 
-# Native smoke harness — runs the real netclaw / netclawd binaries
-# natively (no Docker for the binary) against a native Ollama process.
-# Runs in parallel with smoke_sandbox.yml during the bake-in period.
+# Native smoke harness — runs the real netclaw / netclawd binaries natively
+# (no Docker for the binary) against a native Ollama process.
+#
+# Runs on every PR to dev (Linux + macOS legs in parallel), on dev pushes,
+# and nightly. The `Native Smoke (Linux)` + `Screenshot Regression (Linux)`
+# checks gate merges. The macOS leg runs alongside them — it is the
+# regression guard for Apple-Silicon-specific bugs (e.g. #1036) — and is
+# non-required during its burn-in (see issue #1068). Scheduled-run failures
+# surface via GitHub's built-in Actions notifications.
 
 on:
   workflow_dispatch:
+  schedule:
+    # 07:00 UTC daily — catches external-dependency drift during quiet
+    # stretches (Ollama model digests, the Homebrew vhs version).
+    # NOTE: scheduled runs only fire from the repository's default branch.
+    - cron: '0 7 * * *'
   push:
     branches:
       - dev
   pull_request:
     branches:
       - dev
-    # No `labeled` — it caused duplicate cancelled runs on smoke_sandbox.
     types:
       - opened
       - synchronize
       - reopened
 
 concurrency:
-  group: smoke-native-${{ github.event.pull_request.number || github.ref }}
+  group: smoke-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:

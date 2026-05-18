@@ -6,9 +6,8 @@
 #   NETCLAW_HOME        per-tape NETCLAW_HOME on the host filesystem
 #   NETCLAW_SMOKE_CLI   absolute path to the `netclaw` binary
 #
-# Unlike the Docker assertions (tests/smoke-interactive/assertions/_lib.sh),
-# config and SOUL.md are read directly from the host filesystem — there is
-# no container to exec into.
+# Config and SOUL.md are read directly from the host filesystem — the
+# native harness runs the binary in-process, with no container to exec into.
 
 : "${NETCLAW_HOME:?NETCLAW_HOME must be set by run-native-tape.sh}"
 : "${NETCLAW_SMOKE_CLI:?NETCLAW_SMOKE_CLI must be set by run-native-tape.sh}"
