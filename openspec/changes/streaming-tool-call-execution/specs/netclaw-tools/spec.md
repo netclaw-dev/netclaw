@@ -5,8 +5,10 @@
 Tool execution SHALL be expressed as a stream: an invocation yields an ordered
 sequence of `ToolCallUpdate` items — zero or more non-terminal *activity* items
 followed by exactly one terminal *completion* item. The completion item SHALL
-carry the tool result and any file attachments and sub-agent outputs the
-invocation produced.
+carry the tool result text. Invocation side effects that are not part of the
+tools-abstractions assembly contract, such as file attachments and sub-agent
+outputs, SHALL continue to be collected through the tool execution context and
+returned by the session tool-execution pipeline with the terminal result.
 
 `INetclawTool` SHALL expose the streaming method as a default interface method
 whose default implementation yields a single completion item wrapping the tool's

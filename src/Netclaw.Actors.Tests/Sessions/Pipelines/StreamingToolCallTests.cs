@@ -84,6 +84,22 @@ public sealed class StreamingToolCallTests
     }
 
     [Fact]
+    public async Task Completion_item_is_terminal_even_if_iterator_does_not_finish()
+    {
+        var time = new FakeTimeProvider();
+
+        var result = await StreamingToolWatchdog.ConsumeAsync(
+            CompleteThenStallAsync(TestContext.Current.CancellationToken),
+            "complete_then_stall_tool",
+            FiveSeconds,
+            time,
+            onActivity: null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("done", result);
+    }
+
+    [Fact]
     public async Task Activity_within_budget_keeps_the_call_alive()
     {
         var time = new FakeTimeProvider();
@@ -166,5 +182,12 @@ public sealed class StreamingToolCallTests
     {
         await Task.Yield();
         yield return new ToolActivityUpdate("working");
+    }
+
+    private static async IAsyncEnumerable<ToolCallUpdate> CompleteThenStallAsync(
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        yield return new ToolCompletedUpdate("done");
+        await TestStreamingHelpers.ParkUntilCancelledAsync(ct);
     }
 }

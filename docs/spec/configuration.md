@@ -167,7 +167,7 @@ Tuning parameters for LLM session behavior.
 | `MaxToolCallsPerTurn` | int | `30` | Max individual tool calls per turn. At ~75% a budget nudge is injected; at 100% tools are stripped and the model is asked to summarize. |
 | `SidecarLlmTimeoutSeconds` | int | `90` | Timeout for sidecar LLM calls (title generation, observer summaries, memory extraction). |
 | `TurnLlmTimeoutSeconds` | int | `180` | Timeout for the primary per-turn LLM streaming call before forcing an error/recovery path. |
-| `ToolExecutionTimeoutSeconds` | int | `90` | Timeout for one tool-execution batch before failing the turn safely. |
+| `ToolExecutionTimeoutSeconds` | int | `90` | Per-tool-call inactivity budget. A tool must produce its first result or stream item within this time, and each later item resets the budget. |
 
 ### Tools
 

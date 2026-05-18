@@ -99,8 +99,7 @@ internal static class StreamingToolWatchdog
                 switch (enumerator.Current)
                 {
                     case ToolCompletedUpdate completed:
-                        result = completed.Result;
-                        break;
+                        return completed.Result;
                     case ToolActivityUpdate activity:
                         onActivity?.Invoke(activity);
                         break;
