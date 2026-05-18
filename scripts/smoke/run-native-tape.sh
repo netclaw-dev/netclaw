@@ -107,6 +107,7 @@ collect_failure_artifacts() {
 sed \
   -e "s|__NETCLAW_HOME__|${NETCLAW_HOME}|g" \
   -e "s|__NETCLAW_BIN_DIR__|${NETCLAW_BIN_DIR}|g" \
+  -e "s|__NETCLAW_DAEMON__|${NETCLAW_SMOKE_DAEMON}|g" \
   -e "s|__TAPE_NAME__|${TAPE_NAME}|g" \
   "$preamble" > "$combined"
 

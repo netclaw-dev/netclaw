@@ -7,8 +7,13 @@
 #
 # The wrapper substitutes:
 #   __NETCLAW_HOME__     — per-tape NETCLAW_HOME directory (host filesystem)
-#   __NETCLAW_BIN_DIR__  — directory containing the `netclaw` + `netclawd` binaries
+#   __NETCLAW_BIN_DIR__  — directory containing the `netclaw` CLI binary (added to PATH)
+#   __NETCLAW_DAEMON__   — absolute path to the `netclawd` daemon binary
 #   __TAPE_NAME__        — short name (e.g. init-wizard)
+#
+# The CLI and daemon publish to separate directories (publish/cli/,
+# publish/daemon/), so NETCLAW_DAEMON_PATH cannot be derived from the CLI
+# directory — it is substituted explicitly.
 #
 # After the preamble runs each tape body can assume:
 #   * It is inside an interactive bash session on the host.
@@ -43,7 +48,7 @@ Type "export PATH=__NETCLAW_BIN_DIR__:$PATH"
 Enter
 Type "export NETCLAW_HOME=__NETCLAW_HOME__"
 Enter
-Type "export NETCLAW_DAEMON_PATH=__NETCLAW_BIN_DIR__/netclawd"
+Type "export NETCLAW_DAEMON_PATH=__NETCLAW_DAEMON__"
 Enter
 Type "export PS1='TAPE$ '"
 Enter
