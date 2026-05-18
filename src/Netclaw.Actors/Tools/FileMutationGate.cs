@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Collections.Concurrent;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Tools;
@@ -22,67 +23,40 @@ namespace Netclaw.Actors.Tools;
 /// (target text removed by the earlier write) surfaces loudly via the tool's
 /// existing not-found / ambiguous-match errors.
 ///
-/// A fixed array of stripes is used instead of a per-path dictionary so memory
-/// stays bounded in the long-running daemon. Distinct files may share a stripe
-/// (benign false contention); the same file always maps to the same stripe.
-/// This gate is process-local: it does not guard against other processes
-/// writing the same file.
+/// One <see cref="SemaphoreSlim"/> is kept per normalized path, so distinct
+/// files never contend. The map grows with the set of distinct files mutated
+/// over the process lifetime — a small, bounded set in practice — and the
+/// semaphores are intentionally never disposed: they are process-lifetime
+/// singletons that hold no unmanaged handle. This gate is process-local; it
+/// does not guard against other processes writing the same file.
 /// </remarks>
 internal static class FileMutationGate
 {
-    private const int StripeCount = 64;
-
-    // 64 process-lifetime stripes, allocated once and rooted in this static
-    // field. Disposed on process exit (see the static constructor).
-    private static readonly SemaphoreSlim[] Stripes = CreateStripes();
-
+    // Path key comparison follows the host filesystem so two spellings of the
+    // same file (case differences on Windows/macOS) map to the same lock.
     private static readonly StringComparer PathComparer =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparer.OrdinalIgnoreCase
             : StringComparer.Ordinal;
 
-    static FileMutationGate()
-    {
-        // Stripe semaphores live for the whole process; release them on exit.
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => DisposeStripes();
-    }
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(PathComparer);
 
     /// <summary>
     /// Runs <paramref name="action"/> while holding the exclusive lock for
     /// <paramref name="path"/>, so concurrent mutations of the same file run
-    /// one at a time.
+    /// one at a time. Distinct files never contend.
     /// </summary>
     public static async Task<T> RunExclusiveAsync<T>(string path, Func<Task<T>> action, CancellationToken ct)
     {
-        var stripe = StripeFor(path);
-        await stripe.WaitAsync(ct);
+        var gate = Locks.GetOrAdd(PathUtility.Normalize(path), static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
         try
         {
             return await action();
         }
         finally
         {
-            stripe.Release();
+            gate.Release();
         }
-    }
-
-    private static SemaphoreSlim StripeFor(string path)
-    {
-        var index = (int)((uint)PathComparer.GetHashCode(PathUtility.Normalize(path)) % StripeCount);
-        return Stripes[index];
-    }
-
-    private static SemaphoreSlim[] CreateStripes()
-    {
-        var stripes = new SemaphoreSlim[StripeCount];
-        for (var i = 0; i < StripeCount; i++)
-            stripes[i] = new SemaphoreSlim(1, 1);
-        return stripes;
-    }
-
-    private static void DisposeStripes()
-    {
-        foreach (var stripe in Stripes)
-            stripe.Dispose();
     }
 }
