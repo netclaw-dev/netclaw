@@ -90,6 +90,20 @@ public sealed class SendDiscordMessageToolTests
     }
 
     [Fact]
+    public async Task Returns_partial_success_when_thread_creation_fails_after_message_post()
+    {
+        var fake = new FakeDiscordOutboundClient { ThrowThreadCreationFailure = true };
+        var tool = CreateTool(outbound: fake);
+
+        var result = await ExecuteAsync(tool, "hello", channelId: "ch-1");
+
+        Assert.DoesNotContain("Error:", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Message sent to channel ch-1", result);
+        Assert.Contains("could not create a follow-up thread", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("root-ch-1", result);
+    }
+
+    [Fact]
     public async Task Successful_channel_message_posts_and_wires_session()
     {
         var fake = new FakeDiscordOutboundClient();
@@ -172,12 +186,21 @@ public sealed class SendDiscordMessageToolTests
     private sealed class FakeDiscordOutboundClient : IDiscordOutboundClient
     {
         public bool ShouldThrow { get; init; }
+        public bool ThrowThreadCreationFailure { get; init; }
         public List<(DiscordChannelId ChannelId, string Text, string ThreadName)> Posts { get; } = [];
 
         public Task<DiscordNewThread> PostNewThreadAsync(
             DiscordChannelId channelId, string text, string threadName, CancellationToken ct = default)
         {
             if (ShouldThrow) throw new InvalidOperationException("Discord API error");
+            if (ThrowThreadCreationFailure)
+            {
+                throw new DiscordThreadCreationFailedException(
+                    channelId,
+                    new DiscordMessageId($"root-{channelId.Value}"),
+                    "Root message posted but thread creation failed.",
+                    new InvalidOperationException("Missing Create Public Threads permission"));
+            }
             Posts.Add((channelId, text, threadName));
             // Discord convention: a thread created from a message shares its id.
             var threadId = $"thread-{channelId.Value}";

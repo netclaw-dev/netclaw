@@ -59,6 +59,14 @@ internal sealed class DiscordNetOutboundClient : IDiscordOutboundClient
                     httpEx);
             thread = existingThread;
         }
+        catch (Exception ex)
+        {
+            throw new DiscordThreadCreationFailedException(
+                channelId,
+                new DiscordMessageId(rootMessage.Id.ToString()),
+                $"Discord posted root message {rootMessage.Id} to channel {channelId.Value}, but creating a thread failed.",
+                ex);
+        }
 
         var threadIdStr = thread.Id.ToString();
         return new DiscordNewThread(

@@ -85,6 +85,12 @@ public sealed partial class SendDiscordMessageTool : NetclawTool<SendDiscordMess
         {
             result = await _outboundClient.PostNewThreadAsync(targetChannelId, args.Message, threadName, ct);
         }
+        catch (DiscordThreadCreationFailedException ex)
+        {
+            var detail = ex.InnerException?.Message ?? ex.Message;
+            return $"Message sent to channel {ex.ChannelId.Value}, but Discord could not create a follow-up thread. "
+                   + $"Root message: {ex.RootMessageId.Value}. Reason: {detail}";
+        }
         catch (Exception ex)
         {
             return $"Error: Failed to post message to Discord: {ex.Message}";

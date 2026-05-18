@@ -9,17 +9,20 @@ using Netclaw.Actors.Reminders;
 namespace Netclaw.Channels.Discord;
 
 /// <summary>
-/// Resolves Discord DM reminder targets to canonical IDs.
+/// Resolves Discord reminder targets to canonical guild text-channel IDs.
+/// Current reminder delivery is channel-only: proactive DM delivery is deferred
+/// until Discord gains a session model that can preserve thread context.
 /// Supported inputs:
-/// - user mention: &lt;@123...&gt; or &lt;@!123...&gt;
-/// - user shorthand: @123...
-/// - raw user ID: 123...
-/// - explicit DM channel ID: dm:123...
+/// - channel mention: &lt;#123...&gt;
+/// - explicit channel ID: channel:123...
 /// </summary>
 public sealed class DiscordReminderTargetResolver : IReminderTargetResolver
 {
     private static readonly Regex MentionRegex =
         new("^<@!?([0-9]{17,20})>$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ChannelMentionRegex =
+        new("^<#([0-9]{17,20})>$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex SnowflakeRegex =
         new("^[0-9]{17,20}$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -41,12 +44,21 @@ public sealed class DiscordReminderTargetResolver : IReminderTargetResolver
 
         if (raw.StartsWith("dm:", StringComparison.OrdinalIgnoreCase))
         {
-            var dmChannelId = raw[3..].Trim();
-            if (SnowflakeRegex.IsMatch(dmChannelId))
+            return Task.FromResult(new ReminderTargetResolution(
+                Success: false,
+                ResolvedId: null,
+                Kind: ReminderTargetKind.Unknown,
+                ErrorMessage: "Discord reminder delivery currently supports guild text channels only; DM targets are not supported. Use channel:<channelId> or <#channelId>."));
+        }
+
+        if (raw.StartsWith("channel:", StringComparison.OrdinalIgnoreCase))
+        {
+            var channelId = raw[8..].Trim();
+            if (SnowflakeRegex.IsMatch(channelId))
             {
                 return Task.FromResult(new ReminderTargetResolution(
                     Success: true,
-                    ResolvedId: dmChannelId,
+                    ResolvedId: channelId,
                     Kind: ReminderTargetKind.Channel,
                     ErrorMessage: null));
             }
@@ -55,35 +67,42 @@ public sealed class DiscordReminderTargetResolver : IReminderTargetResolver
                 Success: false,
                 ResolvedId: null,
                 Kind: ReminderTargetKind.Unknown,
-                ErrorMessage: "Invalid Discord DM channel ID. Use dm:<channelId>."));
+                ErrorMessage: "Invalid Discord channel target. Use channel:<channelId> or <#channelId>."));
         }
 
-        var mention = MentionRegex.Match(raw);
-        if (mention.Success)
+        var channelMention = ChannelMentionRegex.Match(raw);
+        if (channelMention.Success)
         {
             return Task.FromResult(new ReminderTargetResolution(
                 Success: true,
-                ResolvedId: mention.Groups[1].Value,
-                Kind: ReminderTargetKind.User,
+                ResolvedId: channelMention.Groups[1].Value,
+                Kind: ReminderTargetKind.Channel,
                 ErrorMessage: null));
         }
-
-        if (raw.StartsWith("@", StringComparison.Ordinal))
-            raw = raw[1..].Trim();
 
         if (SnowflakeRegex.IsMatch(raw))
         {
             return Task.FromResult(new ReminderTargetResolution(
-                Success: true,
-                ResolvedId: raw,
-                Kind: ReminderTargetKind.User,
-                ErrorMessage: null));
+                Success: false,
+                ResolvedId: null,
+                Kind: ReminderTargetKind.Unknown,
+                ErrorMessage: "Bare Discord snowflakes are ambiguous. Use channel:<channelId> or <#channelId> for channel delivery."));
+        }
+
+        var mention = MentionRegex.Match(raw);
+        if (mention.Success || raw.StartsWith("@", StringComparison.Ordinal))
+        {
+            return Task.FromResult(new ReminderTargetResolution(
+                Success: false,
+                ResolvedId: null,
+                Kind: ReminderTargetKind.Unknown,
+                ErrorMessage: "Discord reminder delivery currently supports guild text channels only; user/DM targets are not supported. Use channel:<channelId> or <#channelId>."));
         }
 
         return Task.FromResult(new ReminderTargetResolution(
             Success: false,
             ResolvedId: null,
             Kind: ReminderTargetKind.Unknown,
-            ErrorMessage: $"Could not resolve Discord target '{target}'. Use a Discord user ID, @userId, user mention (<@id>), or dm:<channelId>."));
+            ErrorMessage: $"Could not resolve Discord target '{target}'. Use channel:<channelId> or <#channelId>."));
     }
 }

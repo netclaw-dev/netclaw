@@ -327,6 +327,39 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         await AwaitAssertAsync(() => Assert.Equal(3, fetcher.FetchCount), cancellationToken: ct);
     }
 
+    [Fact]
+    public async Task Proactive_thread_can_apply_session_title_updates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("session-discord-proactive-title");
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("hello back") { SessionId = sid },
+            new SessionTitleOutput("Release Readout") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+        ], reactive: true);
+
+        var actor = CreateActorCore(sid, pipeline, detector);
+
+        actor.Tell(new StartProactiveThread(
+            new DiscordChannelId("ch-test"),
+            new DiscordReplyChannelId("reply-test"),
+            new DiscordThreadOrMessageId("thread-test"),
+            sid), TestActor);
+
+        await ExpectMsgAsync<ProactiveThreadAck>(cancellationToken: ct);
+
+        actor.Tell(MakeInbound("1000000000000000004", "replier-user", "what changed?"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(_replyClient.ThreadRenames);
+            Assert.Equal("reply-test", _replyClient.ThreadRenames[0].ThreadId.Value);
+            Assert.Equal("Release Readout", _replyClient.ThreadRenames[0].Name);
+        }, cancellationToken: ct);
+    }
+
     private static ChannelInput MakeHistoryItem(string senderId, string messageId, string text)
         => new()
         {
