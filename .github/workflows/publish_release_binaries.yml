@@ -100,29 +100,18 @@ jobs:
       with:
         global-json-file: "./global.json"
 
-    - name: Publish CLI
+    # Publish via the canonical publish script — the single source of truth
+    # for `dotnet publish` flags, shared with the Docker image build and the
+    # smoke-test harness. `shell: bash` runs on the Windows runner too (Git
+    # Bash); `dotnet publish` itself is OS-agnostic.
+    - name: Publish binaries
+      shell: bash
       run: >
-        dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
-        -c Release
-        -r ${{ matrix.rid }}
-        --self-contained true
-        /p:PublishSingleFile=true
-        /p:EnableCompressionInSingleFile=true
-        /p:IncludeNativeLibrariesForSelfExtract=true
-        /p:Version=${{ github.ref_name }}
-        -o ./publish/cli
-
-    - name: Publish Daemon
-      run: >
-        dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj
-        -c Release
-        -r ${{ matrix.rid }}
-        --self-contained true
-        /p:PublishSingleFile=true
-        /p:EnableCompressionInSingleFile=true
-        /p:IncludeNativeLibrariesForSelfExtract=true
-        /p:Version=${{ github.ref_name }}
-        -o ./publish/daemon
+        bash scripts/build/publish-binaries.sh
+        --rid ${{ matrix.rid }}
+        --component all
+        --output-dir ./publish
+        --version ${{ github.ref_name }}
 
     - name: Smoke-test published binary (macOS)
       if: runner.os == 'macOS'

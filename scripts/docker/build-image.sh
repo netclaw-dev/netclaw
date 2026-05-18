@@ -50,26 +50,16 @@ echo "  Tag:              $IMAGE_TAG"
 echo "  RID:              $RID"
 echo "  NO_BUILD:         $NO_BUILD"
 
-publish_args=(
-    -c Release -r "$RID" --self-contained true
-    /p:PublishSingleFile=true
-    /p:EnableCompressionInSingleFile=true
-    /p:IncludeNativeLibrariesForSelfExtract=true
-)
-if [[ -n "$ASSEMBLY_VERSION" ]]; then
-    publish_args+=(/p:Version="$ASSEMBLY_VERSION")
-fi
-
+# Publish via the canonical publish script — the single source of truth for
+# `dotnet publish` flags, shared with the release pipeline and the smoke
+# harness. Docker-specific logic (NO_BUILD, arch-suffixed copy, the RID guard
+# below) stays here; only the publish flags are delegated.
 if [[ "$NO_BUILD" != "1" ]]; then
-    echo "→ Publishing CLI ($RID)..."
-    dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj \
-        "${publish_args[@]}" \
-        -o ./publish/cli
-
-    echo "→ Publishing Daemon ($RID)..."
-    dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj \
-        "${publish_args[@]}" \
-        -o ./publish/daemon
+    pub_args=(--rid "$RID" --component all --output-dir ./publish)
+    if [[ -n "$ASSEMBLY_VERSION" ]]; then
+        pub_args+=(--version "$ASSEMBLY_VERSION")
+    fi
+    bash "${ROOT_DIR}/scripts/build/publish-binaries.sh" "${pub_args[@]}"
 else
     echo "→ NO_BUILD=1 — skipping dotnet publish"
 fi
