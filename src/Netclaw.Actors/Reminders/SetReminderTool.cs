@@ -172,11 +172,21 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
                 if (!resolution.Success)
                 {
                     var detail = resolution.ErrorMessage ?? "unresolvable target";
-                    return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': {detail}. Use #channel, @user, or a valid channel ID.";
+                    var hint = string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
+                        ? "Use channel:<channelId> or <#channelId>."
+                        : "Use #channel, @user, or a valid channel ID.";
+                    return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': {detail}. {hint}";
                 }
 
                 if (string.IsNullOrWhiteSpace(resolution.ResolvedId))
                     return $"Error: Could not resolve delivery_address '{rawDeliveryAddress}': resolver returned an empty canonical target ID.";
+
+                if (string.Equals(transport, "discord", StringComparison.OrdinalIgnoreCase)
+                    && resolution.Kind is not ReminderTargetKind.Channel)
+                {
+                    return "Error: Discord channel delivery currently supports guild text-channel targets only. "
+                           + "Use channel:<channelId> or <#channelId>; user and DM targets are not supported yet.";
+                }
 
                 delivery = new ReminderDelivery
                 {

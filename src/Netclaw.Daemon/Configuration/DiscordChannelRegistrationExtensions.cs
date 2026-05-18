@@ -8,9 +8,11 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
+using Netclaw.Channels.Discord.Tools;
 using Netclaw.Channels.Discord.Transport;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -41,6 +43,7 @@ public static class DiscordChannelRegistrationExtensions
         services.AddHttpClient("discord-files");
         services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();
         services.AddSingleton<IDiscordReplyClient, DiscordNetReplyClient>();
+        services.AddSingleton<IDiscordOutboundClient, DiscordNetOutboundClient>();
         services.AddSingleton<IThreadHistoryFetcher>(sp =>
         {
             var client = sp.GetRequiredService<DiscordSocketClient>();
@@ -66,6 +69,22 @@ public static class DiscordChannelRegistrationExtensions
         services.AddKeyedSingleton<IChannel, DiscordChannel>(DiscordChannelKey);
         services.AddSingleton<IChannel>(sp =>
             sp.GetRequiredKeyedService<IChannel>(DiscordChannelKey));
+        services.AddSingleton<DiscordChannel>(sp =>
+            (DiscordChannel)sp.GetRequiredKeyedService<IChannel>(DiscordChannelKey));
+
+        // Channel-specific LLM tool: registered as an INetclawTool singleton.
+        // The gateway actor ref is resolved lazily via DiscordChannel since it
+        // is not available until StartAsync completes.
+        services.AddSingleton<SendDiscordMessageTool>(sp =>
+        {
+            var outbound = sp.GetRequiredService<IDiscordOutboundClient>();
+            var channel = sp.GetRequiredService<DiscordChannel>();
+            return new SendDiscordMessageTool(
+                outbound,
+                discordOptions,
+                () => channel.Gateway);
+        });
+        services.AddSingleton<IChannelTool>(sp => sp.GetRequiredService<SendDiscordMessageTool>());
 
         services.AddSingleton<IHostedService>(sp =>
             (IHostedService)sp.GetRequiredKeyedService<IChannel>(DiscordChannelKey));

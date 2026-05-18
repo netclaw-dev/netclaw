@@ -425,6 +425,7 @@ Optional OpenTelemetry export for logs and metrics.
 {
   "Telemetry": {
     "Enabled": true,
+    "ServiceName": "netclawd",
     "Otlp": {
       "Endpoint": "http://127.0.0.1:4317"
     }
@@ -435,6 +436,7 @@ Optional OpenTelemetry export for logs and metrics.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Enabled` | bool | `false` | Enables OTLP export pipeline in daemon. |
+| `ServiceName` | string | `OTEL_SERVICE_NAME` env, else `netclawd` | OpenTelemetry `service.name` for this instance. Set it to distinguish multiple netclaw instances (e.g. per-agent) in a shared backend. |
 | `Otlp:Endpoint` | string | `http://127.0.0.1:4317` | OTLP collector endpoint (gRPC). |
 
 ## Secrets

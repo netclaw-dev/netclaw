@@ -202,6 +202,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         CommandAsync<DiscordThreadInbound>(HandleInboundAsync);
         CommandAsync<DiscordApprovalResponse>(HandleApprovalResponseAsync);
         CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
+        CommandAsync<StartProactiveThread>(HandleProactiveThreadAsync);
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
 
         Command<OutputStreamTerminated>(msg =>
@@ -245,6 +246,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         });
 
         Context.SetReceiveTimeout(IdlePassivationTimeout);
+    }
+
+    /// <summary>
+    /// Wires a proactively-created thread: ensures the session pipeline is
+    /// initialized and acknowledges. The thread root (the bot's posted message)
+    /// is recovered as adopted context on the first authorized reply via the
+    /// deferred re-armed hydration path — see <see cref="PerformOneShotHydrationAsync"/>.
+    /// </summary>
+    private async Task HandleProactiveThreadAsync(StartProactiveThread message)
+    {
+        _replyChannelId = message.ReplyChannelId;
+        _threadCreated = true;
+        _rootMessageId = null;
+
+        _log.Info("Initializing proactive thread pipeline for session {0}", message.SessionId.Value);
+        await EnsureInitializedAsync();
+        Sender.Tell(new ProactiveThreadAck(message.SessionId));
     }
 
     private async Task EnsureInitializedAsync()
