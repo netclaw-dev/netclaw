@@ -64,9 +64,7 @@ LIGHT_SCENARIOS=(
   stats
   reminders
   pairing
-  provider-connect
   mcp-setup
-  chat-completion
 )
 FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")
 
