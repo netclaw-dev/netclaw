@@ -231,6 +231,9 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         IDictionary<string, object?>? arguments,
         CancellationToken ct)
     {
+        if (arguments is { Count: > 0 })
+            arguments = McpArgumentNormalizer.Normalize(function, arguments);
+
         var aiArgs = arguments is { Count: > 0 }
             ? new AIFunctionArguments(arguments)
             : null;
