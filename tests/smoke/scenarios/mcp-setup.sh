@@ -2,8 +2,9 @@
 # mcp-setup.sh — goal: register an MCP server and verify the daemon
 # connects to it and indexes its tools.
 #
-# The deterministic test server (Netclaw.SmokeMcpServer) exposes add/echo
-# over stdio. This scenario hard-verifies netclaw's MCP integration:
+# The deterministic test server (Netclaw.SmokeMcpServer) exposes
+# add/echo/record-tasks over stdio. This scenario hard-verifies netclaw's
+# MCP integration:
 # `mcp add` records the server in config, and on daemon startup the daemon
 # spawns the stdio server, completes the MCP handshake, and registers its
 # tools — confirmed from the daemon log.
@@ -86,12 +87,12 @@ else
   die "daemon log: no 'MCP server ${MCP_SERVER_NAME} connected' line — stdio handshake failed"
 fi
 
-# The test server exposes exactly two tools (add, echo) — confirm the
-# daemon registered both.
-if [[ "$connect_line" == *"(2 tools)"* ]]; then
-  pass "daemon log: MCP server registered 2 tools (add, echo)"
+# The test server exposes exactly three tools (add, echo, record-tasks) —
+# confirm the daemon registered all of them.
+if [[ "$connect_line" == *"(3 tools)"* ]]; then
+  pass "daemon log: MCP server registered 3 tools (add, echo, record-tasks)"
 else
-  die "daemon log: expected '(2 tools)' in the connection line, got: $connect_line"
+  die "daemon log: expected '(3 tools)' in the connection line, got: $connect_line"
 fi
 
 summarize
