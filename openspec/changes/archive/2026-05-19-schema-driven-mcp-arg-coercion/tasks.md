@@ -41,4 +41,4 @@
 
 - [x] 6.1 Confirm no PRD or `docs/spec/` update is required — PRD-006 (MCP-006) is unchanged; the OpenSpec `mcp-schema-coercion` capability is the spec record for this behavior.
 - [x] 6.2 Check whether the `netclaw-operations` system skill describes MCP tool-argument handling; update it only if it does — no agent-facing behavior change is expected.
-- [ ] 6.3 On completion, run `/opsx-verify` then `/opsx-sync` to fold the `mcp-schema-coercion` delta into `openspec/specs/`.
+- [x] 6.3 On completion, run `/opsx-verify` then `/opsx-sync` to fold the `mcp-schema-coercion` delta into `openspec/specs/`.
