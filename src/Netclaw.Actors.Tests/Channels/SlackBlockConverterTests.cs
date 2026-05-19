@@ -129,6 +129,23 @@ public class SlackBlockConverterTests
     }
 
     [Fact]
+    public void MarkdownLink_UrlWithParentheses_NotTruncated()
+    {
+        // Regression for #1107: a balanced '(...)' inside the link
+        // destination must stay part of the URL — the destination is
+        // not truncated at the first ')'.
+        var blocks = SlackBlockConverter.Convert(
+            "Read [the article](https://en.wikipedia.org/wiki/Foo_(disambiguation)) now.");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var link = Assert.Single(section.Elements.OfType<RichTextLink>());
+        Assert.Equal("https://en.wikipedia.org/wiki/Foo_(disambiguation)", link.Url);
+        Assert.Equal("the article", link.Text);
+    }
+
+    [Fact]
     public void BareUrl_WithRewriteProneUrl_ProducesInlineCode()
     {
         // Bare URL with '+' — block path emits inline code, not a link.
