@@ -149,7 +149,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             return;
         }
 
-        // A connection failure must never escape StartAsync: an unhandled
+        // A misconfiguration must never escape StartAsync: an unhandled
         // exception from IHostedService.StartAsync aborts the .NET host and
         // takes the whole daemon down. A misconfigured channel degrades; it
         // does not crash the process.
@@ -158,6 +158,24 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             HandleConnectFailure(new ChannelConnectException(
                 ChannelConnectFailureKind.Fatal,
                 "Slack channel currently supports Socket Mode only. Set Slack:SocketMode to true."));
+            return;
+        }
+
+        if (_options.BotToken.IsNullOrEmpty())
+        {
+            HandleConnectFailure(new ChannelConnectException(
+                ChannelConnectFailureKind.Fatal,
+                "Slack is enabled but no bot token is configured. "
+                + "Set the Slack:BotToken secret, then restart the daemon."));
+            return;
+        }
+
+        if (_options.AppToken.IsNullOrEmpty())
+        {
+            HandleConnectFailure(new ChannelConnectException(
+                ChannelConnectFailureKind.Fatal,
+                "Slack Socket Mode is enabled but no app-level token is configured. "
+                + "Set the Slack:AppToken secret, then restart the daemon."));
             return;
         }
 
