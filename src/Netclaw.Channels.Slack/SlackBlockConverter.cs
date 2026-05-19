@@ -238,17 +238,33 @@ public static partial class SlackBlockConverter
                 Style = new RichTextStyle { Code = true }
             });
 
-        // Links: [text](url)
+        // Links: [text](url) — keep clickable unless the URL is
+        // rewrite-prone (e.g. contains '+' that Slack's link redirector
+        // would re-encode to '%2B' on click). Rewrite-prone links are
+        // rendered as inline code so the user can copy the literal URL.
         TryMatch(LinkRegex(), text, ref best, (m) =>
-            new RichTextLink
-            {
-                Text = m.Groups[1].Value,
-                Url = m.Groups[2].Value
-            });
+            SlackTextProtector.IsRewriteProne(m.Groups[2].Value)
+                ? (RichTextSectionElement)new RichTextText
+                {
+                    Text = m.Groups[2].Value,
+                    Style = new RichTextStyle { Code = true }
+                }
+                : new RichTextLink
+                {
+                    Text = m.Groups[1].Value,
+                    Url = m.Groups[2].Value
+                });
 
-        // Bare URLs: https://example.com
+        // Bare URLs: https://example.com — same is-it-safe-to-link
+        // heuristic as above; rewrite-prone URLs become inline code.
         TryMatch(BareUrlRegex(), text, ref best, (m) =>
-            new RichTextLink { Url = m.Value });
+            SlackTextProtector.IsRewriteProne(m.Value)
+                ? new RichTextText
+                {
+                    Text = m.Value,
+                    Style = new RichTextStyle { Code = true }
+                }
+                : (RichTextSectionElement)new RichTextLink { Url = m.Value });
 
         if (best.Element is null)
             return (0, 0, null, null);
