@@ -68,8 +68,11 @@ public class SlackBlockConverterTests
     }
 
     [Fact]
-    public void MarkdownLink_ProducesRichTextLink()
+    public void MarkdownLink_WithSafeUrl_ProducesRichTextLink()
     {
+        // Closes #850 at the Block Kit surface: standard markdown
+        // [text](url) is converted into a Slack-native RichTextLink
+        // (with label) so it renders as a clickable link.
         var blocks = SlackBlockConverter.Convert("Visit [Google](https://google.com) for search");
 
         var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
@@ -78,6 +81,70 @@ public class SlackBlockConverterTests
         var link = Assert.Single(section.Elements.OfType<RichTextLink>());
         Assert.Equal("https://google.com", link.Url);
         Assert.Equal("Google", link.Text);
+    }
+
+    [Fact]
+    public void MarkdownLink_WithRewriteProneUrl_ProducesInlineCode()
+    {
+        // Closes #1092 at the Block Kit surface: markdown links with
+        // '+' in the URL would be re-encoded by Slack's link redirector
+        // on click. Render as inline code so the URL is non-clickable
+        // and survives. Label is dropped because the URL has to be the
+        // visible payload.
+        var blocks = SlackBlockConverter.Convert(
+            "Auth at [here](https://accounts.google.com/o/oauth2/auth?scope=A+B+C&state=1).");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        Assert.Empty(section.Elements.OfType<RichTextLink>());
+        var codeElement = Assert.Single(
+            section.Elements.OfType<RichTextText>(),
+            t => t.Style?.Code == true);
+        Assert.Equal(
+            "https://accounts.google.com/o/oauth2/auth?scope=A+B+C&state=1",
+            codeElement.Text);
+    }
+
+    [Fact]
+    public void MarkdownLink_WithMisencodedScopeList_DecodedAndProducesInlineCode()
+    {
+        // Closes #1092 LLM-rewrite shape: bot URL-encoded the literal
+        // '+' between scopes into '%2B' when constructing the markdown
+        // link. The Block path decodes them back to '+' and emits the
+        // URL as inline code.
+        var blocks = SlackBlockConverter.Convert(
+            "Auth at [here](https://x.example.com/auth?scope=A%2BB%2BC&state=1).");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        Assert.Empty(section.Elements.OfType<RichTextLink>());
+        var codeElement = Assert.Single(
+            section.Elements.OfType<RichTextText>(),
+            t => t.Style?.Code == true);
+        Assert.Equal(
+            "https://x.example.com/auth?scope=A+B+C&state=1",
+            codeElement.Text);
+    }
+
+    [Fact]
+    public void BareUrl_WithRewriteProneUrl_ProducesInlineCode()
+    {
+        // Bare URL with '+' — block path emits inline code, not a link.
+        var blocks = SlackBlockConverter.Convert(
+            "Visit https://accounts.google.com/auth?scope=A+B+C for auth");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        Assert.Empty(section.Elements.OfType<RichTextLink>());
+        var codeElement = Assert.Single(
+            section.Elements.OfType<RichTextText>(),
+            t => t.Style?.Code == true);
+        Assert.Equal(
+            "https://accounts.google.com/auth?scope=A+B+C",
+            codeElement.Text);
     }
 
     [Fact]
@@ -273,6 +340,23 @@ public class SlackBlockConverterTests
         var link = Assert.Single(section.Elements.OfType<RichTextLink>());
         Assert.Equal("https://github.com/foo/bar", link.Url);
         Assert.Null(link.Text);
+    }
+
+    [Fact]
+    public void BareUrl_AtSentenceEnd_ExcludesTrailingPeriodFromLink()
+    {
+        // Shared bare-URL tokenizer (SlackTextProtector.BareUrlRegex):
+        // the sentence's closing period must not be pulled into the
+        // link target — it survives as trailing plain text.
+        var blocks = SlackBlockConverter.Convert("Check https://example.com.");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var link = Assert.Single(section.Elements.OfType<RichTextLink>());
+        Assert.Equal("https://example.com", link.Url);
+
+        Assert.Contains(section.Elements.OfType<RichTextText>(), t => t.Text == ".");
     }
 
     [Fact]
