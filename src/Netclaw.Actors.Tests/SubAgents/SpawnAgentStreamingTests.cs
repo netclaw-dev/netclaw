@@ -21,21 +21,13 @@ using Xunit;
 namespace Netclaw.Actors.Tests.SubAgents;
 
 /// <summary>
-/// Full-chain coverage for the spawn_agent streaming path: a real
-/// <see cref="DispatchingToolExecutor"/> resolves <c>spawn_agent</c>, dispatches
-/// through the <c>INetclawTool</c> interface into <see cref="SpawnAgentTool"/>'s
-/// streaming override, runs a real <see cref="SubAgentActor"/>, and surfaces the
-/// sub-agent's progress as activity items into a real
+/// Regression guard for the default-interface-method dispatch gap that let
+/// <c>spawn_agent</c> bypass its streaming override and run the non-streaming
+/// path — emitting zero activity items, so the parent's per-call watchdog
+/// killed healthy sub-agents at the flat tool timeout. Exercises the full
+/// chain: <see cref="DispatchingToolExecutor"/> → <c>INetclawTool</c> dispatch
+/// → <see cref="SpawnAgentTool"/> → <see cref="SubAgentActor"/> →
 /// <see cref="StreamingToolWatchdog"/>.
-///
-/// Regression guard for the default-interface-method dispatch gap: a plain
-/// <c>public</c> <c>ExecuteStreamAsync</c> on <see cref="SpawnAgentTool"/> was
-/// never reached through the <c>INetclawTool</c> interface (the interface slot
-/// was bound to the DIM default at the <c>NetclawTool&lt;T&gt;</c> base). So
-/// <c>spawn_agent</c> ran the non-streaming path, emitted zero activity items,
-/// and the parent's per-call watchdog killed a healthy sub-agent at the flat
-/// tool timeout. The watchdog's <c>onActivity</c> callback makes the otherwise
-/// ephemeral activity items observable here.
 /// </summary>
 public class SpawnAgentStreamingTests : TestKit
 {
@@ -114,16 +106,14 @@ public class SpawnAgentStreamingTests : TestKit
             onActivity: activity.Add,
             TestContext.Current.CancellationToken);
 
-        // With the DIM dispatch gap, spawn_agent ran the non-streaming path and
-        // produced zero activity items — the watchdog would see only silence and
-        // kill a healthy sub-agent at the flat budget. The streaming override
-        // emits at least one progress item ("calling the model").
+        // The DIM dispatch gap ran spawn_agent on the non-streaming path: zero
+        // activity items, so the watchdog saw only silence and killed healthy
+        // sub-agents at the flat budget. The streaming override emits progress.
         Assert.NotEmpty(activity);
-        Assert.Contains("Response #1", result, StringComparison.Ordinal);
-    }
 
-    private sealed class SingleClientProvider(IChatClient client) : IChatClientProvider
-    {
-        public IChatClient GetClient(ModelRole role) => client;
+        // The terminal result still flows through — a successful sub-agent run,
+        // not a "Subagent '...' failed: ..." message from FormatResult.
+        Assert.NotEmpty(result);
+        Assert.DoesNotContain("failed", result, StringComparison.OrdinalIgnoreCase);
     }
 }

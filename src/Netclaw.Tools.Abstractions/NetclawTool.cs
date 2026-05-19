@@ -70,15 +70,12 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     /// they work, which keeps the caller's per-call watchdog alive.
     /// </summary>
     /// <remarks>
-    /// This is a <c>virtual</c> class member rather than just inheriting the
-    /// <see cref="INetclawTool.ExecuteStreamAsync"/> default interface method.
-    /// A default interface method is bound to the interface slot at the class
-    /// that declares <c>: INetclawTool</c> (this base) — a derived tool adding
-    /// a matching public method does NOT re-implement it and would be invisible
-    /// to <c>INetclawTool</c>-typed dispatch. A <c>virtual</c> class member, by
-    /// contrast, is the interface implementation for the whole hierarchy, so a
-    /// derived <c>override</c> is reachable through an <c>INetclawTool</c>
-    /// reference.
+    /// Declared <c>virtual</c> rather than left to the
+    /// <see cref="INetclawTool.ExecuteStreamAsync"/> default interface method:
+    /// a DIM is bound at this interface-declaring base, so a derived tool's
+    /// matching <c>public</c> method does not re-implement it and is unreachable
+    /// through <c>INetclawTool</c> dispatch — only a derived <c>override</c> of
+    /// this <c>virtual</c> is.
     /// </remarks>
     public virtual async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
