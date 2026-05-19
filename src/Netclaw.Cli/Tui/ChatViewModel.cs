@@ -113,7 +113,9 @@ public partial class ChatViewModel : ReactiveViewModel
         _daemonConnectionSubscription = _daemonClient.ConnectionEvents
             .Subscribe(evt =>
             {
-                if (evt.State is DaemonConnectionState.Disconnected or DaemonConnectionState.Reconnecting)
+                if (evt.State is DaemonConnectionState.Disconnected
+                    or DaemonConnectionState.Reconnecting
+                    or DaemonConnectionState.TransportClosed)
                 {
                     _sessionReady = false;
                     IsGenerating.Value = false;

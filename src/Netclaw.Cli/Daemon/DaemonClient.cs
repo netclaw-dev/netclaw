@@ -45,7 +45,10 @@ public sealed class DaemonClient : IAsyncDisposable
     private string? _sessionId;
     private Actors.Channels.ChannelType? _channelType;
     private bool _hasConnected;
-    private bool _disposed;
+
+    // volatile: read from SignalR callback threads (Reconnected/Closed handlers)
+    // and ReconnectLoopAsync continuations; written by DisposeAsync.
+    private volatile bool _disposed;
     private CancellationTokenSource? _reconnectCts;
 
     public DaemonClient(
@@ -79,8 +82,37 @@ public sealed class DaemonClient : IAsyncDisposable
 
         _connection.Reconnected += async _ =>
         {
+            if (_disposed)
+                return;
+
+            // SignalR's built-in auto-reconnect has restored the transport. Re-attach
+            // the session before announcing Connected so consumers that act on
+            // Connected (the TUI re-runs EnsureSession) observe a live session.
+            //
+            // A re-attach failure must NOT be swallowed: SignalR invokes Reconnected
+            // fire-and-forget, so a thrown exception would vanish and strand consumers
+            // in a stale Reconnecting state on a transport that is actually up. Hand
+            // off to the supervised ReconnectLoopAsync instead — it short-circuits the
+            // already-connected transport and retries EnsureSession past transient
+            // failures, emitting a terminal Disconnected only if it truly exhausts its
+            // budget. This makes the built-in reconnect path as resilient as the
+            // manual Closed-handler path.
             if (_channelType is { } ct)
-                await EnsureSessionInternalAsync(ct, CancellationToken.None);
+            {
+                try
+                {
+                    await EnsureSessionInternalAsync(ct, CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    _connectionSubject.OnNext(new DaemonConnectionEvent(
+                        DaemonConnectionState.Reconnecting,
+                        _daemonEndpoint,
+                        $"Reconnected to {_daemonEndpoint} but session re-attach failed: {ex.Message}. Retrying..."));
+                    await ReconnectLoopAsync();
+                    return;
+                }
+            }
 
             _connectionSubject.OnNext(new DaemonConnectionEvent(
                 DaemonConnectionState.Connected,
@@ -104,10 +136,14 @@ public sealed class DaemonClient : IAsyncDisposable
                 return;
 
             var reason = ex?.Message ?? "connection closed";
+            // TransportClosed, not Disconnected: SignalR's built-in auto-reconnect
+            // has given up, but ReconnectLoopAsync takes over immediately below. This
+            // is a transient handoff — a Reconnecting follows within microseconds.
+            // Only ReconnectLoopAsync's exhaustion branch emits terminal Disconnected.
             _connectionSubject.OnNext(new DaemonConnectionEvent(
-                DaemonConnectionState.Disconnected,
+                DaemonConnectionState.TransportClosed,
                 _daemonEndpoint,
-                $"Disconnected from daemon at {_daemonEndpoint}: {reason}"));
+                $"Connection to daemon at {_daemonEndpoint} dropped: {reason}"));
 
             if (!string.IsNullOrWhiteSpace(_sessionId))
                 await ReconnectLoopAsync();
