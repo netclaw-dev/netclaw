@@ -1425,15 +1425,35 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var child = await Sys.ActorSelection(childPath).ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
         Watch(child);
 
+        // Subscribe a fresh probe to observe the retried turn deterministically.
+        // It is registered while the actor is Passivating — JoinSession is handled
+        // there (CommandSubscriptionMessages) without aborting passivation — so the
+        // probe is in the subscriber set before the retry turn emits any output.
+        var retryWatcher = CreateTestProbe("passivation-retry-watch");
+
         child.Tell(new LeaveSession(subscriber)
         {
             SessionId = sessionId
         });
 
+        // These four messages are consecutive Tells to the child from this
+        // thread, so they enqueue into its mailbox in call order and are
+        // processed ahead of any cross-actor message: LeaveSession (drop the
+        // subscriber) -> ReceiveTimeout (enter Passivating) -> JoinSession
+        // (subscribe retryWatcher, no abort) -> DeliveryFailed (abort
+        // passivation, retry the latest turn). Sent directly to the child, not
+        // via sessionManager, so the feedback lands during Passivating rather
+        // than after the actor has stopped and been re-created by the parent.
         child.Tell(ReceiveTimeout.Instance);
-        // Send directly to child (not via sessionManager) so Akka's single-sender
-        // ordering guarantee ensures the message arrives during Passivating, not
-        // after the actor has stopped and been re-created by the entity parent.
+
+        child.Tell(
+            new JoinSession(retryWatcher)
+            {
+                SessionId = sessionId,
+                Filter = OutputFilter.TextOnly
+            },
+            retryWatcher);
+
         child.Tell(new DeliveryFailed
         {
             SessionId = sessionId,
@@ -1443,16 +1463,16 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             ErrorMessage = "msg_too_long"
         });
 
-        await AwaitAssertAsync(() =>
-        {
-            Assert.True(_fakeChatClient.CallCount >= 2);
-            Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
-                conversation.Any(msg =>
-                    msg.Role == Microsoft.Extensions.AI.ChatRole.User
-                    && msg.Text is not null
-                    && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase)));
-            return Task.CompletedTask;
-        }, TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+        // retryWatcher was subscribed before the retry began, so it
+        // deterministically receives the retried turn's output — no polling of
+        // fake-client internals against a fixed budget.
+        await retryWatcher.ExpectMsgAsync<SessionJoined>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await retryWatcher.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var retriedTurn = await retryWatcher.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(completed.TurnNumber.Value + 1, retriedTurn.TurnNumber.Value);
 
         var rejoined = await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
         {
@@ -1463,6 +1483,17 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal(2, rejoined.TurnCount);
         await subscriber.ExpectMsgAsync<SessionJoined>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
+
+        // The retried turn must carry the delivery-failure feedback to the LLM.
+        // Checked once the session is quiescent (turn 2 completed, no call in
+        // flight) so ReceivedMessages is not being mutated by a concurrent call.
+        Assert.True(_fakeChatClient.CallCount >= 2);
+        Assert.Contains(_fakeChatClient.ReceivedMessages, conversation =>
+            conversation.Any(msg =>
+                msg.Role == Microsoft.Extensions.AI.ChatRole.User
+                && msg.Text is not null
+                && msg.Text.Contains("msg_too_long", StringComparison.OrdinalIgnoreCase)));
+
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
