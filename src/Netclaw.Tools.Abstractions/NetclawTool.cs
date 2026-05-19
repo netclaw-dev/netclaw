@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
@@ -60,6 +61,31 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
         return TryParse(arguments, out var error, out var args)
             ? await ExecuteAsync(args, context, ct)
             : error;
+    }
+
+    /// <summary>
+    /// Execute the tool as a stream of <see cref="ToolCallUpdate"/> items. The
+    /// default yields the non-streaming result as a single terminal completion
+    /// item. Long-running tools override this to emit liveness/progress while
+    /// they work, which keeps the caller's per-call watchdog alive.
+    /// </summary>
+    /// <remarks>
+    /// This is a <c>virtual</c> class member rather than just inheriting the
+    /// <see cref="INetclawTool.ExecuteStreamAsync"/> default interface method.
+    /// A default interface method is bound to the interface slot at the class
+    /// that declares <c>: INetclawTool</c> (this base) — a derived tool adding
+    /// a matching public method does NOT re-implement it and would be invisible
+    /// to <c>INetclawTool</c>-typed dispatch. A <c>virtual</c> class member, by
+    /// contrast, is the interface implementation for the whole hierarchy, so a
+    /// derived <c>override</c> is reachable through an <c>INetclawTool</c>
+    /// reference.
+    /// </remarks>
+    public virtual async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        yield return new ToolCompletedUpdate(await ExecuteAsync(arguments, context, ct));
     }
 
     /// <summary>
