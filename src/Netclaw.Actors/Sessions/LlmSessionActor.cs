@@ -3,10 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Immutable;
 using System.Diagnostics;
-using System.Net.Http;
-using System.Text;
 using System.Text.Json;
 using Akka.Actor;
 using Akka.Event;
@@ -488,112 +485,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<CompactionWorkCompleted>(_ => { });
         Command<CompactionWorkFailed>(_ => { });
 
-        Command<LlmResponseReceived>(msg =>
-        {
-            if (msg.CallId != _activeCallId) return; // stale response from cancelled call
-            _watchdog.Stop(Timers);
-            CancelAndDisposeLlmCts();
+        Command<LlmResponseReceived>(HandleLlmResponseReceived);
 
-            var response = msg.Response;
-            var lastMessage = response.Messages[^1];
-
-            var toolCalls = new List<FunctionCallContent>();
-            bool hasText = false, hasThinking = false;
-            int textChars = 0, thinkingChars = 0;
-            foreach (var c in lastMessage.Contents)
-            {
-                switch (c)
-                {
-                    case TextContent tc:
-                        textChars += tc.Text?.Length ?? 0;
-                        if (!string.IsNullOrWhiteSpace(tc.Text)) hasText = true;
-                        break;
-                    case TextReasoningContent rc:
-                        thinkingChars += rc.Text?.Length ?? 0;
-                        if (!string.IsNullOrWhiteSpace(rc.Text)) hasThinking = true;
-                        break;
-                    case FunctionCallContent fc:
-                        toolCalls.Add(fc);
-                        break;
-                }
-            }
-
-            _log.Debug(
-                "LLM response content breakdown: text={TextChars}ch thinking={ThinkingChars}ch toolCalls={ToolCallCount} finishReason={FinishReason}",
-                textChars, thinkingChars, toolCalls.Count, response.FinishReason?.ToString() ?? "null");
-
-            if (toolCalls.Count > 0 && _turnState.ForceNoToolsActive)
-            {
-                TurnLog().Warning(
-                    "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
-                    toolCalls.Count,
-                    _turnState.ToolCallCount,
-                    _config.MaxToolCallsPerTurn);
-                FailCurrentTurn(
-                    ToolBudgetExhaustedMessage,
-                    new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
-                    ErrorCategory.ProviderFailure);
-                return;
-            }
-
-            if (toolCalls.Count > 0 && _toolExecutor is not null)
-            {
-                HandleToolCallResponse(lastMessage, toolCalls, response.Usage);
-                return;
-            }
-
-            if (!hasText && toolCalls.Count == 0)
-            {
-                var label = hasThinking ? "thinking-only" : "empty";
-                switch (_turnState.EvaluateEmptyResponse())
-                {
-                    case EmptyResponseAction.Retry retry:
-                        _log.Warning("LLM produced {Label} response ({ThinkingChars} chars) — retrying with nudge",
-                            label, thinkingChars);
-                        _state = _state.AddSystemNudge(retry.NudgeText);
-                        FireLlmCall();
-                        return;
-                    case EmptyResponseAction.Fail fail:
-                        _log.Warning("LLM produced {Label} response — failing turn", label);
-                        FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
-                        return;
-                }
-            }
-
-            // Normal text response — persist turn
-            HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking, msg.RecallResult);
-        });
-
-        Command<LlmResponseDeltaReceived>(msg =>
-        {
-            if (msg.CallId != _activeCallId) return; // stale delta from cancelled call
-            if (!_anyContentStreamed)
-            {
-                _anyContentStreamed = true;
-                _watchdog.Promote(_config.FirstTokenTimeout, Timers);
-            }
-            else
-            {
-                _watchdog.Refresh(_config.FirstTokenTimeout, Timers);
-            }
-
-            switch (msg.Content)
-            {
-                case TextContent text when !string.IsNullOrEmpty(text.Text):
-                    EmitOutput(new TextDeltaOutput(text.Text)
-                    {
-                        SessionId = _sessionId
-                    }, OutputFilter.TextStreaming);
-                    break;
-
-                case TextReasoningContent thinking when !string.IsNullOrEmpty(thinking.Text):
-                    EmitOutput(new ThinkingDeltaOutput(thinking.Text)
-                    {
-                        SessionId = _sessionId
-                    }, OutputFilter.Thinking);
-                    break;
-            }
-        });
+        Command<LlmResponseDeltaReceived>(HandleLlmResponseDeltaReceived);
 
         Command<ToolExecutionSingleCompleted>(msg =>
         {
@@ -618,233 +512,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryCompleteStreamedToolBatch();
         });
 
-        Command<ToolExecutionCompleted>(msg =>
-        {
-            _watchdog.Stop(Timers);
-
-            var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var finding in msg.AcceptedSubAgentFindings)
-            {
-                if (emittedRunIds.Add(finding.RunId))
-                {
-                    var runSummary = msg.CompletedSubAgentRuns
-                        .FirstOrDefault(x => string.Equals(x.RunId, finding.RunId, StringComparison.Ordinal));
-
-                    EmitOutput(new SubAgentOutput
-                    {
-                        SessionId = _sessionId,
-                        TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                        AgentName = finding.AgentName,
-                        Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                        Success = true,
-                        Duration = finding.Duration,
-                        MemoryDecision = finding.Decision.ToWireValue(),
-                        MemoryDecisionReason = finding.DecisionReason,
-                        FindingsCount = runSummary?.FindingsCount ?? 1
-                    }, OutputFilter.ToolCalls);
-                }
-
-                if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
-                    continue;
-
-                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                    SessionId: _sessionId,
-                    TurnId: _activeTurnId,
-                    TriggerType: Memory.CheckpointTriggerType.SubagentFindings,
-                    Priority: 80,
-                    Payload: new MemoryCheckpointPayload(
-                        SessionId: _sessionId.Value,
-                        TriggerType: "subagent-findings",
-                        Source: finding.AgentName.Value,
-                        Content: finding.Content,
-                        UserContent: null,
-                        AssistantContent: finding.Content,
-                        IsExplicitRequest: false,
-                        HasVerifiedToolFinding: false,
-                        IsCompactionBoundary: false,
-                        HasAcceptedSubAgentFinding: true,
-                        Boundary: CurrentMemoryBoundary(),
-                        Audience: CurrentMemoryAudience(),
-                        Sensitivity: finding.Sensitivity.ToWireValue(),
-                        RecallMode: finding.RecallMode.ToWireValue(),
-                        Confidence: finding.Confidence,
-                        Title: finding.Title,
-                        Kind: finding.Kind,
-                        UpdateSemantics: finding.UpdateSemantics,
-                        Evidence: finding.Evidence,
-                        FreshnessAtMs: finding.FreshnessAtMs)));
-            }
-
-            foreach (var run in msg.CompletedSubAgentRuns)
-            {
-                if (!emittedRunIds.Add(run.RunId))
-                    continue;
-
-                EmitOutput(new SubAgentOutput
-                {
-                    SessionId = _sessionId,
-                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    AgentName = run.AgentName,
-                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
-                    Success = run.Success,
-                    Duration = run.Duration,
-                    MemoryDecision = run.MemoryDecision,
-                    MemoryDecisionReason = run.MemoryDecisionReason,
-                    FindingsCount = run.FindingsCount
-                }, OutputFilter.ToolCalls);
-            }
-
-            foreach (var result in msg.ToolResults)
-            {
-                _state = _state with { History = _state.History.Add(result) };
-
-                // A tool result must correlate to a tool call. A null ToolCallId
-                // means the result was assembled wrong; fabricating an empty id
-                // would hand subscribers a non-correlatable id, so fail loud.
-                if (result.ToolCallId is not { } toolCallId)
-                    throw new InvalidOperationException(
-                        $"Tool-result message for tool '{result.Name ?? "unknown"}' has no ToolCallId.");
-
-                var preview = result.Content is { Length: > 200 }
-                    ? result.Content[..200] + "..."
-                    : result.Content ?? "(null)";
-                _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-                    result.Name ?? "unknown", toolCallId.Value, preview);
-
-                EmitOutput(new ToolResultOutput
-                {
-                    SessionId = _sessionId,
-                    CallId = toolCallId,
-                    ToolName = new ToolName(result.Name ?? "unknown"),
-                    Result = result.Content ?? string.Empty
-                }, OutputFilter.ToolCalls);
-            }
-
-            // Processes ALL results in the batch, including failed tool
-            // calls. RecentFiles tracks "files the agent has recently
-            // interacted with," not "files the agent successfully read" —
-            // a tool that tried to read a non-existent file still reveals
-            // intent. The control-character rejection in AddRecentFile is
-            // the defense against adversarial paths flowing through here.
-            var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
-                _state.WorkingContext,
-                _state.History,
-                msg.ToolResults,
-                _log);
-            if (!ReferenceEquals(updatedContext, _state.WorkingContext))
-            {
-                _state = _state with { WorkingContext = updatedContext };
-            }
-
-            // Dynamic tool loading: if load_tool was called, activate the requested tool.
-            // LoadToolTool returns the canonical tool name on success; the actor looks it
-            // up in the registry. Error messages won't match any entry, so only valid
-            // tool names trigger activation — no string parsing required.
-            if (_fullRegistry is not null)
-            {
-                foreach (var result in msg.ToolResults)
-                {
-                    if (result.Name is "load_tool" && result.Content is not null)
-                    {
-                        TryActivateDiscoveredTool(result.Content.Trim());
-                    }
-                }
-            }
-
-            // Project directory: if set_working_directory was called, update
-            // WorkingContext and re-assemble the system prompt so the project's
-            // identity files are included. The tool returns an absolute path on
-            // success — IsPathRooted is a structural gate that rejects error
-            // messages without relying on string prefix conventions.
-            foreach (var result in msg.ToolResults)
-            {
-                if (result.Name is "set_working_directory" && result.Content is not null)
-                {
-                    var projectDir = result.Content.Trim();
-                    if (!Path.IsPathRooted(projectDir))
-                        continue;
-                    var next = _state.WorkingContext.WithProjectDirectory(projectDir);
-                    if (!ReferenceEquals(next, _state.WorkingContext))
-                    {
-                        _state = _state with { WorkingContext = next };
-                        SetSystemPrompt();
-                        _log.Info("Project directory set to {ProjectDir}", projectDir);
-                    }
-                }
-            }
-
-            // Emit FileOutput for any file attachments registered by tools
-            foreach (var file in msg.FileAttachments)
-            {
-                EmitOutput(new FileOutput
-                {
-                    SessionId = _sessionId,
-                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                    FilePath = file.FilePath,
-                    FileName = file.FileName,
-                    MimeType = new Netclaw.Security.MimeType(file.MimeType)
-                }, OutputFilter.Files);
-            }
-
-            // Record completion and check budget + duplicates
-            var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolCallsPerTurn);
-
-            var dupNudge = _turnState.CheckForDuplicates();
-            if (dupNudge is not null)
-            {
-                TurnLog().Warning(
-                    "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
-                    dupNudge.ToolName, dupNudge.Count, _turnState.ToolIterationCount);
-                _state = _state.AddSystemNudge(dupNudge.NudgeText);
-            }
-
-            // Mid-loop user message injection: if the user sent messages while tools were
-            // running, inject them into the conversation now so the LLM can see corrections
-            // like "stop" or "that's already done" before the next iteration.
-            if (_buffer.Count > 0)
-            {
-                TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
-                    _buffer.Count, _turnState.ToolIterationCount);
-                foreach (var buffered in _buffer)
-                {
-                    var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                    _state = _state.AddUserMessage(buffered.Content, refs);
-                }
-                _buffer.Clear();
-            }
-
-            // Apply budget decision
-            switch (budgetStatus)
-            {
-                case ToolBudgetStatus.Exhausted exhausted:
-                    TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                        _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
-                    _state = _state.AddSystemNudge(exhausted.NudgeText);
-                    FireLlmCall(forceNoTools: true);
-                    return;
-                case ToolBudgetStatus.NudgeNeeded nudge:
-                    _state = _state.AddSystemNudge(nudge.NudgeText);
-                    break;
-            }
-
-            // Compaction check before follow-up LLM call (#424)
-            if (ShouldCompact())
-            {
-                _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
-                    _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
-                _resumeToolLoopAfterCompaction = true;
-                Self.Tell(new CompactionTriggered(_lastInputTokenCount));
-                TransitionTo(SessionPhase.Compacting);
-                return;
-            }
-
-            // Fire follow-up LLM call with tool results in context
-            _pendingToolInteractions.Clear();
-            _resolvedToolApprovals.Clear();
-            TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-                _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
-            FireLlmCall();
-        });
+        Command<ToolExecutionCompleted>(HandleToolExecutionCompleted);
 
         Command<ToolExecutionFailed>(msg =>
         {
@@ -1042,6 +710,283 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CommandDistillationAckNoOp();
     }
 
+    private void HandleLlmResponseReceived(LlmResponseReceived msg)
+    {
+        if (msg.CallId != _activeCallId)
+            return;
+
+        _watchdog.Stop(Timers);
+        CancelAndDisposeLlmCts();
+
+        var response = msg.Response;
+        var lastMessage = response.Messages[^1];
+        var analysis = LlmResponseClassifier.Analyze(lastMessage);
+
+        _log.Debug(
+            "LLM response content breakdown: text={TextChars}ch thinking={ThinkingChars}ch toolCalls={ToolCallCount} finishReason={FinishReason}",
+            analysis.TextChars,
+            analysis.ThinkingChars,
+            analysis.ToolCalls.Count,
+            response.FinishReason?.ToString() ?? "null");
+
+        if (analysis.ToolCalls.Count > 0 && _turnState.ForceNoToolsActive)
+        {
+            TurnLog().Warning(
+                "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
+                analysis.ToolCalls.Count,
+                _turnState.ToolCallCount,
+                _config.MaxToolCallsPerTurn);
+            FailCurrentTurn(
+                ToolBudgetExhaustedMessage,
+                new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
+                ErrorCategory.ProviderFailure);
+            return;
+        }
+
+        if (analysis.ToolCalls.Count > 0 && _toolExecutor is not null)
+        {
+            HandleToolCallResponse(lastMessage, analysis.ToolCalls, response.Usage);
+            return;
+        }
+
+        if (!analysis.HasText && analysis.ToolCalls.Count == 0)
+        {
+            var label = analysis.HasThinking ? "thinking-only" : "empty";
+            switch (_turnState.EvaluateEmptyResponse())
+            {
+                case EmptyResponseAction.Retry retry:
+                    _log.Warning("LLM produced {Label} response ({ThinkingChars} chars) — retrying with nudge",
+                        label, analysis.ThinkingChars);
+                    _state = _state.AddSystemNudge(retry.NudgeText);
+                    FireLlmCall();
+                    return;
+                case EmptyResponseAction.Fail fail:
+                    _log.Warning("LLM produced {Label} response — failing turn", label);
+                    FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
+                    return;
+            }
+        }
+
+        HandleTextResponse(lastMessage, response.Usage, msg.StreamedText, msg.StreamedThinking, msg.RecallResult);
+    }
+
+    private void HandleLlmResponseDeltaReceived(LlmResponseDeltaReceived msg)
+    {
+        if (msg.CallId != _activeCallId)
+            return;
+
+        if (!_anyContentStreamed)
+        {
+            _anyContentStreamed = true;
+            _watchdog.Promote(_config.FirstTokenTimeout, Timers);
+        }
+        else
+        {
+            _watchdog.Refresh(_config.FirstTokenTimeout, Timers);
+        }
+
+        switch (msg.Content)
+        {
+            case TextContent text when !string.IsNullOrEmpty(text.Text):
+                EmitOutput(new TextDeltaOutput(text.Text)
+                {
+                    SessionId = _sessionId
+                }, OutputFilter.TextStreaming);
+                break;
+
+            case TextReasoningContent thinking when !string.IsNullOrEmpty(thinking.Text):
+                EmitOutput(new ThinkingDeltaOutput(thinking.Text)
+                {
+                    SessionId = _sessionId
+                }, OutputFilter.Thinking);
+                break;
+        }
+    }
+
+    private void HandleToolExecutionCompleted(ToolExecutionCompleted msg)
+    {
+        _watchdog.Stop(Timers);
+
+        var emittedRunIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var finding in msg.AcceptedSubAgentFindings)
+        {
+            if (emittedRunIds.Add(finding.RunId))
+            {
+                var runSummary = msg.CompletedSubAgentRuns
+                    .FirstOrDefault(x => string.Equals(x.RunId, finding.RunId, StringComparison.Ordinal));
+
+                EmitOutput(new SubAgentOutput
+                {
+                    SessionId = _sessionId,
+                    TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                    AgentName = finding.AgentName,
+                    Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                    Success = true,
+                    Duration = finding.Duration,
+                    MemoryDecision = finding.Decision.ToWireValue(),
+                    MemoryDecisionReason = finding.DecisionReason,
+                    FindingsCount = runSummary?.FindingsCount ?? 1
+                }, OutputFilter.ToolCalls);
+            }
+
+            if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
+                continue;
+
+            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                SessionId: _sessionId,
+                TurnId: _activeTurnId,
+                TriggerType: Memory.CheckpointTriggerType.SubagentFindings,
+                Priority: 80,
+                Payload: SessionMemoryCheckpointFactory.ForSubAgentFinding(
+                    _sessionId,
+                    CurrentMemoryBoundary(),
+                    CurrentMemoryAudience(),
+                    finding)));
+        }
+
+        foreach (var run in msg.CompletedSubAgentRuns)
+        {
+            if (!emittedRunIds.Add(run.RunId))
+                continue;
+
+            EmitOutput(new SubAgentOutput
+            {
+                SessionId = _sessionId,
+                TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                AgentName = run.AgentName,
+                Phase = Netclaw.Actors.SubAgents.SubAgentPhase.Completed,
+                Success = run.Success,
+                Duration = run.Duration,
+                MemoryDecision = run.MemoryDecision,
+                MemoryDecisionReason = run.MemoryDecisionReason,
+                FindingsCount = run.FindingsCount
+            }, OutputFilter.ToolCalls);
+        }
+
+        foreach (var result in msg.ToolResults)
+        {
+            _state = _state with { History = _state.History.Add(result) };
+
+            if (result.ToolCallId is not { } toolCallId)
+                throw new InvalidOperationException(
+                    $"Tool-result message for tool '{result.Name ?? "unknown"}' has no ToolCallId.");
+
+            var preview = result.Content is { Length: > 200 }
+                ? result.Content[..200] + "..."
+                : result.Content ?? "(null)";
+            _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
+                result.Name ?? "unknown", toolCallId.Value, preview);
+
+            EmitOutput(new ToolResultOutput
+            {
+                SessionId = _sessionId,
+                CallId = toolCallId,
+                ToolName = new ToolName(result.Name ?? "unknown"),
+                Result = result.Content ?? string.Empty
+            }, OutputFilter.ToolCalls);
+        }
+
+        // Processes all results, including failed tool calls. RecentFiles tracks
+        // interaction intent, not successful reads only.
+        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+            _state.WorkingContext,
+            _state.History,
+            msg.ToolResults,
+            _log);
+        if (!ReferenceEquals(updatedContext, _state.WorkingContext))
+            _state = _state with { WorkingContext = updatedContext };
+
+        if (_fullRegistry is not null)
+        {
+            foreach (var result in msg.ToolResults)
+            {
+                if (result.Name is "load_tool" && result.Content is not null)
+                    TryActivateDiscoveredTool(result.Content.Trim());
+            }
+        }
+
+        foreach (var result in msg.ToolResults)
+        {
+            if (result.Name is not "set_working_directory" || result.Content is null)
+                continue;
+
+            var projectDir = result.Content.Trim();
+            if (!Path.IsPathRooted(projectDir))
+                continue;
+
+            var next = _state.WorkingContext.WithProjectDirectory(projectDir);
+            if (ReferenceEquals(next, _state.WorkingContext))
+                continue;
+
+            _state = _state with { WorkingContext = next };
+            SetSystemPrompt();
+            _log.Info("Project directory set to {ProjectDir}", projectDir);
+        }
+
+        foreach (var file in msg.FileAttachments)
+        {
+            EmitOutput(new FileOutput
+            {
+                SessionId = _sessionId,
+                TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
+                FilePath = file.FilePath,
+                FileName = file.FileName,
+                MimeType = new Netclaw.Security.MimeType(file.MimeType)
+            }, OutputFilter.Files);
+        }
+
+        var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolCallsPerTurn);
+        var dupNudge = _turnState.CheckForDuplicates();
+        if (dupNudge is not null)
+        {
+            TurnLog().Warning(
+                "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
+                dupNudge.ToolName, dupNudge.Count, _turnState.ToolIterationCount);
+            _state = _state.AddSystemNudge(dupNudge.NudgeText);
+        }
+
+        if (_buffer.Count > 0)
+        {
+            TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
+                _buffer.Count, _turnState.ToolIterationCount);
+            foreach (var buffered in _buffer)
+            {
+                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
+                _state = _state.AddUserMessage(buffered.Content, refs);
+            }
+            _buffer.Clear();
+        }
+
+        switch (budgetStatus)
+        {
+            case ToolBudgetStatus.Exhausted exhausted:
+                TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
+                    _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
+                _state = _state.AddSystemNudge(exhausted.NudgeText);
+                FireLlmCall(forceNoTools: true);
+                return;
+            case ToolBudgetStatus.NudgeNeeded nudge:
+                _state = _state.AddSystemNudge(nudge.NudgeText);
+                break;
+        }
+
+        if (ShouldCompact())
+        {
+            _log.Info("Compaction threshold reached during tool loop ({InputTokens} tokens >= {Threshold} limit), starting compaction",
+                _lastInputTokenCount, _model.CompactionTokenLimit(_config.Tuning.CompactionThreshold));
+            _resumeToolLoopAfterCompaction = true;
+            Self.Tell(new CompactionTriggered(_lastInputTokenCount));
+            TransitionTo(SessionPhase.Compacting);
+            return;
+        }
+
+        _pendingToolInteractions.Clear();
+        _resolvedToolApprovals.Clear();
+        TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
+            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
+        FireLlmCall();
+    }
+
     private void HandleDistillationResult(SessionDistillationCompleted msg)
         => HandleDistillationResult(msg, stopAfterAcceptedProposalPersistence: false);
 
@@ -1169,155 +1114,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _deferredApprovalResponse = msg;
         });
 
-        Command<ProcessingWatchdogExpired>(msg =>
-        {
-            if (!_watchdog.IsCurrent(msg))
-                return;
-
-            _log.Error("Compaction watchdog expired for operation {OperationName} (opId={OperationId})",
-                msg.OperationName, msg.OperationId);
-
-            _watchdog.Stop(Timers);
-
-            EmitOutput(new ErrorOutput
-            {
-                SessionId = _sessionId,
-                Message = "Context compaction timed out. The session will continue.",
-                Category = ErrorCategory.Timeout,
-                CorrelationId = Guid.NewGuid(),
-                Cause = new TimeoutException(
-                    $"Session compaction operation '{msg.OperationName}' exceeded watchdog timeout of {GetCompactionTimeout().TotalSeconds:F0}s")
-            });
-
-            DrainBufferOrReady();
-        });
+        Command<ProcessingWatchdogExpired>(HandleCompactionWatchdogExpired);
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
 
-        Command<CompactionTriggered>(msg =>
-        {
-            var timeout = GetCompactionTimeout();
-            _watchdog.Start(ProcessingWatchdog.Compaction, timeout, Timers);
+        Command<CompactionTriggered>(HandleCompactionTriggered);
 
-            var operationId = _watchdog.CurrentOperationId;
-            var stateSnapshot = _state;
-            var self = Self;
-            var log = _log;
-            var compactionClient = _compactionClient;
+        Command<CompactionWorkCompleted>(HandleCompactionWorkCompleted);
 
-            var compactionParams = new CompactionParameters(
-                _sessionId,
-                msg.InputTokenCount,
-                _config.Tuning.KeepRecentToolResults,
-                _config.Tuning.KeepRecentMessages,
-                _model.ContextWindowTokens,
-                _config.SidecarLlmTimeout,
-                timeout);
-
-            _ = SessionCompactionPipeline.ExecuteAsync(
-                stateSnapshot,
-                compactionParams,
-                compactionClient,
-                self,
-                log,
-                operationId);
-        });
-
-        Command<CompactionWorkCompleted>(msg =>
-        {
-            if (!IsCurrentCompactionOperation(msg.OperationId))
-                return;
-
-            _watchdog.Stop(Timers);
-
-            var compactedEvent = new SessionCompacted
-            {
-                SessionId = _sessionId,
-                Summary = msg.Summary,
-                CompactedMessages = msg.CompactedMessages,
-                TurnCountBefore = _state.TurnCount,
-                CompactedAtMs = NowMs()
-            };
-
-            Persist(compactedEvent, evt =>
-            {
-                _state = _state.Apply(evt);
-                _lastInputTokenCount = 0; // Reset — next LLM call will provide fresh count
-                _startupContextInjected = false; // Re-inject static layers on next LLM call
-                _recallManager.ResetForCompaction(); // Force fresh recall + progressive recall reset
-                _discoveredToolCache.EvictAll(_availableTools, _baseToolCount); // Reset to base tools — re-discover as needed
-
-                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                    SessionId: _sessionId,
-                    TurnId: _activeTurnId,
-                    TriggerType: Memory.CheckpointTriggerType.CompactionBoundary,
-                    Priority: 90,
-                    Payload: new MemoryCheckpointPayload(
-                        SessionId: _sessionId.Value,
-                        TriggerType: "compaction-boundary",
-                        Source: "compaction",
-                        Content: string.IsNullOrWhiteSpace(msg.Summary)
-                            ? "Compaction completed"
-                            : msg.Summary,
-                        UserContent: null,
-                        AssistantContent: string.IsNullOrWhiteSpace(msg.Summary) ? null : msg.Summary,
-                        IsExplicitRequest: false,
-                        HasVerifiedToolFinding: false,
-                        IsCompactionBoundary: true,
-                        HasAcceptedSubAgentFinding: false,
-                        Boundary: CurrentMemoryBoundary(),
-                        Audience: CurrentMemoryAudience(),
-                        Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
-                        RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
-                        Confidence: 0.8,
-                        Kind: Memory.MemoryKind.Document.ToWireValue(),
-                        Title: "compaction-boundary",
-                        UpdateSemantics: "append-document")));
-
-                SaveSnapshot(BuildSnapshot());
-
-                EmitOutput(new CompactionOutput
-                {
-                    SessionId = _sessionId,
-                    MessagesBefore = msg.MessagesBefore,
-                    MessagesAfter = _state.History.Count,
-                    ToolResultsCleared = msg.ClearedCount > 0,
-                    Summarized = !string.IsNullOrWhiteSpace(msg.Summary),
-                    ContextWindowTokens = _model.ContextWindowTokens,
-                    PreCompactionInputTokens = msg.PreCompactionInputTokens,
-                    KeepCountUsed = msg.KeepCountUsed
-                });
-
-                _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
-                    msg.MessagesBefore, _state.History.Count);
-
-                if (_memoryExtractor is NullMemoryExtractor)
-                    DrainBufferOrReady();
-                else
-                    InvokeMemoryExtractionAsync();
-            });
-        });
-
-        Command<CompactionWorkFailed>(msg =>
-        {
-            if (!IsCurrentCompactionOperation(msg.OperationId))
-                return;
-
-            _watchdog.Stop(Timers);
-
-            _log.Warning(msg.Cause, "Compaction failed");
-
-            EmitOutput(new ErrorOutput
-            {
-                SessionId = _sessionId,
-                Message = "Context compaction encountered an error. The session will continue.",
-                Category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.Unknown,
-                CorrelationId = Guid.NewGuid(),
-                Cause = msg.Cause
-            });
-
-            DrainBufferOrReady();
-        });
+        Command<CompactionWorkFailed>(HandleCompactionWorkFailed);
 
         Command<MemoryExtractionCompleted>(msg =>
         {
@@ -1328,24 +1133,156 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             DrainBufferOrReady();
         });
 
-        Command<CompactionFailed>(msg =>
-        {
-            _log.Warning(msg.Cause, "Compaction failed");
-
-            EmitOutput(new ErrorOutput
-            {
-                SessionId = _sessionId,
-                Message = "Context compaction encountered an error. The session will continue.",
-                Category = ErrorCategory.Unknown,
-                CorrelationId = Guid.NewGuid(),
-                Cause = msg.Cause
-            });
-
-            // Compaction is best-effort — drain buffer and continue
-            DrainBufferOrReady();
-        });
+        Command<CompactionFailed>(HandleLegacyCompactionFailed);
 
         CommandDistillationAckNoOp();
+    }
+
+    private void HandleCompactionWatchdogExpired(ProcessingWatchdogExpired msg)
+    {
+        if (!_watchdog.IsCurrent(msg))
+            return;
+
+        _log.Error("Compaction watchdog expired for operation {OperationName} (opId={OperationId})",
+            msg.OperationName, msg.OperationId);
+
+        _watchdog.Stop(Timers);
+
+        EmitOutput(new ErrorOutput
+        {
+            SessionId = _sessionId,
+            Message = "Context compaction timed out. The session will continue.",
+            Category = ErrorCategory.Timeout,
+            CorrelationId = Guid.NewGuid(),
+            Cause = new TimeoutException(
+                $"Session compaction operation '{msg.OperationName}' exceeded watchdog timeout of {GetCompactionTimeout().TotalSeconds:F0}s")
+        });
+
+        DrainBufferOrReady();
+    }
+
+    private void HandleCompactionTriggered(CompactionTriggered msg)
+    {
+        var timeout = GetCompactionTimeout();
+        _watchdog.Start(ProcessingWatchdog.Compaction, timeout, Timers);
+
+        var operationId = _watchdog.CurrentOperationId;
+        var stateSnapshot = _state;
+        var self = Self;
+        var log = _log;
+        var compactionClient = _compactionClient;
+
+        var compactionParams = new CompactionParameters(
+            _sessionId,
+            msg.InputTokenCount,
+            _config.Tuning.KeepRecentToolResults,
+            _config.Tuning.KeepRecentMessages,
+            _model.ContextWindowTokens,
+            _config.SidecarLlmTimeout,
+            timeout);
+
+        _ = SessionCompactionPipeline.ExecuteAsync(
+            stateSnapshot,
+            compactionParams,
+            compactionClient,
+            self,
+            log,
+            operationId);
+    }
+
+    private void HandleCompactionWorkCompleted(CompactionWorkCompleted msg)
+    {
+        if (!IsCurrentCompactionOperation(msg.OperationId))
+            return;
+
+        _watchdog.Stop(Timers);
+
+        var compactedEvent = new SessionCompacted
+        {
+            SessionId = _sessionId,
+            Summary = msg.Summary,
+            CompactedMessages = msg.CompactedMessages,
+            TurnCountBefore = _state.TurnCount,
+            CompactedAtMs = NowMs()
+        };
+
+        Persist(compactedEvent, evt =>
+        {
+            _state = _state.Apply(evt);
+            _lastInputTokenCount = 0;
+            _startupContextInjected = false;
+            _recallManager.ResetForCompaction();
+            _discoveredToolCache.EvictAll(_availableTools, _baseToolCount);
+
+            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                SessionId: _sessionId,
+                TurnId: _activeTurnId,
+                TriggerType: Memory.CheckpointTriggerType.CompactionBoundary,
+                Priority: 90,
+                Payload: SessionMemoryCheckpointFactory.ForCompactionBoundary(
+                    _sessionId,
+                    CurrentMemoryBoundary(),
+                    CurrentMemoryAudience(),
+                    msg.Summary)));
+
+            SaveSnapshot(BuildSnapshot());
+
+            EmitOutput(new CompactionOutput
+            {
+                SessionId = _sessionId,
+                MessagesBefore = msg.MessagesBefore,
+                MessagesAfter = _state.History.Count,
+                ToolResultsCleared = msg.ClearedCount > 0,
+                Summarized = !string.IsNullOrWhiteSpace(msg.Summary),
+                ContextWindowTokens = _model.ContextWindowTokens,
+                PreCompactionInputTokens = msg.PreCompactionInputTokens,
+                KeepCountUsed = msg.KeepCountUsed
+            });
+
+            _log.Info("Compaction complete (before={MessagesBefore}, after={MessagesAfter})",
+                msg.MessagesBefore, _state.History.Count);
+
+            if (_memoryExtractor is NullMemoryExtractor)
+                DrainBufferOrReady();
+            else
+                InvokeMemoryExtractionAsync();
+        });
+    }
+
+    private void HandleCompactionWorkFailed(CompactionWorkFailed msg)
+    {
+        if (!IsCurrentCompactionOperation(msg.OperationId))
+            return;
+
+        _watchdog.Stop(Timers);
+        _log.Warning(msg.Cause, "Compaction failed");
+
+        EmitOutput(new ErrorOutput
+        {
+            SessionId = _sessionId,
+            Message = "Context compaction encountered an error. The session will continue.",
+            Category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.Unknown,
+            CorrelationId = Guid.NewGuid(),
+            Cause = msg.Cause
+        });
+
+        DrainBufferOrReady();
+    }
+
+    private void HandleLegacyCompactionFailed(CompactionFailed msg)
+    {
+        _log.Warning(msg.Cause, "Compaction failed");
+
+        EmitOutput(new ErrorOutput
+        {
+            SessionId = _sessionId,
+            Message = "Context compaction encountered an error. The session will continue.",
+            Category = ErrorCategory.Unknown,
+            CorrelationId = Guid.NewGuid(),
+            Cause = msg.Cause
+        });
+
+        DrainBufferOrReady();
     }
 
     /// <summary>
@@ -1954,25 +1891,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TurnId: _activeTurnId,
                 TriggerType: Memory.CheckpointTriggerType.TurnComplete,
                 Priority: 40,
-                    Payload: new MemoryCheckpointPayload(
-                        SessionId: _sessionId.Value,
-                        TriggerType: Memory.CheckpointTriggerType.TurnComplete.ToWireValue(),
-                        Source: "session",
-                        Content: $"User: {evt.UserMessage.Content}\nAssistant: {evt.AssistantReply.Content}",
-                        UserContent: evt.UserMessage.Content,
-                        AssistantContent: evt.AssistantReply.Content,
-                        IsExplicitRequest: false,
-                    HasVerifiedToolFinding: false,
-                    IsCompactionBoundary: false,
-                    HasAcceptedSubAgentFinding: false,
-                    Boundary: CurrentMemoryBoundary(),
-                    Audience: CurrentMemoryAudience(),
-                    Sensitivity: Memory.MemorySensitivity.Normal.ToWireValue(),
-                    RecallMode: Memory.MemoryRecallMode.Auto.ToWireValue(),
-                    Confidence: 0.7,
-                    Kind: Memory.MemoryKind.Document.ToWireValue(),
-                    Title: "turn-completion",
-                    UpdateSemantics: "append-document")));
+                Payload: SessionMemoryCheckpointFactory.ForTurnComplete(
+                    _sessionId,
+                    evt,
+                    CurrentMemoryBoundary(),
+                    CurrentMemoryAudience())));
 
             _deliveryRetry.MarkEligible(new TurnNumber(_state.TurnCount));
 
@@ -2340,7 +2263,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 Title = _state.Title,
                 TurnCount = _state.TurnCount,
-                RecentMessages = ExtractRecentMessages(_state.History)
+                    RecentMessages = SessionRecentMessageExtractor.Extract(_state.History)
             };
 
             // On re-join, only reply to the Sender (for Ask callers) — don't
@@ -2431,38 +2354,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// timeouts, and falls back to a generic message.
     /// </summary>
     private string ExtractLlmErrorMessage(Exception? cause)
-    {
-        if (cause is null)
-            return "I encountered an error processing your message. Please try again.";
-
-        // ProviderException carries a pre-formatted user-safe message
-        var providerEx = FindException<Configuration.ProviderException>(cause);
-        if (providerEx is not null)
-            return providerEx.UserMessage;
-
-        if (IsContextOverflowError(cause))
-            return $"Context window exceeded after compaction — the session has too many tools or a large system prompt for the {_model.ModelId} context window ({_model.ContextWindowTokens} tokens). Try reducing tools or increasing the model's context window.";
-
-        if (cause is TimeoutException)
-            return "The LLM response stream timed out due to inactivity. The model may be overloaded or the context too large. Please try again.";
-
-        return "I encountered an error processing your message. Please try again.";
-    }
-
-    /// <summary>
-    /// Walks the exception chain (including inner exceptions) to find an exception
-    /// of the specified type.
-    /// </summary>
-    private static T? FindException<T>(Exception? ex) where T : Exception
-    {
-        while (ex is not null)
-        {
-            if (ex is T match)
-                return match;
-            ex = ex.InnerException;
-        }
-        return null;
-    }
+        => LlmFailureClassifier.ExtractUserMessage(cause, _model);
 
     /// <summary>
     /// Detect context-length overflow errors from LLM providers.
@@ -2471,107 +2363,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// don't use ProviderException.
     /// </summary>
     internal static bool IsContextOverflowError(Exception? ex)
-    {
-        if (ex is null) return false;
-
-        // Preferred path: ProviderException carries structured status code
-        var providerEx = FindException<Configuration.ProviderException>(ex);
-        if (providerEx is { StatusCode: 400 } && ContainsOverflowKeyword(providerEx.Message))
-            return true;
-
-        // Fallback: walk the full exception chain for keyword matches
-        var current = ex;
-        while (current is not null)
-        {
-            if (ContainsOverflowKeyword(current.Message))
-                return true;
-            current = current.InnerException;
-        }
-
-        return false;
-    }
-
-    // This is inherently brittle — there is no standard error format for context
-    // overflow across LLM providers. Each returns different messages. We cast a wide
-    // net with keyword matching and rely on the ContextOverflowDetectionTests to
-    // verify coverage across known provider formats.
-    private static bool ContainsOverflowKeyword(string message) =>
-        message.Contains("context length", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("context_length", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("maximum context", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("exceeds", StringComparison.OrdinalIgnoreCase)
-            && message.Contains("context", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("prompt is too long", StringComparison.OrdinalIgnoreCase)
-        || message.Contains("token", StringComparison.OrdinalIgnoreCase)
-            && message.Contains("exceed", StringComparison.OrdinalIgnoreCase);
+        => LlmFailureClassifier.IsContextOverflow(ex);
 
     /// <summary>
     /// Detect transient streaming errors that are safe to retry when no data
     /// has been streamed yet (5xx server errors, 429 rate limits, network failures).
     /// </summary>
     internal static bool IsTransientStreamingError(Exception? ex)
-    {
-        if (ex is null) return false;
-        var providerEx = FindException<Configuration.ProviderException>(ex);
-        if (providerEx?.StatusCode is >= 500) return true;
-        if (providerEx?.StatusCode is 429) return true;
-        // Only retry network-level failures (no response from provider).
-        // TimeoutException is NOT retried here — the ProcessingWatchdog is the
-        // authoritative timeout handler and covers that case.
-        return ex is HttpRequestException { StatusCode: null };
-    }
-
-    /// <summary>
-    /// Extracts the last N user/assistant text messages for session resume display.
-    /// Skips system prompts, tool messages, and assistant messages that are tool-call-only
-    /// (no visible text). Truncates long content to keep the DTO payload reasonable.
-    /// </summary>
-    private static IReadOnlyList<ChatMessageDto>? ExtractRecentMessages(
-        ImmutableList<SerializableChatMessage> history, int maxMessages = 20)
-    {
-        if (history.Count == 0)
-            return null;
-
-        const int maxContentLength = 2000;
-
-        var candidates = new List<ChatMessageDto>();
-        for (var i = 0; i < history.Count; i++)
-        {
-            var msg = history[i];
-
-            // Only include user and assistant messages
-            if (msg.Role is not (Protocol.ChatRole.User or Protocol.ChatRole.Assistant))
-                continue;
-
-            // Skip assistant messages that are tool-call-only (no visible text)
-            if (msg.Role == Protocol.ChatRole.Assistant
-                && string.IsNullOrWhiteSpace(msg.Content)
-                && msg.ToolCalls.Count > 0)
-                continue;
-
-            // Skip system nudges injected as user messages
-            if (SessionState.IsSystemNudge(msg))
-                continue;
-
-            var content = msg.Content;
-            if (content.Length > maxContentLength)
-                content = string.Concat(content.AsSpan(0, maxContentLength - 3), "...");
-
-            candidates.Add(new ChatMessageDto(
-                msg.Role == Protocol.ChatRole.User ? "user" : "assistant",
-                content));
-        }
-
-        if (candidates.Count == 0)
-            return null;
-
-        // Take the last N messages
-        if (candidates.Count > maxMessages)
-            candidates = candidates.GetRange(candidates.Count - maxMessages, maxMessages);
-
-        return candidates;
-    }
-
+        => LlmFailureClassifier.IsTransientStreaming(ex);
 
     private string GetSessionDirectory() =>
         SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath);
@@ -3729,37 +3528,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _observerActor?.Tell(output);
     }
 
-    private sealed record PendingToolInteraction(
-        // Tool call id of the parked invocation. Carried explicitly (not just as
-        // the _pendingToolInteractions dictionary key) so the record can be
-        // persisted in a flat repeated list in the session snapshot.
-        string CallId,
-        string ToolName,
-        IReadOnlyList<string> Patterns,
-        IReadOnlyList<string> CandidateVerbs,
-        TrustAudience Audience,
-        TrustBoundary? Boundary,
-        string? ChannelType,
-        bool? SupportsInteractiveApproval,
-        string? RequesterSenderId,
-        PrincipalClassification? RequesterPrincipal,
-        string? Cwd,
-        // Per-clause (verb, directory) pairs preserved across the pause-
-        // for-approval round trip so the persistence path on
-        // ApprovedAlways can write per-clause folder-scoped grants from
-        // the path arguments the agent originally passed, rather than
-        // collapsing everything to cwd. Empty list when the request did
-        // not carry candidate-level data (e.g. older callers).
-        IReadOnlyList<ApprovalCandidate> Candidates) : INoSerializationVerificationNeeded;
-
-    private sealed record ApprovalRedrivePlan(
-        IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
-        IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride);
-
-    private sealed record ResolvedToolApproval(
-        PendingToolInteraction Pending,
-        ApprovalDecision Decision);
-
     private async Task PersistApprovalCandidatesAsync(
         PendingToolInteraction pending,
         ApprovalDecision decision,
@@ -3805,7 +3573,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // with no path arg (curl, gh, git status).
         var sessionDirectory = GetSessionDirectory();
 
-        var grouping = BuildApprovalBuckets(
+        var grouping = ApprovalBucketBuilder.Build(
             pending.Candidates,
             persistent,
             globalWildcard,
@@ -3864,27 +3632,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TurnId: _activeTurnId,
                 TriggerType: Memory.CheckpointTriggerType.SubagentFindings,
                 Priority: 80,
-                Payload: new MemoryCheckpointPayload(
-                    SessionId: _sessionId.Value,
-                    TriggerType: "subagent-findings",
-                    Source: finding.AgentName.Value,
-                    Content: finding.Content,
-                    UserContent: null,
-                    AssistantContent: finding.Content,
-                    IsExplicitRequest: false,
-                    HasVerifiedToolFinding: false,
-                    IsCompactionBoundary: false,
-                    HasAcceptedSubAgentFinding: true,
-                    Boundary: CurrentMemoryBoundary(),
-                    Audience: CurrentMemoryAudience(),
-                    Sensitivity: finding.Sensitivity.ToWireValue(),
-                    RecallMode: finding.RecallMode.ToWireValue(),
-                    Confidence: finding.Confidence,
-                    Title: finding.Title,
-                    Kind: finding.Kind,
-                    UpdateSemantics: finding.UpdateSemantics,
-                    Evidence: finding.Evidence,
-                    FreshnessAtMs: finding.FreshnessAtMs)));
+                Payload: SessionMemoryCheckpointFactory.ForSubAgentFinding(
+                    _sessionId,
+                    CurrentMemoryBoundary(),
+                    CurrentMemoryAudience(),
+                    finding)));
         }
 
         foreach (var run in result.CompletedSubAgentRuns)
@@ -4027,90 +3779,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, resultCount);
         FireLlmCall();
     }
-
-    /// <summary>
-    /// Pure helper that groups approval candidates into the per-directory
-    /// buckets <see cref="PersistApprovalCandidatesAsync"/> turns into
-    /// <c>RecordApprovalAsync</c> calls. Extracted so the session-scope
-    /// vs persistent-scope branching is regression-tested at the unit
-    /// level — the bucketing is where the no-path-arg-verb retry bug
-    /// (curl https://..., gh pr list) was hiding.
-    /// </summary>
-    /// <remarks>
-    /// Session-scope entries (<c>persistent: false</c>, not global wildcard)
-    /// use <c>candidate.Directory</c> directly without falling back to
-    /// <paramref name="cwd"/>. The session approval dict in
-    /// <c>ToolApprovalActor._sessionApprovals</c> is keyed by
-    /// <c>(sessionId, audience, tool)</c> and matches verb-only — the
-    /// directory half is never consulted at lookup time, so threading
-    /// cwd through here just creates buckets that the session-scratch
-    /// guard then drops on the floor (which is what was silently
-    /// breaking retries on standalone verbs with no anchored path arg).
-    ///
-    /// Persistent scope (<c>persistent: true</c>) still falls back to
-    /// <paramref name="cwd"/> and applies the session-scratch guard, so
-    /// folder-scoped grants whose effective directory resolves to the
-    /// ephemeral session directory continue to be dropped — those entries
-    /// would be dead-on-arrival because the next session has a fresh
-    /// session_dir and the saved entry could never match again.
-    /// </remarks>
-    internal static Dictionary<string, List<string>> BuildApprovalBuckets(
-        IReadOnlyList<ApprovalCandidate> candidates,
-        bool persistent,
-        bool globalWildcard,
-        string? cwd,
-        string? sessionDirectory)
-    {
-        var grouping = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-
-        foreach (var candidate in candidates)
-        {
-            if (ApprovalPatternMatching.IsPureSideEffect(candidate))
-                continue;
-
-            string? effectiveDirectory;
-            if (globalWildcard)
-            {
-                effectiveDirectory = null;
-            }
-            else if (!persistent)
-            {
-                effectiveDirectory = candidate.Directory;
-            }
-            else
-            {
-                effectiveDirectory = candidate.Directory ?? cwd;
-
-                if (effectiveDirectory is not null
-                    && sessionDirectory is not null
-                    && IsSessionScratchDirectory(effectiveDirectory, sessionDirectory))
-                {
-                    continue;
-                }
-            }
-
-            var key = effectiveDirectory ?? string.Empty;
-            if (!grouping.TryGetValue(key, out var verbs))
-            {
-                verbs = [];
-                grouping[key] = verbs;
-            }
-
-            if (!verbs.Contains(candidate.Verb, StringComparer.OrdinalIgnoreCase))
-                verbs.Add(candidate.Verb);
-        }
-
-        return grouping;
-    }
-
-    /// <summary>
-    /// Returns true when <paramref name="effectiveDirectory"/> is the same
-    /// path as <paramref name="sessionDirectory"/>. Used by the persistence
-    /// guard to skip dead-on-arrival folder-scoped grants whose directory
-    /// matches the session's ephemeral scratch dir.
-    /// </summary>
-    private static bool IsSessionScratchDirectory(string effectiveDirectory, string sessionDirectory)
-        => PathUtility.AreEquivalentPaths(effectiveDirectory, sessionDirectory);
 
     private void PersistAdoptedContextIfNeeded(MessageSource? source)
     {
@@ -4278,148 +3946,4 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
-    private static class ParkedToolBatchHistory
-    {
-        public static IReadOnlyList<SerializableChatMessage> FindToolResultsFor(
-            IReadOnlyList<SerializableChatMessage> history,
-            SerializableChatMessage assistantMessage)
-        {
-            var ids = assistantMessage.ToolCalls
-                .Select(c => c.CallId.Value)
-                .ToHashSet(StringComparer.Ordinal);
-
-            return history
-                .Where(m => m.Role == Protocol.ChatRole.Tool
-                    && m.ToolCallId is not null
-                    && ids.Contains(m.ToolCallId.Value.Value))
-                .ToArray();
-        }
-
-        public static bool HasToolResult(
-            IReadOnlyList<SerializableChatMessage> history,
-            string callId)
-            => history.Any(m => m.Role == Protocol.ChatRole.Tool
-                && m.ToolCallId?.Value == callId);
-
-        /// <summary>
-        /// Locates the tail assistant message carrying unanswered tool calls.
-        /// When <paramref name="callId"/> is set, a newer unanswered batch for a
-        /// different call expires this response instead of re-driving stale work.
-        /// </summary>
-        public static SerializableChatMessage? FindRedrivableAssistantMessage(
-            IReadOnlyList<SerializableChatMessage> history,
-            string? callId)
-        {
-            for (var i = history.Count - 1; i >= 0; i--)
-            {
-                var candidate = history[i];
-                if (candidate.Role != Protocol.ChatRole.Assistant || candidate.ToolCalls.Count == 0)
-                    continue;
-
-                if (callId is not null
-                    && candidate.ToolCalls.All(tc => tc.CallId.Value != callId))
-                {
-                    return null;
-                }
-
-                if (callId is not null && HasToolResult(history, callId))
-                    return null;
-
-                if (callId is null && candidate.ToolCalls.All(tc => HasToolResult(history, tc.CallId.Value)))
-                    continue;
-
-                return candidate;
-            }
-
-            return null;
-        }
-
-        public static IReadOnlyList<SerializableChatMessage> BuildSyntheticAbandonResults(
-            IReadOnlyList<SerializableChatMessage> history,
-            SerializableChatMessage assistantMessage,
-            string resultContent)
-        {
-            var results = new List<SerializableChatMessage>();
-            foreach (var call in assistantMessage.ToolCalls)
-            {
-                if (HasToolResult(history, call.CallId.Value))
-                    continue;
-
-                results.Add(CreateAbandonedToolResult(call, resultContent));
-            }
-
-            return results;
-        }
-
-        private static SerializableChatMessage CreateAbandonedToolResult(
-            SerializableToolCall call,
-            string resultContent)
-            => new()
-            {
-                Role = Protocol.ChatRole.Tool,
-                Content = resultContent,
-                ToolCallId = call.CallId,
-                Name = call.Name.Value
-            };
-    }
-
-    private sealed class ActiveToolBatchTracker
-    {
-        private readonly HashSet<string> _expectedCallIds = new(StringComparer.Ordinal);
-        private readonly HashSet<string> _completedCallIds = new(StringComparer.Ordinal);
-
-        public int CompletedCount => _completedCallIds.Count;
-
-        public bool CanComplete => ExecutionTaskCompleted
-            && _completedCallIds.Count >= _expectedCallIds.Count;
-
-        private bool ExecutionTaskCompleted { get; set; }
-
-        public void Start(
-            SerializableChatMessage assistantMessage,
-            IEnumerable<SerializableChatMessage> existingResults)
-        {
-            ClearExpectedCallIds();
-            foreach (var call in assistantMessage.ToolCalls)
-                _expectedCallIds.Add(call.CallId.Value);
-
-            ClearCompletedCallIds();
-            foreach (var result in existingResults)
-            {
-                if (result.ToolCallId is { } id)
-                    _completedCallIds.Add(id.Value);
-            }
-
-            ExecutionTaskCompleted = false;
-        }
-
-        public void Start(IEnumerable<FunctionCallContent> toolCalls)
-        {
-            ClearExpectedCallIds();
-            foreach (var call in toolCalls)
-                _expectedCallIds.Add(call.CallId);
-
-            ClearCompletedCallIds();
-            ExecutionTaskCompleted = false;
-        }
-
-        public void RecordCompleted(string callId)
-            => _completedCallIds.Add(callId);
-
-        public void MarkExecutionTaskCompleted()
-            => ExecutionTaskCompleted = true;
-
-        public void Clear()
-        {
-            ClearExpectedCallIds();
-            ClearCompletedCallIds();
-            ExecutionTaskCompleted = false;
-        }
-
-        private void ClearExpectedCallIds()
-            => _expectedCallIds.Clear();
-
-        private void ClearCompletedCallIds()
-            => _completedCallIds.Clear();
-    }
 }
