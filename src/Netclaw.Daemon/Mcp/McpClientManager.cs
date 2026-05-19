@@ -405,15 +405,21 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     private async Task<bool> ConnectAsync(McpServerName name, McpServerEntry entry, CancellationToken ct)
     {
+        // Holds the client until ownership passes to _clients. If the connect
+        // fails after the client — and its child process — is created but
+        // before that handoff (e.g. ListToolsAsync throws), the finally
+        // disposes it so the process is not orphaned.
+        McpClient? client = null;
         try
         {
-            var client = await CreateClientAsync(name, entry, ct, updateStatusOnAuthFailure: true);
+            client = await CreateClientAsync(name, entry, ct, updateStatusOnAuthFailure: true);
             if (client is null)
                 return false;
 
             var tools = await client.ListToolsAsync(cancellationToken: ct);
 
             _clients[name] = client;
+            client = null;
             _sharedToolFunctions[name] = CreateFunctionMap(tools);
             _sessionScopedServers[name] = RequiresSessionScopedClient(name, entry);
 
@@ -463,6 +469,21 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             }
 
             return false;
+        }
+        finally
+        {
+            if (client is not null)
+            {
+                try
+                {
+                    await client.DisposeAsync();
+                }
+                catch (Exception disposeEx)
+                {
+                    _logger.LogDebug(disposeEx,
+                        "Error disposing MCP client '{Name}' after failed connect", name.Value);
+                }
+            }
         }
     }
 
