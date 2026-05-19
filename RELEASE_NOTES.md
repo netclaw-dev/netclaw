@@ -1,3 +1,25 @@
+#### 0.18.2 2026-05-17 ####
+
+Netclaw v0.18.2 — OpenTelemetry resource attribute config, CLI/build fixes, and value-object/type-safety refactors
+
+**Features**
+
+* **OpenTelemetry resource attributes are configurable** — `service.name` and `service.version` in the OTEL resource can now be set from configuration. ([#1042](https://github.com/netclaw-dev/netclaw/pull/1042))
+
+**Bug Fixes**
+
+* **CLI** — startup update checks are skipped for interactive flows. ([#1037](https://github.com/netclaw-dev/netclaw/pull/1037))
+* **Build** — fixed `.slnx` load and marked `Netclaw.Tests.Utilities` as a non-test project so it is no longer discovered by the test runner. ([#1039](https://github.com/netclaw-dev/netclaw/pull/1039), [#1041](https://github.com/netclaw-dev/netclaw/pull/1041))
+
+**Refactoring**
+
+* **Memory** — Pass 7e: typed memory and sub-agent enum fields. ([#1029](https://github.com/netclaw-dev/netclaw/pull/1029))
+* **Protocol** — Pass 7d: value objects for `ModelId`, `TurnNumber`, et al. ([#1024](https://github.com/netclaw-dev/netclaw/pull/1024))
+
+**Other**
+
+* **OpenSpec** — retired the `value-object-adoption` change. ([#1040](https://github.com/netclaw-dev/netclaw/pull/1040))
+
 #### 0.18.1 May 16 2026 ####
 
 Netclaw v0.18.1 — macOS binaries, provider renaming, shell subprocess cleanup, and stream stability fixes
