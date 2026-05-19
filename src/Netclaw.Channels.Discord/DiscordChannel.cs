@@ -113,14 +113,20 @@ public sealed class DiscordChannel : IChannel
             return;
         }
 
-        // Validated at DI registration too, so this resolve does not throw here.
-        var botToken = _options.BotToken.RequireValid("Discord:BotToken");
-
-        // A connection failure must never escape StartAsync: an unhandled
+        // A misconfiguration must never escape StartAsync: an unhandled
         // exception from IHostedService.StartAsync aborts the .NET host and
         // takes the whole daemon down. A misconfigured channel degrades; it
         // does not crash the process.
-        await TryConnectAsync(botToken.Value, cancellationToken);
+        if (_options.BotToken.IsNullOrEmpty())
+        {
+            HandleConnectFailure(new ChannelConnectException(
+                ChannelConnectFailureKind.Fatal,
+                "Discord is enabled but no bot token is configured. "
+                + "Set the Discord:BotToken secret, then restart the daemon."));
+            return;
+        }
+
+        await TryConnectAsync(_options.BotToken.Value, cancellationToken);
     }
 
     private async Task TryConnectAsync(string botToken, CancellationToken cancellationToken)
@@ -250,8 +256,12 @@ public sealed class DiscordChannel : IChannel
 
             try
             {
-                var botToken = _options.BotToken.RequireValid("Discord:BotToken");
-                await _gatewayClient.ConnectAsync(botToken.Value, cancellationToken);
+                if (_options.BotToken.IsNullOrEmpty())
+                    throw new ChannelConnectException(
+                        ChannelConnectFailureKind.Fatal,
+                        "Discord is enabled but no bot token is configured.");
+
+                await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
                 CompleteConnectionSetup();
                 _connectFailureDetail = null;
                 _logger.LogInformation("Discord channel reconnected after a transient failure.");

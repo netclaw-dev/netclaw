@@ -20,6 +20,10 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     // failure with a fresh readiness signal. Read by Discord.Net event threads.
     private volatile TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    // 0/1 guard: Discord.Net raises Disconnected on every reconnect attempt,
+    // so a fatal close is logged and acted on exactly once. Reset per ConnectAsync.
+    private int _fatalCloseHandled;
+
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
 
@@ -49,6 +53,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         // Fresh readiness signal per attempt so a retry after a transient
         // failure is not satisfied by a stale result or fault.
         var readyTcs = _readyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Interlocked.Exchange(ref _fatalCloseHandled, 0);
 
         await _client.LoginAsync(TokenType.Bot, botToken);
         await _client.StartAsync();
@@ -78,17 +83,38 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
 
     private Task OnDisconnectedAsync(Exception exception)
     {
-        // A fatal close (bad token, disallowed/invalid intents) is not something
-        // Discord.Net will retry, so surface it to ConnectAsync immediately
-        // instead of letting the caller block on the 30s readiness timeout.
         // Transient drops are left alone — Discord.Net reconnects on its own,
-        // and OnReadyAsync will complete the readiness signal when it recovers.
+        // and OnReadyAsync completes the readiness signal when it recovers.
         var classified = DiscordConnectFailureClassifier.Classify(exception);
-        if (classified.IsFatal)
+        if (!classified.IsFatal)
+            return Task.CompletedTask;
+
+        // Surface the fatal close to ConnectAsync immediately instead of
+        // letting the caller block on the 30s readiness timeout.
+        _readyTcs.TrySetException(classified);
+
+        // Discord.Net raises Disconnected on every reconnect attempt. A fatal
+        // close (bad token, disallowed/invalid intents) will never recover on
+        // its own, so handle it exactly once: log it, then stop the client so
+        // Discord.Net does not retry a configuration error forever — the
+        // channel has already torn down and would not pick the socket back up,
+        // so further retries are pure churn and log spam.
+        if (Interlocked.Exchange(ref _fatalCloseHandled, 1) == 1)
+            return Task.CompletedTask;
+
+        _logger.LogError(classified, "Discord gateway closed fatally: {Reason}", classified.Message);
+
+        _ = Task.Run(async () =>
         {
-            _logger.LogError(classified, "Discord gateway closed fatally: {Reason}", classified.Message);
-            _readyTcs.TrySetException(classified);
-        }
+            try
+            {
+                await _client.StopAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error stopping Discord client after fatal close.");
+            }
+        });
 
         return Task.CompletedTask;
     }

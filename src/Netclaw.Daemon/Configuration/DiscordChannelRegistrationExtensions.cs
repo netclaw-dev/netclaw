@@ -28,8 +28,10 @@ public static class DiscordChannelRegistrationExtensions
         if (!discordOptions.Enabled)
             return;
 
-        discordOptions.BotToken.RequireValid("Discord:BotToken");
-
+        // Token validity is NOT checked here: an exception thrown from this
+        // registration path aborts host construction and crashes the daemon.
+        // A missing/invalid token is handled as a contained channel failure in
+        // DiscordChannel.StartAsync instead (see issue #1033).
         services.AddSingleton(_ => new DiscordSocketClient(new DiscordSocketConfig
         {
             GatewayIntents = Discord.GatewayIntents.Guilds

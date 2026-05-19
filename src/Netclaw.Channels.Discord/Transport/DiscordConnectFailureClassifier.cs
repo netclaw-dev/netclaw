@@ -16,8 +16,11 @@ namespace Netclaw.Channels.Discord.Transport;
 internal static class DiscordConnectFailureClassifier
 {
     // Gateway close codes that signal a configuration/permission problem an
-    // operator must fix. Discord.Net does not reconnect on these, so retrying
-    // would loop forever — the channel stays disconnected until config is fixed.
+    // operator must fix — non-recoverable per the Discord gateway spec.
+    // NOTE: Discord.Net's ConnectionManager only stops auto-reconnecting on
+    // 4014 (and 4006); for 4004/4010-4013 it retries forever. So once a close
+    // is classified Fatal here, DiscordNetGatewayClient stops the client
+    // itself rather than relying on Discord.Net to give up.
     // Ref: https://discord.com/developers/docs/topics/opcodes-and-status-codes#gateway-gateway-close-event-codes
     private static readonly IReadOnlyDictionary<int, string> FatalCloseCodes =
         new Dictionary<int, string>
