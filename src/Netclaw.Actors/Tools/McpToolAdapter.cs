@@ -23,6 +23,13 @@ public sealed class McpToolAdapter : INetclawTool
     private readonly string _toolName;
     private readonly IMcpToolInvoker? _invoker;
 
+    /// <summary>
+    /// The MCP server's declared input schema, verbatim — the authority for
+    /// argument coercion. Distinct from <see cref="ParameterSchema"/>, which is
+    /// sanitized for LLM grammar compatibility and shown to the model.
+    /// </summary>
+    private readonly JsonElement _rawSchema;
+
     public McpToolAdapter(
         AITool mcpTool,
         string serverName,
@@ -42,7 +49,10 @@ public sealed class McpToolAdapter : INetclawTool
         if (mcpTool is AIFunction func)
         {
             Description = ClampDescription(func.Description ?? "", maxDescriptionChars);
-            // Sanitize schema for LLM compatibility, then inject meta properties
+            // The raw server schema is the authority for argument coercion.
+            // The sanitized schema below is a derivative for LLM grammar
+            // compatibility — shown to the model, never coerced against.
+            _rawSchema = func.JsonSchema;
             var sanitized = McpSchemaSanitizer.SanitizeSchema(func.JsonSchema);
             ParameterSchema = McpSchemaSanitizer.InjectMetaProperties(sanitized, Name, logger);
             _sanitizedTool = new SanitizedAIFunction(func, Name, Description, ParameterSchema);
@@ -50,9 +60,18 @@ public sealed class McpToolAdapter : INetclawTool
         else
         {
             Description = "";
+            _rawSchema = default;
             ParameterSchema = default;
             _sanitizedTool = mcpTool;
         }
+
+        // The MCP protocol mandates inputSchema; a tool reaching us without a
+        // usable one is anomalous. Coercion degrades to faithful pass-through
+        // (the server still validates the call), but surface the anomaly.
+        if (_rawSchema.ValueKind != JsonValueKind.Object)
+            logger?.LogWarning(
+                "MCP tool '{ToolName}' exposes no usable input schema; tool-call arguments will be forwarded without schema-directed coercion",
+                Name);
     }
 
     /// <summary>
@@ -93,7 +112,7 @@ public sealed class McpToolAdapter : INetclawTool
         {
             var stripped = McpSchemaSanitizer.StripMetaFields(arguments);
             var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(stripped, ParameterSchema);
-            var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
+            var coerced = McpSchemaSanitizer.CoerceArguments(normalized, _rawSchema);
             return await _invoker.InvokeAsync(ServerName, _toolName, coerced, context, ct);
         }
         catch (Exception ex)
@@ -112,10 +131,9 @@ public sealed class McpToolAdapter : INetclawTool
 
         try
         {
-            // Strip meta fields, then coerce arguments — some LLMs send numbers as strings
             var stripped = McpSchemaSanitizer.StripMetaFields(arguments);
             var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(stripped, ParameterSchema);
-            var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
+            var coerced = McpSchemaSanitizer.CoerceArguments(normalized, _rawSchema);
             var aiArgs = coerced is not null
                 ? new AIFunctionArguments(coerced)
                 : null;
@@ -156,10 +174,9 @@ public sealed class McpToolAdapter : INetclawTool
         protected override ValueTask<object?> InvokeCoreAsync(
             AIFunctionArguments arguments, CancellationToken cancellationToken)
         {
-            // Strip meta fields and coerce arguments before forwarding to the MCP client
             var stripped = McpSchemaSanitizer.StripMetaFields(arguments);
             var normalized = McpSchemaSanitizer.NormalizeArgumentKeys(stripped, _sanitizedSchema);
-            var coerced = McpSchemaSanitizer.CoerceArguments(normalized);
+            var coerced = McpSchemaSanitizer.CoerceArguments(normalized, _inner.JsonSchema);
             var coercedArgs = coerced is not null
                 ? new AIFunctionArguments(coerced)
                 : arguments;
