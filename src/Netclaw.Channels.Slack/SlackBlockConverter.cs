@@ -238,17 +238,42 @@ public static partial class SlackBlockConverter
                 Style = new RichTextStyle { Code = true }
             });
 
-        // Links: [text](url)
+        // Links: [text](url) — normalise the URL (recovers LLM-mangled
+        // OAuth scope lists) then choose the right element. Safe URLs
+        // become Block Kit RichTextLink (proper clickable Slack-native
+        // link — addresses #850). Rewrite-prone URLs become inline-
+        // code RichTextText so Slack's click redirector can't re-encode
+        // them; the label is dropped because the URL has to be the
+        // visible payload for copy.
         TryMatch(LinkRegex(), text, ref best, (m) =>
-            new RichTextLink
-            {
-                Text = m.Groups[1].Value,
-                Url = m.Groups[2].Value
-            });
+        {
+            var url = SlackTextProtector.NormaliseScopeList(m.Groups[2].Value);
+            return SlackTextProtector.IsRewriteProne(url)
+                ? (RichTextSectionElement)new RichTextText
+                {
+                    Text = url,
+                    Style = new RichTextStyle { Code = true }
+                }
+                : new RichTextLink
+                {
+                    Text = m.Groups[1].Value,
+                    Url = url
+                };
+        });
 
-        // Bare URLs: https://example.com
+        // Bare URLs: https://example.com — same is-it-safe-to-link
+        // heuristic.
         TryMatch(BareUrlRegex(), text, ref best, (m) =>
-            new RichTextLink { Url = m.Value });
+        {
+            var url = SlackTextProtector.NormaliseScopeList(m.Value);
+            return SlackTextProtector.IsRewriteProne(url)
+                ? (RichTextSectionElement)new RichTextText
+                {
+                    Text = url,
+                    Style = new RichTextStyle { Code = true }
+                }
+                : new RichTextLink { Url = url };
+        });
 
         if (best.Element is null)
             return (0, 0, null, null);
