@@ -408,10 +408,11 @@ public static class McpSchemaSanitizer
     {
         None = 0,
         String = 1,
-        Number = 1 << 1,
-        Boolean = 1 << 2,
-        Array = 1 << 3,
-        Object = 1 << 4,
+        Integer = 1 << 1,
+        Number = 1 << 2,
+        Boolean = 1 << 3,
+        Array = 1 << 4,
+        Object = 1 << 5,
     }
 
     private static JsonElement TryGetSchemaProperties(JsonElement schema)
@@ -463,7 +464,8 @@ public static class McpSchemaSanitizer
     private static SchemaKinds MapTypeName(string? typeName) => typeName switch
     {
         "string" => SchemaKinds.String,
-        "integer" or "number" => SchemaKinds.Number,
+        "integer" => SchemaKinds.Integer,
+        "number" => SchemaKinds.Number,
         "boolean" => SchemaKinds.Boolean,
         "array" => SchemaKinds.Array,
         "object" => SchemaKinds.Object,
@@ -510,6 +512,9 @@ public static class McpSchemaSanitizer
         // The schema declares a scalar and the model emitted it as a string —
         // parse it toward exactly that scalar. This is the only string→scalar
         // path, and it fires only because the schema asked for it.
+        if ((declared & SchemaKinds.Integer) != 0 && TryParseJsonInteger(stringForm, out var integer))
+            return integer;
+
         if ((declared & SchemaKinds.Number) != 0 && TryParseJsonNumber(stringForm, out var number))
             return number;
 
@@ -572,4 +577,7 @@ public static class McpSchemaSanitizer
         number = 0L;
         return false;
     }
+
+    private static bool TryParseJsonInteger(string value, out long number)
+        => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
 }

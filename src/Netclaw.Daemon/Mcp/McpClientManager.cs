@@ -417,23 +417,38 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return false;
 
             var tools = await client.ListToolsAsync(cancellationToken: ct);
+            var sharedFunctions = CreateFunctionMap(tools);
+            var requiresSessionScopedClient = RequiresSessionScopedClient(name, entry);
 
-            _clients[name] = client;
-            client = null;
-            _sharedToolFunctions[name] = CreateFunctionMap(tools);
-            _sessionScopedServers[name] = RequiresSessionScopedClient(name, entry);
+            LogToolDrift(name, tools);
 
             _toolRegistry.WithMcpTools(name.Value, tools, entry.GrantCategory, this,
                 _maxToolDescriptionChars, _maxToolSchemaWarnChars, _logger);
-            _statuses[name] = new McpServerStatus(name, McpConnectionState.Connected, tools.Count, null);
 
-            LogToolDrift(name, tools);
+            _sharedToolFunctions[name] = sharedFunctions;
+            _sessionScopedServers[name] = requiresSessionScopedClient;
+            _clients[name] = client;
+            client = null;
+            _statuses[name] = new McpServerStatus(name, McpConnectionState.Connected, tools.Count, null);
 
             _logger.LogInformation("MCP server '{Name}' connected ({ToolCount} tools)", name.Value, tools.Count);
             return true;
         }
         catch (Exception ex)
         {
+            if (_clients.TryRemove(name, out var existing))
+            {
+                try
+                {
+                    await existing.DisposeAsync();
+                }
+                catch (Exception disposeEx)
+                {
+                    _logger.LogDebug(disposeEx,
+                        "Error disposing MCP client '{Name}' after failed connect rollback", name.Value);
+                }
+            }
+
             _sharedToolFunctions.TryRemove(name, out _);
             _sessionScopedServers.TryRemove(name, out _);
 

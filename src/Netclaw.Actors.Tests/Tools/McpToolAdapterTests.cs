@@ -299,6 +299,24 @@ public class McpSchemaSanitizerTests
     }
 
     [Fact]
+    public void CoerceArguments_IntegerDeclaredParameter_DoesNotAcceptFractionalStrings()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "count": { "type": "integer" }
+              }
+            }
+            """);
+        var args = ToolInput.Create("count", "3.14");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal("3.14", coerced["count"]);
+    }
+
+    [Fact]
     public void CoerceArguments_StringifiedArrayOfObjects_IsReconstructed()
     {
         var schema = Schema("""
