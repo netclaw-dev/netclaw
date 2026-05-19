@@ -35,17 +35,18 @@ public sealed class DaemonClientReconnectIntegrationTests
         var reconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnectedOutput = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Sync on Reconnecting OR Disconnected: SignalR fires Reconnecting from
+        // Sync on Reconnecting OR TransportClosed: SignalR fires Reconnecting from
         // its state machine as soon as the transport drops, before any retry
-        // attempt. Waiting for Disconnected alone requires WithAutomaticReconnect
+        // attempt. Waiting for TransportClosed alone requires WithAutomaticReconnect
         // to exhaust its retries, which on Windows can exceed the test budget
         // because ConnectEx to a closed loopback port is not immediate (Winsock
         // SYN-retransmit path, exacerbated by WFP/AV filter drivers on hosted
         // runners). Either event is sufficient evidence the client has observed
-        // the drop.
+        // the drop. (Disconnected is now terminal-only — emitted solely when the
+        // supervised reconnect loop exhausts its budget — so it is not a drop signal.)
         using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
         {
-            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.Disconnected)
+            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.TransportClosed)
                 disconnected.TrySetResult();
 
             if (evt.State is DaemonConnectionState.Connected && disconnected.Task.IsCompleted)
@@ -101,9 +102,9 @@ public sealed class DaemonClientReconnectIntegrationTests
         var clientDisconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var reconnectedAfterRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        // Sync on Reconnecting OR Disconnected. SignalR fires Reconnecting from
+        // Sync on Reconnecting OR TransportClosed. SignalR fires Reconnecting from
         // its state machine as soon as the transport drops, before any retry
-        // attempt. Waiting for Disconnected alone requires WithAutomaticReconnect
+        // attempt. Waiting for TransportClosed alone requires WithAutomaticReconnect
         // to exhaust its retries, which on Windows can exceed the test budget:
         // ConnectEx to a closed loopback port is not immediate (Winsock
         // SYN-retransmit path, exacerbated by WFP/AV filter drivers on hosted
@@ -111,12 +112,12 @@ public sealed class DaemonClientReconnectIntegrationTests
         // sub-millisecond ECONNREFUSED seen on Linux.
         //
         // The IsCompleted guard for reconnectedAfterRestart is still safe: at
-        // least one Reconnecting/Disconnected always precedes any subsequent
+        // least one Reconnecting/TransportClosed always precedes any subsequent
         // Connected emission. host1's port release is already synchronous via
         // host1.Dispose(), so it is not gated on the client observing anything.
         using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
         {
-            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.Disconnected)
+            if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.TransportClosed)
                 clientDisconnected.TrySetResult();
 
             if (evt.State is DaemonConnectionState.Connected && clientDisconnected.Task.IsCompleted)
