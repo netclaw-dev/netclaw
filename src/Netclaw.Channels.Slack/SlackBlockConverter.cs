@@ -244,8 +244,9 @@ public static partial class SlackBlockConverter
         // link — addresses #850). Rewrite-prone URLs become inline-
         // code RichTextText so Slack's click redirector can't re-encode
         // them; the label is dropped because the URL has to be the
-        // visible payload for copy.
-        TryMatch(LinkRegex(), text, ref best, (m) =>
+        // visible payload for copy. Uses SlackTextProtector's shared
+        // markdown-link regex so both surfaces tokenize links identically.
+        TryMatch(SlackTextProtector.MarkdownLinkRegex(), text, ref best, (m) =>
         {
             var url = SlackTextProtector.NormaliseScopeList(m.Groups[2].Value);
             return SlackTextProtector.IsRewriteProne(url)
@@ -352,10 +353,6 @@ public static partial class SlackBlockConverter
     // Inline code: `text`
     [GeneratedRegex(@"`([^`]+)`")]
     private static partial Regex InlineCodeRegex();
-
-    // Links: [text](url)
-    [GeneratedRegex(@"\[([^\]]+)\]\(([^)]+)\)")]
-    private static partial Regex LinkRegex();
 
     // Ordered list prefix: 1. or 2. etc.
     [GeneratedRegex(@"^\d+\.\s")]

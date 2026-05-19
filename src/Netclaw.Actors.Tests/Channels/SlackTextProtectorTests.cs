@@ -130,6 +130,43 @@ public sealed class SlackTextProtectorTests
         Assert.Equal("Read `https://example.com/docs?a=b+c`.", result);
     }
 
+    [Fact]
+    public void MarkdownLink_UrlWithParentheses_NotTruncated()
+    {
+        // Regression for #1107: the markdown link destination must not
+        // be cut off at the first ')'. A balanced '(...)' inside the
+        // URL is part of the URL — only an unbalanced ')' closes the link.
+        var input = "Read [the article](https://en.wikipedia.org/wiki/Foo_(disambiguation)) now.";
+
+        var result = SlackTextProtector.ProtectUrls(input);
+
+        Assert.Equal(
+            "Read <https://en.wikipedia.org/wiki/Foo_(disambiguation)|the article> now.",
+            result);
+    }
+
+    [Fact]
+    public void MarkdownLink_UrlWithParentheses_FollowedByProseParens_SplitCorrectly()
+    {
+        // The ')' that closes the markdown link must be distinguished
+        // from prose parentheses that follow it.
+        var input = "See [doc](https://e.com/Foo_(bar)) (really).";
+
+        var result = SlackTextProtector.ProtectUrls(input);
+
+        Assert.Equal("See <https://e.com/Foo_(bar)|doc> (really).", result);
+    }
+
+    [Fact]
+    public void MarkdownLink_UrlWithMultipleParenGroups_NotTruncated()
+    {
+        var input = "[wiki](https://e.com/a_(b)_(c))";
+
+        var result = SlackTextProtector.ProtectUrls(input);
+
+        Assert.Equal("<https://e.com/a_(b)_(c)|wiki>", result);
+    }
+
     // ---- Already-protected URLs --------------------------------------------
 
     [Fact]

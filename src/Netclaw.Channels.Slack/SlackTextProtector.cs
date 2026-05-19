@@ -190,9 +190,18 @@ public static partial class SlackTextProtector
         return string.Concat(url.AsSpan(0, scopeStart), restored, url.AsSpan(scopeEnd));
     }
 
-    // Markdown link: [label](url). Captures label + url separately.
-    [GeneratedRegex(@"\[([^\]]+)\]\(([^)]+)\)")]
-    private static partial Regex MarkdownLinkRegex();
+    // Markdown link: [label](url). Captures label (group 1) + url
+    // (group 2) separately. The url group accepts a parenthesised
+    // segment — e.g. "(disambiguation)" in a Wikipedia-style URL — so
+    // the destination is not truncated at the first ')'. A ')' only
+    // ends the link when it is not part of a balanced pair, matching
+    // CommonMark link-destination semantics. One level of paren
+    // nesting is supported, which covers every URL shape seen in
+    // practice; deeper nesting falls back to first-')' termination.
+    // Shared with SlackBlockConverter so both outbound surfaces
+    // tokenize markdown links identically.
+    [GeneratedRegex(@"\[([^\]]+)\]\(((?:[^()]|\([^()]*\))*)\)")]
+    internal static partial Regex MarkdownLinkRegex();
 
     // Bare http/https URL. Stops at whitespace and at the characters
     // that close a wrapping mrkdwn link or markdown construct. The
