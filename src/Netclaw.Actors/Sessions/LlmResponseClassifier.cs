@@ -35,18 +35,38 @@ internal static class LlmResponseClassifier
             }
         }
 
-        return new LlmResponseAnalysis(
-            toolCalls,
-            hasText,
-            hasThinking,
-            textChars,
-            thinkingChars);
+        var kind =
+            toolCalls.Count > 0 ? LlmResponseKind.ToolCalls
+            : hasText ? LlmResponseKind.Text
+            : hasThinking ? LlmResponseKind.ThinkingOnly
+            : LlmResponseKind.Empty;
+
+        return new LlmResponseAnalysis(toolCalls, kind, textChars, thinkingChars);
     }
+}
+
+/// <summary>
+/// What the model produced on a turn. Tool calls take precedence over reply
+/// text, and reply text over reasoning — so a response carrying both text and
+/// tool calls classifies as <see cref="ToolCalls"/>.
+/// </summary>
+public enum LlmResponseKind
+{
+    /// <summary>Contains reply text — a normal answer to the user.</summary>
+    Text,
+
+    /// <summary>Requested one or more tool calls.</summary>
+    ToolCalls,
+
+    /// <summary>Emitted reasoning but no reply text and no tool calls.</summary>
+    ThinkingOnly,
+
+    /// <summary>No reply text, no reasoning, and no tool calls.</summary>
+    Empty,
 }
 
 internal sealed record LlmResponseAnalysis(
     List<FunctionCallContent> ToolCalls,
-    bool HasText,
-    bool HasThinking,
+    LlmResponseKind Kind,
     int TextChars,
     int ThinkingChars);

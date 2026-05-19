@@ -729,7 +729,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             analysis.ToolCalls.Count,
             response.FinishReason?.ToString() ?? "null");
 
-        if (analysis.ToolCalls.Count > 0 && _turnState.ForceNoToolsActive)
+        if (analysis.Kind == LlmResponseKind.ToolCalls && _turnState.ForceNoToolsActive)
         {
             TurnLog().Warning(
                 "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
@@ -743,25 +743,24 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        if (analysis.ToolCalls.Count > 0 && _toolExecutor is not null)
+        if (analysis.Kind == LlmResponseKind.ToolCalls && _toolExecutor is not null)
         {
             HandleToolCallResponse(lastMessage, analysis.ToolCalls, response.Usage);
             return;
         }
 
-        if (!analysis.HasText && analysis.ToolCalls.Count == 0)
+        if (analysis.Kind is LlmResponseKind.ThinkingOnly or LlmResponseKind.Empty)
         {
-            var label = analysis.HasThinking ? "thinking-only" : "empty";
-            switch (_turnState.EvaluateEmptyResponse())
+            switch (_turnState.EvaluateEmptyResponse(analysis.Kind))
             {
                 case EmptyResponseAction.Retry retry:
-                    _log.Warning("LLM produced {Label} response ({ThinkingChars} chars) — retrying with nudge",
-                        label, analysis.ThinkingChars);
+                    _log.Warning("LLM produced {Kind} response ({ThinkingChars} chars) — retrying with nudge",
+                        analysis.Kind, analysis.ThinkingChars);
                     _state = _state.AddSystemNudge(retry.NudgeText);
                     FireLlmCall();
                     return;
                 case EmptyResponseAction.Fail fail:
-                    _log.Warning("LLM produced {Label} response — failing turn", label);
+                    _log.Warning("LLM produced {Kind} response — failing turn", analysis.Kind);
                     FailCurrentTurn(fail.ErrorMessage, fail.Cause, ErrorCategory.ProviderFailure);
                     return;
             }

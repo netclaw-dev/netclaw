@@ -282,6 +282,10 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             new FunctionCallContent("call-1", "web_search",
                 new Dictionary<string, object?> { ["query"] = "test" })
         ];
+        // Four post-tool empty responses: the first three are nudged and
+        // retried (MaxPostToolEmptyRetries), the fourth fails the turn.
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([]);
         _fakeChatClient.PlannedResponses.Enqueue([]);
         _fakeChatClient.PlannedResponses.Enqueue([]);
 
@@ -317,7 +321,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[fake] Response #6", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
