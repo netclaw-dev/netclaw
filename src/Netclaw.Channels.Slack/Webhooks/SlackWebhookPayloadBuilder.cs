@@ -16,9 +16,11 @@ public static class SlackWebhookPayloadBuilder
     private static readonly string Hostname = Environment.MachineName;
     /// <summary>
     /// Build a Slack-compatible webhook payload with a required <c>text</c> fallback
-    /// and a <c>blocks</c> array for rich formatting.
+    /// and a <c>blocks</c> array for rich formatting. <paramref name="identity"/> is
+    /// the emitting netclaw instance — surfaced so alerts from multiple instances
+    /// in a shared channel can be told apart.
     /// </summary>
-    public static object Build(OperationalAlert alert)
+    public static object Build(OperationalAlert alert, ServiceIdentity identity)
     {
         var emoji = SeverityEmoji(alert.Severity);
         var blocks = new List<object>
@@ -35,23 +37,26 @@ public static class SlackWebhookPayloadBuilder
                 type = "section",
                 text = new { type = "mrkdwn", text = alert.Summary }
             },
-            // Fields: severity, timestamp, hostname, source
             new
             {
                 type = "section",
-                fields = BuildFields(alert)
+                fields = BuildFields(alert, identity)
             },
         };
 
-        // Context block for additional key-value pairs
+        // Context block: service identity footer plus alert-specific context.
+        var elements = new List<object>();
+        if (identity.Namespace is not null)
+            elements.Add(new { type = "mrkdwn", text = $"*namespace:* {identity.Namespace}" });
+        if (identity.InstanceId is not null)
+            elements.Add(new { type = "mrkdwn", text = $"*instance:* {identity.InstanceId}" });
+        elements.Add(new { type = "mrkdwn", text = $"*version:* {identity.Version}" });
         if (alert.Context is { Count: > 0 })
         {
-            var elements = alert.Context
-                .Select(kv => (object)new { type = "mrkdwn", text = $"*{kv.Key}:* {kv.Value}" })
-                .ToList();
-
-            blocks.Add(new { type = "context", elements });
+            elements.AddRange(alert.Context
+                .Select(kv => (object)new { type = "mrkdwn", text = $"*{kv.Key}:* {kv.Value}" }));
         }
+        blocks.Add(new { type = "context", elements });
 
         return new
         {
@@ -60,13 +65,14 @@ public static class SlackWebhookPayloadBuilder
         };
     }
 
-    private static List<object> BuildFields(OperationalAlert alert)
+    private static List<object> BuildFields(OperationalAlert alert, ServiceIdentity identity)
     {
         var fields = new List<object>
         {
             new { type = "mrkdwn", text = $"*Severity:*\n{alert.Severity}" },
             new { type = "mrkdwn", text = $"*Type:*\n{alert.Type}" },
             new { type = "mrkdwn", text = $"*Timestamp:*\n{alert.Timestamp:u}" },
+            new { type = "mrkdwn", text = $"*Service:*\n{identity.Name}" },
             new { type = "mrkdwn", text = $"*Hostname:*\n{Hostname}" },
         };
 

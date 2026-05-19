@@ -34,18 +34,23 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         };
     }
 
+    private static readonly ServiceIdentity TestIdentity =
+        new("test-agent", "test-ns", "test-host:4321", "9.9.9");
+
     private readonly List<WebhookNotificationService> _services = [];
 
     private WebhookNotificationService CreateService(
         NotificationsConfig config,
         RecordingHandler handler,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ServiceIdentity? identity = null)
     {
         var factory = new TestHttpClientFactory(handler);
         var service = new WebhookNotificationService(
             config,
             factory,
             timeProvider ?? TimeProvider.System,
+            identity ?? TestIdentity,
             NullLogger<WebhookNotificationService>.Instance);
         _services.Add(service);
         return service;
@@ -178,6 +183,13 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         Assert.True(root.TryGetProperty("hostname", out _));
         Assert.True(root.TryGetProperty("alertId", out _));
         Assert.True(root.TryGetProperty("timestamp", out _));
+
+        // Configured service identity flows into the generic payload's service block
+        var serviceBlock = root.GetProperty("service");
+        Assert.Equal("test-agent", serviceBlock.GetProperty("name").GetString());
+        Assert.Equal("test-ns", serviceBlock.GetProperty("namespace").GetString());
+        Assert.Equal("test-host:4321", serviceBlock.GetProperty("instanceId").GetString());
+        Assert.Equal("9.9.9", serviceBlock.GetProperty("version").GetString());
     }
 
     [Fact]

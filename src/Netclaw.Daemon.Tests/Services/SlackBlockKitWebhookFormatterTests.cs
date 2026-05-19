@@ -15,6 +15,9 @@ namespace Netclaw.Daemon.Tests.Services;
 
 public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
 {
+    private static readonly ServiceIdentity TestIdentity =
+        new("test-agent", "test-ns", "test-host:4321", "9.9.9");
+
     private static OperationalAlert CreateAlert(
         string type = "mcp.auth.expired",
         AlertSeverity severity = AlertSeverity.Warning,
@@ -40,7 +43,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
     public void Build_ProducesPayloadWithTextField()
     {
         var alert = CreateAlert();
-        var payload = SlackWebhookPayloadBuilder.Build(alert);
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
 
         var json = JsonSerializer.Serialize(payload);
         var doc = JsonDocument.Parse(json);
@@ -55,7 +58,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
     public void Build_ProducesBlocksArray()
     {
         var alert = CreateAlert();
-        var payload = SlackWebhookPayloadBuilder.Build(alert);
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
 
         var json = JsonSerializer.Serialize(payload);
         var doc = JsonDocument.Parse(json);
@@ -83,7 +86,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
             ["action"] = "re-authorize"
         });
 
-        var payload = SlackWebhookPayloadBuilder.Build(alert);
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
 
         var json = JsonSerializer.Serialize(payload);
         var doc = JsonDocument.Parse(json);
@@ -92,23 +95,29 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
         var lastBlock = blocks[blocks.GetArrayLength() - 1];
         Assert.Equal("context", lastBlock.GetProperty("type").GetString());
 
+        // identity footer (namespace + instance + version) + 2 alert context entries
         var elements = lastBlock.GetProperty("elements");
-        Assert.Equal(2, elements.GetArrayLength());
+        Assert.Equal(5, elements.GetArrayLength());
     }
 
     [Fact]
-    public void Build_OmitsContextBlock_WhenAlertContextIsNull()
+    public void Build_ContextBlockCarriesServiceIdentity_WhenAlertContextIsNull()
     {
         var alert = CreateAlert(context: null);
 
-        var payload = SlackWebhookPayloadBuilder.Build(alert);
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
 
         var json = JsonSerializer.Serialize(payload);
         var doc = JsonDocument.Parse(json);
         var blocks = doc.RootElement.GetProperty("blocks");
 
-        // No context block — only header + section + fields = 3
-        Assert.Equal(3, blocks.GetArrayLength());
+        // header + section + fields + identity context footer = 4
+        Assert.Equal(4, blocks.GetArrayLength());
+
+        var contextBlock = blocks[blocks.GetArrayLength() - 1];
+        Assert.Equal("context", contextBlock.GetProperty("type").GetString());
+        // namespace + instance + version
+        Assert.Equal(3, contextBlock.GetProperty("elements").GetArrayLength());
     }
 
     [Theory]
@@ -119,7 +128,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
     {
         var alert = CreateAlert(severity: severity);
 
-        var payload = SlackWebhookPayloadBuilder.Build(alert);
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
 
         var json = JsonSerializer.Serialize(payload);
         var doc = JsonDocument.Parse(json);
@@ -133,10 +142,43 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
     {
         var alert = CreateAlert(source: "notion-mcp");
 
-        var payload = SlackWebhookPayloadBuilder.Build(alert);
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
 
         var json = JsonSerializer.Serialize(payload);
         Assert.Contains("notion-mcp", json);
+    }
+
+    [Fact]
+    public void Build_CarriesServiceIdentity()
+    {
+        var alert = CreateAlert();
+
+        var payload = SlackWebhookPayloadBuilder.Build(alert, TestIdentity);
+
+        var json = JsonSerializer.Serialize(payload);
+
+        // Service name renders as a field; namespace/instance/version in the footer
+        Assert.Contains("test-agent", json);
+        Assert.Contains("test-ns", json);
+        Assert.Contains("test-host:4321", json);
+        Assert.Contains("9.9.9", json);
+    }
+
+    [Fact]
+    public void Build_OmitsNamespaceAndInstance_WhenTheEnvironmentDoesNotSupplyThem()
+    {
+        var alert = CreateAlert(context: null);
+        var identity = new ServiceIdentity("agent", Namespace: null, InstanceId: null, "1.0.0");
+
+        var payload = SlackWebhookPayloadBuilder.Build(alert, identity);
+
+        var json = JsonSerializer.Serialize(payload);
+        var doc = JsonDocument.Parse(json);
+        var blocks = doc.RootElement.GetProperty("blocks");
+        var contextBlock = blocks[blocks.GetArrayLength() - 1];
+
+        // Only the version element — namespace and instance id are absent.
+        Assert.Equal(1, contextBlock.GetProperty("elements").GetArrayLength());
     }
 
     #endregion
@@ -154,6 +196,7 @@ public sealed class SlackBlockKitWebhookFormatterTests : IAsyncDisposable
             config,
             factory,
             TimeProvider.System,
+            TestIdentity,
             NullLogger<WebhookNotificationService>.Instance);
         _services.Add(service);
         return service;

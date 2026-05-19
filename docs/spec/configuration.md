@@ -425,7 +425,6 @@ Optional OpenTelemetry export for logs and metrics.
 {
   "Telemetry": {
     "Enabled": true,
-    "ServiceName": "netclawd",
     "Otlp": {
       "Endpoint": "http://127.0.0.1:4317"
     }
@@ -436,8 +435,18 @@ Optional OpenTelemetry export for logs and metrics.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `Enabled` | bool | `false` | Enables OTLP export pipeline in daemon. |
-| `ServiceName` | string | `OTEL_SERVICE_NAME` env, else `netclawd` | OpenTelemetry `service.name` for this instance. Set it to distinguish multiple netclaw instances (e.g. per-agent) in a shared backend. |
 | `Otlp:Endpoint` | string | `http://127.0.0.1:4317` | OTLP collector endpoint (gRPC). |
+
+Service identity (`service.name`, `service.namespace`, `service.instance.id`) is
+**not** configured in `netclaw.json`. It is read from the standard OpenTelemetry
+environment variables — `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES` — the
+same way every other OpenTelemetry service is configured. When those are unset,
+netclaw applies sensible defaults: `service.name` = `netclawd`,
+`service.instance.id` = `{hostname}:{processId}`, and `service.version` from the
+running build. The resolved identity is logged at startup, and is stamped onto
+operational webhook alerts so an alert and the telemetry from the same instance
+can be correlated. Set `OTEL_SERVICE_NAME` to tell multiple netclaw instances
+apart.
 
 ## Secrets
 

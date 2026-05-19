@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 
@@ -60,6 +61,28 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
         return TryParse(arguments, out var error, out var args)
             ? await ExecuteAsync(args, context, ct)
             : error;
+    }
+
+    /// <summary>
+    /// Execute the tool as a stream of <see cref="ToolCallUpdate"/> items. The
+    /// default yields the non-streaming result as a single terminal completion
+    /// item. Long-running tools override this to emit liveness/progress while
+    /// they work, which keeps the caller's per-call watchdog alive.
+    /// </summary>
+    /// <remarks>
+    /// Declared <c>virtual</c> rather than left to the
+    /// <see cref="INetclawTool.ExecuteStreamAsync"/> default interface method:
+    /// a DIM is bound at this interface-declaring base, so a derived tool's
+    /// matching <c>public</c> method does not re-implement it and is unreachable
+    /// through <c>INetclawTool</c> dispatch — only a derived <c>override</c> of
+    /// this <c>virtual</c> is.
+    /// </remarks>
+    public virtual async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        yield return new ToolCompletedUpdate(await ExecuteAsync(arguments, context, ct));
     }
 
     /// <summary>
