@@ -75,6 +75,24 @@ public sealed class SlackTextProtectorTests
         Assert.Equal("Look at <https://example.com/?q=foo%20bar> here", result);
     }
 
+    [Theory]
+    [InlineData("Visit https://example.com.", "Visit <https://example.com>.")]
+    [InlineData("Excited https://example.com!", "Excited <https://example.com>!")]
+    [InlineData("Right? https://example.com?", "Right? <https://example.com>?")]
+    [InlineData("Done: https://example.com;", "Done: <https://example.com>;")]
+    [InlineData("Two https://example.com, then more", "Two <https://example.com>, then more")]
+    [InlineData("Trailing https://example.com...", "Trailing <https://example.com>...")]
+    [InlineData("Path https://example.com/a.b.c.", "Path <https://example.com/a.b.c>.")]
+    public void BareUrlAtSentenceEnd_DoesNotSwallowTrailingPunctuation(
+        string input, string expected)
+    {
+        // The URL token must stop before sentence punctuation —
+        // otherwise Slack treats e.g. the period as part of the
+        // clickable link target. Punctuation inside the URL path is
+        // still preserved (only the final character is constrained).
+        Assert.Equal(expected, SlackTextProtector.ProtectUrls(input));
+    }
+
     // ---- Markdown link handling --------------------------------------------
 
     [Fact]
@@ -266,6 +284,16 @@ public sealed class SlackTextProtectorTests
     [InlineData(
         "https://x.com/auth?scope=A+B+C",
         "https://x.com/auth?scope=A+B+C")]
+    // 'scope=' embedded in a longer parameter name ('myscope=') is not
+    // an OAuth scope list — must be left alone even with multiple %2B.
+    [InlineData(
+        "https://x.com/auth?myscope=A%2BB%2BC&state=1",
+        "https://x.com/auth?myscope=A%2BB%2BC&state=1")]
+    // A 'myscope=' decoy earlier in the query string must not shadow
+    // the real boundary-anchored 'scope=' parameter.
+    [InlineData(
+        "https://x.com/auth?myscope=keep%2Bme&scope=A%2BB%2BC",
+        "https://x.com/auth?myscope=keep%2Bme&scope=A+B+C")]
     public void NormaliseScopeList_DecodesOnlyOAuthScopePattern(string input, string expected)
     {
         Assert.Equal(expected, SlackTextProtector.NormaliseScopeList(input));

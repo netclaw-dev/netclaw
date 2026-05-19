@@ -343,6 +343,23 @@ public class SlackBlockConverterTests
     }
 
     [Fact]
+    public void BareUrl_AtSentenceEnd_ExcludesTrailingPeriodFromLink()
+    {
+        // Shared bare-URL tokenizer (SlackTextProtector.BareUrlRegex):
+        // the sentence's closing period must not be pulled into the
+        // link target — it survives as trailing plain text.
+        var blocks = SlackBlockConverter.Convert("Check https://example.com.");
+
+        var rtb = Assert.Single(blocks.OfType<RichTextBlock>());
+        var section = Assert.Single(rtb.Elements.OfType<RichTextSection>());
+
+        var link = Assert.Single(section.Elements.OfType<RichTextLink>());
+        Assert.Equal("https://example.com", link.Url);
+
+        Assert.Contains(section.Elements.OfType<RichTextText>(), t => t.Text == ".");
+    }
+
+    [Fact]
     public void BareUrl_InListItem_ProducesRichTextLink()
     {
         var input = "- See https://example.com/docs for more info";

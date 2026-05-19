@@ -141,8 +141,27 @@ public static partial class SlackTextProtector
         if (string.IsNullOrEmpty(url))
             return url;
 
-        var scopeMarker = "scope=";
-        var scopeIndex = url.IndexOf(scopeMarker, StringComparison.Ordinal);
+        // Locate a 'scope=' query parameter at a parameter boundary
+        // (preceded by '?' or '&'). A bare IndexOf would also match a
+        // 'scope=' substring embedded in a path segment or inside a
+        // longer parameter name (e.g. 'myscope='), mis-targeting the
+        // decode onto an unrelated value.
+        const string scopeMarker = "scope=";
+        var scopeIndex = -1;
+        var searchFrom = 0;
+        while (true)
+        {
+            var hit = url.IndexOf(scopeMarker, searchFrom, StringComparison.Ordinal);
+            if (hit < 0)
+                break;
+            if (hit > 0 && url[hit - 1] is '?' or '&')
+            {
+                scopeIndex = hit;
+                break;
+            }
+            searchFrom = hit + scopeMarker.Length;
+        }
+
         if (scopeIndex < 0)
             return url;
 
@@ -176,7 +195,14 @@ public static partial class SlackTextProtector
     private static partial Regex MarkdownLinkRegex();
 
     // Bare http/https URL. Stops at whitespace and at the characters
-    // that close a wrapping mrkdwn link or markdown construct.
-    [GeneratedRegex(@"https?://[^\s<>)\]|]+")]
-    private static partial Regex BareUrlRegex();
+    // that close a wrapping mrkdwn link or markdown construct. The
+    // required trailing character additionally excludes sentence
+    // punctuation (.,!?;:) so a URL at the end of a sentence —
+    // "see https://x.com." — does not swallow the period into the
+    // clickable link target. Mid-URL punctuation is preserved because
+    // only the final character is constrained. Shared with
+    // SlackBlockConverter so both outbound surfaces tokenize URLs
+    // identically.
+    [GeneratedRegex(@"https?://[^\s<>)\]|]*[^\s<>)\]|.,!?;:]")]
+    internal static partial Regex BareUrlRegex();
 }

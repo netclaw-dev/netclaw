@@ -262,8 +262,9 @@ public static partial class SlackBlockConverter
         });
 
         // Bare URLs: https://example.com — same is-it-safe-to-link
-        // heuristic.
-        TryMatch(BareUrlRegex(), text, ref best, (m) =>
+        // heuristic. Uses SlackTextProtector's shared bare-URL regex so
+        // the Block Kit and plain-text surfaces tokenize URLs identically.
+        TryMatch(SlackTextProtector.BareUrlRegex(), text, ref best, (m) =>
         {
             var url = SlackTextProtector.NormaliseScopeList(m.Value);
             return SlackTextProtector.IsRewriteProne(url)
@@ -355,10 +356,6 @@ public static partial class SlackBlockConverter
     // Links: [text](url)
     [GeneratedRegex(@"\[([^\]]+)\]\(([^)]+)\)")]
     private static partial Regex LinkRegex();
-
-    // Bare URLs: https://example.com
-    [GeneratedRegex(@"https?://[^\s)\]>]+")]
-    private static partial Regex BareUrlRegex();
 
     // Ordered list prefix: 1. or 2. etc.
     [GeneratedRegex(@"^\d+\.\s")]
