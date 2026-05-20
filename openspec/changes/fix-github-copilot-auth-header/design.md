@@ -69,3 +69,50 @@ the two source files. Existing configs are unaffected.
 
 - None. Model availability per Copilot account (e.g. `claude-sonnet-4` returning
   `model_not_supported`) is a separate operator concern, not part of this fix.
+
+## References
+
+The fix relies on the `System.ClientModel` pipeline contract plus where the
+OpenAI SDK plants its auth policy. Pinned here so future maintainers don't
+have to re-derive them from a broken chat turn:
+
+> Note on packaging: `System.ClientModel` is a standalone NuGet package, not
+> part of any `Azure.*` SDK. The OpenAI .NET SDK depends on it directly. The
+> Microsoft Learn docs for `System.ClientModel.*` are bucketed under the
+> "Azure for .NET Developers" doc set for historical/organizational reasons,
+> but the package itself is non-Azure.
+
+- **`ApiKeyCredential.Update(string)` is the documented credential-rotation API.**
+  Microsoft Learn: "intended to be called when the API key has been regenerated
+  and long-lived clients need to be updated to send the new value":
+  <https://learn.microsoft.com/en-us/dotnet/api/system.clientmodel.apikeycredential.update>
+- **`PipelinePosition` layering.** `PerCall` policies run *before* the
+  pipeline's `RetryPolicy`; `PerTry` policies run *after* it. Caller policies
+  registered via `options.AddPolicy(..., PerCall)` therefore land upstream of
+  any per-try policy the SDK plants:
+  <https://learn.microsoft.com/en-us/dotnet/api/system.clientmodel.primitives.pipelineposition>
+- **`ApiKeyAuthenticationPolicy` is the policy the SDK uses to write the
+  `Authorization` header from an `ApiKeyCredential`.** Microsoft Learn
+  documents the factory `CreateBearerAuthorizationPolicy(ApiKeyCredential)` as
+  setting the credential value in the `Authorization` header with a `Bearer`
+  prefix on each request:
+  <https://learn.microsoft.com/en-us/dotnet/api/system.clientmodel.primitives.apikeyauthenticationpolicy>
+- **The OpenAI SDK registers that auth policy as a per-try policy.** See
+  `OpenAIClientUtilities.CreatePipeline` — `authenticationPolicy` is passed in
+  the `perTryPolicies` span of `ClientPipeline.Create`, downstream of any
+  caller `PerCall` policy. Pinned to commit `93b09d1`:
+  <https://github.com/openai/openai-dotnet/blob/93b09d135e08840cbe5d23bb11b5224fedf0f92f/OpenAI/src/Utility/OpenAIClientUtilities.cs>
+
+Composed: our `CopilotRequestPolicy` runs in the per-call band (before the
+retry policy); the SDK's `ApiKeyAuthenticationPolicy` runs in the per-try band
+(after the retry policy) and reads the credential on each send. Writing
+`Authorization` from our policy is therefore overwritten downstream, but
+updating the shared `ApiKeyCredential` from our policy is observed downstream
+on the same request — which is exactly the rotation contract
+`ApiKeyCredential.Update` is documented to support.
+
+The OpenAI SDK commit pinned above is not necessarily the exact build resolved
+by `Microsoft.Extensions.AI.OpenAI` 10.6.0 (the version in
+`Directory.Packages.props`); the SDK's pipeline shape has been stable across
+recent versions, but if a future bump moves auth out of `perTryPolicies` the
+analysis here needs to be re-validated.

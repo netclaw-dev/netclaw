@@ -26,6 +26,11 @@ namespace Netclaw.Providers.GitHubCopilot;
 /// token. (Setting the header directly produced
 /// "bad request: Authorization header is badly formatted" because the SDK
 /// replaced our token with the placeholder credential.)
+///
+/// See <c>openspec/changes/fix-github-copilot-auth-header/design.md</c>
+/// § References for the System.ClientModel / OpenAI SDK contract this relies
+/// on (PipelinePosition layering, where the SDK plants its auth policy, and
+/// the documented use of <see cref="ApiKeyCredential.Update"/>).
 /// </remarks>
 internal sealed class CopilotRequestPolicy(
     CopilotTokenExchanger exchanger, ProviderEntry entry, ApiKeyCredential credential)
