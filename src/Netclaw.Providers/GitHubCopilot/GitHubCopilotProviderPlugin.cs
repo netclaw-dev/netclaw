@@ -22,6 +22,13 @@ public sealed class GitHubCopilotProviderPlugin(
     CopilotTokenExchanger tokenExchanger)
     : ProviderPluginBase<GitHubCopilotDescriptor>(descriptor)
 {
+    // Test seam: when set, routes the OpenAI SDK through this transport instead
+    // of the real network, so a test can capture the fully-assembled outgoing
+    // request — including the Authorization header the SDK's own credential
+    // policy writes — and prove the exchanged token (not the placeholder)
+    // reaches the wire. Never set in production wiring.
+    internal PipelineTransport? TransportOverride { get; init; }
+
     public override IChatClient CreateChatClient(ProviderEntry entry, ModelReference model)
     {
         var endpoint = string.IsNullOrWhiteSpace(entry.Endpoint)
@@ -33,14 +40,21 @@ public sealed class GitHubCopilotProviderPlugin(
             Endpoint = new Uri(endpoint),
         };
 
-        // The policy below overwrites the Authorization header on every
-        // call with a fresh Copilot API token, so the credential we pass
-        // to the SDK is a placeholder.
+        if (TransportOverride is not null)
+            options.Transport = TransportOverride;
+
+        // The SDK owns the Authorization header: its key-credential auth policy
+        // runs after any policy we register and writes "Bearer {key}" from this
+        // credential at send time. So we hand it a mutable credential and let
+        // CopilotRequestPolicy refresh its value (to a fresh short-lived Copilot
+        // token) on every call. The "placeholder" is overwritten before the
+        // first request goes out.
+        var credential = new ApiKeyCredential("placeholder");
         options.AddPolicy(
-            new CopilotRequestPolicy(tokenExchanger, entry),
+            new CopilotRequestPolicy(tokenExchanger, entry, credential),
             PipelinePosition.PerCall);
 
-        var client = new OpenAIClient(new ApiKeyCredential("placeholder"), options);
+        var client = new OpenAIClient(credential, options);
         return client.GetChatClient(model.ModelId).AsIChatClient();
     }
 }
