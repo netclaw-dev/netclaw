@@ -29,6 +29,10 @@
     <Project Path="src/Netclaw.Security/Netclaw.Security.csproj" />
     <Project Path="src/Netclaw.Security.Tests/Netclaw.Security.Tests.csproj" />
     <Project Path="src/Netclaw.Channels.Mattermost.IntegrationTests/Netclaw.Channels.Mattermost.IntegrationTests.csproj" />
+    <Project Path="src/Netclaw.ServiceDefaults/Netclaw.ServiceDefaults.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Netclaw.Demo.AppHost/Netclaw.Demo.AppHost.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj" />
