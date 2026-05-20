@@ -179,40 +179,78 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
             {
                 while (await process.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false) is not null) { }
             }
-            catch { /* drain best-effort */ }
+            catch (OperationCanceledException)
+            {
+                // Drain ends with the test's cancellation token — expected on teardown.
+            }
+            catch (IOException)
+            {
+                // Stream closes when the child is killed in DisposeAsync.
+            }
         }, ct);
 
-        var startTimeout = Task.Delay(TimeSpan.FromSeconds(30), ct);
-        var completed = await Task.WhenAny(listeningTcs.Task, startTimeout).ConfigureAwait(false);
-        if (completed != listeningTcs.Task)
+        // Bounded wait for the child to publish its listening URL on stderr;
+        // listeningTcs is the actual sync primitive — the timeout is just a
+        // fail-fast for "child never started" rather than a flake-buffer.
+        string url;
+        try
         {
-            try { process.Kill(entireProcessTree: true); } catch { /* best-effort */ }
-            throw new TimeoutException("Smoke MCP server did not start within 30s");
+            url = await listeningTcs.Task.WaitAsync(TimeSpan.FromSeconds(30), ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            TryKill(process);
+            throw new TimeoutException("Smoke MCP server did not publish a listening URL within 30s");
         }
 
-        return new SmokeHttpMcpServer(
-            process, await listeningTcs.Task.ConfigureAwait(false), stderrDrain, stdoutDrain);
+        return new SmokeHttpMcpServer(process, url, stderrDrain, stdoutDrain);
     }
 
     public async ValueTask DisposeAsync()
     {
         if (!_process.HasExited)
-        {
-            try { _process.Kill(entireProcessTree: true); }
-            catch { /* best-effort */ }
-        }
+            TryKill(_process);
 
-        try { await _process.WaitForExitAsync().ConfigureAwait(false); }
-        catch { /* best-effort */ }
+        await _process.WaitForExitAsync().ConfigureAwait(false);
 
-        // Drains terminate when the streams close; await both so teardown
-        // doesn't leave Task.Run continuations executing past the test.
-        try { await _stderrDrain.ConfigureAwait(false); }
-        catch { /* drain is best-effort once we're tearing down */ }
-
-        try { await _stdoutDrain.ConfigureAwait(false); }
-        catch { /* drain is best-effort once we're tearing down */ }
+        // Drains terminate once the streams close; await both so teardown
+        // doesn't leave Task.Run continuations executing past the test. The
+        // drains' own catches handle the cancellation/IO race; surfacing
+        // anything else here would mask a real teardown bug.
+        await IgnoreCancellationAsync(_stderrDrain).ConfigureAwait(false);
+        await IgnoreCancellationAsync(_stdoutDrain).ConfigureAwait(false);
 
         _process.Dispose();
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (InvalidOperationException)
+        {
+            // Process exited between HasExited and Kill — nothing to do.
+        }
+    }
+
+    private static async Task IgnoreCancellationAsync(Task task)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Drains are tied to the test's CancellationToken; cancellation
+            // on teardown is the expected exit, not a failure to report.
+        }
+        catch (InvalidOperationException)
+        {
+            // The stderr drain TCS surfaces this when the child exits before
+            // publishing a listening URL; the caller already saw the
+            // TimeoutException that StartAsync threw.
+        }
     }
 }
