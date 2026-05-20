@@ -27,7 +27,6 @@ namespace Netclaw.Providers.GitHubCopilot;
 /// only credential that hits the secrets store.
 /// </remarks>
 public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? timeProvider = null)
-    : ITokenExchanger
 {
     private static readonly Uri TokenEndpoint =
         new("https://api.github.com/copilot_internal/v2/token");
