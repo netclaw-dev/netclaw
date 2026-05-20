@@ -35,9 +35,10 @@ Screenshot "/tmp/shot-wizard-provider-picker.png"
 Sleep 1s
 
 # Provider list ordering is alphabetical by TypeKey:
-#   anthropic, ollama, openai, openai-compatible, openrouter
-# Anthropic is the default; one Down lands on Ollama.
-Down
+#   anthropic, github-copilot, ollama, openai, openai-compatible, openrouter
+# Anthropic is the default; two Downs land on Ollama (one Down lands on
+# github-copilot since it was added in PR #1075).
+Down 2
 Enter
 
 # Endpoint input — native Ollama is at http://localhost:11434, which is

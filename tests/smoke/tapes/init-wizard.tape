@@ -21,9 +21,10 @@ Enter
 # ─── Step 1: Provider ───────────────────────────────────────────────
 Wait+Screen@10s /Choose your LLM provider:/
 # Provider list ordering is alphabetical by TypeKey:
-#   anthropic, ollama, openai, openai-compatible, openrouter
-# Display order matches: Anthropic (default), then Ollama (one Down).
-Down
+#   anthropic, github-copilot, ollama, openai, openai-compatible, openrouter
+# Display order matches: Anthropic (default), then github-copilot, then Ollama.
+# Two Downs from the Anthropic default land on Ollama.
+Down 2
 Enter
 
 # Endpoint input (default http://localhost:11434 — native Ollama is at

@@ -30,10 +30,11 @@ Enter
 Wait+Screen@10s /Ollama/
 Sleep 300ms
 
-# Provider type list (alphabetical by TypeKey): anthropic, ollama,
-# openai, openai-compatible, openrouter. With Anthropic highlighted
-# by default, one Down lands on Ollama.
-Down
+# Provider type list (alphabetical by TypeKey): anthropic,
+# github-copilot, ollama, openai, openai-compatible, openrouter. With
+# Anthropic highlighted by default, two Downs land on Ollama (one Down
+# now lands on github-copilot).
+Down 2
 Enter
 
 # ─── Step 1: Name your provider (NEW in #997) ────────────────────────
