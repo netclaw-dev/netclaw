@@ -117,22 +117,22 @@ Enter
 Wait+Screen@10s /Press Enter to run health checks/
 Enter
 
-# Reverse-proxy mode binds to a non-loopback address; the daemon will refuse
-# to start cleanly inside the smoke env (it tries to listen on 0.0.0.0:5199
-# which may not be reachable / may already be bound). That's fine — the
-# tape's job is to drive the wizard through the new sub-steps and produce
-# a netclaw.json; the post-tape assertion is the real signal.
+# Daemon starts on 0.0.0.0:5199 but in reverse-proxy mode the CLI cannot
+# auto-auth back to it via loopback (loopback auto-auth is intentionally
+# disabled for reverse-proxy to prevent a forwarded-header from inheriting
+# operator privileges). The wizard's chat-page handshake therefore gets 401
+# and the wizard exits to the shell instead of opening the TUI — that's
+# correct behavior, not a bug.
 #
-# The wizard may either:
-#   (a) reach the chat page after the daemon starts (if 0.0.0.0:5199 is
-#       bindable in the smoke env), or
-#   (b) hang on the health-check screen if daemon startup fails.
-#
-# Wait for whichever marker appears first within a generous window, then quit.
-Wait+Screen@120s /(Ready  \|  qwen2:0\.5b|Health checks)/
+# Wait for either terminal state:
+#   (a) chat-page ready bar (if a future change ever wires post-init differently)
+#   (b) the shell prompt re-appearing post-wizard-exit, with `netclaw init`
+#       still visible as the last-typed command
+Wait+Screen@180s /(Ready  \|  qwen2:0\.5b|TAPE\$ netclaw init)/
+# No-op if we're already at the shell; quits the TUI if (a) above.
 Ctrl+Q
 
-Wait+Screen@10s /TAPE\$/
+Wait+Screen@15s /TAPE\$ /
 
 # Sanity: re-check at the prompt that init reported success.
 Type "echo INIT_EXIT=$?"
