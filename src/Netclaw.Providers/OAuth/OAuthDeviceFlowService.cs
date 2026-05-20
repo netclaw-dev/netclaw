@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -53,7 +54,11 @@ public sealed record DeviceAuthorizationResponse(
     [property: JsonPropertyName("user_code")] string UserCode,
     [property: JsonPropertyName("verification_uri")] string VerificationUri,
     [property: JsonPropertyName("expires_in")] int ExpiresIn,
-    [property: JsonPropertyName("interval")] int Interval);
+    [property: JsonPropertyName("interval")] int Interval,
+    // Optional per RFC 8628 §3.3.1. GitHub returns this with the user code
+    // already embedded so a Cmd/Ctrl-click in a terminal that auto-detects
+    // URLs completes the auth without the user having to retype the code.
+    [property: JsonPropertyName("verification_uri_complete")] string? VerificationUriComplete = null);
 
 /// <summary>
 /// Successful token result from the OAuth device flow.
@@ -99,8 +104,10 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
     public async Task<DeviceAuthorizationResponse> StartDeviceAuthorizationAsync(
         OAuthDeviceFlowConfig config, CancellationToken ct = default)
     {
-        var content = new FormUrlEncodedContent(BuildDeviceAuthParams(config));
-        var response = await _httpClient.PostAsync(config.DeviceAuthorizationEndpoint, content, ct);
+        using var response = await PostFormAsync(
+            config.DeviceAuthorizationEndpoint,
+            BuildDeviceAuthParams(config),
+            ct);
         response.EnsureSuccessStatusCode();
 
         var result = await response.Content.ReadFromJsonAsync<DeviceAuthorizationResponse>(ct);
@@ -136,24 +143,26 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
                 ["client_id"] = config.ClientId
             };
 
-            var response = await _httpClient.PostAsync(
-                config.TokenEndpoint,
-                new FormUrlEncodedContent(tokenParams),
-                ct);
+            using var response = await PostFormAsync(config.TokenEndpoint, tokenParams, ct);
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
-            if (response.IsSuccessStatusCode)
+            // GitHub deviates from RFC 8628 §3.5 by returning HTTP 200 with an
+            // `error` body for authorization_pending / slow_down instead of 400.
+            // Check for `error` first regardless of status so a 200 + pending
+            // body doesn't slip into ParseTokenResponse and throw KeyNotFound
+            // looking for a missing access_token.
+            var hasError = root.TryGetProperty("error", out var errProp);
+            var error = hasError ? errProp.GetString() : null;
+
+            if (response.IsSuccessStatusCode && !hasError)
             {
                 var result = ParseTokenResponse(root);
                 onStateChanged?.Invoke(DeviceFlowState.Succeeded);
                 return result;
             }
-
-            var error = root.TryGetProperty("error", out var errProp)
-                ? errProp.GetString() : null;
 
             switch (error)
             {
@@ -204,10 +213,7 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
             ["refresh_token"] = refreshToken.Value
         };
 
-        var response = await _httpClient.PostAsync(
-            tokenEndpoint,
-            new FormUrlEncodedContent(tokenParams),
-            ct);
+        using var response = await PostFormAsync(tokenEndpoint, tokenParams, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -250,6 +256,22 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
             new SensitiveString(accessToken),
             refreshToken is not null ? new SensitiveString(refreshToken) : null,
             expiresAt);
+    }
+
+    // GitHub's OAuth endpoints return application/x-www-form-urlencoded by default
+    // and only switch to JSON when the request explicitly asks for it. Other providers
+    // (OpenAI Codex) already return JSON, so the header is a safe no-op.
+    private async Task<HttpResponseMessage> PostFormAsync(
+        string url,
+        IEnumerable<KeyValuePair<string, string>> form,
+        CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+        {
+            Content = new FormUrlEncodedContent(form),
+        };
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        return await _httpClient.SendAsync(request, ct);
     }
 
     private static List<KeyValuePair<string, string>> BuildDeviceAuthParams(OAuthDeviceFlowConfig config)

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.5.0"
+  version: "2.6.0"
 ---
 
 # Netclaw Operations
@@ -27,6 +27,7 @@ problems, how to update preferences, or how to maintain itself.
 | Check health, update self | [Self-Maintenance](#self-maintenance) |
 | Run long shell commands in background | [Background Jobs](#background-jobs) |
 | Manage inbound webhooks | [Webhook Management](#webhook-management) |
+| Add or switch LLM provider, OAuth login | [LLM Providers](#llm-providers) |
 | Search backend errors, configure SearXNG | [Search Providers](#search-providers) |
 
 ## Project Directory
@@ -606,6 +607,57 @@ full exception internally. Exception details are **never** forwarded to Slack.
 | Download timeout | bot token valid? Slack network reachable? check `daemon-{date}.log` |
 | Content scan rejection | `netclaw status` scanner section; check scan config |
 | Inbox write failure | disk space? permissions on `~/.netclaw/sessions/`? |
+
+## LLM Providers
+
+Netclaw routes chat completions through configured **provider entries** in
+`secrets.json` / `netclaw.json`. Each entry has a logical name (operator-chosen)
+and a `type` (well-known identifier). Manage them with `netclaw provider`:
+
+| Subcommand | Purpose |
+|------------|---------|
+| `netclaw provider list` | Show configured entries and their types |
+| `netclaw provider add <name> <type> [...flags]` | Add a new entry |
+| `netclaw provider remove <name>` | Delete an entry |
+| `netclaw provider rename <old> <new>` | Rename without re-authenticating |
+| `netclaw provider` (no args) | Interactive TUI for add/edit/delete |
+
+### Supported provider types
+
+| Type | Auth | Notes |
+|------|------|-------|
+| `ollama` | Endpoint only | `--endpoint http://host:11434` |
+| `openai` | API key **or** OAuth (ChatGPT sub) | Codex backend for OAuth path |
+| `openai-compatible` | API key + endpoint | Generic OpenAI-shape proxies |
+| `anthropic` | API key | `sk-ant-...` |
+| `openrouter` | API key | `sk-or-...` |
+| `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
+
+### Adding GitHub Copilot
+
+GitHub Copilot uses the OAuth device flow only — no API key. The operator
+must have an active personal Copilot subscription. From the CLI:
+
+```bash
+netclaw provider add my-copilot github-copilot --auth oauth-device
+```
+
+The terminal prints a user code and the URL `https://github.com/login/device`.
+The operator opens the URL in a browser, enters the code, and approves the
+Netclaw GitHub App. On success, the long-lived GitHub OAuth token is
+persisted to `secrets.json`. A short-lived (~30 min) Copilot API token is
+minted lazily on each chat request and never written to disk.
+
+If a Copilot probe or chat call returns "GitHub Copilot authorization
+expired", the stored OAuth token has been revoked. The remediation is:
+
+```bash
+netclaw provider remove my-copilot
+netclaw provider add my-copilot github-copilot --auth oauth-device
+```
+
+The token is **not** auto-cleared on 401 — the operator retains visibility
+into the failing credential until they explicitly remove the entry.
 
 ## Search Providers
 

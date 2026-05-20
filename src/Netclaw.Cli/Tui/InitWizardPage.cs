@@ -113,11 +113,18 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
                 _stepContentNode?.Invalidate();
                 _helpTextNode?.Invalidate();
 
-                // Auto-advance to validation on success
+                // Auto-advance to validation on success.
+                // The coordinator's onSuccess callback (wired in
+                // ProviderStepViewModel.StartOAuthFlow) already calls
+                // StartProbe() with the fresh token, so we MUST NOT call it
+                // here too — doing so cancels the probe that onSuccess just
+                // started (this subscriber fires synchronously from
+                // FlowState.Value = Succeeded, which runs *before* the
+                // coordinator invokes onSuccess; the duplicate StartProbe
+                // races and torpedoes its own CTS).
                 if (state == DeviceFlowState.Succeeded)
                 {
                     ViewModel.ProviderStep.SetSubStep(3);
-                    ViewModel.ProviderStep.StartProbe();
                     _stepContentNode?.Invalidate();
                     _helpTextNode?.Invalidate();
                     ViewModel.RequestRedraw();
@@ -305,6 +312,30 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             {
                 if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, providerVm.OAuth.VerificationUri))
                     ViewModel.Context.StatusMessage.Value = "\u2714 URL copied to clipboard";
+                return;
+            }
+
+            // Device OAuth: "C" to copy user code to clipboard
+            if (providerVm.CurrentSubStep == 5
+                && keyInfo.Key == ConsoleKey.C
+                && providerVm.OAuth.UserCode is not null)
+            {
+                if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, providerVm.OAuth.UserCode))
+                {
+                    ViewModel.Context.StatusMessage.Value = "\u2714 Code copied to clipboard";
+                }
+                return;
+            }
+
+            // Device OAuth: "O" to open the verification URL in the default browser
+            if (providerVm.CurrentSubStep == 5
+                && keyInfo.Key == ConsoleKey.O
+                && (providerVm.OAuth.VerificationUriComplete ?? providerVm.OAuth.VerificationUri) is not null)
+            {
+                var url = providerVm.OAuth.VerificationUriComplete ?? providerVm.OAuth.VerificationUri;
+                ViewModel.Context.StatusMessage.Value = OAuthFlowViews.TryOpenInBrowser(url)
+                    ? "\u2714 Opening browser..."
+                    : "\u2718 Could not open browser.";
                 return;
             }
 

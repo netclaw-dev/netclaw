@@ -37,6 +37,14 @@ public sealed class OAuthFlowCoordinator : IDisposable
     public ReactiveProperty<DeviceFlowState> FlowState { get; } = new(DeviceFlowState.NotStarted);
     public string? UserCode { get; set; }
     public string? VerificationUri { get; set; }
+
+    /// <summary>
+    /// RFC 8628 §3.3.1 verification URI with the user code pre-filled.
+    /// When the provider returns this (GitHub does), it is the URL we display
+    /// because a single Cmd/Ctrl-click completes auth without retyping the code.
+    /// Null when the provider only returned <see cref="VerificationUri"/>.
+    /// </summary>
+    public string? VerificationUriComplete { get; set; }
     public string? ErrorMessage { get; set; }
     public bool BrowserOpenFailed { get; set; }
     internal OAuthDeviceFlowResult? Result { get; set; }
@@ -169,6 +177,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
         FlowState.Value = DeviceFlowState.NotStarted;
         UserCode = null;
         VerificationUri = null;
+        VerificationUriComplete = null;
         ErrorMessage = null;
         BrowserOpenFailed = false;
         Result = null;
@@ -376,6 +385,7 @@ public sealed class OAuthFlowCoordinator : IDisposable
             var deviceAuth = await service.StartDeviceAuthorizationAsync(config, ct);
             UserCode = deviceAuth.UserCode;
             VerificationUri = deviceAuth.VerificationUri;
+            VerificationUriComplete = deviceAuth.VerificationUriComplete;
             FlowState.Value = DeviceFlowState.WaitingForUser;
             _requestRedraw();
 
@@ -390,7 +400,12 @@ public sealed class OAuthFlowCoordinator : IDisposable
                     _requestRedraw();
                 }, ct);
 
-            // Step 3: Store result
+            // Step 3: Store result.
+            // Setting FlowState fires its reactive subscribers synchronously
+            // (InitWizardPage subscribes to advance to the validation sub-step).
+            // We rely on the onSuccess callback below — NOT on subscribers — to
+            // kick off the credential probe, so that the lifecycle of the probe
+            // CTS doesn't get torpedoed by a duplicate StartProbe call.
             Result = result;
             FlowState.Value = DeviceFlowState.Succeeded;
             _requestRedraw();

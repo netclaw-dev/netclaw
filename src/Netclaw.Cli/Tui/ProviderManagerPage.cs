@@ -483,9 +483,12 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 var elapsed = ViewModel.ProbeElapsedSeconds.Value;
                 var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
 
-                if (ViewModel.OAuth.VerificationUri is not null)
+                // Prefer verification_uri_complete (RFC 8628 §3.3.1, with user
+                // code embedded) so [O] opens a one-click-complete URL.
+                var displayUri = ViewModel.OAuth.VerificationUriComplete ?? ViewModel.OAuth.VerificationUri;
+                if (displayUri is not null)
                 {
-                    children.WithChild(new TextNode($"  Visit: {ViewModel.OAuth.VerificationUri}")
+                    children.WithChild(new TextNode($"  Visit: {displayUri}")
                         .WithForeground(Color.Cyan));
                     children.WithChild(new TextNode("").Height(1));
                 }
@@ -494,6 +497,22 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 {
                     children.WithChild(new TextNode($"  Enter code: {ViewModel.OAuth.UserCode}")
                         .WithForeground(Color.White).Bold());
+                    children.WithChild(new TextNode("").Height(1));
+                }
+
+                var hints = new List<string>();
+                if (displayUri is not null && BrowserDetection.CanOpenBrowser())
+                {
+                    hints.Add("[O] open in browser");
+                }
+                if (ViewModel.OAuth.UserCode is not null && _clipboardService is not null)
+                {
+                    hints.Add("[C] copy code");
+                }
+                if (hints.Count > 0)
+                {
+                    children.WithChild(new TextNode($"  {string.Join("    ", hints)}")
+                        .WithForeground(Color.BrightBlack));
                     children.WithChild(new TextNode("").Height(1));
                 }
 
@@ -852,6 +871,30 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         {
             if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, ViewModel.OAuth.VerificationUri))
                 ViewModel.StatusMessage.Value = "\u2714 URL copied to clipboard";
+            return;
+        }
+
+        // Device OAuth: "C" to copy user code to clipboard
+        if (state == ProviderManagerState.AddOAuthDeviceFlow
+            && keyInfo.Key == ConsoleKey.C
+            && ViewModel.OAuth.UserCode is not null)
+        {
+            if (OAuthFlowViews.TryCopyToClipboard(_clipboardService, ViewModel.OAuth.UserCode))
+            {
+                ViewModel.StatusMessage.Value = "\u2714 Code copied to clipboard";
+            }
+            return;
+        }
+
+        // Device OAuth: "O" to open the verification URL in the default browser
+        if (state == ProviderManagerState.AddOAuthDeviceFlow
+            && keyInfo.Key == ConsoleKey.O
+            && (ViewModel.OAuth.VerificationUriComplete ?? ViewModel.OAuth.VerificationUri) is not null)
+        {
+            var url = ViewModel.OAuth.VerificationUriComplete ?? ViewModel.OAuth.VerificationUri;
+            ViewModel.StatusMessage.Value = OAuthFlowViews.TryOpenInBrowser(url)
+                ? "\u2714 Opening browser..."
+                : "\u2718 Could not open browser.";
             return;
         }
 
