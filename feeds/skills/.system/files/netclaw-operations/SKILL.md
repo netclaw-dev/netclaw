@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.6.0"
+  version: "2.7.0"
 ---
 
 # Netclaw Operations
@@ -765,6 +765,17 @@ Exposure diagnostics are fail-closed:
   `cloudflare-tunnel`) require their local tunnel process by default.
   `Daemon.SkipTunnelProcessCheck=true` is an explicit opt-in only for sidecar or
   host-managed tunnel topologies; all other exposure requirements still apply.
+
+The `netclaw init` wizard's Network Exposure step offers all five modes —
+`local`, `reverse-proxy`, `tailscale-serve`, `tailscale-funnel`,
+`cloudflare-tunnel`. Selecting `reverse-proxy` adds two follow-up prompts that
+collect `Daemon.Host` (must be non-loopback) and `Daemon.TrustedProxies` (≥1
+entry required, comma-separated). The wizard refuses to advance past the
+trusted-proxies prompt with an empty list — the same minimum the daemon
+validator enforces at startup — so an operator who does not yet know their
+proxy IP should choose `local` and re-run `netclaw init` later, supplying the
+bind address and trusted proxies on the second pass once the proxy topology
+is known.
 
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),

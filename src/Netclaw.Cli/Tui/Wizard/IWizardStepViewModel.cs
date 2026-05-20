@@ -47,8 +47,11 @@ public interface IWizardStepViewModel : IDisposable
     string GetHelpText();
 
     /// <summary>
-    /// Attempt to advance within the step (next sub-step or validation trigger).
-    /// Returns <c>true</c> if the step handled the advance internally (sub-step change).
+    /// Attempt to advance within the step.
+    /// Returns <c>true</c> if the step handled the advance internally — either by moving
+    /// to the next sub-step OR by staying on the current sub-step because an in-step
+    /// validation gate blocked the advance. In both cases the orchestrator should NOT
+    /// move to the next wizard step.
     /// Returns <c>false</c> when the step is complete and the orchestrator should move forward.
     /// </summary>
     bool TryAdvance();
