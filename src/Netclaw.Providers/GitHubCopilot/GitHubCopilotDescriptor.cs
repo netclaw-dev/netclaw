@@ -30,10 +30,7 @@ public sealed class GitHubCopilotDescriptor(
         TokenEndpoint = new Uri("https://github.com/login/oauth/access_token"),
         DeviceEndpoint = new Uri("https://github.com/login/device/code"),
 
-        // Placeholder client_id borrowed from a third-party GitHub OAuth app
-        // (akt-sh). Replace with a Netclaw-owned OAuth app registration
-        // before this provider ships as supported (not experimental).
-        ClientId = "Iv1.b507a08c87ecfe98",
+        ClientId = "Iv23lipIurKdMkbqy6nH",
         Scope = "read:user",
         UseProprietaryDeviceFlow = false,
     };
