@@ -40,8 +40,13 @@ Define the guided onboarding flow for first-time Netclaw setup.
 
 ### Step 5: Security Profile
 
-- choose exposure mode (`local`, `tailscale-serve`, `tailscale-funnel`,
-  `cloudflare-tunnel`)
+- choose exposure mode (`local`, `reverse-proxy`, `tailscale-serve`,
+  `tailscale-funnel`, `cloudflare-tunnel`)
+- for `reverse-proxy`: collect `Daemon.Host` (must be non-loopback) and
+  `Daemon.TrustedProxies` (≥1 IP or CIDR entry required to advance — matches
+  the daemon's startup validator so the wizard cannot emit a non-startable
+  config), then show an informational notice with the resulting serving URL
+  (`http://{Host}:{Port}`) before continuing
 - enforce policy prerequisites for selected mode
 
 ### Step 6: Final Validation
