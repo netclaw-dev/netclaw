@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.3.0"
+  version: "2.4.0"
 ---
 
 # Netclaw Operations
@@ -354,6 +354,16 @@ compound command includes pure side-effect verbs (`echo`, `printf`, `:`,
 authorized for the current call by the click but no `ApprovalEntry` is
 written for them. Recording every literal `echo "==="` would be noise.
 
+**Prompts survive passivation and restart.** Pending approval prompts are
+journaled with their requester and trust context, so if the session goes idle or
+the daemon restarts before the user clicks, the click is still honored when it
+arrives. Completed sibling tool results are journaled per call, so recovery
+re-drives unresolved calls rather than replaying the whole batch. The only case
+where a click does nothing is a genuinely expired prompt (the turn already
+failed or was superseded); the session then posts a visible "approval prompt has
+expired" notice rather than silently dropping the click. If a user reports a
+stale button, ask them to re-issue the request.
+
 **Why you may not see a prompt at all.** If the user invokes a read-only verb
 (say `grep`) with a path argument under a tree the operator has previously
 trusted, the safe-verb short-circuit applies and there is no prompt. This
@@ -665,6 +675,7 @@ What to expect inside `session.log`:
 | Missing tools | `netclaw mcp list`; check MCP connection state |
 | Memory recall degraded | `netclaw status` memory section |
 | Daemon won't start | crash logs at `~/.netclaw/logs/crash-*.log` |
+| Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
 | `command not found` for `netclaw` from shell tool when daemon runs as systemd service | `netclaw doctor` (the **Systemd Unit PATH** check warns when the unit was installed before PATH was baked in) |
 
 If webhook notifications are configured, daemon crash paths emit

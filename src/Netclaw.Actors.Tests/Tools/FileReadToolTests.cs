@@ -72,7 +72,7 @@ public class FileReadToolTests : IDisposable
     }
 
     [Fact]
-    public async Task Large_file_is_truncated()
+    public async Task Large_file_is_truncated_with_continuation_hint()
     {
         var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 100 });
         var filePath = Path.Combine(_dir.Path, "large.txt");
@@ -81,7 +81,23 @@ public class FileReadToolTests : IDisposable
         var args = ToolInput.Create("Path", filePath);
         var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
-        Assert.Contains("[output truncated]", result);
+        Assert.Contains("output truncated", result);
+        Assert.Contains("Offset=", result);
+    }
+
+    [Fact]
+    public async Task Paginated_read_truncated_by_char_limit_includes_continuation_hint()
+    {
+        var tool = new FileReadTool(new ToolConfig { MaxOutputChars = 50 });
+        var filePath = Path.Combine(_dir.Path, "paged.txt");
+        var lines = Enumerable.Range(1, 20).Select(i => $"Line {i:D2} content here");
+        await File.WriteAllLinesAsync(filePath, lines, TestContext.Current.CancellationToken);
+
+        var args = ToolInput.Create("Path", filePath, "Offset", 1, "Limit", 20);
+        var result = await tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("output truncated", result);
+        Assert.Contains("Offset=", result);
     }
 
     [Fact]

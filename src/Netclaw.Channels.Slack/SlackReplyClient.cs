@@ -27,7 +27,7 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
             {
                 Channel = message.ChannelId.Value,
                 ThreadTs = message.ThreadTs.Value,
-                Text = message.Text,
+                Text = SlackTextProtector.ProtectUrls(message.Text),
                 Blocks = blocks
             }, cancellationToken);
 
@@ -64,7 +64,7 @@ public sealed class SlackReplyClient(ISlackApiClient slackApiClient) : ISlackRep
             {
                 ChannelId = channelId.Value,
                 Ts = messageTs.Value,
-                Text = text,
+                Text = SlackTextProtector.ProtectUrls(text),
                 Blocks = blocks?.ToList()
             }, cancellationToken);
         }

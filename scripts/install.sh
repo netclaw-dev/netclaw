@@ -260,5 +260,8 @@ fi
 
 echo ""
 echo "Get started:"
-echo "  netclaw init      # First-run setup wizard"
-echo "  netclaw doctor    # Verify configuration"
+echo "  netclaw init             # First-run setup wizard"
+echo "  netclaw doctor           # Verify configuration"
+if [ "$(uname -s)" = "Linux" ]; then
+    echo "  netclaw daemon install   # Enable auto-start on boot (systemd)"
+fi

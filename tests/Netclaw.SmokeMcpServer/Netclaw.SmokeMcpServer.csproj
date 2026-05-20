@@ -2,7 +2,7 @@
 
   <!--
     Deterministic stdio MCP server used by the native smoke harness
-    (tests/smoke/scenarios/mcp-setup.sh). Exposes two fully-deterministic
+    (tests/smoke/scenarios/mcp-setup.sh). Exposes three fully-deterministic
     tools so a scenario can assert on the tool RESULT even though the
     surrounding LLM prose is non-deterministic. NOT shipped to users.
   -->

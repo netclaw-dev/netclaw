@@ -39,6 +39,20 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     private FileSystemWatcher? _watcher;
     private CancellationTokenSource? _debounceCts;
     private readonly TimeSpan _debounceInterval = TimeSpan.FromMilliseconds(500);
+    private readonly object _debounceLock = new();
+    private Task _pendingReload = Task.CompletedTask;
+
+    /// <summary>
+    /// The in-flight debounced reload, or a completed task when none is pending.
+    /// Lets tests await the reload deterministically instead of polling.
+    /// </summary>
+    internal Task PendingReload
+    {
+        get { lock (_debounceLock) { return _pendingReload; } }
+    }
+
+    /// <summary>The debounce window applied before a detected change is reloaded.</summary>
+    internal TimeSpan DebounceInterval => _debounceInterval;
 
     public ConfigWatcherService(
         NetclawPaths paths,
@@ -85,7 +99,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         return Task.CompletedTask;
     }
 
-    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    internal void OnFileChanged(object sender, FileSystemEventArgs e)
     {
         try
         {
@@ -116,7 +130,7 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         }
     }
 
-    private void OnFileRenamed(object sender, RenamedEventArgs e)
+    internal void OnFileRenamed(object sender, RenamedEventArgs e)
     {
         try
         {
@@ -142,25 +156,34 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
 
     private void ScheduleReload()
     {
-        // Cancel any pending debounce timer and start a new one
-        _debounceCts?.Cancel();
-        _debounceCts = new CancellationTokenSource();
-        var token = _debounceCts.Token;
-
-        _ = Task.Run(async () =>
+        // FileSystemWatcher raises events on thread-pool threads and may deliver
+        // them concurrently. The cancel-and-replace of the debounce CTS must be
+        // atomic: without the lock a concurrent event can leave a debounce loop
+        // awaiting a CTS that no later event will ever cancel, double-firing the
+        // reload.
+        lock (_debounceLock)
         {
-            try
-            {
-                await Task.Delay(_debounceInterval, token);
-                if (token.IsCancellationRequested) return;
+            _debounceCts?.Cancel();
+            _debounceCts = new CancellationTokenSource();
+            _pendingReload = RunDebouncedReloadAsync(_debounceCts.Token);
+        }
+    }
 
-                await ApplyReloadAsync(CancellationToken.None);
-            }
-            catch (OperationCanceledException)
-            {
-                _logger.LogDebug("Config reload debounce cancelled by newer event");
-            }
-        }, CancellationToken.None);
+    private async Task RunDebouncedReloadAsync(CancellationToken token)
+    {
+        try
+        {
+            // Debounce on the injected TimeProvider so tests can virtualize it.
+            await Task.Delay(_debounceInterval, _timeProvider, token);
+            if (token.IsCancellationRequested)
+                return;
+
+            await ApplyReloadAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogDebug("Config reload debounce cancelled by newer event");
+        }
     }
 
     internal async Task ApplyReloadAsync(CancellationToken cancellationToken)

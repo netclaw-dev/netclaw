@@ -243,23 +243,274 @@ public class McpSchemaSanitizerTests
         Assert.Equal("string", nameProp.GetProperty("type").GetString());
     }
 
+    private static JsonElement Schema(string json) => JsonDocument.Parse(json).RootElement;
+
     [Fact]
-    public void CoerceArguments_ConvertsStringNumbers()
+    public void CoerceArguments_ReturnsNullForNullArguments()
     {
-        var args = ToolInput.Create("count", "42", "ratio", "3.14", "name", "hello", "flag", "true");
-
-        var coerced = McpSchemaSanitizer.CoerceArguments(args)!;
-
-        Assert.Equal(42L, coerced["count"]);
-        Assert.Equal(3.14, coerced["ratio"]);
-        Assert.Equal("hello", coerced["name"]);
-        Assert.Equal(true, coerced["flag"]);
+        Assert.Null(McpSchemaSanitizer.CoerceArguments(null, Schema("""{ "type": "object" }""")));
     }
 
     [Fact]
-    public void CoerceArguments_ReturnsNullForNull()
+    public void CoerceArguments_CoercesStringScalars_OnlyTowardTheDeclaredType()
     {
-        Assert.Null(McpSchemaSanitizer.CoerceArguments(null));
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "count": { "type": "integer" },
+                "ratio": { "type": "number" },
+                "flag":  { "type": "boolean" },
+                "name":  { "type": "string" }
+              }
+            }
+            """);
+        var args = ToolInput.Create("count", "42", "ratio", "3.14", "name", "hello", "flag", "true");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal(42L, coerced["count"]);
+        Assert.Equal(3.14, coerced["ratio"]);
+        Assert.Equal(true, coerced["flag"]);
+        // A string-declared parameter is never re-typed, even though "hello"
+        // is a valid string either way.
+        Assert.Equal("hello", coerced["name"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_StringDeclaredParameter_PreservesValuesThatResembleOtherTypes()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "projectId": { "type": "string" },
+                "answer":    { "type": "string" }
+              }
+            }
+            """);
+        // "00713" must not become 713; "true" must not become a boolean.
+        var args = ToolInput.Create("projectId", "00713", "answer", "true");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal("00713", coerced["projectId"]);
+        Assert.Equal("true", coerced["answer"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_IntegerDeclaredParameter_DoesNotAcceptFractionalStrings()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "count": { "type": "integer" }
+              }
+            }
+            """);
+        var args = ToolInput.Create("count", "3.14");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal("3.14", coerced["count"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_StringifiedArrayOfObjects_IsReconstructed()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+            """);
+        var args = ToolInput.Create("tasks", "[{\"content\":\"A\"},{\"content\":\"B\"}]");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        var element = Assert.IsType<JsonElement>(coerced["tasks"]);
+        Assert.Equal(JsonValueKind.Array, element.ValueKind);
+        Assert.Equal(2, element.GetArrayLength());
+        Assert.Equal("A", element[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public void CoerceArguments_StringifiedArray_ArrivingAsJsonElementString_IsReconstructed()
+    {
+        // The shape FunctionCallContent.Arguments actually delivers: a
+        // double-encoded value is a JsonElement of ValueKind.String, not a
+        // System.String.
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+            """);
+        var jsonElementString = JsonSerializer.SerializeToElement("[{\"content\":\"A\"}]");
+        Assert.Equal(JsonValueKind.String, jsonElementString.ValueKind);
+        var args = ToolInput.Create("tasks", jsonElementString);
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        var element = Assert.IsType<JsonElement>(coerced["tasks"]);
+        Assert.Equal(JsonValueKind.Array, element.ValueKind);
+        Assert.Equal("A", element[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public void CoerceArguments_StringifiedObject_IsReconstructed()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": { "payload": { "type": "object" } }
+            }
+            """);
+        var args = ToolInput.Create("payload", "{\"foo\":1}");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        var element = Assert.IsType<JsonElement>(coerced["payload"]);
+        Assert.Equal(JsonValueKind.Object, element.ValueKind);
+        Assert.Equal(1, element.GetProperty("foo").GetInt32());
+    }
+
+    [Fact]
+    public void CoerceArguments_NullableUnionArraySchema_IsRecognized()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tags": { "type": ["array", "null"], "items": { "type": "string" } }
+              }
+            }
+            """);
+        var args = ToolInput.Create("tags", "[\"a\",\"b\"]");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        var element = Assert.IsType<JsonElement>(coerced["tags"]);
+        Assert.Equal(JsonValueKind.Array, element.ValueKind);
+        Assert.Equal(2, element.GetArrayLength());
+    }
+
+    [Fact]
+    public void CoerceArguments_AlreadyStructuredArray_IsPassedThroughUnchanged()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+            """);
+        var structured = JsonDocument.Parse("[{\"content\":\"A\"}]").RootElement;
+        var args = ToolInput.Create("tasks", structured);
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Same(args["tasks"], coerced["tasks"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_StringWhoseParsedKindDiffersFromSchema_IsLeftUnchanged()
+    {
+        // Schema declares array; the string parses as a JSON object — refuse
+        // to coerce across kinds.
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+            """);
+        var args = ToolInput.Create("tasks", "{\"oops\":true}");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal("{\"oops\":true}", coerced["tasks"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_UnparseableStringForContainerSchema_IsLeftUnchanged()
+    {
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+            """);
+        var args = ToolInput.Create("tasks", "not json at all");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal("not json at all", coerced["tasks"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_UndeclaredTypeParameters_ArePassedThrough()
+    {
+        // `note` has an empty `{}` schema; `payload` is typed only via anyOf.
+        // Neither declares a `type`, so neither value is coerced.
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "note": {},
+                "payload": { "anyOf": [ { "type": "string" }, { "type": "object" } ] }
+              }
+            }
+            """);
+        var args = ToolInput.Create("note", "42", "payload", "{\"a\":1}");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.Equal("42", coerced["note"]);
+        Assert.Equal("{\"a\":1}", coerced["payload"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_WithNoUsableSchema_PassesEveryValueThrough()
+    {
+        // Defensive guard: a default (Undefined) JsonElement schema.
+        var args = ToolInput.Create("count", "42", "tasks", "[{\"x\":1}]");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, default)!;
+
+        Assert.Equal("42", coerced["count"]);
+        Assert.Equal("[{\"x\":1}]", coerced["tasks"]);
+    }
+
+    [Fact]
+    public void CoerceArguments_DoesNotMutateTheInputDictionary()
+    {
+        // Coercion runs after authorization; it must never alter the argument
+        // values an authorization or approval decision already evaluated.
+        var schema = Schema("""
+            {
+              "type": "object",
+              "properties": {
+                "tasks": { "type": "array", "items": { "type": "object" } }
+              }
+            }
+            """);
+        var args = ToolInput.Create("tasks", "[{\"content\":\"A\"}]");
+
+        var coerced = McpSchemaSanitizer.CoerceArguments(args, schema)!;
+
+        Assert.NotSame(args, coerced);
+        Assert.Equal("[{\"content\":\"A\"}]", args["tasks"]); // input untouched
+        Assert.IsType<JsonElement>(coerced["tasks"]);          // output coerced
     }
 
     [Fact]

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
 using Netclaw.Tests.Utilities;
@@ -16,6 +17,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly FakeRestartCoordinator _restartCoordinator;
+    private readonly FakeTimeProvider _time = new();
     private readonly ConfigWatcherService _sut;
 
     public ConfigWatcherServiceTests()
@@ -27,7 +29,7 @@ public sealed class ConfigWatcherServiceTests : IDisposable
 
         _sut = new ConfigWatcherService(
             _paths,
-            TimeProvider.System,
+            _time,
             _restartCoordinator,
             new DaemonConfig(),
             NullLogger<ConfigWatcherService>.Instance);
@@ -115,28 +117,26 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         Assert.Equal(1, _restartCoordinator.RequestCount);
     }
 
-    // Integration tests — exercise real FileSystemWatcher + filesystem operations.
-    // These are inherently async and use generous timeouts to stay stable on slow CI.
+    // File-event tests — drive the watcher's event handlers directly with
+    // synthesized event args. Real FileSystemWatcher delivery is OS-dependent
+    // and cannot be observed deterministically (especially the latency and
+    // event classification of an atomic-replace move on Windows), so the
+    // handler -> debounce -> reload pipeline is exercised in isolation and the
+    // debounce is virtualized through the injected FakeTimeProvider.
 
     [Fact]
     public async Task AtomicReplace_TriggersReload()
     {
-        var ct = TestContext.Current.CancellationToken;
-
-        // Simulate the write-temp-then-rename pattern used by safe editors and CLI tools
-        await _sut.StartAsync(ct);
-
+        // An atomic-replace write (write-temp then rename) surfaces as a Renamed
+        // event whose new name is the watched config file.
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
+        var configDir = Path.GetDirectoryName(_paths.NetclawConfigPath)!;
 
-        var tempPath = _paths.NetclawConfigPath + ".tmp." + Guid.NewGuid().ToString("N")[..8];
-        File.WriteAllText(tempPath, """{ "Providers": {} }""");
-        File.Move(tempPath, _paths.NetclawConfigPath, overwrite: true);
+        _sut.OnFileRenamed(this, new RenamedEventArgs(
+            WatcherChangeTypes.Renamed, configDir, "netclaw.json", "netclaw.json.tmp.0a1b2c3d"));
 
-        // Wait up to 3 s for the debounce + reload to fire
-        var deadline = TimeSpan.FromSeconds(3);
-        var started = DateTime.UtcNow;
-        while (_restartCoordinator.RequestCount == 0 && DateTime.UtcNow - started < deadline)
-            await Task.Delay(50, ct);
+        _time.Advance(_sut.DebounceInterval);
+        await _sut.PendingReload;
 
         Assert.Equal(1, _restartCoordinator.RequestCount);
     }
@@ -144,22 +144,16 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     [Fact]
     public async Task InPlaceWrite_TriggersReload()
     {
-        var ct = TestContext.Current.CancellationToken;
-
-        // Regression: direct in-place writes (e.g. shell > redirect) must still work
-        await _sut.StartAsync(ct);
-
-        // Write once to create the file, then overwrite in place
+        // Regression: a direct in-place write (e.g. a shell > redirect) surfaces
+        // as a Changed event and must still trigger a reload.
         File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
-        await Task.Delay(100, ct); // let any initial events settle
+        var configDir = Path.GetDirectoryName(_paths.NetclawConfigPath)!;
 
-        _restartCoordinator.Reset();
-        await File.WriteAllTextAsync(_paths.NetclawConfigPath, """{ "Providers": {} }""", ct);
+        _sut.OnFileChanged(this, new FileSystemEventArgs(
+            WatcherChangeTypes.Changed, configDir, "netclaw.json"));
 
-        var deadline = TimeSpan.FromSeconds(3);
-        var started = DateTime.UtcNow;
-        while (_restartCoordinator.RequestCount == 0 && DateTime.UtcNow - started < deadline)
-            await Task.Delay(50, ct);
+        _time.Advance(_sut.DebounceInterval);
+        await _sut.PendingReload;
 
         Assert.Equal(1, _restartCoordinator.RequestCount);
     }
@@ -193,8 +187,6 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         public int RequestCount { get; private set; }
 
         public bool ThrowOnRequest { get; set; }
-
-        public void Reset() => RequestCount = 0;
 
         public Task RequestConfigRestartAsync(CancellationToken cancellationToken)
         {

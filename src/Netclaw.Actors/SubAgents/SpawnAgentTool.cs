@@ -70,7 +70,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
     /// surfaced as the tool call's stream, so the parent's per-call watchdog
     /// keeps a long-but-healthy delegated run alive.
     /// </summary>
-    public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+    public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         IDictionary<string, object?>? arguments,
         ToolExecutionContext context,
         [EnumeratorCancellation] CancellationToken ct = default)

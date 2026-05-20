@@ -26,6 +26,11 @@ internal static class NetclawProtoMapper
         TurnRecorded v => ToProto(v),
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
+        ToolBatchStarted v => ToProto(v),
+        ToolCallRecorded v => ToProto(v),
+        ToolApprovalRequested v => ToProto(v),
+        ToolApprovalResolved v => ToProto(v),
+        ToolBatchAbandoned v => ToProto(v),
         SessionSnapshot v => ToProto(v),
         TurnBroadcast v => ToProto(v),
         CompactionBroadcast v => ToProto(v),
@@ -208,6 +213,139 @@ internal static class NetclawProtoMapper
         CompactedAtMs = proto.CompactedAtMs,
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         CompactedMessages = proto.CompactedMessages.Select(FromProto).ToArray()
+    };
+
+    // ── Tool batch / approval events ──
+
+    internal static Proto.ToolBatchStartedProto ToProto(ToolBatchStarted evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        UserMessage = ToProto(evt.UserMessage),
+        AssistantMessage = ToProto(evt.AssistantMessage),
+        StartedAtMs = evt.StartedAtMs
+    };
+
+    internal static ToolBatchStarted FromProto(Proto.ToolBatchStartedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        UserMessage = FromProto(proto.UserMessage),
+        AssistantMessage = FromProto(proto.AssistantMessage),
+        StartedAtMs = proto.StartedAtMs
+    };
+
+    internal static Proto.ToolCallRecordedProto ToProto(ToolCallRecorded evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        ToolResult = ToProto(evt.ToolResult),
+        RecordedAtMs = evt.RecordedAtMs
+    };
+
+    internal static ToolCallRecorded FromProto(Proto.ToolCallRecordedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        ToolResult = FromProto(proto.ToolResult),
+        RecordedAtMs = proto.RecordedAtMs
+    };
+
+    internal static Proto.ToolApprovalRequestedProto ToProto(ToolApprovalRequested evt)
+    {
+        var proto = new Proto.ToolApprovalRequestedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            CallId = evt.CallId,
+            ToolName = evt.ToolName,
+            Audience = (Proto.TrustAudience)(int)evt.Audience,
+            RequestedAtMs = evt.RequestedAtMs
+        };
+        proto.Patterns.AddRange(evt.Patterns);
+        proto.CandidateVerbs.AddRange(evt.CandidateVerbs);
+        if (evt.RequesterSenderId is not null)
+            proto.RequesterSenderId = evt.RequesterSenderId.Value.Value;
+        if (evt.RequesterPrincipal is not null)
+            proto.RequesterPrincipal = (int)evt.RequesterPrincipal.Value;
+        if (evt.Cwd is not null)
+            proto.Cwd = evt.Cwd;
+        if (evt.Boundary is not null)
+            proto.Boundary = evt.Boundary.Value.Value;
+        if (evt.ChannelType is not null)
+            proto.ChannelType = evt.ChannelType;
+        if (evt.SupportsInteractiveApproval is not null)
+            proto.SupportsInteractiveApproval = evt.SupportsInteractiveApproval.Value;
+        proto.Candidates.AddRange(evt.Candidates.Select(ToApprovalCandidateProto));
+        return proto;
+    }
+
+    internal static ToolApprovalRequested FromProto(Proto.ToolApprovalRequestedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        CallId = proto.CallId,
+        ToolName = proto.ToolName,
+        Patterns = proto.Patterns.ToArray(),
+        CandidateVerbs = proto.CandidateVerbs.ToArray(),
+        Audience = (Configuration.TrustAudience)(int)proto.Audience,
+        RequesterSenderId = proto.HasRequesterSenderId ? new SenderId(proto.RequesterSenderId) : null,
+        RequesterPrincipal = proto.HasRequesterPrincipal
+            ? (Configuration.PrincipalClassification)proto.RequesterPrincipal
+            : null,
+        Cwd = proto.HasCwd ? proto.Cwd : null,
+        Boundary = proto.HasBoundary ? new Configuration.TrustBoundary(proto.Boundary) : null,
+        ChannelType = proto.HasChannelType ? proto.ChannelType : null,
+        SupportsInteractiveApproval = proto.HasSupportsInteractiveApproval ? proto.SupportsInteractiveApproval : null,
+        Candidates = proto.Candidates.Select(FromApprovalCandidateProto).ToArray(),
+        RequestedAtMs = proto.RequestedAtMs
+    };
+
+    internal static Proto.ToolApprovalResolvedProto ToProto(ToolApprovalResolved evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        CallId = evt.CallId,
+        Decision = evt.Decision,
+        ResolvedAtMs = evt.ResolvedAtMs
+    };
+
+    internal static ToolApprovalResolved FromProto(Proto.ToolApprovalResolvedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        CallId = proto.CallId,
+        Decision = proto.Decision,
+        ResolvedAtMs = proto.ResolvedAtMs
+    };
+
+    internal static Proto.ToolBatchAbandonedProto ToProto(ToolBatchAbandoned evt)
+    {
+        var proto = new Proto.ToolBatchAbandonedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            AbandonedAtMs = evt.AbandonedAtMs
+        };
+        proto.ToolResults.AddRange(evt.ToolResults.Select(ToProto));
+        return proto;
+    }
+
+    internal static ToolBatchAbandoned FromProto(Proto.ToolBatchAbandonedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        ToolResults = proto.ToolResults.Select(FromProto).ToArray(),
+        AbandonedAtMs = proto.AbandonedAtMs
+    };
+
+    private static Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto ToApprovalCandidateProto(
+        ToolApprovalRequested.ApprovalCandidateRecord c)
+    {
+        var proto = new Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto
+        {
+            Verb = c.Verb
+        };
+        if (c.Directory is not null)
+            proto.Directory = c.Directory;
+        return proto;
+    }
+
+    private static ToolApprovalRequested.ApprovalCandidateRecord FromApprovalCandidateProto(
+        Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto proto) => new()
+    {
+        Verb = proto.Verb,
+        Directory = proto.HasDirectory ? proto.Directory : null
     };
 
     // ── SessionSnapshot ──

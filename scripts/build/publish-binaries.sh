@@ -19,7 +19,7 @@
 #   --component    cli | daemon | all   (default: all)
 #   --output-dir   base output dir; components land in <dir>/cli and
 #                  <dir>/daemon   (default: ./publish)
-#   --version      assembly version; when omitted, no /p:Version is passed
+#   --version      assembly version; when omitted, no -p:Version is passed
 #                  and the Directory.Build.props VersionPrefix is used
 set -euo pipefail
 
@@ -58,12 +58,19 @@ case "$COMPONENT" in
 esac
 
 # Flags common to every platform.
+#
+# MSBuild properties MUST use the `-p:` form, not `/p:`. On the Windows
+# release runner this script executes under Git Bash, whose MSYS argument
+# conversion strips the leading `/` from `/p:Name=value` — MSBuild then
+# receives a bare `p:Name=value` token and aborts with MSB1008 ("Only one
+# project can be specified"). `-p:` is immune to that conversion and is
+# accepted identically by `dotnet` on every shell and platform.
 COMMON=(
   -c Release
   -r "$RID"
   --self-contained true
-  /p:PublishSingleFile=true
-  /p:IncludeNativeLibrariesForSelfExtract=true
+  -p:PublishSingleFile=true
+  -p:IncludeNativeLibrariesForSelfExtract=true
 )
 
 # Per-platform single-file compression. Kept centralized here so the release
@@ -80,9 +87,9 @@ case "$RID" in
   *) echo "ERROR: unsupported RID '$RID'" >&2; exit 2 ;;
 esac
 
-EXTRA=(/p:EnableCompressionInSingleFile="$COMPRESS")
+EXTRA=(-p:EnableCompressionInSingleFile="$COMPRESS")
 if [[ -n "$VERSION" ]]; then
-  EXTRA+=(/p:Version="$VERSION")
+  EXTRA+=(-p:Version="$VERSION")
 fi
 
 publish_component() {
