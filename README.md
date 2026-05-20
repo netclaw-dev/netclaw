@@ -28,7 +28,7 @@
     <img src="https://img.shields.io/discord/1494176300657545318?style=flat-square&color=5865F2&logo=discord&logoColor=white" alt="Discord" />
   </a>
   <a href="https://ghcr.io/netclaw-dev/netclaw">
-    <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Fnetclaw-dev%2Fnetclaw%2Fpackages%2Fcontainer%2Fnetclaw%2Ftags%3Fname%3Dlatest&query=name&label=docker&logo=docker&style=flat-square&color=512BD4" alt="Docker Image" />
+    <img src="https://img.shields.io/badge/docker-ghcr.io%2Fnetclaw--dev%2Fnetclaw-512BD4?style=flat-square&logo=docker&logoColor=white" alt="Docker Image" />
   </a>
 </p>
 
