@@ -10,6 +10,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using Netclaw.Configuration;
 
 namespace Netclaw.Providers.GitHubCopilot;
@@ -36,14 +37,12 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
     private static readonly TimeSpan RefreshBuffer = TimeSpan.FromMinutes(2);
 
     private readonly TimeProvider time = timeProvider ?? TimeProvider.System;
-    private readonly ConcurrentDictionary<string, CachedToken> cache = new();
 
-    // Per-OAuth-token semaphore so a burst of chat requests arriving inside
-    // the refresh window doesn't fan out into N concurrent calls to
-    // /copilot_internal/v2/token (GitHub rate-limits aggressively). The first
-    // caller refreshes; the others wait, then read the new cache entry under
-    // the lock.
-    private readonly ConcurrentDictionary<string, SemaphoreSlim> refreshLocks = new();
+    // One slot per OAuth-token identity. The slot carries both the cached
+    // Copilot API token AND the refresh lock — a burst of chat requests
+    // arriving inside the 2-minute refresh buffer share one semaphore and
+    // therefore fan in to a single call to /copilot_internal/v2/token, not N.
+    private readonly ConcurrentDictionary<string, CacheSlot> slots = new();
 
     /// <summary>
     /// Returns a valid Copilot API token for the OAuth credential carried by
@@ -59,41 +58,31 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
         var oauthToken = entry.OAuthAccessToken.RequireValid(
             "GitHub OAuth access token (re-run 'netclaw provider add <name> github-copilot --auth oauth-device')");
 
-        var cacheKey = HashKey(oauthToken.Value);
+        var slot = slots.GetOrAdd(HashKey(oauthToken.Value), _ => new CacheSlot());
 
-        if (TryGetFresh(cacheKey, out var cached))
-            return cached.Token;
+        if (IsFresh(slot.Token))
+            return slot.Token!.Token;
 
-        var sem = refreshLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
-        await sem.WaitAsync(ct);
+        await slot.Lock.WaitAsync(ct);
         try
         {
             // Re-check under the lock — a previous caller may have refreshed
             // while we were waiting.
-            if (TryGetFresh(cacheKey, out cached))
-                return cached.Token;
+            if (IsFresh(slot.Token))
+                return slot.Token!.Token;
 
             var fresh = await ExchangeAsync(oauthToken.Value, ct);
-            cache[cacheKey] = fresh;
+            slot.Token = fresh;
             return fresh.Token;
         }
         finally
         {
-            sem.Release();
+            slot.Lock.Release();
         }
     }
 
-    private bool TryGetFresh(string cacheKey, out CachedToken cached)
-    {
-        if (cache.TryGetValue(cacheKey, out cached!)
-            && cached.ExpiresAt - RefreshBuffer > time.GetUtcNow())
-        {
-            return true;
-        }
-
-        cached = default!;
-        return false;
-    }
+    private bool IsFresh(CachedToken? cached) =>
+        cached is { } c && c.ExpiresAt - RefreshBuffer > time.GetUtcNow();
 
     private async Task<CachedToken> ExchangeAsync(string oauthToken, CancellationToken ct)
     {
@@ -158,6 +147,21 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
     }
 
     private sealed record CachedToken(string Token, DateTimeOffset ExpiresAt);
+
+    // Volatile so the lock-free fast-path read in GetTokenAsync sees the
+    // store from a previous caller's refresh without acquiring the lock.
+    // Reference assignments are atomic in the CLR, but visibility across
+    // threads on weak-memory architectures (ARM) requires the barrier.
+    private sealed class CacheSlot
+    {
+        private CachedToken? token;
+        public CachedToken? Token
+        {
+            get => Volatile.Read(ref token);
+            set => Volatile.Write(ref token, value);
+        }
+        public SemaphoreSlim Lock { get; } = new(1, 1);
+    }
 
     private sealed record TokenResponse(
         [property: JsonPropertyName("token")] string Token,
