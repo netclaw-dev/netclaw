@@ -178,6 +178,21 @@ internal static class ProviderCommand
         var forceApiKey = requestedAuthMethod == AuthMethod.ApiKey;
         var authMethod = AuthMethod.None;
 
+        // OAuth-only providers (no API key support, e.g. github-copilot) need
+        // --auth oauth-device or the TUI; otherwise we'd silently write an
+        // entry with no credentials. Fail loudly per CLAUDE.md.
+        if (!supportedAuth.Contains(AuthMethod.ApiKey)
+            && !supportedAuth.Contains(AuthMethod.None)
+            && supportedAuth.Contains(AuthMethod.OAuthDevice))
+        {
+            WriteProviderGuidance(descriptor, writer);
+            writer.WriteLine();
+            writer.WriteLine($"Provider '{type}' requires OAuth device flow.");
+            writer.WriteLine("Re-run with --auth oauth-device, or use `netclaw provider` (TUI)");
+            writer.WriteLine("for an interactive setup.");
+            return 1;
+        }
+
         if (supportedAuth.Contains(AuthMethod.ApiKey) && apiKey is not null)
         {
             authMethod = AuthMethod.ApiKey;
@@ -501,7 +516,8 @@ internal static class ProviderCommand
     internal static ProviderDescriptorRegistry CreateDefaultRegistry()
     {
         var httpClient = new HttpClient();
-        var catalog = ProviderDescriptorCatalog.Create(httpClient);
+        var copilotTokenExchanger = new Netclaw.Providers.GitHubCopilot.CopilotTokenExchanger(httpClient);
+        var catalog = ProviderDescriptorCatalog.Create(httpClient, copilotTokenExchanger);
         return new ProviderDescriptorRegistry(catalog.All);
     }
 }

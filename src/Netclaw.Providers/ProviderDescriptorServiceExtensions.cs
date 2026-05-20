@@ -6,6 +6,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Configuration;
 using Netclaw.Providers.Anthropic;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
 using Netclaw.Providers.SelfHosted;
@@ -18,6 +19,7 @@ namespace Netclaw.Providers;
 public static class ProviderDescriptorServiceExtensions
 {
     private const string HttpClientName = "ProviderProbe";
+    private const string CopilotTokenClientName = "CopilotTokenExchange";
 
     /// <summary>
     /// Registers all provider descriptors and the registry.
@@ -27,10 +29,18 @@ public static class ProviderDescriptorServiceExtensions
     public static IServiceCollection AddProviderDescriptors(this IServiceCollection services)
     {
         services.AddHttpClient(HttpClientName);
+        services.AddHttpClient(CopilotTokenClientName);
+
+        // CopilotTokenExchanger is shared between CLI (for probe) and daemon
+        // (for chat). The in-memory cache is per-process, which is what we want.
+        services.AddSingleton(sp => new CopilotTokenExchanger(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(CopilotTokenClientName),
+            sp.GetService<TimeProvider>()));
 
         services.AddSingleton(sp =>
             ProviderDescriptorCatalog.Create(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(HttpClientName),
+                sp.GetRequiredService<CopilotTokenExchanger>(),
                 sp.GetService<TimeProvider>()));
 
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
@@ -38,12 +48,14 @@ public static class ProviderDescriptorServiceExtensions
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
         services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
+        services.AddSingleton(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
 
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Ollama);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAiCompatible);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenAi);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().Anthropic);
         services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().OpenRouter);
+        services.AddSingleton<IProviderDescriptor>(sp => sp.GetRequiredService<ProviderDescriptorCatalog>().GitHubCopilot);
 
         services.AddSingleton(sp =>
             new ProviderDescriptorRegistry(sp.GetRequiredService<ProviderDescriptorCatalog>().All));

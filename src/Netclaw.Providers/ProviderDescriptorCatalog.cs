@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Providers.Anthropic;
+using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
 using Netclaw.Providers.SelfHosted;
@@ -21,14 +22,16 @@ public sealed class ProviderDescriptorCatalog
         OpenAiCompatibleDescriptor openAiCompatible,
         OpenAiDescriptor openAi,
         AnthropicDescriptor anthropic,
-        OpenRouterDescriptor openRouter)
+        OpenRouterDescriptor openRouter,
+        GitHubCopilotDescriptor gitHubCopilot)
     {
         Ollama = ollama;
         OpenAiCompatible = openAiCompatible;
         OpenAi = openAi;
         Anthropic = anthropic;
         OpenRouter = openRouter;
-        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter];
+        GitHubCopilot = gitHubCopilot;
+        All = [Ollama, OpenAiCompatible, OpenAi, Anthropic, OpenRouter, GitHubCopilot];
     }
 
     public OllamaDescriptor Ollama { get; }
@@ -41,17 +44,24 @@ public sealed class ProviderDescriptorCatalog
 
     public OpenRouterDescriptor OpenRouter { get; }
 
+    public GitHubCopilotDescriptor GitHubCopilot { get; }
+
     public IReadOnlyList<IProviderDescriptor> All { get; }
 
-    public static ProviderDescriptorCatalog Create(HttpClient httpClient, TimeProvider? timeProvider = null)
+    public static ProviderDescriptorCatalog Create(
+        HttpClient httpClient,
+        CopilotTokenExchanger copilotTokenExchanger,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentNullException.ThrowIfNull(copilotTokenExchanger);
 
         return new ProviderDescriptorCatalog(
             new OllamaDescriptor(httpClient),
             new OpenAiCompatibleDescriptor(httpClient),
             new OpenAiDescriptor(httpClient, timeProvider),
             new AnthropicDescriptor(httpClient),
-            new OpenRouterDescriptor(httpClient));
+            new OpenRouterDescriptor(httpClient),
+            new GitHubCopilotDescriptor(httpClient, copilotTokenExchanger));
     }
 }
