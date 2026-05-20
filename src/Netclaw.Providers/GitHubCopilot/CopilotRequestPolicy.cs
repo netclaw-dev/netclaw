@@ -21,10 +21,17 @@ internal sealed class CopilotRequestPolicy(CopilotTokenExchanger exchanger, Prov
     public override void Process(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
-        var token = exchanger.GetTokenAsync(entry, message.CancellationToken)
-            .GetAwaiter().GetResult();
-        Apply(message, token);
-        ProcessNext(message, pipeline, currentIndex);
+        // The OpenAI SDK's chat-completions path always invokes ProcessAsync.
+        // The sync overload exists on PipelinePolicy because the abstract
+        // contract requires it, but in practice it's only hit by callers
+        // that misconfigure their client. We refuse to block on an async
+        // network call (deadlock risk under a sync context, synchronous I/O
+        // on the calling thread) and fail loudly per the no-silent-fallback
+        // rule in CLAUDE.md.
+        throw new NotSupportedException(
+            "CopilotRequestPolicy requires the async pipeline. Token exchange " +
+            "is an async network call; use the OpenAI SDK's async chat methods " +
+            "(e.g. ChatClient.CompleteChatAsync) rather than the synchronous overloads.");
     }
 
     public override async ValueTask ProcessAsync(

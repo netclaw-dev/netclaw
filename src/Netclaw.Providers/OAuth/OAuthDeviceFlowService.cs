@@ -104,7 +104,7 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
     public async Task<DeviceAuthorizationResponse> StartDeviceAuthorizationAsync(
         OAuthDeviceFlowConfig config, CancellationToken ct = default)
     {
-        var response = await PostFormAsync(
+        using var response = await PostFormAsync(
             config.DeviceAuthorizationEndpoint,
             BuildDeviceAuthParams(config),
             ct);
@@ -143,7 +143,7 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
                 ["client_id"] = config.ClientId
             };
 
-            var response = await PostFormAsync(config.TokenEndpoint, tokenParams, ct);
+            using var response = await PostFormAsync(config.TokenEndpoint, tokenParams, ct);
 
             var json = await response.Content.ReadAsStringAsync(ct);
             using var doc = JsonDocument.Parse(json);
@@ -213,7 +213,7 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
             ["refresh_token"] = refreshToken.Value
         };
 
-        var response = await PostFormAsync(tokenEndpoint, tokenParams, ct);
+        using var response = await PostFormAsync(tokenEndpoint, tokenParams, ct);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -261,17 +261,17 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
     // GitHub's OAuth endpoints return application/x-www-form-urlencoded by default
     // and only switch to JSON when the request explicitly asks for it. Other providers
     // (OpenAI Codex) already return JSON, so the header is a safe no-op.
-    private Task<HttpResponseMessage> PostFormAsync(
+    private async Task<HttpResponseMessage> PostFormAsync(
         string url,
         IEnumerable<KeyValuePair<string, string>> form,
         CancellationToken ct)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, url)
+        using var request = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new FormUrlEncodedContent(form),
         };
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        return _httpClient.SendAsync(request, ct);
+        return await _httpClient.SendAsync(request, ct);
     }
 
     private static List<KeyValuePair<string, string>> BuildDeviceAuthParams(OAuthDeviceFlowConfig config)

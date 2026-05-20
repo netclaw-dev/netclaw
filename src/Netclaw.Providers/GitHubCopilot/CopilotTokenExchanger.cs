@@ -39,6 +39,13 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
     private readonly TimeProvider time = timeProvider ?? TimeProvider.System;
     private readonly ConcurrentDictionary<string, CachedToken> cache = new();
 
+    // Per-OAuth-token semaphore so a burst of chat requests arriving inside
+    // the refresh window doesn't fan out into N concurrent calls to
+    // /copilot_internal/v2/token (GitHub rate-limits aggressively). The first
+    // caller refreshes; the others wait, then read the new cache entry under
+    // the lock.
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> refreshLocks = new();
+
     /// <summary>
     /// Returns a valid Copilot API token for the OAuth credential carried by
     /// <paramref name="entry"/>, fetching from <c>/copilot_internal/v2/token</c>
@@ -54,17 +61,39 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
             "GitHub OAuth access token (re-run 'netclaw provider add <name> github-copilot --auth oauth-device')");
 
         var cacheKey = HashKey(oauthToken.Value);
-        var now = time.GetUtcNow();
 
-        if (cache.TryGetValue(cacheKey, out var cached)
-            && cached.ExpiresAt - RefreshBuffer > now)
-        {
+        if (TryGetFresh(cacheKey, out var cached))
             return cached.Token;
+
+        var sem = refreshLocks.GetOrAdd(cacheKey, _ => new SemaphoreSlim(1, 1));
+        await sem.WaitAsync(ct);
+        try
+        {
+            // Re-check under the lock — a previous caller may have refreshed
+            // while we were waiting.
+            if (TryGetFresh(cacheKey, out cached))
+                return cached.Token;
+
+            var fresh = await ExchangeAsync(oauthToken.Value, ct);
+            cache[cacheKey] = fresh;
+            return fresh.Token;
+        }
+        finally
+        {
+            sem.Release();
+        }
+    }
+
+    private bool TryGetFresh(string cacheKey, out CachedToken cached)
+    {
+        if (cache.TryGetValue(cacheKey, out cached!)
+            && cached.ExpiresAt - RefreshBuffer > time.GetUtcNow())
+        {
+            return true;
         }
 
-        var fresh = await ExchangeAsync(oauthToken.Value, ct);
-        cache[cacheKey] = fresh;
-        return fresh.Token;
+        cached = default!;
+        return false;
     }
 
     private async Task<CachedToken> ExchangeAsync(string oauthToken, CancellationToken ct)
@@ -94,7 +123,26 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
 
         var parsed = JsonSerializer.Deserialize<TokenResponse>(body)
             ?? throw new InvalidOperationException(
-                "Empty token response from /copilot_internal/v2/token.");
+                $"Empty token response from {TokenEndpoint}.");
+
+        // System.Text.Json doesn't enforce required-ness on positional record
+        // parameters by default, so a {} response would deserialize to
+        // Token=null/ExpiresAt=0 and we'd cache a useless Bearer. Validate
+        // here so the failure surfaces at the exchange boundary, not later
+        // when the chat call returns 401.
+        if (string.IsNullOrWhiteSpace(parsed.Token))
+        {
+            throw new InvalidOperationException(
+                $"GitHub Copilot token exchange at {TokenEndpoint} returned a "
+                + $"payload with no 'token' field: {Truncate(body)}");
+        }
+
+        if (parsed.ExpiresAt <= 0)
+        {
+            throw new InvalidOperationException(
+                $"GitHub Copilot token exchange at {TokenEndpoint} returned an "
+                + $"invalid 'expires_at' value ({parsed.ExpiresAt}).");
+        }
 
         return new CachedToken(
             parsed.Token,

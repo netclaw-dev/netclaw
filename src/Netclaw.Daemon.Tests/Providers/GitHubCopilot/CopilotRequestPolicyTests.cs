@@ -96,6 +96,27 @@ public sealed class CopilotRequestPolicyTests
         Assert.Equal("Bearer copilot-real", auth);
     }
 
+    [Fact]
+    public void Process_Synchronous_ThrowsNotSupported()
+    {
+        // The sync pipeline path would require blocking on async token exchange.
+        // The OpenAI SDK uses the async pipeline for chat completions; the sync
+        // overload is only hit by misconfigured callers and we fail loudly.
+        var policy = new CopilotRequestPolicy(
+            ExchangerReturning("copilot-bearer"), OAuthEntry());
+
+        var clientPipeline = ClientPipeline.Create(new ClientPipelineOptions());
+        using var message = clientPipeline.CreateMessage();
+        message.Request.Method = "POST";
+        message.Request.Uri = new Uri("https://api.githubcopilot.com/chat/completions");
+
+        IReadOnlyList<PipelinePolicy> pipeline = [policy, new TerminalCapturingPolicy(() => { })];
+
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            policy.Process(message, pipeline, 0));
+        Assert.Contains("async", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>
     /// No-op terminal policy that records whether the previous policy invoked
     /// the chain. Used so ProcessNextAsync has somewhere to land without
