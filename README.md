@@ -18,9 +18,6 @@
   <a href="https://github.com/netclaw-dev/netclaw/releases/latest">
     <img src="https://img.shields.io/github/v/release/netclaw-dev/netclaw?style=flat-square&logo=github&label=latest&color=512BD4" alt="Latest Release" />
   </a>
-  <a href="https://github.com/netclaw-dev/netclaw/releases">
-    <img src="https://img.shields.io/github/downloads/netclaw-dev/netclaw/total?style=flat-square&logo=github&label=downloads&color=512BD4" alt="Downloads" />
-  </a>
   <a href="https://github.com/netclaw-dev/netclaw/blob/dev/LICENSE">
     <img src="https://img.shields.io/github/license/netclaw-dev/netclaw?style=flat-square&color=512BD4&logo=github" alt="License" />
   </a>
