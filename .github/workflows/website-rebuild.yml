@@ -1,0 +1,30 @@
+# Fires netclaw-website's deploy workflow whenever a release is published
+# here. The receiving workflow rebuilds the site (re-fetching the GitHub
+# Releases API at build time) so /changelog stays in sync.
+#
+# Auth: WEBSITE_DISPATCH_TOKEN repository secret, a fine-grained PAT with
+# Actions: read+write on netclaw-dev/netclaw-website. See
+# ops/auto-rebuild-on-release/README.md in netclaw-website for setup.
+name: Trigger netclaw.dev rebuild
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch netclaw-website deploy workflow
+        env:
+          GH_TOKEN: ${{ secrets.WEBSITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::WEBSITE_DISPATCH_TOKEN secret is not set on this repository." >&2
+            exit 1
+          fi
+          gh workflow run deploy.yml \
+            --repo netclaw-dev/netclaw-website \
+            --ref dev
+          echo "Dispatched deploy.yml on netclaw-dev/netclaw-website@dev."
