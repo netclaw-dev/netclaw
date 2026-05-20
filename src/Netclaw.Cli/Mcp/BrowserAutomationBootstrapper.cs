@@ -266,7 +266,7 @@ internal sealed class BrowserAutomationBootstrapper : IBrowserAutomationBootstra
 
             var npxCommand = BrowserAutomationRuntimeDetector.GetPreferredNpxCommand();
             var env = BrowserAutomationRuntimeDetector.BuildPlaywrightEnvironmentOverlay(npxCommand)
-                ?.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Value, StringComparer.OrdinalIgnoreCase);
+                .ToRawValues(StringComparer.OrdinalIgnoreCase);
             var succeeded = await RunCommandAsync(
                 npxCommand,
                 $"-y playwright@latest install {browser}",

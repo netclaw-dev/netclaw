@@ -794,18 +794,11 @@ internal static class McpCommand
 
         if (entry.Transport is "stdio")
         {
-            var envVars = entry.EnvironmentVariables is { Count: > 0 }
-                ? entry.EnvironmentVariables.ToDictionary(
-                    kvp => kvp.Key,
-                    kvp => (string?)kvp.Value.Value,
-                    StringComparer.OrdinalIgnoreCase)
-                : null;
-
             transport = new StdioClientTransport(new StdioClientTransportOptions
             {
                 Command = entry.Command!,
                 Arguments = entry.Arguments ?? [],
-                EnvironmentVariables = envVars,
+                EnvironmentVariables = entry.EnvironmentVariables.ToRawNullableValues(StringComparer.OrdinalIgnoreCase),
                 Name = serverName.Value,
                 ShutdownTimeout = TimeSpan.FromSeconds(10),
             });
@@ -816,12 +809,7 @@ internal static class McpCommand
             {
                 Endpoint = new Uri(entry.Url!),
                 Name = serverName.Value,
-                AdditionalHeaders = entry.Headers is { Count: > 0 }
-                    ? entry.Headers.ToDictionary(
-                        kvp => kvp.Key,
-                        kvp => kvp.Value.Value,
-                        StringComparer.OrdinalIgnoreCase)
-                    : null,
+                AdditionalHeaders = entry.Headers.ToRawValues(StringComparer.OrdinalIgnoreCase),
                 TransportMode = entry.Transport is "sse"
                     ? HttpTransportMode.Sse : HttpTransportMode.AutoDetect,
             });

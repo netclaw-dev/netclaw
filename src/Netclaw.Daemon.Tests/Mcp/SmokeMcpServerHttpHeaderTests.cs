@@ -122,11 +122,13 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
 
     private readonly Process _process;
     private readonly Task _stderrDrain;
+    private readonly Task _stdoutDrain;
 
-    private SmokeHttpMcpServer(Process process, string url, Task stderrDrain)
+    private SmokeHttpMcpServer(Process process, string url, Task stderrDrain, Task stdoutDrain)
     {
         _process = process;
         _stderrDrain = stderrDrain;
+        _stdoutDrain = stdoutDrain;
         Url = url;
     }
 
@@ -134,8 +136,6 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
 
     public static async Task<SmokeHttpMcpServer> StartAsync(CancellationToken ct)
     {
-        var dll = LocateSmokeMcpServerDll();
-
         var info = new ProcessStartInfo("dotnet")
         {
             RedirectStandardError = true,
@@ -143,7 +143,7 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        info.ArgumentList.Add(dll);
+        info.ArgumentList.Add(SmokeMcpServerLocator.LocateDll());
         info.ArgumentList.Add("--transport");
         info.ArgumentList.Add("http");
         info.ArgumentList.Add("--port");
@@ -155,10 +155,10 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
 
         var listeningTcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var drain = Task.Run(async () =>
+        // Drain stderr to completion: scan for the listening line, then keep
+        // reading so a full pipe doesn't deadlock the child.
+        var stderrDrain = Task.Run(async () =>
         {
-            // Drain stderr fully so the child doesn't block on a full pipe
-            // even after the listening line has been seen.
             string? line;
             while ((line = await process.StandardError.ReadLineAsync(ct).ConfigureAwait(false)) is not null)
             {
@@ -166,15 +166,14 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
                 if (match.Success && !listeningTcs.Task.IsCompleted)
                     listeningTcs.TrySetResult(match.Groups["url"].Value);
             }
-            // If we drained to EOF without ever seeing the listening line,
-            // surface that to whoever's awaiting StartAsync.
             listeningTcs.TrySetException(new InvalidOperationException(
                 "Smoke MCP server exited before publishing a listening URL"));
         }, ct);
 
-        // Drain stdout in the background too — otherwise Kestrel logs that
-        // make it to stdout could block the process under buffer pressure.
-        _ = Task.Run(async () =>
+        // Drain stdout too — Kestrel may log there and a full pipe will
+        // wedge the child. Tracked symmetrically with stderr so DisposeAsync
+        // can await it.
+        var stdoutDrain = Task.Run(async () =>
         {
             try
             {
@@ -191,7 +190,8 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
             throw new TimeoutException("Smoke MCP server did not start within 30s");
         }
 
-        return new SmokeHttpMcpServer(process, await listeningTcs.Task.ConfigureAwait(false), drain);
+        return new SmokeHttpMcpServer(
+            process, await listeningTcs.Task.ConfigureAwait(false), stderrDrain, stdoutDrain);
     }
 
     public async ValueTask DisposeAsync()
@@ -205,29 +205,14 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
         try { await _process.WaitForExitAsync().ConfigureAwait(false); }
         catch { /* best-effort */ }
 
+        // Drains terminate when the streams close; await both so teardown
+        // doesn't leave Task.Run continuations executing past the test.
         try { await _stderrDrain.ConfigureAwait(false); }
         catch { /* drain is best-effort once we're tearing down */ }
 
+        try { await _stdoutDrain.ConfigureAwait(false); }
+        catch { /* drain is best-effort once we're tearing down */ }
+
         _process.Dispose();
-    }
-
-    private static string LocateSmokeMcpServerDll()
-    {
-        var repo = new DirectoryInfo(AppContext.BaseDirectory);
-        while (repo is not null && !File.Exists(Path.Combine(repo.FullName, "Netclaw.slnx")))
-            repo = repo.Parent;
-        Assert.NotNull(repo);
-
-        var projectDir = Path.Combine(repo!.FullName, "tests", "Netclaw.SmokeMcpServer");
-        var binMarker = $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}";
-        var dll = Directory
-            .EnumerateFiles(projectDir, "Netclaw.SmokeMcpServer.dll", SearchOption.AllDirectories)
-            .Where(p => p.Contains(binMarker))
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
-
-        Assert.True(dll is not null,
-            $"Netclaw.SmokeMcpServer.dll not found under {projectDir}/bin — is the project built?");
-        return dll!;
     }
 }
