@@ -773,8 +773,9 @@ collect `Daemon.Host` (must be non-loopback) and `Daemon.TrustedProxies` (≥1
 entry required, comma-separated). The wizard refuses to advance past the
 trusted-proxies prompt with an empty list — the same minimum the daemon
 validator enforces at startup — so an operator who does not yet know their
-proxy IP should choose `local` and re-run `netclaw init` later — the wizard
-auto-resumes incomplete onboarding by skipping already-completed steps.
+proxy IP should choose `local` and re-run `netclaw init` later, supplying the
+bind address and trusted proxies on the second pass once the proxy topology
+is known.
 
 Config files: `~/.netclaw/config/netclaw.json` (daemon-owned base config,
 including `Daemon.Host`, `Daemon.Port`, `Daemon.ExposureMode`),

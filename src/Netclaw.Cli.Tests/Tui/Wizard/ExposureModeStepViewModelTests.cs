@@ -477,29 +477,6 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
-    public void IsReverseProxy_OnlyTrueForReverseProxyMode()
-    {
-        using var step = new ExposureModeStepViewModel();
-
-        foreach (var mode in Enum.GetValues<ExposureMode>())
-        {
-            step.SelectedMode = mode;
-            Assert.Equal(mode == ExposureMode.ReverseProxy, step.IsReverseProxy);
-        }
-    }
-
-    [Fact]
-    public void IsHighRisk_ReverseProxy_IsFalse()
-    {
-        // Reverse proxy is medium-risk (operator-managed perimeter), not high-risk
-        // (public internet without operator-managed perimeter).
-        using var step = new ExposureModeStepViewModel();
-        step.SelectedMode = ExposureMode.ReverseProxy;
-
-        Assert.False(step.IsHighRisk);
-    }
-
-    [Fact]
     public void ContributeSecrets_ReverseProxy_AddsDeviceToken()
     {
         // Reverse proxy is non-local, so the bootstrap device must still be

@@ -108,7 +108,12 @@ Wait+Screen@10s /Reverse proxy configured/
 Wait+Screen@5s /http:\/\/0\.0\.0\.0:5199/
 Enter
 
-# Sub-step 4: webhook toggle. "No" = second option.
+# Sub-step 4: webhook toggle.
+# Option order is [No (default), Yes]. Down+Enter selects "Yes — accept inbound
+# webhook requests" so the produced netclaw.json gets a Webhooks section.
+# (The assertion script does not validate the webhook choice; both branches
+# work for the smoke run. We deliberately exercise the non-default branch to
+# prove the toggle plumbing.)
 Wait+Screen@10s /Should this daemon accept inbound webhooks/
 Down
 Enter
