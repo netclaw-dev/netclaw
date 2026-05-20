@@ -26,10 +26,10 @@
 #
 # The companion `netclaw` CLI binary is also installed so shell_execute
 # can invoke it from inside the container (e.g., `netclaw doctor`).
-FROM ubuntu:24.04
-
-ARG NETCLAW_VERSION=unknown
 ARG TARGETARCH=amd64
+ARG NETCLAW_VERSION=unknown
+
+FROM ubuntu:24.04
 
 # Pre-install the general-purpose toolkit an autonomous agent is expected
 # to reach for via its shell_execute tool. An Ubuntu base (not a chiseled

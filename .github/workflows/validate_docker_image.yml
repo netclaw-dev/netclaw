@@ -120,8 +120,52 @@ jobs:
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
           exit 1
 
+      - name: "Verify multi-arch manifest has distinct per-platform digests"
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Build both platforms locally and inspect their digests.
+          # This catches the bug from #1091 where TARGETARCH was declared
+          # after FROM and buildx defaulted both platforms to amd64.
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            -t netclawd-pr:multi-arch-test \
+            --load \
+            -f docker/Dockerfile .
+
+          # Extract the two digest entries from the manifest list.
+          # For a correct multi-arch image, the amd64 and arm64 digests
+          # MUST be different — if they're the same, the build baked the
+          # same binary into both platforms (the #1091 bug).
+          AMD64_DIGEST=$(docker buildx imagetools inspect netclawd-pr:multi-arch-test --format '{{ index .RepoDigests 0 }}' 2>/dev/null | grep amd64 | head -1 || true)
+          ARM64_DIGEST=$(docker buildx imagetools inspect netclawd-pr:multi-arch-test --format '{{ index .RepoDigests 0 }}' 2>/dev/null | grep arm64 | head -1 || true)
+
+          if [[ -z "$AMD64_DIGEST" || -z "$ARM64_DIGEST" ]]; then
+            echo "WARNING: Could not extract per-platform digests from manifest list" >&2
+            echo "This may indicate the manifest is not a proper list." >&2
+            # Show what we got for debugging
+            docker buildx imagetools inspect netclawd-pr:multi-arch-test >&2 || true
+            exit 1
+          fi
+
+          if [[ "$AMD64_DIGEST" == "$ARM64_DIGEST" ]]; then
+            echo "ERROR: multi-arch manifest has the SAME digest for both platforms!" >&2
+            echo "  amd64: $AMD64_DIGEST" >&2
+            echo "  arm64: $ARM64_DIGEST" >&2
+            echo "This means the Dockerfile is not correctly using TARGETARCH" >&2
+            echo "in a way that buildx can resolve per-platform." >&2
+            exit 1
+          fi
+
+          echo "✓ Multi-arch manifest verified: amd64 and arm64 have distinct digests"
+          echo "  amd64: $AMD64_DIGEST"
+          echo "  arm64: $ARM64_DIGEST"
+
       - name: "Cleanup validation containers"
         if: always()
         shell: bash
         run: |
           docker rm -f netclaw-validate-ok 2>/dev/null || true
+          docker rmi netclawd-pr:multi-arch-test 2>/dev/null || true
