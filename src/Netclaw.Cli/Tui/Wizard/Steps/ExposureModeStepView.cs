@@ -22,9 +22,6 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ExposureModeStepView : IWizardStepView
 {
-    /// <summary>Default daemon port when the operator does not override it via netclaw.json.</summary>
-    private const int DefaultDaemonPort = 5199;
-
     private IDisposable? _modeList;
     private SelectionListNode<string>? _confirmList;
     private IDisposable? _webhookList;
@@ -54,7 +51,6 @@ public sealed class ExposureModeStepView : IWizardStepView
         if (vm.CurrentSubStep == vm.WebhookSubStep)
             return BuildWebhookToggle(vm, callbacks);
 
-        // Sub-step 1 confirmation (non-reverse-proxy non-Local modes only)
         return BuildConfirmation(vm, callbacks);
     }
 
@@ -343,7 +339,7 @@ public sealed class ExposureModeStepView : IWizardStepView
         var displayHost = host;
         if (host.Contains(':') && !host.StartsWith('['))
             displayHost = $"[{host}]";
-        return $"http://{displayHost}:{DefaultDaemonPort}";
+        return $"http://{displayHost}:{DaemonConfig.DefaultPort}";
     }
 
     public bool HandleKeyPress(KeyPressed key)

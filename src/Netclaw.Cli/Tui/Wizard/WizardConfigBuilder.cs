@@ -317,7 +317,7 @@ public sealed class WizardConfigBuilder
                 daemonSection["Host"] = Daemon.Host;
 
             if (Daemon.TrustedProxies.Count > 0)
-                daemonSection["TrustedProxies"] = Daemon.TrustedProxies.ToArray();
+                daemonSection["TrustedProxies"] = Daemon.TrustedProxies;
 
             config["Daemon"] = daemonSection;
         }

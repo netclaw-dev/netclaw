@@ -347,7 +347,7 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
         var daemon = (Dictionary<string, object>)config["Daemon"];
         Assert.Equal("reverse-proxy", daemon["ExposureMode"]);
         Assert.Equal("10.0.0.5", daemon["Host"]);
-        Assert.Equal(new[] { "10.0.0.0/24", "192.168.1.5" }, (string[])daemon["TrustedProxies"]);
+        Assert.Equal(new[] { "10.0.0.0/24", "192.168.1.5" }, (IEnumerable<string>)daemon["TrustedProxies"]);
     }
 
     [Fact]
