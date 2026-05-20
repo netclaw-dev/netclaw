@@ -3,13 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
-using Netclaw.Providers.OAuth;
 using Netclaw.Tools;
 using Xunit;
 
@@ -151,49 +148,28 @@ public class McpStdioSmokeTests : IAsyncDisposable
             Enabled = true,
         };
 
-        var serverEntries = new Dictionary<string, McpServerEntry>
-        {
-            ["everything"] = entry
-        };
-
         var registry = new ToolRegistry();
-        var logger = NullLogger<McpClientManager>.Instance;
-        var pkceService = new OAuthPkceService(new HttpClient());
-        var oauthService = new McpOAuthService(
-            new HttpClient(),
-            new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString())),
-            TimeProvider.System,
-            NullLogger<McpOAuthService>.Instance,
-            pkceService,
-            NullNotificationSink.Instance);
-        var manager = new McpClientManager(serverEntries, registry, new ToolConfig(), oauthService, NullNotificationSink.Instance, TimeProvider.System, logger);
+        await using var harness = McpSmokeHarness.Create(
+            new Dictionary<string, McpServerEntry> { ["everything"] = entry }, registry);
 
-        try
-        {
-            await manager.StartAsync(CancellationToken.None);
+        await harness.Manager.StartAsync(CancellationToken.None);
 
-            var statuses = manager.GetServerStatuses();
-            Assert.True(statuses.ContainsKey(new McpServerName("everything")));
+        var statuses = harness.Manager.GetServerStatuses();
+        Assert.True(statuses.ContainsKey(new McpServerName("everything")));
 
-            var status = statuses[new McpServerName("everything")];
-            Assert.Equal(McpConnectionState.Connected, status.State);
-            Assert.True(status.ToolCount > 0, $"Expected tools, got {status.ToolCount}");
-            Assert.Null(status.ErrorMessage);
+        var status = statuses[new McpServerName("everything")];
+        Assert.Equal(McpConnectionState.Connected, status.State);
+        Assert.True(status.ToolCount > 0, $"Expected tools, got {status.ToolCount}");
+        Assert.Null(status.ErrorMessage);
 
-            // Verify tools were registered in the registry
-            var allRegs = registry.GetAllRegistrations();
-            Assert.NotEmpty(allRegs);
-            Assert.All(allRegs, r => Assert.StartsWith("everything/", r.Tool.Name));
+        // Verify tools were registered in the registry
+        var allRegs = registry.GetAllRegistrations();
+        Assert.NotEmpty(allRegs);
+        Assert.All(allRegs, r => Assert.StartsWith("everything/", r.Tool.Name));
 
-            // GetClient should return a live client
-            var client = manager.GetClient(new McpServerName("everything"));
-            Assert.NotNull(client);
-        }
-        finally
-        {
-            await manager.StopAsync(CancellationToken.None);
-            manager.Dispose();
-        }
+        // GetClient should return a live client
+        var client = harness.Manager.GetClient(new McpServerName("everything"));
+        Assert.NotNull(client);
     }
 
     public async ValueTask DisposeAsync()

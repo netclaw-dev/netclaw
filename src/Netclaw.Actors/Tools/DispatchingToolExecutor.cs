@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -88,6 +89,47 @@ public sealed class DispatchingToolExecutor : IToolExecutor
     public async Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         _ = await AuthorizeCoreAsync(toolCall, context, ct);
+    }
+
+    public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+        FunctionCallContent toolCall,
+        ToolExecutionContext? context = null,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        if (_registry.GetByName(toolCall.Name) is null)
+        {
+            _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
+            yield return new ToolCompletedUpdate($"Unknown tool: {toolCall.Name}");
+            yield break;
+        }
+
+        // Authorization throws (ToolApprovalRequiredException / ToolAccessDeniedException)
+        // before the first item is produced; the tool-execution pipeline handles
+        // those exactly as it does for the non-streaming path.
+        var tool = await AuthorizeCoreAsync(toolCall, context, ct);
+        var execContext = context ?? ToolExecutionContext.Empty;
+
+        var sw = Stopwatch.StartNew();
+        await foreach (var update in tool.ExecuteStreamAsync(toolCall.Arguments, execContext, ct))
+        {
+            switch (update)
+            {
+                case ToolCompletedUpdate completed:
+                    sw.Stop();
+                    var redacted = SecretOutputRedactor.Redact(completed.Result);
+                    _logger.LogInformation(
+                        "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
+                        toolCall.Name, sw.ElapsedMilliseconds, redacted.Length);
+                    yield return new ToolCompletedUpdate(redacted);
+                    break;
+                case ToolActivityUpdate { OutputChunk: not null } activity:
+                    yield return activity with { OutputChunk = SecretOutputRedactor.Redact(activity.OutputChunk) };
+                    break;
+                default:
+                    yield return update;
+                    break;
+            }
+        }
     }
 
     private async Task<INetclawTool> AuthorizeCoreAsync(FunctionCallContent toolCall, ToolExecutionContext? context, CancellationToken ct)

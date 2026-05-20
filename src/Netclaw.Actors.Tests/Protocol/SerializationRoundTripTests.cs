@@ -698,6 +698,70 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void ToolApprovalRequested_round_trips_all_persisted_context()
+    {
+        var wrapped = new ToolApprovalRequested
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-pending-1",
+            ToolName = "shell_execute",
+            Patterns = ["git status", "ls"],
+            CandidateVerbs = ["git", "ls"],
+            Audience = Netclaw.Configuration.TrustAudience.Team,
+            Boundary = Netclaw.Configuration.TrustBoundary.Team,
+            ChannelType = "slack",
+            SupportsInteractiveApproval = true,
+            RequesterSenderId = new SenderId("U12345"),
+            RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.Operator,
+            Cwd = "/home/user/project",
+            Candidates =
+            [
+                new ToolApprovalRequested.ApprovalCandidateRecord { Verb = "git", Directory = "/home/user/project" },
+                new ToolApprovalRequested.ApprovalCandidateRecord { Verb = "ls", Directory = null }
+            ],
+            RequestedAtMs = 1700000000000
+        };
+
+        var result = RoundTrip(wrapped);
+
+        Assert.Equal(wrapped.SessionId, result.SessionId);
+        Assert.Equal(wrapped.CallId, result.CallId);
+        Assert.Equal(wrapped.ToolName, result.ToolName);
+        Assert.Equal(wrapped.Patterns, result.Patterns);
+        Assert.Equal(wrapped.CandidateVerbs, result.CandidateVerbs);
+        Assert.Equal(wrapped.Audience, result.Audience);
+        Assert.Equal(wrapped.Boundary, result.Boundary);
+        Assert.Equal(wrapped.ChannelType, result.ChannelType);
+        Assert.Equal(wrapped.SupportsInteractiveApproval, result.SupportsInteractiveApproval);
+        Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
+        Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Equal(wrapped.Cwd, result.Cwd);
+        Assert.Equal(2, result.Candidates.Count);
+        Assert.Equal("git", result.Candidates[0].Verb);
+        Assert.Equal("/home/user/project", result.Candidates[0].Directory);
+        Assert.Equal("ls", result.Candidates[1].Verb);
+        Assert.Null(result.Candidates[1].Directory);
+        Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);
+    }
+
+    [Fact]
+    public void SessionSnapshot_has_no_pending_approval_projection()
+    {
+        var wrapped = new SessionSnapshot
+        {
+            TurnCount = 2,
+            History = []
+        };
+
+        var expected = new Serialization.Proto.SessionSnapshotProto
+        {
+            TurnCount = 2
+        }.ToByteArray();
+
+        Assert.Equal(expected, Serialize(wrapped));
+    }
+
+    [Fact]
     public void AdoptedContextRecorded_sender_id_wrap_is_byte_identical_to_raw_primitive_proto()
     {
         // Pass 7c wraps the adopted-context SenderId / AuthorizerSenderId fields

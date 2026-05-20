@@ -48,6 +48,11 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private SlackChannelId? _defaultChannelId;
     private volatile bool _connected;
 
+    // Cancels the background reconnect loop when the channel stops.
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private Task? _reconnectTask;
+    private volatile string? _connectFailureDetail;
+
     public SlackChannel(
         ISessionPipeline pipeline,
         ActorSystem system,
@@ -131,7 +136,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         if (_connected)
             return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
 
-        return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Disconnected, "Slack socket mode disconnected."));
+        return ValueTask.FromResult(new ChannelHealth(
+            ChannelHealthStatus.Disconnected,
+            _connectFailureDetail ?? "Slack socket mode disconnected."));
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -142,63 +149,230 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             return;
         }
 
+        // A misconfiguration must never escape StartAsync: an unhandled
+        // exception from IHostedService.StartAsync aborts the .NET host and
+        // takes the whole daemon down. A misconfigured channel degrades; it
+        // does not crash the process.
         if (!_options.SocketMode)
-            throw new InvalidOperationException("Slack channel currently supports Socket Mode only.");
+        {
+            HandleConnectFailure(new ChannelConnectException(
+                ChannelConnectFailureKind.Fatal,
+                "Slack channel currently supports Socket Mode only. Set Slack:SocketMode to true."));
+            return;
+        }
 
+        if (_options.BotToken.IsNullOrEmpty())
+        {
+            HandleConnectFailure(new ChannelConnectException(
+                ChannelConnectFailureKind.Fatal,
+                "Slack is enabled but no bot token is configured. "
+                + "Set the Slack:BotToken secret, then restart the daemon."));
+            return;
+        }
+
+        if (_options.AppToken.IsNullOrEmpty())
+        {
+            HandleConnectFailure(new ChannelConnectException(
+                ChannelConnectFailureKind.Fatal,
+                "Slack Socket Mode is enabled but no app-level token is configured. "
+                + "Set the Slack:AppToken secret, then restart the daemon."));
+            return;
+        }
+
+        await TryConnectAsync(cancellationToken);
+    }
+
+    private async Task TryConnectAsync(CancellationToken cancellationToken)
+    {
         try
         {
-            var auth = await _slack.Auth.Test(cancellationToken);
-            _botUserId = !string.IsNullOrWhiteSpace(auth.UserId) ? new SlackUserId(auth.UserId) : null;
-            var resolvedChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
-            _defaultChannelId = resolvedChannelId is not null ? new SlackChannelId(resolvedChannelId) : null;
-
-            var httpClient = _httpClientFactory.CreateClient("slack-files");
-
-            _gateway = _system.ActorOf(
-                SlackGatewayActor.CreateProps(new SlackGatewayDependencies(
-                    Pipeline: _pipeline,
-                    IngressGate: _ingressGate,
-                    ActorSystem: _system,
-                    TimeProvider: _timeProvider,
-                    Options: _options,
-                    BotUserId: _botUserId,
-                    DefaultChannelId: _defaultChannelId,
-                    ReplyClient: _replyClient,
-                    ContentScanner: _contentScanner,
-                    ThreadHistoryFetcher: _threadHistoryFetcher,
-                    AudienceProfiles: _audienceProfiles,
-                    ModelCapabilities: _modelCapabilities,
-                    Paths: _paths,
-                    HttpClient: httpClient,
-                    PromptInjectionDetector: _promptInjectionDetector)),
-                "slack-gateway");
-
-            // Publish the gateway under SlackGatewayActorKey so the reminder
-            // dispatcher can resolve it via IRequiredActor<SlackGatewayActorKey>
-            // for Mode B DeliverTrustedSessionTurn delivery.
-            ActorRegistry.For(_system).Register<SlackGatewayActorKey>(_gateway);
-
-            await _socketModeClient.Connect(cancellationToken: cancellationToken);
-            _connected = true;
-
+            await ConnectCoreAsync(cancellationToken);
             _logger.LogInformation("Slack channel connected as user {BotUserId}.", _botUserId);
         }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception ex)
         {
-            _notificationSink.Emit(OperationalAlert.Create(
-                _timeProvider,
-                "channel.disconnected",
-                AlertType.ChannelDisconnected,
-                $"Slack channel failed to connect: {ex.Message}",
-                AlertSeverity.Warning,
-                source: "slack",
-                context: new Dictionary<string, string> { ["channel"] = "slack" }));
-            throw;
+            if (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Slack channel connect cancelled during shutdown.");
+                return;
+            }
+
+            HandleConnectFailure(SlackConnectFailureClassifier.Classify(ex));
+        }
+    }
+
+    private async Task ConnectCoreAsync(CancellationToken cancellationToken)
+    {
+        var auth = await _slack.Auth.Test(cancellationToken);
+        _botUserId = !string.IsNullOrWhiteSpace(auth.UserId) ? new SlackUserId(auth.UserId) : null;
+        var resolvedChannelId = await ResolveDefaultChannelIdAsync(cancellationToken);
+        _defaultChannelId = resolvedChannelId is not null ? new SlackChannelId(resolvedChannelId) : null;
+
+        CompleteConnectionSetup();
+
+        await _socketModeClient.Connect(cancellationToken: cancellationToken);
+        _connected = true;
+        _connectFailureDetail = null;
+    }
+
+    /// <summary>
+    /// Creates and registers the gateway actor once authentication succeeds.
+    /// Idempotent — safe to call again after a reconnect.
+    /// </summary>
+    private void CompleteConnectionSetup()
+    {
+        if (_gateway is not null)
+            return;
+
+        var httpClient = _httpClientFactory.CreateClient("slack-files");
+
+        _gateway = _system.ActorOf(
+            SlackGatewayActor.CreateProps(new SlackGatewayDependencies(
+                Pipeline: _pipeline,
+                IngressGate: _ingressGate,
+                ActorSystem: _system,
+                TimeProvider: _timeProvider,
+                Options: _options,
+                BotUserId: _botUserId,
+                DefaultChannelId: _defaultChannelId,
+                ReplyClient: _replyClient,
+                ContentScanner: _contentScanner,
+                ThreadHistoryFetcher: _threadHistoryFetcher,
+                AudienceProfiles: _audienceProfiles,
+                ModelCapabilities: _modelCapabilities,
+                Paths: _paths,
+                HttpClient: httpClient,
+                PromptInjectionDetector: _promptInjectionDetector)),
+            "slack-gateway");
+
+        // Publish the gateway under SlackGatewayActorKey so the reminder
+        // dispatcher can resolve it via IRequiredActor<SlackGatewayActorKey>
+        // for Mode B DeliverTrustedSessionTurn delivery.
+        ActorRegistry.For(_system).Register<SlackGatewayActorKey>(_gateway);
+    }
+
+    private void HandleConnectFailure(ChannelConnectException failure)
+    {
+        _connectFailureDetail = failure.Message;
+
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "channel.disconnected",
+            AlertType.ChannelDisconnected,
+            $"Slack channel failed to connect: {failure.Message}",
+            AlertSeverity.Warning,
+            source: "slack",
+            context: new Dictionary<string, string>
+            {
+                ["channel"] = "slack",
+                ["failure_kind"] = failure.Kind.ToString(),
+            }));
+
+        if (failure.IsFatal)
+        {
+            // Retrying will not help — the operator must fix the configuration.
+            // The rest of the daemon keeps running.
+            _logger.LogError(
+                failure,
+                "Slack channel could not connect and will stay offline until the "
+                + "configuration is fixed and the daemon is restarted. The rest of the "
+                + "daemon is unaffected. {Reason}",
+                failure.Message);
+            return;
+        }
+
+        _logger.LogWarning(
+            failure,
+            "Slack channel could not connect (transient). The daemon will keep running "
+            + "and retry the connection in the background. {Reason}",
+            failure.Message);
+        StartReconnectLoop();
+    }
+
+    private void StartReconnectLoop()
+    {
+        if (_reconnectTask is { IsCompleted: false })
+            return;
+
+        _reconnectTask = Task.Run(() => ReconnectLoopAsync(_lifetimeCts.Token));
+    }
+
+    private async Task ReconnectLoopAsync(CancellationToken cancellationToken)
+    {
+        var delay = TimeSpan.FromSeconds(5);
+        var maxDelay = TimeSpan.FromMinutes(5);
+
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(delay, _timeProvider, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            // Reset transport state so the retry performs a clean connect.
+            try
+            {
+                _socketModeClient.Disconnect();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Slack transport reset before reconnect failed; continuing.");
+            }
+
+            try
+            {
+                await ConnectCoreAsync(cancellationToken);
+                _logger.LogInformation("Slack channel reconnected after a transient failure.");
+                return;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                var classified = SlackConnectFailureClassifier.Classify(ex);
+                _connectFailureDetail = classified.Message;
+
+                if (classified.IsFatal)
+                {
+                    _logger.LogError(
+                        classified,
+                        "Slack reconnect hit a fatal failure; giving up until the daemon "
+                        + "is restarted. {Reason}",
+                        classified.Message);
+                    return;
+                }
+
+                _logger.LogWarning(
+                    classified,
+                    "Slack reconnect attempt failed; will retry. {Reason}",
+                    classified.Message);
+                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
+            }
         }
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Stop the background reconnect loop before tearing down the transport.
+        await _lifetimeCts.CancelAsync();
+        if (_reconnectTask is { } reconnectTask)
+        {
+            try
+            {
+                await reconnectTask;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Slack reconnect loop ended with an error during shutdown.");
+            }
+        }
+
         _connected = false;
         _socketModeClient.Disconnect();
 
@@ -215,6 +389,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
 
             _gateway = null;
         }
+
+        _lifetimeCts.Dispose();
     }
 
     public Task Handle(MessageEvent slackEvent)

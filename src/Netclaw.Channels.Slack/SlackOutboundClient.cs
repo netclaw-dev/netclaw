@@ -37,7 +37,7 @@ public sealed class SlackOutboundClient(ISlackApiClient slackApiClient) : ISlack
             var response = await slackApiClient.Chat.PostMessage(new Message
             {
                 Channel = channelId.Value,
-                Text = text,
+                Text = SlackTextProtector.ProtectUrls(text),
                 Blocks = blocks
             }, ct);
 

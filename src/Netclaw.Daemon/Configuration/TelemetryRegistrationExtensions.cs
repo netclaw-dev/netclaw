@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
@@ -15,13 +17,6 @@ namespace Netclaw.Daemon.Configuration;
 
 public static class TelemetryRegistrationExtensions
 {
-    /// <summary>
-    /// OpenTelemetry <c>service.name</c> used when neither
-    /// <see cref="TelemetryOptions.ServiceName"/> nor the <c>OTEL_SERVICE_NAME</c>
-    /// environment variable is set.
-    /// </summary>
-    internal const string DefaultServiceName = "netclawd";
-
     public static void AddNetclawTelemetry(this WebApplicationBuilder builder)
     {
         builder.Services
@@ -34,32 +29,36 @@ public static class TelemetryRegistrationExtensions
             .GetSection(TelemetryOptions.SectionName)
             .Get<TelemetryOptions>() ?? new TelemetryOptions();
 
+        // Build the OpenTelemetry resource once. NetclawResourceDetector supplies
+        // assembly/runtime defaults; AddEnvironmentVariableDetector runs last so the
+        // standard OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES env vars override
+        // those defaults — netclaw is configured the same way as every other
+        // OpenTelemetry service. Projected and registered unconditionally:
+        // operational webhook alerts carry the identity even when OTLP export is off.
+        var resource = ResourceBuilder.CreateEmpty()
+            .AddDetector(new NetclawResourceDetector())
+            .AddTelemetrySdk()
+            .AddEnvironmentVariableDetector()
+            .Build();
+        builder.Services.AddSingleton(ProjectServiceIdentity(resource));
+        builder.Services.AddHostedService<ServiceIdentityStartupLogger>();
+
         if (!telemetry.Enabled)
             return;
 
         var endpoint = new Uri(telemetry.Otlp.Endpoint);
-
-        // service.name distinguishes netclaw instances in a shared backend;
-        // service.version is the running netclaw build so telemetry is
-        // attributable to a specific release.
-        var serviceName = ResolveServiceName(
-            telemetry,
-            Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME"));
-        var serviceVersion = BuildInfo.Version;
 
         builder.Logging.AddOpenTelemetry(options =>
         {
             options.IncludeFormattedMessage = true;
             options.IncludeScopes = true;
             options.ParseStateValues = true;
-            options.SetResourceBuilder(ResourceBuilder.CreateDefault()
-                .AddService(serviceName, serviceVersion: serviceVersion));
+            options.SetResourceBuilder(ResourceBuilder.CreateEmpty().AddAttributes(resource.Attributes));
             options.AddOtlpExporter(otlp => otlp.Endpoint = endpoint);
         });
 
         builder.Services.AddOpenTelemetry()
-            .ConfigureResource(resource =>
-                resource.AddService(serviceName, serviceVersion: serviceVersion))
+            .ConfigureResource(rb => rb.AddAttributes(resource.Attributes))
             .WithMetrics(metrics =>
             {
                 metrics.AddMeter(ChannelTelemetry.MeterName);
@@ -69,19 +68,54 @@ public static class TelemetryRegistrationExtensions
     }
 
     /// <summary>
-    /// Resolves the OpenTelemetry <c>service.name</c>. Precedence: an explicit
-    /// <see cref="TelemetryOptions.ServiceName"/> wins, then the standard
-    /// <c>OTEL_SERVICE_NAME</c> environment variable, then
-    /// <see cref="DefaultServiceName"/>.
+    /// Projects the OpenTelemetry <c>service.*</c> resource attributes into a
+    /// <see cref="ServiceIdentity"/> for operational webhook payloads, so an alert
+    /// carries the same identity as the telemetry this instance emits.
+    /// <c>service.namespace</c> and <c>service.instance.id</c> are absent unless
+    /// the environment supplies them.
     /// </summary>
-    internal static string ResolveServiceName(TelemetryOptions telemetry, string? otelServiceNameEnv)
+    internal static ServiceIdentity ProjectServiceIdentity(Resource resource)
     {
-        if (!string.IsNullOrWhiteSpace(telemetry.ServiceName))
-            return telemetry.ServiceName;
+        string? Attribute(string key)
+        {
+            foreach (var attribute in resource.Attributes)
+            {
+                if (attribute.Key == key)
+                    return attribute.Value as string;
+            }
 
-        if (!string.IsNullOrWhiteSpace(otelServiceNameEnv))
-            return otelServiceNameEnv;
+            return null;
+        }
 
-        return DefaultServiceName;
+        return new ServiceIdentity(
+            Attribute("service.name") ?? "netclawd",
+            Attribute("service.namespace"),
+            Attribute("service.instance.id"),
+            Attribute("service.version") ?? "");
     }
+}
+
+/// <summary>
+/// Logs the resolved <see cref="ServiceIdentity"/> once at daemon startup, so an
+/// operator can confirm what identity this instance reports to telemetry and
+/// operational webhook alerts (and whether their <c>OTEL_*</c> env vars took effect).
+/// </summary>
+internal sealed class ServiceIdentityStartupLogger(
+    ServiceIdentity identity,
+    ILogger<ServiceIdentityStartupLogger> logger) : IHostedService
+{
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        logger.LogInformation(
+            "OpenTelemetry service identity resolved: service.name={ServiceName}, " +
+            "service.namespace={ServiceNamespace}, service.instance.id={ServiceInstanceId}, " +
+            "service.version={ServiceVersion}",
+            identity.Name,
+            identity.Namespace ?? "(unset)",
+            identity.InstanceId ?? "(unset)",
+            identity.Version);
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

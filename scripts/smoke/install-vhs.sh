@@ -5,6 +5,7 @@
 #   - If `vhs` is already on PATH, do nothing.
 #   - On Linux x86_64: install vhs from the upstream release with SHA256 verification,
 #     and ensure ttyd / ffmpeg are present (apt-get if available).
+#   - On macOS: install vhs / ttyd / ffmpeg via Homebrew.
 #   - Other platforms: print install hints and fail.
 #
 # Pin the VHS version + SHA256 here. Bumping vhs requires updating both.
@@ -15,7 +16,11 @@
 set -euo pipefail
 
 VHS_VERSION="${VHS_VERSION:-0.11.0}"
-VHS_LINUX_X64_SHA256="${VHS_LINUX_X64_SHA256:-SKIP_VERIFY}"
+# SHA256 of vhs_0.11.0_Linux_x86_64.tar.gz from the upstream checksums.txt.
+# When bumping VHS_VERSION, refresh this with the curl command in the header
+# comment above. The pin matters for screenshot regression: a VHS bump can
+# change the bundled font/renderer and silently drift every baseline PNG.
+VHS_LINUX_X64_SHA256="${VHS_LINUX_X64_SHA256:-99cb634587eaae0473c1ea377db80c3a048c27f99fe0a7febb1a1e8cb7ee5009}"
 # 0.11.0 is the minimum that supports `Wait+Screen /pattern/`.
 # Earlier versions (e.g. 0.8.0) parse `Wait` as an unknown command.
 
@@ -35,13 +40,31 @@ case "${uname_s}/${uname_m}" in
     : # supported below
     ;;
   Darwin/*)
-    cat >&2 <<'EOF'
-ERROR: vhs is not installed and automatic install is Linux/x86_64 only.
-On macOS install with Homebrew:
-    brew install vhs ttyd ffmpeg
-Then re-run.
+    # macOS install path. Unlike Linux there is no pinned VHS version + SHA:
+    # the macOS leg does not run the screenshot comparison (Linux is the
+    # canonical screenshot platform), so renderer/font drift across VHS
+    # versions does not affect it. macOS VHS only drives the flow tapes,
+    # which assert on exit codes — not pixels — so `brew`'s latest is fine.
+    if ! have brew; then
+      cat >&2 <<'EOF'
+ERROR: vhs is not installed and Homebrew ('brew') is not on PATH.
+GitHub macOS runners ship Homebrew; for a local macOS run install it
+from https://brew.sh first, then re-run. To install vhs manually:
+    brew install vhs ttyd ffmpeg coreutils
 EOF
-    exit 1
+      exit 1
+    fi
+    # coreutils provides `gtimeout` — stock macOS has no `timeout`, and
+    # run-native-tape.sh needs one to bound the vhs run.
+    echo "Installing vhs + runtime deps (ttyd, ffmpeg, coreutils) via Homebrew..."
+    brew install vhs ttyd ffmpeg coreutils
+    if ! have vhs; then
+      echo "ERROR: 'brew install vhs' completed but 'vhs' is still not on PATH." >&2
+      exit 1
+    fi
+    echo "vhs installed at $(command -v vhs)"
+    vhs --version || true
+    exit 0
     ;;
   *)
     cat >&2 <<EOF

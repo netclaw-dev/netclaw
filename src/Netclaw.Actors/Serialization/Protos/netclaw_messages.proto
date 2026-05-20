@@ -111,6 +111,54 @@ message SessionCompactedProto {
   WorkingContextProto working_context = 7;
 }
 
+message ToolBatchStartedProto {
+  SessionIdProto session_id = 1;
+  SerializableChatMessageProto user_message = 2;
+  SerializableChatMessageProto assistant_message = 3;
+  int64 started_at_ms = 4;
+}
+
+message ToolCallRecordedProto {
+  SessionIdProto session_id = 1;
+  SerializableChatMessageProto tool_result = 2;
+  int64 recorded_at_ms = 3;
+}
+
+message ToolApprovalRequestedProto {
+  message ApprovalCandidateProto {
+    string verb = 1;
+    optional string directory = 2;
+  }
+
+  SessionIdProto session_id = 1;
+  string call_id = 2;
+  string tool_name = 3;
+  repeated string patterns = 4;
+  repeated string candidate_verbs = 5;
+  TrustAudience audience = 6;
+  optional string requester_sender_id = 7;
+  optional int32 requester_principal = 8;
+  optional string cwd = 9;
+  repeated ApprovalCandidateProto candidates = 10;
+  optional string boundary = 11;
+  optional string channel_type = 12;
+  optional bool supports_interactive_approval = 13;
+  int64 requested_at_ms = 14;
+}
+
+message ToolApprovalResolvedProto {
+  SessionIdProto session_id = 1;
+  string call_id = 2;
+  string decision = 3;
+  int64 resolved_at_ms = 4;
+}
+
+message ToolBatchAbandonedProto {
+  SessionIdProto session_id = 1;
+  repeated SerializableChatMessageProto tool_results = 2;
+  int64 abandoned_at_ms = 3;
+}
+
 // ── Adopted context ──
 
 message AdoptedContextRecordedProto {
@@ -175,6 +223,7 @@ message SessionSnapshotProto {
   WorkingContextProto working_context = 6;
   repeated ActiveJobInfoProto active_background_jobs = 7;
   repeated AdoptedContextSnapshotRecord adopted_context_records = 8;
+  reserved 9;
 }
 
 // ── Broadcasts ──

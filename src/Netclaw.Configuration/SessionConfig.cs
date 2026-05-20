@@ -18,13 +18,13 @@ namespace Netclaw.Configuration;
 public sealed record SessionConfig
 {
     /// <summary>
-    /// Maximum number of individual tool calls allowed per turn.
-    /// Each tool call in a batch counts separately (e.g., 3 parallel calls = 3).
-    /// At ~75% of this limit, a budget-awareness nudge is injected so the model
-    /// can start wrapping up. At 100%, tools are stripped and the model is asked
-    /// to summarize its work.
+    /// Maximum number of LLM-to-tools-to-LLM iterations allowed per turn. One
+    /// LLM response that requests any number of parallel tool calls counts as
+    /// exactly one iteration. At ~75% of this limit a budget-awareness nudge
+    /// is injected; at 100% tools are stripped and the model is asked to
+    /// summarize its work (force-no-tools completion).
     /// </summary>
-    public int MaxToolCallsPerTurn { get; init; } = 30;
+    public int MaxToolIterationsPerTurn { get; init; } = 60;
 
     /// <summary>
     /// Idle seconds before the session memory observer triggers distillation.
@@ -49,9 +49,11 @@ public sealed record SessionConfig
     public TimeSpan TurnLlmTimeout { get; init; } = TimeSpan.FromMinutes(3);
 
     /// <summary>
-    /// Timeout for one tool-execution batch (all tool calls emitted
-    /// by a single assistant response). Prevents indefinite hangs when one or
-    /// more tools block forever.
+    /// Per-tool-call inactivity budget. Each tool call is consumed as a stream
+    /// under its own watchdog: the call must produce its first item within this
+    /// budget, and each later item resets it. A non-streaming tool emits only
+    /// its single result, so it must finish within this budget. Enforced per
+    /// call, so a stuck tool is caught without affecting siblings in the batch.
     /// </summary>
     public TimeSpan ToolExecutionTimeout { get; init; } = TimeSpan.FromSeconds(90);
 
@@ -98,7 +100,7 @@ public sealed record SessionConfig
 
         return new SessionConfig
         {
-            MaxToolCallsPerTurn = raw.MaxToolCallsPerTurn,
+            MaxToolIterationsPerTurn = raw.MaxToolIterationsPerTurn,
             MemoryObserverIdleSeconds = raw.MemoryObserverIdleSeconds,
             IdleTimeout = raw.IdleTimeout,
             TurnLlmTimeout = turnLlmTimeout,
@@ -155,7 +157,7 @@ public sealed record SessionConfig
     /// </summary>
     private sealed record RawSessionConfig
     {
-        public int MaxToolCallsPerTurn { get; init; } = 30;
+        public int MaxToolIterationsPerTurn { get; init; } = 60;
         public int MemoryObserverIdleSeconds { get; init; } = 90;
         public TimeSpan IdleTimeout { get; init; } = TimeSpan.FromMinutes(30);
         public int TurnLlmTimeoutSeconds { get; init; } = 180;

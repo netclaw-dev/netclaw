@@ -31,9 +31,10 @@ public sealed class SlackThreadHistoryFetcherTests
         IContentScanner? scanner = null,
         ToolAudienceProfiles? profiles = null,
         ModelCapabilities? modelCapabilities = null,
+        SlackChannelOptions? options = null,
         NetclawPaths? paths = null) => new(
             _replies.FetchAsync,
-            _options,
+            options ?? _options,
             new HttpClient(handler ?? new FakeHttpHandler()),
             scanner ?? new NullContentScanner(),
             paths ?? new NetclawPaths(Path.GetTempPath()),
@@ -82,6 +83,28 @@ public sealed class SlackThreadHistoryFetcherTests
 
         var item = Assert.Single(result);
         Assert.Equal(TrustAudience.Personal, item.Audience);
+    }
+
+    [Fact]
+    public async Task Allowlisted_dm_sender_rehydrates_as_team_and_trusted_internal()
+    {
+        var options = new SlackChannelOptions
+        {
+            BotToken = new SensitiveString("xoxb-test"),
+            AllowDirectMessages = true,
+            AllowedUserIds = ["U1"]
+        };
+
+        _replies.Set("D1", "1000.0", null, new ConversationMessagesResponse
+        {
+            Messages = [new MessageEvent { Ts = "1000.0", User = "U1", Text = "allowlisted DM message" }]
+        });
+
+        var result = await CreateFetcher(options: options).FetchThreadHistoryAsync(new SessionId("D1/1000.0"), TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Equal(TrustAudience.Team, item.Audience);
+        Assert.Equal(PrincipalClassification.TrustedInternal, item.Principal);
     }
 
     [Fact]
@@ -224,6 +247,9 @@ public sealed class SlackThreadHistoryFetcherTests
     [Fact]
     public async Task Historical_non_image_files_are_downloaded_and_announced_path_only()
     {
+        // PDFs require an audience whose attachment policy permits the Document
+        // category — pin the channel to Team (Public is image-only).
+        _options.ChannelAudiences["D1"] = "team";
         _replies.Set("D1", "2000.0", null, new ConversationMessagesResponse
         {
             Messages =

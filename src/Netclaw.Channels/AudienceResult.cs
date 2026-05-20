@@ -37,7 +37,12 @@ public readonly record struct AudienceResult(TrustAudience Audience, string? Err
                 : new AudienceResult($"{AclDenyReasons.InvalidChannelAudiencePrefix}:dm={dmOverride}");
         }
 
-        var audience = (isDirectMessage || isExplicitUser || isExplicitChannel)
+        // Team requires an operator-vetted sender: an allowlisted user or an
+        // explicitly allowlisted channel. A direct message alone does NOT grant
+        // Team — an unvetted DM (allowed only because AllowedUserIds is empty)
+        // resolves to Public. Operators who want all DMs treated as Team set an
+        // explicit ChannelAudiences "dm" override, handled above.
+        var audience = (isExplicitUser || isExplicitChannel)
             ? TrustAudience.Team
             : TrustAudience.Public;
         return new AudienceResult(audience);

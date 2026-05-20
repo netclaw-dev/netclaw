@@ -439,6 +439,37 @@ public sealed class DiscordThreadHistoryFetcherTests
         Assert.Equal(TrustAudience.Personal, item.Audience);
     }
 
+    [Fact]
+    public async Task Allowlisted_dm_sender_rehydrates_as_team_and_trusted_internal()
+    {
+        var options = new DiscordChannelOptions
+        {
+            AllowDirectMessages = true,
+            AllowedUserIds = ["user-10"]
+        };
+
+        var fetcher = CreateFetcher(
+            (_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>(
+            [
+                new DiscordThreadHistoryFetcher.HistoricalMessage(
+                    MessageId: "100000000000000010",
+                    SenderId: new SenderId("user-10"),
+                    IsBot: false,
+                    Text: "allowlisted DM message",
+                    Timestamp: TimeProvider.System.GetUtcNow(),
+                    Attachments: [])
+            ]),
+            options: options);
+
+        var result = await fetcher.FetchThreadHistoryAsync(
+            new SessionId("100000000000000010/100000000000000010"),
+            TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(result);
+        Assert.Equal(TrustAudience.Team, item.Audience);
+        Assert.Equal(PrincipalClassification.TrustedInternal, item.Principal);
+    }
+
     private static DiscordThreadHistoryFetcher CreateFetcher(
         DiscordThreadHistoryFetcher.MessageFetcher? messageFetcher = null,
         HttpMessageHandler? handler = null,

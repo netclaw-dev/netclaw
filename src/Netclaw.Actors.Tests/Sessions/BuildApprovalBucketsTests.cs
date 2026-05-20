@@ -40,7 +40,7 @@ public sealed class BuildApprovalBucketsTests
             new ApprovalCandidate("curl", null)
         };
 
-        var buckets = LlmSessionActor.BuildApprovalBuckets(
+        var buckets = ApprovalBucketBuilder.Build(
             candidates,
             persistent: false,
             globalWildcard: false,
@@ -65,7 +65,7 @@ public sealed class BuildApprovalBucketsTests
             new ApprovalCandidate("git checkout", ProjectDir)
         };
 
-        var buckets = LlmSessionActor.BuildApprovalBuckets(
+        var buckets = ApprovalBucketBuilder.Build(
             candidates,
             persistent: false,
             globalWildcard: false,
@@ -90,7 +90,7 @@ public sealed class BuildApprovalBucketsTests
             new ApprovalCandidate("curl", null)  // no path arg → falls back to cwd
         };
 
-        var buckets = LlmSessionActor.BuildApprovalBuckets(
+        var buckets = ApprovalBucketBuilder.Build(
             candidates,
             persistent: true,
             globalWildcard: false,
@@ -108,7 +108,7 @@ public sealed class BuildApprovalBucketsTests
             new ApprovalCandidate("git checkout", ProjectDir)
         };
 
-        var buckets = LlmSessionActor.BuildApprovalBuckets(
+        var buckets = ApprovalBucketBuilder.Build(
             candidates,
             persistent: true,
             globalWildcard: false,
@@ -131,7 +131,7 @@ public sealed class BuildApprovalBucketsTests
             new ApprovalCandidate("curl", null)
         };
 
-        var buckets = LlmSessionActor.BuildApprovalBuckets(
+        var buckets = ApprovalBucketBuilder.Build(
             candidates,
             persistent: true,
             globalWildcard: true,
@@ -156,7 +156,7 @@ public sealed class BuildApprovalBucketsTests
             new ApprovalCandidate("git status", null)
         };
 
-        var sessionBuckets = LlmSessionActor.BuildApprovalBuckets(
+        var sessionBuckets = ApprovalBucketBuilder.Build(
             candidates,
             persistent: false,
             globalWildcard: false,

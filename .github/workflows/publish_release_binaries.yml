@@ -85,7 +85,7 @@ jobs:
           - os: windows-latest
             rid: win-x64
             archive_ext: zip
-          - os: macos-latest
+          - os: macos-26
             rid: osx-arm64
             archive_ext: tar.gz
     steps:
@@ -100,35 +100,18 @@ jobs:
       with:
         global-json-file: "./global.json"
 
-    - name: Publish CLI
+    # Publish via the canonical publish script — the single source of truth
+    # for `dotnet publish` flags, shared with the Docker image build and the
+    # smoke-test harness. `shell: bash` runs on the Windows runner too (Git
+    # Bash); `dotnet publish` itself is OS-agnostic.
+    - name: Publish binaries
+      shell: bash
       run: >
-        dotnet publish src/Netclaw.Cli/Netclaw.Cli.csproj
-        -c Release
-        -r ${{ matrix.rid }}
-        --self-contained true
-        /p:PublishSingleFile=true
-        /p:EnableCompressionInSingleFile=true
-        /p:IncludeNativeLibrariesForSelfExtract=true
-        /p:Version=${{ github.ref_name }}
-        -o ./publish/cli
-
-    - name: Publish Daemon
-      run: >
-        dotnet publish src/Netclaw.Daemon/Netclaw.Daemon.csproj
-        -c Release
-        -r ${{ matrix.rid }}
-        --self-contained true
-        /p:PublishSingleFile=true
-        /p:EnableCompressionInSingleFile=true
-        /p:IncludeNativeLibrariesForSelfExtract=true
-        /p:Version=${{ github.ref_name }}
-        -o ./publish/daemon
-
-    - name: Smoke-test published binary (macOS)
-      if: runner.os == 'macOS'
-      run: |
-        chmod +x ./publish/cli/netclaw
-        ./publish/cli/netclaw version
+        bash scripts/build/publish-binaries.sh
+        --rid ${{ matrix.rid }}
+        --component all
+        --output-dir ./publish
+        --version ${{ github.ref_name }}
 
     - name: Package archives (Unix)
       if: runner.os != 'Windows'
@@ -457,7 +440,9 @@ jobs:
         --file=./feeds/releases/manifest.pub
         --content-type=text/plain
 
-    - name: Upload Linux install script to R2
+    # install.sh is the unified Unix installer — it handles Linux AND macOS
+    # (uname -s -> darwin -> osx-arm64). There is intentionally one Unix script.
+    - name: Upload Unix (Linux + macOS) install script to R2
       env:
         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

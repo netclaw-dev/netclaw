@@ -96,7 +96,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             ? context.RequestedTimeoutSeconds.Value
             : _config.ShellTimeoutSeconds;
 
-        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
+        using var timeoutCts = new CancellationTokenSource();
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         Process process;
@@ -108,6 +108,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             return $"Error starting process: {ex.Message}";
         }
+
+        // Start the timeout countdown only after the shell process exists, so
+        // process-spawn overhead (heavier on Windows: cmd.exe plus the child it
+        // execs) is not charged against the command's execution budget.
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
 
         using (process)
         {

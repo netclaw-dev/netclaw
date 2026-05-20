@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.2.0"
+  version: "2.5.0"
 ---
 
 # Netclaw Operations
@@ -47,7 +47,7 @@ Rules:
 
 - The path must be an absolute path to an existing directory
 - The path must be within the session's allowed file access roots
-- Profile-managed: not available to Public or Team audiences by default
+- Profile-managed: granted to Team and Personal audiences by default, not Public
 - Project identity files are re-read from disk on each `SetSystemPrompt()` call,
   so edits to the project's `AGENTS.md` take effect on the next project switch
   or daemon restart
@@ -238,10 +238,19 @@ Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
 
+Built-in tool grants follow the audience and are monotonic (Public ⊆ Team ⊆
+Personal). **Public** sessions get read-only file tools only — `file_read`,
+`file_list`, `attach_file` — and no outbound web access. **Team** adds
+`file_write`, `file_edit`, `web_search`, `web_fetch`, the scheduling tools,
+`skill_manage`, and `set_working_directory`. **Personal** gets everything.
+`shell_execute` is Personal-only — in a Team or Public session, use `file_list`
+to enumerate a directory instead of `ls`.
+
 Tools belonging to disabled subsystems (see [Feature Kill Switches](#feature-kill-switches))
 are hidden from `search_tools` results for all audiences. Public sessions
-additionally cannot discover or load skills, subagents, memory tools, or
-scheduling tools regardless of feature flags.
+additionally cannot discover or load skills, subagents, memory tools,
+scheduling tools, or the `web_search` / `web_fetch` tools regardless of
+feature flags.
 
 ### Adding MCP servers (fail-closed by default)
 
@@ -328,10 +337,16 @@ The approval gate runs three layers in order:
 
 1. **Hard-deny list** — system-protected paths. Always blocks.
 2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated
-   safe list (`ls`, `grep`, `cat`, `git status`, `git log`, …) AND the
-   effective directory (path arg or cwd) is under your declared safe space
-   (`session_dir` or `project_dir`), the call auto-runs with no prompt.
-   Mutating verbs (`git push`, `rm`, `sed -i`) are never on the list.
+   safe list AND the effective directory (path arg or cwd) is under your
+   declared safe space (`session_dir` or `project_dir`), the call auto-runs
+   with no prompt. The list covers demonstrably read-only verbs: file readers
+   (`ls`, `grep`, `cat`, …), system/info verbs (`date`, `whoami`, `uname`,
+   `uptime`, …), and read-only `git`/`gh` queries (`git status`, `git log`,
+   `gh pr view`, `gh run list`, …). Mutating verbs (`git push`, `git fetch`,
+   `rm`, `sed -i`), command-prefixing verbs (`env`, `xargs`, `sudo`),
+   network-writing verbs (`gh api`, `curl`), and environment/process-inspection
+   verbs (`printenv`, `ps`) are never on the list — the safe-space gate
+   cannot scope a verb that dumps the environment or the process table.
 3. **Interactive prompt** — everything else. Five buttons:
    - **Once** — run this one time, persist nothing.
    - **This chat** — allow the verbs in this directory for the rest of the
@@ -347,6 +362,16 @@ compound command includes pure side-effect verbs (`echo`, `printf`, `:`,
 `true`, `false`) with no path argument and no redirect, those clauses are
 authorized for the current call by the click but no `ApprovalEntry` is
 written for them. Recording every literal `echo "==="` would be noise.
+
+**Prompts survive passivation and restart.** Pending approval prompts are
+journaled with their requester and trust context, so if the session goes idle or
+the daemon restarts before the user clicks, the click is still honored when it
+arrives. Completed sibling tool results are journaled per call, so recovery
+re-drives unresolved calls rather than replaying the whole batch. The only case
+where a click does nothing is a genuinely expired prompt (the turn already
+failed or was superseded); the session then posts a visible "approval prompt has
+expired" notice rather than silently dropping the click. If a user reports a
+stale button, ask them to re-issue the request.
 
 **Why you may not see a prompt at all.** If the user invokes a read-only verb
 (say `grep`) with a path argument under a tree the operator has previously
@@ -659,6 +684,7 @@ What to expect inside `session.log`:
 | Missing tools | `netclaw mcp list`; check MCP connection state |
 | Memory recall degraded | `netclaw status` memory section |
 | Daemon won't start | crash logs at `~/.netclaw/logs/crash-*.log` |
+| Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
 | `command not found` for `netclaw` from shell tool when daemon runs as systemd service | `netclaw doctor` (the **Systemd Unit PATH** check warns when the unit was installed before PATH was baked in) |
 
 If webhook notifications are configured, daemon crash paths emit

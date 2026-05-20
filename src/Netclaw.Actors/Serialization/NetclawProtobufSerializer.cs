@@ -39,6 +39,11 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string AdoptedContextRecordedManifest = "acr-v1";
     private const string CursorAdvancedManifest = "ca-v1";
     private const string MemoriesDistilledV2Manifest = "mdv2-v1";
+    private const string ToolBatchStartedManifest = "tbs-v1";
+    private const string ToolCallRecordedManifest = "tcr-v1";
+    private const string ToolApprovalRequestedManifest = "tar-v1";
+    private const string ToolApprovalResolvedManifest = "tares-v1";
+    private const string ToolBatchAbandonedManifest = "tba-v1";
 
     private static readonly FrozenDictionary<Type, string> TypeToManifest = new Dictionary<Type, string>
     {
@@ -61,6 +66,11 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(AdoptedContextRecorded)] = AdoptedContextRecordedManifest,
         [typeof(Channels.CursorAdvanced)] = CursorAdvancedManifest,
         [typeof(MemoriesDistilledV2)] = MemoriesDistilledV2Manifest,
+        [typeof(ToolBatchStarted)] = ToolBatchStartedManifest,
+        [typeof(ToolCallRecorded)] = ToolCallRecordedManifest,
+        [typeof(ToolApprovalRequested)] = ToolApprovalRequestedManifest,
+        [typeof(ToolApprovalResolved)] = ToolApprovalResolvedManifest,
+        [typeof(ToolBatchAbandoned)] = ToolBatchAbandonedManifest,
     }.ToFrozenDictionary();
 
     public override int Identifier => 150;
@@ -125,6 +135,16 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.CursorAdvancedProto.Parser.ParseFrom(bytes)),
             MemoriesDistilledV2Manifest => NetclawProtoMapper.FromProto(
                 Proto.MemoriesDistilledV2Proto.Parser.ParseFrom(bytes)),
+            ToolBatchStartedManifest => NetclawProtoMapper.FromProto(
+                Proto.ToolBatchStartedProto.Parser.ParseFrom(bytes)),
+            ToolCallRecordedManifest => NetclawProtoMapper.FromProto(
+                Proto.ToolCallRecordedProto.Parser.ParseFrom(bytes)),
+            ToolApprovalRequestedManifest => NetclawProtoMapper.FromProto(
+                Proto.ToolApprovalRequestedProto.Parser.ParseFrom(bytes)),
+            ToolApprovalResolvedManifest => NetclawProtoMapper.FromProto(
+                Proto.ToolApprovalResolvedProto.Parser.ParseFrom(bytes)),
+            ToolBatchAbandonedManifest => NetclawProtoMapper.FromProto(
+                Proto.ToolBatchAbandonedProto.Parser.ParseFrom(bytes)),
             _ => throw new ArgumentException(
                 $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
         };

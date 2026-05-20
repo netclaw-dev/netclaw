@@ -153,6 +153,33 @@ public class FileEditToolTests : IDisposable
         Assert.Equal("original", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task Concurrent_edits_to_same_file_all_apply()
+    {
+        // Regression: tool calls in one assistant turn run concurrently. Without
+        // per-path serialization each edit reads the same original content and
+        // the last write wins, silently losing the others while every call
+        // still reports success.
+        var filePath = Path.Combine(_dir.Path, "concurrent.cs");
+        const int editCount = 12;
+        var originalLines = Enumerable.Range(0, editCount).Select(i => $"slot{i} = ORIGINAL;");
+        await File.WriteAllTextAsync(filePath, string.Join('\n', originalLines), TestContext.Current.CancellationToken);
+
+        var context = CreatePersonalContext();
+        var edits = Enumerable.Range(0, editCount).Select(i => _tool.ExecuteAsync(
+            ToolInput.Create("Path", filePath, "OldString", $"slot{i} = ORIGINAL;", "NewString", $"slot{i} = EDITED;"),
+            context,
+            CancellationToken.None));
+
+        var results = await Task.WhenAll(edits);
+
+        Assert.All(results, r => Assert.Contains("Successfully edited", r));
+        var content = await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("ORIGINAL", content);
+        for (var i = 0; i < editCount; i++)
+            Assert.Contains($"slot{i} = EDITED;", content);
+    }
+
     private ToolExecutionContext CreatePersonalContext()
         => new("signalr/thread-1", _sessionDir)
         {

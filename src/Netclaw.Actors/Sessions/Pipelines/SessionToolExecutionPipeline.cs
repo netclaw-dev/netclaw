@@ -54,12 +54,26 @@ internal static class SessionToolExecutionPipeline
         int shellTimeoutSeconds = 60,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
-        bool setWorkingDirectoryAvailable = false)
+        bool setWorkingDirectoryAvailable = false,
+        bool streamToolResults = false,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
+        TrustAudience? audienceOverride = null,
+        TrustBoundary? boundaryOverride = null,
+        string? channelTypeOverride = null,
+        bool? supportsInteractiveApprovalOverride = null,
+        SenderId? requesterSenderIdOverride = null,
+        PrincipalClassification? requesterPrincipalOverride = null,
+        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null)
     {
         try
         {
-            // Execute all tool calls in parallel -- each is independent
-            var tasks = toolCalls.Select(tc => ExecuteSingleToolAsync(
+            // Execute all tool calls in parallel. Calls are not always
+            // independent -- e.g. two file_edit calls on the same file -- so
+            // file-mutating tools serialize their read-modify-write per target
+            // path via FileMutationGate to avoid lost-update races here.
+            var tasks = toolCalls.Select(async tc =>
+            {
+                var result = await ExecuteSingleToolAsync(
                 executor,
                 tc,
                 sessionId,
@@ -80,8 +94,31 @@ internal static class SessionToolExecutionPipeline
                 shellTimeoutSeconds,
                 backgroundJobManager,
                 projectDirectory,
-                setWorkingDirectoryAvailable));
+                setWorkingDirectoryAvailable,
+                oneTimeApprovalPreSeed is not null
+                && oneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedPatterns)
+                    ? preSeedPatterns
+                    : null,
+                audienceOverride,
+                boundaryOverride,
+                channelTypeOverride,
+                supportsInteractiveApprovalOverride,
+                requesterSenderIdOverride,
+                requesterPrincipalOverride,
+                decisionOverride is not null && decisionOverride.TryGetValue(tc.CallId, out var overrideDecision)
+                    ? overrideDecision
+                    : null);
+                if (streamToolResults)
+                    self.Tell(new ToolExecutionSingleCompleted(result));
+                return result;
+            });
             var results = await Task.WhenAll(tasks);
+
+            if (streamToolResults)
+            {
+                self.Tell(new ToolExecutionBatchCompleted());
+                return;
+            }
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
             self.Tell(new ToolExecutionCompleted
@@ -132,7 +169,15 @@ internal static class SessionToolExecutionPipeline
         int shellTimeoutSeconds = 60,
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
-        bool setWorkingDirectoryAvailable = false)
+        bool setWorkingDirectoryAvailable = false,
+        IReadOnlyList<string>? oneTimeApprovalPreSeed = null,
+        TrustAudience? audienceOverride = null,
+        TrustBoundary? boundaryOverride = null,
+        string? channelTypeOverride = null,
+        bool? supportsInteractiveApprovalOverride = null,
+        SenderId? requesterSenderIdOverride = null,
+        PrincipalClassification? requesterPrincipalOverride = null,
+        ApprovalDecision? decisionOverride = null)
     {
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
@@ -145,16 +190,39 @@ internal static class SessionToolExecutionPipeline
 
         var sw = Stopwatch.StartNew();
         string resultText;
-        var context = BuildToolExecutionContext(sessionId, source, sessionDir, spawnChildActor, projectDirectory);
+        var context = BuildToolExecutionContext(
+            sessionId,
+            source,
+            sessionDir,
+            spawnChildActor,
+            projectDirectory,
+            audienceOverride,
+            boundaryOverride,
+            channelTypeOverride,
+            supportsInteractiveApprovalOverride);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
+
+        // Re-drive of an ApprovedOnce approval: the user already clicked
+        // "approve once" before the session passivated, but there is no
+        // persisted grant to satisfy the gate on the cold-recovered re-drive.
+        // Pre-seed the one-time approval bypass for exactly this call id so the
+        // gate passes once without emitting a duplicate approval prompt. The
+        // bypass is still tool-name- and pattern-matched inside the gate
+        // (DispatchingToolExecutor.IsOneTimeApprovalSatisfied) and the pipeline
+        // clears it after the attempt — it cannot leak to any other call.
+        if (oneTimeApprovalPreSeed is not null)
+        {
+            context.OneTimeApprovedToolName = tc.Name;
+            context.SetOneTimeApprovedPatterns(oneTimeApprovalPreSeed);
+        }
         if (approvalChannel is not null && emitApprovalRequest is not null)
         {
             context.ApprovalBridge = new ParentSessionApprovalBridge(
                 approvalChannel,
                 emitApprovalRequest,
                 sessionId,
-                source?.SenderId,
-                source?.Principal,
+                requesterSenderIdOverride ?? source?.SenderId,
+                requesterPrincipalOverride ?? source?.Principal,
                 source?.HasAdoptedContext ?? false,
                 source?.HasThirdPartyAdoptedContext ?? false,
                 source?.AdoptedSpeakerIds ?? []);
@@ -231,6 +299,31 @@ internal static class SessionToolExecutionPipeline
         };
         try
         {
+            if (decisionOverride is ApprovalDecision.Denied or ApprovalDecision.TimedOut)
+            {
+                sw.Stop();
+                resultText = decisionOverride == ApprovalDecision.TimedOut
+                    ? "Tool access denied: approval_timed_out"
+                    : $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)";
+
+                auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
+                {
+                    Allowed = false,
+                    DenyReason = resultText,
+                    ApprovalDecision = decisionOverride.ToString()
+                });
+
+                var deniedMessage = new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool,
+                    Content = ClampToolResult(resultText, maxInlineToolResultChars),
+                    ToolCallId = new ToolCallId(tc.CallId),
+                    Name = tc.Name
+                };
+
+                return new ToolCallResult(deniedMessage, [], [], []);
+            }
+
             if (meta is { Background: true })
             {
                 if (!string.Equals(tc.Name, Tools.ShellTool.ToolName, StringComparison.Ordinal))
@@ -261,7 +354,7 @@ internal static class SessionToolExecutionPipeline
                 }
             }
 
-            resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
+            resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, timeProvider, ct);
             sw.Stop();
 
             auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
@@ -339,7 +432,7 @@ internal static class SessionToolExecutionPipeline
                         string.Join(", ", ctx.Patterns));
                 }
 
-                resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, ct);
+                resultText = await ExecuteToolAttemptAsync(executor, tc, context, timeout, timeProvider, ct);
                 sw.Stop();
 
                 var patternStr = string.Join(", ", ctx.Patterns);
@@ -441,27 +534,25 @@ internal static class SessionToolExecutionPipeline
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         TimeSpan timeout,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var grantedOneTimeToolName = context.OneTimeApprovedToolName;
         var grantedOneTimePatterns = context.OneTimeApprovedPatterns;
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (timeout != Timeout.InfiniteTimeSpan)
-            timeoutCts.CancelAfter(timeout);
-
         try
         {
-            return await executor.ExecuteAsync(toolCall, context, timeoutCts.Token);
-        }
-        catch (OperationCanceledException ex)
-            when (!cancellationToken.IsCancellationRequested
-                  && timeout != Timeout.InfiniteTimeSpan
-                  && timeoutCts.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
-                ex);
+            // Consumed as a stream under a per-call inactivity watchdog. A
+            // non-streaming tool emits only the terminal item, so a flat budget
+            // is equivalent to the former timeout; inactivity throws
+            // TimeoutException, which the caller turns into a per-tool error.
+            return await StreamingToolWatchdog.ConsumeAsync(
+                executor.ExecuteStreamAsync(toolCall, context, cancellationToken),
+                toolCall.Name,
+                ToolWatchdogBudget.Flat(timeout),
+                timeProvider,
+                onActivity: null,
+                cancellationToken);
         }
         finally
         {
@@ -647,18 +738,29 @@ internal static class SessionToolExecutionPipeline
         MessageSource? source,
         string sessionDir,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
-        string? projectDirectory)
+        string? projectDirectory,
+        TrustAudience? audienceOverride = null,
+        TrustBoundary? boundaryOverride = null,
+        string? channelTypeOverride = null,
+        bool? supportsInteractiveApprovalOverride = null)
     {
         // A turn with no source carries no trust context — fall closed to the
         // most-restrictive audience. The default is resolved once, here, so every
         // downstream tool gate reads a guaranteed audience.
+        //
+        // audienceOverride is set only by the post-approval re-drive of a
+        // cold-recovered session: the live MessageSource is gone, but the
+        // parked turn's audience was persisted, so the re-driven call runs
+        // under the audience its approval grant was recorded against rather
+        // than the fail-closed Public default. It is never an escalation —
+        // the override carries the parked turn's own audience.
         var context = new ToolExecutionContext(sessionId.Value, sessionDir)
         {
-            Audience = source?.Audience ?? TrustAudience.Public,
+            Audience = audienceOverride ?? source?.Audience ?? TrustAudience.Public,
         };
-        context.Boundary = source?.Boundary;
-        context.ChannelType = source is null ? null : source.ChannelType.ToWireValue();
-        context.SupportsInteractiveApproval = source?.ChannelType.SupportsInteractiveApproval();
+        context.Boundary = boundaryOverride ?? source?.Boundary;
+        context.ChannelType = channelTypeOverride ?? (source is null ? null : source.ChannelType.ToWireValue());
+        context.SupportsInteractiveApproval = supportsInteractiveApprovalOverride ?? source?.ChannelType.SupportsInteractiveApproval();
         context.SpawnChildActor = spawnChildActor;
         context.ProjectDirectory = projectDirectory;
         return context;

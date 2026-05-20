@@ -1,0 +1,73 @@
+# wizard-screens.tape (screenshot) — walk `netclaw init` and capture two
+# settled wizard states as PNGs.
+#
+# Capture-only tape: NO post-tape assertion. The screenshots mode in
+# run-smoke.sh compares each emitted PNG byte-for-byte against the committed
+# baseline at tests/smoke/screenshots/<frame>.approved.png.
+#
+# Frames captured:
+#   shot-wizard-provider-picker  — "Choose your LLM provider:" list
+#   shot-wizard-security-posture — "Who will interact with this Netclaw
+#                                   instance" posture list
+#
+# The identity ("Agent name:") step is deliberately NOT screenshotted: it
+# is a text-input step, and Termina blinks the input caret on its own
+# timer. VHS's `Set CursorBlink false` only governs VHS's own terminal
+# cursor, so the app-drawn caret cell is not byte-stable across runs.
+#
+# Navigation + anchors mirror tapes/init-wizard.tape; see that file and
+# src/Netclaw.Cli/Tui/Wizard/Steps/*StepView.cs for the synchronization
+# rationale. Each Screenshot is bracketed by Sleep 1s — VHS can otherwise
+# capture an unsettled frame, or let the next keystroke leak into the shot.
+#
+# Prepended preamble: tapes/screenshot-preamble.tape (determinism-pinned).
+
+Output "/tmp/tape-shot-wizard-screens.gif"
+
+# ─── Launch ──────────────────────────────────────────────────────────
+Type "netclaw init"
+Enter
+
+# ─── Frame 1: Provider picker ────────────────────────────────────────
+Wait+Screen@10s /Choose your LLM provider:/
+Sleep 1s
+Screenshot "/tmp/shot-wizard-provider-picker.png"
+Sleep 1s
+
+# Provider list ordering is alphabetical by TypeKey:
+#   anthropic, ollama, openai, openai-compatible, openrouter
+# Anthropic is the default; one Down lands on Ollama.
+Down
+Enter
+
+# Endpoint input — native Ollama is at http://localhost:11434, which is
+# also the prompt's default value.
+Wait+Screen@10s /endpoint:/
+# VHS has no End/Home — push the cursor right past the existing text
+# (Right N is a no-op at end), then Backspace to clear all 22 chars.
+Right 32
+Backspace 32
+Type "http://localhost:11434"
+Enter
+
+# Connection probe + model discovery. The "Connected! Found N models"
+# success frame auto-advances; wait directly on the model list header.
+Wait+Screen@45s /Select a model/
+# Models are alphabetical: all-minilm first, qwen2 second.
+Down
+Enter
+
+# ─── Frame 2: Security posture ───────────────────────────────────────
+Wait+Screen@10s /Who will interact with this Netclaw instance/
+Sleep 1s
+Screenshot "/tmp/shot-wizard-security-posture.png"
+Sleep 1s
+
+# Both frames captured; abandon the wizard. Ctrl+C drops out of the
+# interactive prompt back to the shell — capture-only tape, no config to
+# validate.
+Ctrl+C
+Wait+Screen@10s /TAPE\$/
+
+Type "exit"
+Enter

@@ -44,6 +44,7 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
     private readonly NotificationsConfig _config;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly TimeProvider _timeProvider;
+    private readonly ServiceIdentity _identity;
     private readonly ILogger<WebhookNotificationService> _logger;
 
     private readonly Channel<OperationalAlert> _channel;
@@ -53,11 +54,13 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         NotificationsConfig config,
         IHttpClientFactory httpClientFactory,
         TimeProvider timeProvider,
+        ServiceIdentity identity,
         ILogger<WebhookNotificationService> logger)
     {
         _config = config;
         _httpClientFactory = httpClientFactory;
         _timeProvider = timeProvider;
+        _identity = identity;
         _logger = logger;
 
         _channel = Channel.CreateBounded<OperationalAlert>(new BoundedChannelOptions(ChannelCapacity)
@@ -221,17 +224,17 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         }
     }
 
-    private static JsonContent BuildContent(WebhookTarget target, OperationalAlert alert)
+    private JsonContent BuildContent(WebhookTarget target, OperationalAlert alert)
     {
         return target.Format switch
         {
             WebhookFormat.Slack => JsonContent.Create(
-                SlackWebhookPayloadBuilder.Build(alert), options: JsonOptions),
+                SlackWebhookPayloadBuilder.Build(alert, _identity), options: JsonOptions),
             _ => JsonContent.Create(BuildGenericPayload(alert), options: JsonOptions),
         };
     }
 
-    private static WebhookPayload BuildGenericPayload(OperationalAlert alert) => new()
+    private WebhookPayload BuildGenericPayload(OperationalAlert alert) => new()
     {
         AlertId = alert.AlertId,
         Type = alert.Type,
@@ -240,6 +243,13 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         Timestamp = alert.Timestamp,
         Source = "netclaw",
         Hostname = Hostname,
+        Service = new ServicePayload
+        {
+            Name = _identity.Name,
+            Namespace = _identity.Namespace,
+            InstanceId = _identity.InstanceId,
+            Version = _identity.Version,
+        },
         Context = alert.Context,
     };
 
@@ -265,6 +275,20 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         public DateTimeOffset Timestamp { get; init; }
         public string Source { get; init; } = "";
         public string Hostname { get; init; } = "";
+        public ServicePayload Service { get; init; } = new();
         public Dictionary<string, string>? Context { get; init; }
+    }
+
+    /// <summary>
+    /// Wire-format projection of <see cref="ServiceIdentity"/>, nested under
+    /// <c>service</c> in the generic payload. Field names follow the
+    /// OpenTelemetry <c>service.*</c> resource-attribute convention.
+    /// </summary>
+    private sealed class ServicePayload
+    {
+        public string Name { get; init; } = "";
+        public string? Namespace { get; init; }
+        public string? InstanceId { get; init; }
+        public string Version { get; init; } = "";
     }
 }

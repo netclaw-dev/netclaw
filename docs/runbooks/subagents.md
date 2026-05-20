@@ -85,18 +85,21 @@ first user message is just the raw task, identical to the pre-context protocol.
 ### Execution
 
 1. The `spawn_agent` tool resolves the named agent from the definition registry.
-2. Tools listed in the agent's definition are resolved from the tool registry
-   and filtered against `SubAgentToolPolicy` for user-facing agents.
+2. Tools listed in the agent's definition are resolved from the tool registry.
+   Subagents inherit the parent session's runtime tool policy, then
+   `SubAgentToolPolicy` removes tools that are statically denied to subagents
+   (`spawn_agent`).
 3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
    lifecycle-managed — stops when the session stops).
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After at most 10 tool iterations or the configured timeout, the subagent
-   returns its final text response.
+5. After at most 10 tool iterations, a final response, or an inactivity timeout,
+   the subagent returns its final text response.
 6. The main agent receives this response as the `spawn_agent` tool result.
 
 Child creation is marshaled back onto the session actor thread, so supervision
 stays within Akka's actor-thread rules. If the parent tool call is cancelled or
-times out, the subagent is cancelled too.
+times out, the subagent is cancelled too. The timeout is an inactivity budget: a
+responsive subagent is not stopped merely because wall-clock time has elapsed.
 
 ### Observability
 
@@ -168,9 +171,9 @@ findings into clear, well-organized summaries.
 |-------|----------|---------|-------------|
 | `name` | Yes | — | Unique identifier. Used in `spawn_agent(agent: "<name>")`. Duplicate names across files are rejected with a warning. |
 | `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
-| `tools` | No | (attempt all, then filter) | List of tool names. When omitted, the runtime starts from all registered tools, then filters user-facing agents through the safe allowlist. When specified, it acts as a whitelist before the same user-facing filter is applied. |
+| `tools` | No | (inherit all except denied) | List of tool names. When omitted, the runtime starts from all registered tools available to the parent session, then removes statically denied subagent tools. When specified, it acts as a whitelist before the same denylist is applied. |
 | `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
-| `timeoutSeconds` | No | `60` | Wall-clock timeout in seconds. |
+| `timeoutSeconds` | No | `60` | Inactivity timeout in seconds. The watchdog resets when the subagent makes progress. |
 | `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
 | `emitStructuredFindings` | No | `false` | When true, successful output becomes a memory-candidate finding for parent-session review. |
 
@@ -211,15 +214,14 @@ ignored at the glob layer and never logged.
 ### Tool access
 
 When `tools` is omitted from the frontmatter, the runtime starts from all
-registered tools and then filters user-facing subagents through the safe
-allowlist (`attach_file`, `file_read`, `web_fetch`, `web_search`). This keeps
-file-authored subagents read-oriented even if the parent session has broader
-tool access.
+registered tools available under the parent session's audience, boundary,
+approval, and shell policies. It then applies the subagent denylist, which
+prevents recursive delegation through `spawn_agent`.
 
 When `tools` is specified, it acts as a whitelist limiting which tools the
-subagent can access before the same user-facing allowlist is applied. Use this
-when you want to restrict a subagent to specific capabilities (e.g., read-only
-access via `tools: [file_read, web_search]`).
+subagent can access before the same subagent denylist and runtime policy checks
+are applied. Use this when you want to restrict a subagent to specific
+capabilities (e.g., read-only access via `tools: [file_read, web_search]`).
 
 Spawned subagents inherit the parent session's `session_dir` and current
 `project_dir` as read-only grounding. That means file tools resolve against the

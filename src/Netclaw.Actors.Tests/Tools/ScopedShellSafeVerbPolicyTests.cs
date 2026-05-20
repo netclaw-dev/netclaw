@@ -182,4 +182,30 @@ public sealed class ScopedShellSafeVerbPolicyTests : IDisposable
 
         Assert.False(policy.ShortCircuitsApproval("grep", null, ctx));
     }
+
+    [Fact]
+    public void Newly_added_read_only_verb_short_circuits_in_safe_space()
+    {
+        // Mirrors the safe-verb expansion: a read-only system verb (date) and
+        // a read-only gh query (gh pr view) short-circuit inside a trusted
+        // zone and still prompt outside one. The bundled list's membership of
+        // these verbs is verified separately by SafeVerbLoaderTests.
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("date", "gh pr view"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+
+        Assert.True(policy.ShortCircuitsApproval("date", _sessionDir, ctx));
+        Assert.True(policy.ShortCircuitsApproval("gh pr view", _projectDir, ctx));
+        Assert.False(policy.ShortCircuitsApproval("date", _outsideDir, ctx));
+    }
+
+    [Fact]
+    public void New_safe_verb_chained_with_mutating_verb_still_prompts()
+    {
+        // The all-clauses-safe conjunction holds: `date` is safe but a
+        // compound that also runs the unlisted `git push` must still prompt.
+        var policy = new ScopedShellSafeVerbPolicy(VerbList("date"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+
+        Assert.False(policy.AllShortCircuit(["date", "git push origin main"], _projectDir, ctx));
+    }
 }

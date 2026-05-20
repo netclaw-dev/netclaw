@@ -37,6 +37,7 @@ public static class ToolRegistrationExtensions
     {
         registry.Register(new ShellTool(config, pathPolicy, shellCommandPolicy));
         registry.Register(new FileReadTool(config, pathPolicy, paths));
+        registry.Register(new FileListTool(config, paths, pathPolicy));
         registry.Register(new FileWriteTool(config, pathPolicy));
         registry.Register(new FileEditTool(config, pathPolicy));
         registry.Register(new AttachFileTool(config));
@@ -137,10 +138,18 @@ public static class ToolRegistrationExtensions
         int maxSchemaWarnChars = 0,
         ILogger? logger = null)
     {
+        var adapters = new List<McpToolAdapter>(tools.Count);
         foreach (var tool in tools)
         {
-            var adapter = new McpToolAdapter(tool, serverName, tool.Name, grantCategory, invoker, maxDescriptionChars);
-            registry.Register(adapter);
+            var adapter = new McpToolAdapter(
+                tool,
+                serverName,
+                tool.Name,
+                grantCategory,
+                invoker,
+                maxDescriptionChars,
+                logger);
+            adapters.Add(adapter);
 
             if (maxSchemaWarnChars > 0 && adapter.ParameterSchema.ValueKind != System.Text.Json.JsonValueKind.Undefined)
             {
@@ -154,6 +163,9 @@ public static class ToolRegistrationExtensions
                 }
             }
         }
+
+        foreach (var adapter in adapters)
+            registry.Register(adapter);
 
         return registry;
     }

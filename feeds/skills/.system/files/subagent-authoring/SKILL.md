@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.2.1"
+  version: "1.2.2"
 ---
 
 # Subagent Authoring
@@ -75,9 +75,9 @@ The markdown body below the closing `---` must also be non-empty.
 
 | Field | Default | Notes |
 |------|---------|-------|
-| `tools` | (attempt all, then filter) | List of tool names. When omitted, the runtime starts from all registered tools, then filters user-facing agents through the safe allowlist. When specified, it acts as a whitelist before the same filter is applied. |
+| `tools` | (inherit all except denied) | List of tool names. When omitted, the runtime starts from all registered tools available to the parent session, then removes statically denied subagent tools. When specified, it acts as a whitelist before the same denylist is applied. |
 | `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values fall back to `Compaction`. |
-| `timeoutSeconds` | `60` | Wall-clock timeout for subagent execution. |
+| `timeoutSeconds` | `60` | Inactivity timeout for subagent execution. The watchdog resets when the subagent makes progress. |
 | `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values fall back to `user-facing`. |
 | `emitStructuredFindings` | `false` | When true, successful output is emitted as findings for parent-session review. |
 
@@ -106,9 +106,9 @@ Summarize the latest planning notes and highlight next actions.
 - Follow the user's existing plan format and structure
 ```
 
-This agent does not automatically inherit every parent-session tool. User-facing
-subagents are filtered to the safe allowlist (`attach_file`, `file_read`,
-`web_fetch`, `web_search`) even when `tools` is omitted.
+This agent inherits the parent session's runtime tool policy. User-facing
+subagents then apply the static subagent denylist, which blocks recursive
+delegation through `spawn_agent` even when `tools` is omitted.
 
 ## Fail-loud loader behavior
 

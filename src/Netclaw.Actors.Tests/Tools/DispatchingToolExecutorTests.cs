@@ -52,8 +52,8 @@ public class DispatchingToolExecutorTests
                 ["shell_execute"] = ToolApprovalMode.Auto
             }
         };
-        restrictedConfig.AudienceProfiles.Team.AllowedTools = ["file_read", "attach_file", "shell_execute"];
-        restrictedConfig.AudienceProfiles.Public.AllowedTools = ["file_read", "file_write", "attach_file"];
+        restrictedConfig.AudienceProfiles.Team.AllowedTools = ["file_read", "file_list", "file_write", "file_edit", "attach_file", "shell_execute"];
+        restrictedConfig.AudienceProfiles.Public.AllowedTools = ["file_read", "file_list", "attach_file"];
         var restrictedRegistry = new ToolRegistry();
         restrictedRegistry.WithFirstPartyTools(restrictedConfig);
         _restrictedExecutor = new DispatchingToolExecutor(
@@ -245,9 +245,9 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public async Task File_write_is_denied_outside_session_directory_in_public_context()
+    public async Task File_write_is_denied_outside_session_directory_in_team_context()
     {
-        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-public-write-{Guid.NewGuid():N}.txt");
+        var filePath = Path.Combine(Path.GetTempPath(), $"netclaw-team-write-{Guid.NewGuid():N}.txt");
 
         try
         {
@@ -255,18 +255,18 @@ public class DispatchingToolExecutorTests
                 "call-file-write-deny", "file_write",
                 ToolInput.Create("Path", filePath, "Content", "blocked"));
 
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-public-session-{Guid.NewGuid():N}");
+            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-team-session-{Guid.NewGuid():N}");
             Directory.CreateDirectory(sessionDir);
 
             var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
             {
-                Audience = TrustAudience.Public,
-                Boundary = TrustBoundary.Public,
+                Audience = TrustAudience.Team,
+                Boundary = TrustBoundary.Team,
                 ChannelType = "slack"
             };
 
             var result = await _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
-            Assert.Contains("Public trust context", result);
+            Assert.Contains("Team trust context", result);
             Assert.Contains("session directory", result);
             Assert.False(File.Exists(filePath));
         }
@@ -319,10 +319,10 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public void Team_profile_hides_shell_and_write_tools()
+    public void Team_profile_exposes_file_tools_and_hides_shell_and_webhooks()
     {
+        // Default Team profile (no explicit AllowedTools override).
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        config.AudienceProfiles.Team.AllowedTools = ["file_read", "attach_file"];
 
         var policy = new ToolAccessPolicy(
             config,
@@ -344,13 +344,53 @@ public class DispatchingToolExecutorTests
             ChannelType = "slack"
         };
 
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_write")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_edit")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("set_working_directory")!, teamContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("web_fetch")!, teamContext));
         Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, teamContext));
-        Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, teamContext));
         Assert.False(policy.IsToolExposed(registry.GetByName("set_webhook")!, teamContext));
         Assert.False(policy.IsToolExposed(registry.GetByName("list_webhooks")!, teamContext));
         Assert.False(policy.IsToolExposed(registry.GetByName("delete_webhook")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, teamContext));
-        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, teamContext));
+    }
+
+    [Fact]
+    public void Public_profile_exposes_read_tools_and_hides_mutation_tools()
+    {
+        // Default Public profile — least-trusted: read, enumerate, attach only.
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false));
+
+        var registry = new ToolRegistry();
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-public-tools-{Guid.NewGuid():N}"));
+        paths.EnsureDirectoriesExist();
+        registry.WithFirstPartyTools(config, toolAccessPolicy: policy, paths: paths, webhookRouteStore: new WebhookRouteStore(paths));
+
+        var publicContext = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", Path.GetTempPath())
+        {
+            Audience = TrustAudience.Public,
+            Boundary = TrustBoundary.Public,
+            ChannelType = "slack"
+        };
+
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_read")!, publicContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("file_list")!, publicContext));
+        Assert.True(policy.IsToolExposed(registry.GetByName("attach_file")!, publicContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("file_write")!, publicContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("file_edit")!, publicContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("shell_execute")!, publicContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("set_working_directory")!, publicContext));
+        Assert.False(policy.IsToolExposed(registry.GetByName("web_fetch")!, publicContext));
     }
 
     [Fact]

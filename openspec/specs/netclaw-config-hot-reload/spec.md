@@ -54,6 +54,14 @@ recovery state, and only then request daemon shutdown.
 - **THEN** the message is rejected with a restart-in-progress response
 - **AND** no new session actor is created for that message
 
+#### Scenario: Active session finishes current turn during restart drain
+
+- **GIVEN** a session is already in `Processing` or `Compacting` when restart drain begins
+- **WHEN** the coordinator requests drain for that session
+- **THEN** the session rejects new work
+- **AND** allows the current in-flight turn or compaction to finish
+- **AND** only then passivates and acknowledges the drain
+
 #### Scenario: Drain timeout still requests restart
 
 - **GIVEN** at least one recorded active session does not drain before the restart timeout

@@ -13,8 +13,18 @@ namespace Netclaw.Actors.Sessions.Handlers;
 internal sealed class TurnStateTracker
 {
     private const int MaxPreToolEmptyRetries = 2;
+    private const int MaxPostToolEmptyRetries = 3;
     private const int DuplicateToolThreshold = 3;
     private const double BudgetNudgeRatio = 0.75;
+
+    // Nudge for a thinking-only response: the model emitted reasoning but no
+    // final answer. Generic across providers — no provider-specific payload.
+    private const string ThinkingOnlyNudge =
+        "Your last response contained only reasoning and no reply to the user. "
+        + "Stop thinking and write your answer now as a normal assistant message.";
+
+    private const string EmptyResponseFailureMessage =
+        "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
 
     private readonly Dictionary<ToolCallFingerprint, int> _toolCallCounts = [];
 
@@ -23,7 +33,7 @@ internal sealed class TurnStateTracker
     public bool ForceNoToolsActive { get; set; }
 
     private bool _budgetNudgeSent;
-    private bool _postToolNudgeSent;
+    private int _postToolEmptyResponseCount;
     private int _preToolEmptyResponseCount;
     private bool _duplicateNudgeSent;
 
@@ -35,7 +45,7 @@ internal sealed class TurnStateTracker
         ToolCallCount = 0;
         ToolIterationCount = 0;
         _budgetNudgeSent = false;
-        _postToolNudgeSent = false;
+        _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
         ForceNoToolsActive = false;
         _toolCallCounts.Clear();
@@ -61,7 +71,7 @@ internal sealed class TurnStateTracker
     /// </summary>
     public void ResetEmptyResponseGuards()
     {
-        _postToolNudgeSent = false;
+        _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
         ForceNoToolsActive = false;
     }
@@ -83,31 +93,35 @@ internal sealed class TurnStateTracker
     /// <summary>
     /// Record completed tool results and determine what the actor should do next.
     /// Call after tool execution completes with the number of results in the batch.
+    /// Enforcement is iteration-based: one completed LLM-to-tools round increments
+    /// <see cref="ToolIterationCount"/> by 1 regardless of how many tool calls
+    /// were issued in parallel. <see cref="ToolCallCount"/> is retained for
+    /// telemetry only.
     /// </summary>
-    public ToolBudgetStatus RecordToolCompletion(int resultCount, int maxToolCallsPerTurn)
+    public ToolBudgetStatus RecordToolCompletion(int resultCount, int maxToolIterationsPerTurn)
     {
         ToolCallCount += resultCount;
         ToolIterationCount++;
 
-        if (ToolCallCount >= maxToolCallsPerTurn)
+        if (ToolIterationCount >= maxToolIterationsPerTurn)
         {
             return new ToolBudgetStatus.Exhausted(
-                $"You have reached the tool call limit for this turn. "
+                $"You have reached the tool iteration limit for this turn. "
                 + "Do NOT request any more tools. "
                 + "Summarize the work you completed and answer the user's question "
                 + "based on the information you have gathered so far. "
                 + "If you could not complete the task, explain what you found and what remains.");
         }
 
-        var budgetThreshold = (int)(maxToolCallsPerTurn * BudgetNudgeRatio);
-        if (ToolCallCount >= budgetThreshold && !_budgetNudgeSent)
+        var budgetThreshold = (int)(maxToolIterationsPerTurn * BudgetNudgeRatio);
+        if (ToolIterationCount >= budgetThreshold && !_budgetNudgeSent)
         {
             _budgetNudgeSent = true;
-            var remaining = maxToolCallsPerTurn - ToolCallCount;
+            var remaining = maxToolIterationsPerTurn - ToolIterationCount;
             return new ToolBudgetStatus.NudgeNeeded(
                 remaining,
-                $"You have used {ToolCallCount} of {maxToolCallsPerTurn} tool calls for this turn. "
-                + $"You have approximately {remaining} tool calls remaining. "
+                $"You have used {ToolIterationCount} of {maxToolIterationsPerTurn} tool iterations for this turn. "
+                + $"You have approximately {remaining} iterations remaining. "
                 + "Start wrapping up your tool usage and prepare to answer the user's question.");
         }
 
@@ -144,38 +158,43 @@ internal sealed class TurnStateTracker
     // ── Empty response decisions ──
 
     /// <summary>
-    /// The LLM produced no text and no tool calls. Determine what the actor should do.
+    /// The LLM produced no reply text and no tool calls. Determine what the
+    /// actor should do. Expects <paramref name="kind"/> to be
+    /// <see cref="LlmResponseKind.ThinkingOnly"/> or
+    /// <see cref="LlmResponseKind.Empty"/>; a thinking-only response gets a
+    /// nudge telling the model to surface its answer.
     /// </summary>
-    public EmptyResponseAction EvaluateEmptyResponse()
+    public EmptyResponseAction EvaluateEmptyResponse(LlmResponseKind kind)
     {
+        var hasThinking = kind == LlmResponseKind.ThinkingOnly;
+
         // Pre-tool: LLM hasn't done any tool work yet
         if (ToolIterationCount == 0)
         {
             _preToolEmptyResponseCount++;
             if (_preToolEmptyResponseCount > MaxPreToolEmptyRetries)
                 return new EmptyResponseAction.Fail(
-                    "I didn't manage to produce a reply. Please try rephrasing or sending your request again.",
+                    EmptyResponseFailureMessage,
                     new InvalidOperationException("LLM produced repeated empty responses before any tool execution."));
 
-            return new EmptyResponseAction.Retry(
-                "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
-                + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
-                + "MCP tools are not directly callable until loaded via search_tools.");
+            return new EmptyResponseAction.Retry(hasThinking
+                ? ThinkingOnlyNudge
+                : "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
+                  + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
+                  + "MCP tools are not directly callable until loaded via search_tools.");
         }
 
-        // Post-tool, first empty: nudge to continue
-        if (!_postToolNudgeSent)
-        {
-            _postToolNudgeSent = true;
-            return new EmptyResponseAction.Retry(
-                "You received tool results but did not respond. "
-                + "Continue working or answer the user's question.");
-        }
+        // Post-tool: nudge the model to produce its final reply
+        _postToolEmptyResponseCount++;
+        if (_postToolEmptyResponseCount > MaxPostToolEmptyRetries)
+            return new EmptyResponseAction.Fail(
+                EmptyResponseFailureMessage,
+                new InvalidOperationException("LLM produced repeated empty responses after tool execution."));
 
-        // Post-tool, already nudged: give up
-        return new EmptyResponseAction.Fail(
-            "I didn't manage to produce a reply. Please try rephrasing or sending your request again.",
-            new InvalidOperationException("LLM produced an empty response after tool execution and follow-up nudge."));
+        return new EmptyResponseAction.Retry(hasThinking
+            ? ThinkingOnlyNudge
+            : "You received tool results but did not respond. "
+              + "Continue working or answer the user's question.");
     }
 }
 

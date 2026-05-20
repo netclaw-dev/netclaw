@@ -30,13 +30,13 @@ public sealed class SetWorkingDirectoryAudienceTests
     }
 
     [Fact]
-    public void SetWorkingDirectory_BlockedForTeamAudience_ByDefault()
+    public void SetWorkingDirectory_AllowedForTeamAudience_ByDefault()
     {
         var config = new ToolConfig();
         var policy = new ToolAccessPolicy(config, Defaults);
         var tool = CreateFakeTool();
 
-        Assert.False(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
+        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
     }
 
     [Fact]
@@ -47,17 +47,6 @@ public sealed class SetWorkingDirectoryAudienceTests
         var tool = CreateFakeTool();
 
         Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Personal)));
-    }
-
-    [Fact]
-    public void SetWorkingDirectory_AllowedForTeam_WhenExplicitlyGranted()
-    {
-        var config = new ToolConfig();
-        config.AudienceProfiles.Team.AllowedTools.Add("set_working_directory");
-        var policy = new ToolAccessPolicy(config, Defaults);
-        var tool = CreateFakeTool();
-
-        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
     }
 
     private static FakeNetclawTool CreateFakeTool()

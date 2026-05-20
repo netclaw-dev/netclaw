@@ -238,17 +238,44 @@ public static partial class SlackBlockConverter
                 Style = new RichTextStyle { Code = true }
             });
 
-        // Links: [text](url)
-        TryMatch(LinkRegex(), text, ref best, (m) =>
-            new RichTextLink
-            {
-                Text = m.Groups[1].Value,
-                Url = m.Groups[2].Value
-            });
+        // Links: [text](url) — normalise the URL (recovers LLM-mangled
+        // OAuth scope lists) then choose the right element. Safe URLs
+        // become Block Kit RichTextLink (proper clickable Slack-native
+        // link — addresses #850). Rewrite-prone URLs become inline-
+        // code RichTextText so Slack's click redirector can't re-encode
+        // them; the label is dropped because the URL has to be the
+        // visible payload for copy. Uses SlackTextProtector's shared
+        // markdown-link regex so both surfaces tokenize links identically.
+        TryMatch(SlackTextProtector.MarkdownLinkRegex(), text, ref best, (m) =>
+        {
+            var url = SlackTextProtector.NormaliseScopeList(m.Groups[2].Value);
+            return SlackTextProtector.IsRewriteProne(url)
+                ? (RichTextSectionElement)new RichTextText
+                {
+                    Text = url,
+                    Style = new RichTextStyle { Code = true }
+                }
+                : new RichTextLink
+                {
+                    Text = m.Groups[1].Value,
+                    Url = url
+                };
+        });
 
-        // Bare URLs: https://example.com
-        TryMatch(BareUrlRegex(), text, ref best, (m) =>
-            new RichTextLink { Url = m.Value });
+        // Bare URLs: https://example.com — same is-it-safe-to-link
+        // heuristic. Uses SlackTextProtector's shared bare-URL regex so
+        // the Block Kit and plain-text surfaces tokenize URLs identically.
+        TryMatch(SlackTextProtector.BareUrlRegex(), text, ref best, (m) =>
+        {
+            var url = SlackTextProtector.NormaliseScopeList(m.Value);
+            return SlackTextProtector.IsRewriteProne(url)
+                ? (RichTextSectionElement)new RichTextText
+                {
+                    Text = url,
+                    Style = new RichTextStyle { Code = true }
+                }
+                : new RichTextLink { Url = url };
+        });
 
         if (best.Element is null)
             return (0, 0, null, null);
@@ -326,14 +353,6 @@ public static partial class SlackBlockConverter
     // Inline code: `text`
     [GeneratedRegex(@"`([^`]+)`")]
     private static partial Regex InlineCodeRegex();
-
-    // Links: [text](url)
-    [GeneratedRegex(@"\[([^\]]+)\]\(([^)]+)\)")]
-    private static partial Regex LinkRegex();
-
-    // Bare URLs: https://example.com
-    [GeneratedRegex(@"https?://[^\s)\]>]+")]
-    private static partial Regex BareUrlRegex();
 
     // Ordered list prefix: 1. or 2. etc.
     [GeneratedRegex(@"^\d+\.\s")]

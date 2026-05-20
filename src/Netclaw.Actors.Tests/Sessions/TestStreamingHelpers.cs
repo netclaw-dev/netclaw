@@ -18,6 +18,18 @@ internal static class TestStreamingHelpers
         yield break;
     }
 
+    /// <summary>
+    /// Completes (as cancelled) only when <paramref name="ct"/> is cancelled.
+    /// Lets a test fake park a stream so the consumer's watchdog or cancellation
+    /// is the only thing that can end it.
+    /// </summary>
+    public static async Task ParkUntilCancelledAsync(CancellationToken ct)
+    {
+        var parked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using (ct.Register(static state => ((TaskCompletionSource)state!).TrySetCanceled(), parked))
+            await parked.Task;
+    }
+
     public static async IAsyncEnumerable<ChatResponseUpdate> ReturnTextAsync(
         string text,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)

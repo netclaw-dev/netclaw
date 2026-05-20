@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Tools;
 
@@ -58,6 +59,10 @@ internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeed
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
 }
+
+internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result) : INoSerializationVerificationNeeded;
+
+internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificationNeeded;
 
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {

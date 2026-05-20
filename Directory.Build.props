@@ -8,37 +8,45 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.18.2</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.18.1 — macOS binaries, provider renaming, shell subprocess cleanup, and stream stability fixes
+    <VersionPrefix>0.19.0</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.19.0 — Streaming tool-call execution, Discord proactive posting, isolated channel failures, and durable approval recovery
 
 **Features**
 
-* **macOS (Apple Silicon) support** — Netclaw now ships `osx-arm64` self-contained binaries, and the install script supports macOS installs end-to-end with a Rosetta guard and an explicit Intel-Mac rejection. This is the first release to publish macOS binaries. Path-security checks were also corrected for macOS's `/private` symlink layout. launchd service install and notarization are tracked as follow-ups ([#1015](https://github.com/netclaw-dev/netclaw/issues/1015), [#1016](https://github.com/netclaw-dev/netclaw/issues/1016)). ([#1018](https://github.com/netclaw-dev/netclaw/pull/1018))
+* **Streaming tool-call execution** — tool execution now yields an `IAsyncEnumerable&lt;ToolCallUpdate&gt;` stream monitored by a per-call, two-phase inactivity watchdog, replacing the flat per-attempt timeout. A `spawn_agent` sub-agent making progress is no longer killed mid-run by an uncoordinated ~90s timeout, while a genuinely stalled tool call is still caught. All existing tools inherit a single-completion-item default unchanged. ([#1045](https://github.com/netclaw-dev/netclaw/pull/1045))
 
-* **Editable provider names + rename action** — the provider add flow now opens with a dedicated Name step pre-filled with a suggested default, so multiple self-hosted endpoints (vLLM, llama.cpp) and aggregator accounts are no longer stuck with auto-generated names like `my-vllm-2`. A new `[N] Rename` action and CLI subcommand rename existing providers, cascading the change to `Models.{Main,Fallback,Compaction}.Provider` role references in the same atomic write. ([#997](https://github.com/netclaw-dev/netclaw/pull/997))
+* **`send_discord_message` proactive-post tool** — the agent can now start a new Discord conversation for channel-targeted reminder delivery and cross-channel outreach, at parity with `send_slack_message`. The posted message becomes the thread root, and user replies in the created thread route back to a live session. Discord reminder delivery is hardened to explicit channel targets only (`channel:&lt;id&gt;` or `&lt;#id&gt;`); DM, user, and bare-snowflake targets are rejected. Closes [#953](https://github.com/netclaw-dev/netclaw/issues/953). ([#1026](https://github.com/netclaw-dev/netclaw/pull/1026))
 
-* **Approval creation timestamps + gate near-miss diagnostics** — persisted tool approvals now carry an optional `createdAt` timestamp, surfaced as a relative creation time in `netclaw approvals list`, its `--json` output, and the approvals TUI. When a shell pattern is prompted despite a same-verb persisted grant, the daemon now logs why it did not match (directory not under grant, symlink segment, verb-case mismatch). The on-disk schema is unchanged and existing approval files load without migration. ([#1010](https://github.com/netclaw-dev/netclaw/pull/1010))
+* **Service identity on operational webhook alerts** — operational webhook alerts now carry OpenTelemetry `service.*` resource attributes (`service.name`, `service.namespace`, `service.instance.id`, `service.version`), so alerts from multiple Netclaw instances posting to the same Slack channel or endpoint can be told apart. Service identity is sourced purely from the standard OpenTelemetry environment variables (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`); the short-lived `Telemetry:ServiceName` config property from 0.18.2 is removed in favor of this standard configuration. ([#1078](https://github.com/netclaw-dev/netclaw/pull/1078))
+
+* **Expanded safe-verb auto-allow list** — trivially read-only verbs (`date`, `whoami`, `uname`, `ps`, read-only `git`/`gh` query subcommands like `git describe` and `gh pr view`) no longer hit the interactive approval gate, cutting the dominant fixable source of approval-prompt spam. Command-prefixing and mutating/network-writing verbs remain excluded. ([#1071](https://github.com/netclaw-dev/netclaw/pull/1071))
 
 **Bug Fixes**
 
-* **`shell_execute` no longer orphans subprocesses** — `shell_execute` could leave a subprocess running indefinitely when the kill branch was skipped on a timeout, and interactive Termina commands launched by a non-interactive caller would hang forever. Process kill is now driven off the linked cancellation token, and a remaining gap where `ShellTool.Kill` throwing `Win32Exception` left pipe reads hung at EOF is also closed. ([#1019](https://github.com/netclaw-dev/netclaw/pull/1019))
+* **Tool-approval recovery is now journal-backed** — a tool-approval prompt that outlived its session via idle passivation, turn failure, or daemon restart is now recovered from the event journal rather than snapshot-only state. Pending approvals, approval resolution, requester identity, and trust context all survive a cold re-drive, and already-completed sibling calls are no longer replayed in a recovered mixed batch. ([#1044](https://github.com/netclaw-dev/netclaw/pull/1044))
 
-* **Tool results without a ToolCallId now fail loud** — a missing `ToolCallId` is no longer coalesced to an empty value that handed approval matching and channel rendering a non-correlatable id; the session actor throws instead, surfacing the assembly bug. ([#1023](https://github.com/netclaw-dev/netclaw/pull/1023))
+* **Channel connection failures are contained** — a misconfigured channel (such as a Discord bot missing the Message Content privileged intent) previously took the whole daemon down by escalating into a full Akka coordinated shutdown. Discord and Slack channels now fail in isolation: fatal gateway close codes are classified and reported via the existing `channel.disconn` path instead of rethrowing and aborting the host. ([#1033](https://github.com/netclaw-dev/netclaw/pull/1033), [#1083](https://github.com/netclaw-dev/netclaw/pull/1083))
 
-* **Proactive thread hydration re-armed** — a proactively-created channel thread (such as a reminder posting via `send_slack_message`) no longer loses the message that opened it; a deferred hydration is now re-armed so the first authorized inbound completes it. ([#1008](https://github.com/netclaw-dev/netclaw/pull/1008))
+* **`spawn_agent` routes through its streaming override** — `SpawnAgentTool.ExecuteStreamAsync` was an unreachable orphan method, so `spawn_agent` collapsed to the non-streaming path and a healthy, actively-streaming sub-agent was still killed at the flat 90s timeout. The streaming override is now compiler-enforced through the whole tool hierarchy, so this class of bug cannot recur silently. ([#1080](https://github.com/netclaw-dev/netclaw/pull/1080))
 
-* **Cached shell approval matches audited** — cached shell approvals are now evaluated with full approval candidates and record `PreviouslyApproved` audit context.
+* **`file_edit`/`file_write` no longer lose updates** — concurrent `file_edit` calls against the same file in one assistant turn each read the same original content, and the last write clobbered the others while every call still reported success — a lost-update race present since `file_edit` was introduced. A new process-wide, per-path serialization gate routes the read-modify-write through, so disjoint same-file edits all compose and apply. ([#1062](https://github.com/netclaw-dev/netclaw/pull/1062))
 
-* **`netclaw approvals list` fills the terminal** — the approvals list previously showed only 10 of 100+ entries with a scrollbar floating in an empty panel; it now grows with the terminal height. ([#1005](https://github.com/netclaw-dev/netclaw/pull/1005))
+* **Shell timeout countdown starts after process spawn** — `shell_execute` charged process-spawn overhead against the command's timeout budget, so a configured or requested timeout now means "the command gets N seconds" rather than "N seconds minus shell-spawn overhead." ([#1074](https://github.com/netclaw-dev/netclaw/pull/1074))
 
-* **Daemon no longer crashes on discarded stream tasks** — Akka.Streams stages discarded internal `Task&lt;Done&gt;` instances that surfaced as daemon-unobserved crash logs during hot reload and idle passivation; those tasks are now observed. ([#998](https://github.com/netclaw-dev/netclaw/pull/998))
+* **Release notes deduplicated** — a separate lowercase `release_notes.md` introduced in the 0.18.2 release collided with the canonical `RELEASE_NOTES.md` on case-insensitive filesystems; the 0.18.2 entry is now folded into the cumulative changelog and the duplicate file removed. ([#1082](https://github.com/netclaw-dev/netclaw/pull/1082))
 
-* **Session log writes deterministic under Windows share-mode races** — `SessionLogFile.AppendLine` now retries transient sharing violations with backoff and uses the canonical `FileShare.ReadWrite|Delete` mask, so concurrent readers no longer cause silently-dropped audit lines on Windows. ([#996](https://github.com/netclaw-dev/netclaw/pull/996))
+**Build/CI**
+
+* **Native cross-platform smoke harness** — the smoke-testing suite was restructured across multiple phases: a native cross-platform harness replaces the Docker-based one, with screenshot-regression mode, an MCP-integration scenario and test server, a macOS smoke leg with a `netclaw doctor` check, and a split Linux/macOS CI cadence. ([#1047](https://github.com/netclaw-dev/netclaw/pull/1047), [#1048](https://github.com/netclaw-dev/netclaw/pull/1048), [#1049](https://github.com/netclaw-dev/netclaw/pull/1049), [#1051](https://github.com/netclaw-dev/netclaw/pull/1051), [#1054](https://github.com/netclaw-dev/netclaw/pull/1054), [#1056](https://github.com/netclaw-dev/netclaw/pull/1056), [#1061](https://github.com/netclaw-dev/netclaw/pull/1061), [#1067](https://github.com/netclaw-dev/netclaw/pull/1067), [#1076](https://github.com/netclaw-dev/netclaw/pull/1076))
+
+* **Canonical publish script** — the `dotnet publish` flags for shipped self-contained binaries are now consolidated into a single `publish-binaries.sh` script shared by the release and image-build callers. Single-file compression is disabled for `osx-arm64`, which corrupted memory on Apple Silicon during single-file self-extract. ([#1047](https://github.com/netclaw-dev/netclaw/pull/1047))
+
+* Fixed a mislabeled "Upload Linux install script" CI step and stabilized flaky reminder and shell timeout tests. ([#1050](https://github.com/netclaw-dev/netclaw/pull/1050), [#1053](https://github.com/netclaw-dev/netclaw/pull/1053), [#1066](https://github.com/netclaw-dev/netclaw/pull/1066))
 
 **Dependencies**
 
-* Upgraded `ShellSyntaxTree` to 0.1.5 and routed `ExtractPatterns` through `BashParser`. ([#1007](https://github.com/netclaw-dev/netclaw/pull/1007), [#1020](https://github.com/netclaw-dev/netclaw/pull/1020))
-* Bumped `ModelContextProtocol.Core` from 1.2.0 to 1.3.0. ([#992](https://github.com/netclaw-dev/netclaw/pull/992))</PackageReleaseNotes>
+* Bumped all Akka.Hosting-linked packages (Akka.Hosting, Akka.Cluster.Sharding, Akka.Persistence, Akka.Persistence.Hosting, Akka.Hosting.TestKit) from 1.5.67 to 1.5.68. ([#1081](https://github.com/netclaw-dev/netclaw/pull/1081))
+* Updated the Termina package to 0.9.0. ([#1073](https://github.com/netclaw-dev/netclaw/pull/1073))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

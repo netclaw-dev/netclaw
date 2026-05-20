@@ -123,13 +123,16 @@ the command:
 
 | Command | Pattern |
 |---------|---------|
-| `git push origin main` | `git push` |
-| `docker compose up -d` | `docker compose` |
+| `git push origin main` | `git push origin main` |
+| `docker compose up -d` | `docker compose up` |
 | `ls -la /tmp` | `ls` |
 | `dotnet build --configuration Release` | `dotnet build` |
 
-Approving `git push` covers all `git push` variants. A typical workflow
-produces ~10 patterns after a week of use.
+Extraction is greedy: bare-word operands (subcommands, remote names, branch
+names) stay in the verb chain; the chain stops at the first flag, path, or
+URL. Approving `git push origin main` covers later `git push origin main`
+calls, not `git push origin dev` — each distinct verb chain is its own
+pattern.
 
 For **compound commands** (`&&`, `||`, `;`, `|`), each segment is checked
 independently. If any segment is unapproved, all unapproved patterns are
@@ -143,6 +146,23 @@ control-plane targets. Writes under the control-plane root use mode keys like
 `file_write:control-plane` / `file_edit:control-plane` and persist approvals as
 path-scoped patterns (for example,
 `file_write:control-plane:netclaw.json`).
+
+### Read-only verbs skip the prompt
+
+Demonstrably read-only verbs auto-run with no prompt when invoked inside a
+trusted zone (`session_dir`, or `project_dir` for Personal/Team). The bundled
+safe-verb lists (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover file
+readers (`ls`, `grep`, `cat`), system/info verbs (`date`, `whoami`, `uname`,
+`uptime`), and read-only `git`/`gh` queries (`git status`, `git log`,
+`gh pr view`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
+command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
+(`gh api`, `curl`), and environment/process-inspection verbs (`printenv`,
+`ps`) are never auto-allowed — the trusted-zone gate scopes verbs that act on
+a path, so it cannot contain a verb that dumps the process environment or the
+process table. The list ships with the daemon and is widened only through
+code review — the agent cannot extend its own auto-pass surface. A compound
+command auto-runs only when every clause is a safe verb; a single mutating
+clause makes the whole command prompt.
 
 ### Persistent approvals
 

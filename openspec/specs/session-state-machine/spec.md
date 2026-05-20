@@ -42,15 +42,15 @@ The system SHALL enforce the following transition rules:
 - `Ready → Processing, Compacting, Passivating`
 - `Processing → Ready, Compacting`
 - `Compacting → Ready, Processing`
-- `Passivating` is terminal (no transitions out)
+- `Passivating → Ready`
 
 Any transition not in this set SHALL throw `InvalidOperationException`.
 
-#### Scenario: Passivating is terminal
+#### Scenario: Passivating may abort back to Ready
 
 - **GIVEN** the session actor is in phase `Passivating`
-- **WHEN** any `TransitionTo()` call is attempted
-- **THEN** an `InvalidOperationException` is thrown
+- **WHEN** a racing message aborts shutdown before the final stop
+- **THEN** `TransitionTo(Ready)` is allowed
 
 #### Scenario: Recovering only transitions to Ready
 
@@ -61,10 +61,12 @@ Any transition not in this set SHALL throw `InvalidOperationException`.
 ### Requirement: Passivating behavior
 
 The session actor SHALL enter `Passivating` phase when idle timeout fires and no
-subscribers are active. In `Passivating`, the actor SHALL buffer incoming
-`SendUserMessage` commands, request final memory distillation from the observer
-actor (if present), wait up to 5 seconds for completion, save a snapshot, notify
-the lifecycle observer, and stop itself.
+subscribers are active. In `Passivating`, the actor SHALL request final memory
+distillation from the observer actor (if present), wait up to 5 seconds for
+completion, save a snapshot, notify the lifecycle observer, and stop itself.
+Idle-driven passivation SHALL include a short post-snapshot grace window where a
+racing inbound message can abort the stop and return the actor to `Ready`
+instead of forcing a full stop and recovery cycle.
 
 #### Scenario: Idle timeout triggers passivation with no subscribers
 
@@ -106,8 +108,9 @@ the lifecycle observer, and stop itself.
 
 - **GIVEN** the session actor is in phase `Passivating`
 - **WHEN** a `SendUserMessage` arrives
-- **THEN** the message is buffered
-- **AND** the buffered message is available for processing after rehydration
+- **THEN** idle passivation is aborted
+- **AND** the actor transitions `Passivating → Ready`
+- **AND** the message is handled immediately
 
 ### Requirement: Phase transition logging and observability
 
@@ -127,3 +130,68 @@ phases. The observer actor SHALL be notified of phase changes via
 - **GIVEN** the session actor has an observer actor
 - **WHEN** the actor transitions to `Passivating`
 - **THEN** the observer actor receives a `SessionPhaseChanged(Passivating)` message
+
+### Requirement: Tool interaction response accepted in all session phases
+
+The session actor SHALL accept a `ToolInteractionResponse` in the `Ready`,
+`Passivating`, and `Compacting` phases, not only in `Processing`. A response
+SHALL NOT be left unhandled (dead-lettered) because the session moved out of
+`Processing` while an approval prompt was outstanding. Handling SHALL preserve
+the legal phase-transition rules: re-driving a tool batch transitions
+`Ready → Processing`, and aborting passivation transitions `Passivating → Ready`.
+
+#### Scenario: Response in Ready re-drives the tool batch
+
+- **GIVEN** the session actor is in phase `Ready` with a restored pending tool
+  interaction (e.g. after cold recovery)
+- **WHEN** a `ToolInteractionResponse` for that call arrives
+- **THEN** the actor SHALL transition `Ready → Processing`
+- **AND** re-drive the parked tool batch and continue the turn
+
+#### Scenario: Response in Passivating aborts passivation then is handled
+
+- **GIVEN** the session actor is in phase `Passivating`
+- **WHEN** a `ToolInteractionResponse` for that call arrives before the actor stops
+- **THEN** the actor SHALL abort passivation, cancel its passivation timers,
+  and transition `Passivating → Ready`
+- **AND** then handle the response normally
+- **AND** if the call is still pending the turn resumes from that state
+- **AND** if the call is expired the actor emits the visible expired-prompt notice
+
+### Requirement: Restart-drain passivation is non-interruptible
+
+When a coordinated daemon restart requests session drain, the actor SHALL reject
+new work, allow the current in-flight turn or compaction to finish, and then
+enter `Passivating`. Once restart-drain mode reaches `Passivating`, shutdown is
+non-interruptible: inbound user messages and tool-interaction responses SHALL
+NOT abort passivation.
+
+#### Scenario: Restart drain finishes current turn before passivating
+
+- **GIVEN** the session actor is in `Processing` or `Compacting`
+- **WHEN** restart drain is requested
+- **THEN** the actor rejects new work
+- **AND** allows the current in-flight work to finish
+- **AND** only then transitions to `Passivating`
+
+#### Scenario: Restart-drain passivation rejects racing inbound work
+
+- **GIVEN** the session actor is in `Passivating` because restart drain is active
+- **WHEN** a `SendUserMessage` or `ToolInteractionResponse` arrives
+- **THEN** the actor does NOT abort passivation
+- **AND** the shutdown continues to completion
+
+#### Scenario: Response in Compacting is buffered and replayed
+
+- **GIVEN** the session actor is in phase `Compacting`
+- **WHEN** a `ToolInteractionResponse` arrives
+- **THEN** the actor SHALL buffer the response rather than re-driving mid-compaction
+- **AND** SHALL replay the buffered response to itself after compaction completes
+
+#### Scenario: Unknown call id does not transition phase
+
+- **GIVEN** the session actor is in phase `Ready` with no matching pending
+  interaction and no reconstructable call in history
+- **WHEN** a `ToolInteractionResponse` arrives
+- **THEN** the actor SHALL remain in phase `Ready`
+- **AND** SHALL emit a user-visible "approval prompt expired" message

@@ -131,6 +131,10 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
                 Enabled = true,
                 MentionOnly = false,
                 AllowDirectMessages = true,
+                // U_HUMAN is operator-allowlisted so DMs from it resolve to the
+                // Team audience (rich attachment policy); a non-allowlisted DM
+                // sender would resolve to Public (image-only).
+                AllowedUserIds = ["U_HUMAN"],
                 BotToken = new SensitiveString("xoxb-fake-token")
             },
             BotUserId: new SlackUserId("UBOT"),

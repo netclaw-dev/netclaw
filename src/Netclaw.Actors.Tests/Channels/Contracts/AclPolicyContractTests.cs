@@ -125,9 +125,25 @@ public abstract class AclPolicyContractTests
     // --- Audience resolution ---
 
     [Fact]
-    public void DM_defaults_to_Team_audience()
+    public void DM_from_non_allowlisted_user_resolves_to_Public_audience()
     {
+        // Team requires an operator-vetted sender. A DM allowed only because
+        // AllowedUserIds is empty comes from an unvetted user and resolves to
+        // the least-trusted Public audience.
         var options = new ChannelOptionsBuilder { AllowDirectMessages = true };
+        var result = EvaluateDm("user-1", options);
+        Assert.True(result.IsAllowed);
+        Assert.Equal(TrustAudience.Public, result.Audience);
+    }
+
+    [Fact]
+    public void DM_from_allowlisted_user_resolves_to_Team_audience()
+    {
+        var options = new ChannelOptionsBuilder
+        {
+            AllowDirectMessages = true,
+            AllowedUserIds = ["user-1"]
+        };
         var result = EvaluateDm("user-1", options);
         Assert.True(result.IsAllowed);
         Assert.Equal(TrustAudience.Team, result.Audience);

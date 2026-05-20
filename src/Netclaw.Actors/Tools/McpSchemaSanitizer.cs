@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Netclaw.Tools;
@@ -34,18 +35,32 @@ public static class McpSchemaSanitizer
     }
 
     /// <summary>
-    /// Coerces tool call arguments to their expected types.
-    /// Some LLMs (like Ollama) send numbers as strings (e.g., "10" instead of 10).
+    /// Coerces tool-call argument values toward the types the MCP tool's
+    /// declared input schema specifies, immediately before dispatch.
     /// </summary>
-    public static IDictionary<string, object?>? CoerceArguments(IDictionary<string, object?>? arguments)
+    /// <remarks>
+    /// The declared schema is the sole authority: a value is only ever coerced
+    /// <em>toward</em> the type its parameter declares, never on a guess from
+    /// the value's runtime shape. A stringified <c>array</c>/<c>object</c> is
+    /// reconstructed; a string is parsed to a scalar only when the schema
+    /// declares that scalar; a <c>string</c>-typed parameter is left untouched;
+    /// a parameter the schema does not constrain is passed through unchanged.
+    /// Returns a new dictionary — the input is never mutated, so argument
+    /// values an authorization decision already evaluated cannot change.
+    /// </remarks>
+    public static IDictionary<string, object?>? CoerceArguments(
+        IDictionary<string, object?>? arguments,
+        JsonElement schema)
     {
         if (arguments is null)
             return null;
 
+        var properties = TryGetSchemaProperties(schema);
+
         var coerced = new Dictionary<string, object?>(arguments.Count);
         foreach (var (key, value) in arguments)
         {
-            coerced[key] = CoerceValue(value);
+            coerced[key] = CoerceValue(value, ResolveDeclaredKinds(properties, key));
         }
 
         return coerced;
@@ -62,12 +77,9 @@ public static class McpSchemaSanitizer
         if (arguments is null)
             return null;
 
-        if (parameterSchema.ValueKind != JsonValueKind.Object
-            || !parameterSchema.TryGetProperty("properties", out var properties)
-            || properties.ValueKind != JsonValueKind.Object)
-        {
+        var properties = TryGetSchemaProperties(parameterSchema);
+        if (properties.ValueKind != JsonValueKind.Object)
             return arguments;
-        }
 
         var canonicalKeys = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var property in properties.EnumerateObject())
@@ -385,65 +397,187 @@ public static class McpSchemaSanitizer
 
     // ── Argument coercion ──
 
-    private static object? CoerceValue(object? value)
-    {
-        return value switch
-        {
-            string s => CoerceStringValue(s),
-            JsonElement je => ConvertJsonValue(je),
-            IList<object?> list => list.Select(CoerceValue).ToList(),
-            IDictionary<string, object?> dict => dict.ToDictionary(
-                kvp => kvp.Key, kvp => CoerceValue(kvp.Value)),
-            _ => value
-        };
-    }
-
     /// <summary>
-    /// Coerces string values to appropriate types when possible.
-    /// Some LLMs (like Ollama) incorrectly pass numbers as strings.
+    /// The JSON value kinds a parameter's schema may declare, as a set so that
+    /// union types (e.g. <c>["array", "null"]</c>) resolve cleanly.
+    /// <see cref="SchemaKinds.None"/> means the schema does not constrain the
+    /// parameter's type.
     /// </summary>
-    private static object? CoerceStringValue(string? str)
+    [Flags]
+    private enum SchemaKinds
     {
-        if (str == null)
-            return null;
-
-        if (long.TryParse(str, out var longVal))
-            return longVal;
-
-        if (double.TryParse(str, out var doubleVal))
-            return doubleVal;
-
-        if (str.Equals("true", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (str.Equals("false", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        return str;
+        None = 0,
+        String = 1,
+        Integer = 1 << 1,
+        Number = 1 << 2,
+        Boolean = 1 << 3,
+        Array = 1 << 4,
+        Object = 1 << 5,
     }
 
-    private static object? ConvertJsonValue(JsonElement value)
+    private static JsonElement TryGetSchemaProperties(JsonElement schema)
     {
-        return value.ValueKind switch
+        if (schema.ValueKind == JsonValueKind.Object
+            && schema.TryGetProperty("properties", out var properties)
+            && properties.ValueKind == JsonValueKind.Object)
         {
-            JsonValueKind.String => CoerceStringValue(value.GetString()),
-            JsonValueKind.Number => value.TryGetInt64(out var l) ? l : value.GetDouble(),
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            JsonValueKind.Null => null,
-            JsonValueKind.Array => value.EnumerateArray().Select(ConvertJsonValue).ToList(),
-            JsonValueKind.Object => ConvertJsonObject(value),
-            _ => value.GetRawText()
-        };
-    }
-
-    private static Dictionary<string, object?> ConvertJsonObject(JsonElement element)
-    {
-        var dict = new Dictionary<string, object?>();
-        foreach (var prop in element.EnumerateObject())
-        {
-            dict[prop.Name] = ConvertJsonValue(prop.Value);
+            return properties;
         }
 
-        return dict;
+        return default;
     }
+
+    private static SchemaKinds ResolveDeclaredKinds(JsonElement properties, string parameterName)
+    {
+        // Undeclared: no properties block, the parameter is absent, its schema
+        // is an empty `{}`, or it is typed only via $ref/anyOf/oneOf/allOf
+        // (no `type` key). Undeclared parameters pass through uncoerced — the
+        // schema gave no type to coerce toward.
+        if (properties.ValueKind != JsonValueKind.Object
+            || !properties.TryGetProperty(parameterName, out var parameterSchema)
+            || parameterSchema.ValueKind != JsonValueKind.Object
+            || !parameterSchema.TryGetProperty("type", out var typeElement))
+        {
+            return SchemaKinds.None;
+        }
+
+        switch (typeElement.ValueKind)
+        {
+            case JsonValueKind.String:
+                return MapTypeName(typeElement.GetString());
+
+            case JsonValueKind.Array:
+                var kinds = SchemaKinds.None;
+                foreach (var entry in typeElement.EnumerateArray())
+                {
+                    if (entry.ValueKind == JsonValueKind.String)
+                        kinds |= MapTypeName(entry.GetString());
+                }
+
+                return kinds;
+
+            default:
+                return SchemaKinds.None;
+        }
+    }
+
+    private static SchemaKinds MapTypeName(string? typeName) => typeName switch
+    {
+        "string" => SchemaKinds.String,
+        "integer" => SchemaKinds.Integer,
+        "number" => SchemaKinds.Number,
+        "boolean" => SchemaKinds.Boolean,
+        "array" => SchemaKinds.Array,
+        "object" => SchemaKinds.Object,
+        _ => SchemaKinds.None,
+    };
+
+    private static object? CoerceValue(object? value, SchemaKinds declared)
+    {
+        // The schema does not constrain this parameter — forward the value
+        // exactly as the model emitted it. Coercing here would be a shape
+        // guess, not a schema-directed transform.
+        if (declared == SchemaKinds.None)
+            return value;
+
+        // Coercion only ever acts on a value that arrived as a string — either
+        // a CLR string or a JsonElement of ValueKind.String. Anything else is
+        // already structured/typed and is trusted as-is.
+        var stringForm = AsStringValue(value);
+        if (stringForm is null)
+            return value;
+
+        // The schema already accepts a string here, so the value is valid
+        // as-is — coercing it would invent a type the model did not choose.
+        if ((declared & SchemaKinds.String) != 0)
+            return value;
+
+        // The model emitted a container as a JSON-encoded string. Reconstruct
+        // it, but only when the parsed kind matches a kind the schema declares
+        // — never coerce across kinds.
+        if ((declared & (SchemaKinds.Array | SchemaKinds.Object)) != 0
+            && TryParseJsonContainer(stringForm, out var parsed))
+        {
+            var parsedKind = parsed.ValueKind switch
+            {
+                JsonValueKind.Array => SchemaKinds.Array,
+                JsonValueKind.Object => SchemaKinds.Object,
+                _ => SchemaKinds.None,
+            };
+
+            if (parsedKind != SchemaKinds.None && (declared & parsedKind) != 0)
+                return parsed;
+        }
+
+        // The schema declares a scalar and the model emitted it as a string —
+        // parse it toward exactly that scalar. This is the only string→scalar
+        // path, and it fires only because the schema asked for it.
+        if ((declared & SchemaKinds.Integer) != 0 && TryParseJsonInteger(stringForm, out var integer))
+            return integer;
+
+        if ((declared & SchemaKinds.Number) != 0 && TryParseJsonNumber(stringForm, out var number))
+            return number;
+
+        if ((declared & SchemaKinds.Boolean) != 0 && bool.TryParse(stringForm, out var boolean))
+            return boolean;
+
+        // The value did not parse as the declared type: forward it unchanged.
+        // A genuine mismatch is rejected loudly by the MCP server's own schema
+        // validation, never silently masked here.
+        return value;
+    }
+
+    private static string? AsStringValue(object? value) => value switch
+    {
+        string s => s,
+        JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+        _ => null,
+    };
+
+    private static bool TryParseJsonContainer(string value, out JsonElement element)
+    {
+        var trimmed = value.AsSpan().TrimStart();
+        if (trimmed.IsEmpty || (trimmed[0] != '[' && trimmed[0] != '{'))
+        {
+            element = default;
+            return false;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(value);
+            element = document.RootElement.Clone();
+            return true;
+        }
+        catch (JsonException)
+        {
+            element = default;
+            return false;
+        }
+    }
+
+    private static bool TryParseJsonNumber(string value, out object number)
+    {
+        if (long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var longValue))
+        {
+            number = longValue;
+            return true;
+        }
+
+        // JSON numbers are culture-invariant; parse with the invariant culture
+        // so a comma-decimal host locale cannot change the result. Reject
+        // non-finite values — JSON has no NaN/Infinity literal.
+        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var doubleValue)
+            && double.IsFinite(doubleValue))
+        {
+            number = doubleValue;
+            return true;
+        }
+
+        number = 0L;
+        return false;
+    }
+
+    private static bool TryParseJsonInteger(string value, out long number)
+        => long.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out number);
 }

@@ -51,6 +51,25 @@ public sealed class SessionLogActorTests : TestKit
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    /// <summary>
+    /// Reads a session log file with the same permissive share mask the writer
+    /// (<see cref="SessionLogFile.AppendLine"/>) uses. A plain
+    /// <see cref="File.ReadAllTextAsync(string, System.Threading.CancellationToken)"/>
+    /// opens with <see cref="FileShare.Read"/>, which on Windows denies the
+    /// actor's concurrent <see cref="FileAccess.Write"/> append open and can
+    /// starve <c>AppendLine</c>'s bounded retry budget until an audit line is
+    /// silently dropped — making the polling assertion unsatisfiable. Matching
+    /// the writer's mask lets reader and writer coexist.
+    /// </summary>
+    private static async Task<string> ReadLogAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream);
+        return await reader.ReadToEndAsync(cancellationToken);
+    }
+
     [Fact]
     public async Task ThinkingDeltaOutput_is_written_to_session_log()
     {
@@ -70,7 +89,7 @@ public sealed class SessionLogActorTests : TestKit
             await AwaitAssertAsync(async () =>
             {
                 var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
-                var text = await File.ReadAllTextAsync(logFile, TestContext.Current.CancellationToken);
+                var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
                 Assert.Contains("Thinking delta: step by step", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);
         }
@@ -100,7 +119,7 @@ public sealed class SessionLogActorTests : TestKit
             await AwaitAssertAsync(async () =>
             {
                 var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
-                var text = await File.ReadAllTextAsync(logFile, TestContext.Current.CancellationToken);
+                var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
                 Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -117,7 +136,7 @@ public sealed class SessionLogActorTests : TestKit
                 Assert.True(File.Exists(logFile));
                 Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logFile)!, "*.log", SearchOption.TopDirectoryOnly));
 
-                var text = await File.ReadAllTextAsync(logFile, TestContext.Current.CancellationToken);
+                var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
                 Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
                 Assert.Contains("Assistant: second", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);
@@ -147,8 +166,8 @@ public sealed class SessionLogActorTests : TestKit
             {
                 var pathA = SessionLogFile.GetLogPath(sessionA, basePath);
                 var pathB = SessionLogFile.GetLogPath(sessionB, basePath);
-                var textA = await File.ReadAllTextAsync(pathA, TestContext.Current.CancellationToken);
-                var textB = await File.ReadAllTextAsync(pathB, TestContext.Current.CancellationToken);
+                var textA = await ReadLogAsync(pathA, TestContext.Current.CancellationToken);
+                var textB = await ReadLogAsync(pathB, TestContext.Current.CancellationToken);
 
                 Assert.Contains("alpha", textA, StringComparison.Ordinal);
                 Assert.DoesNotContain("beta", textA, StringComparison.Ordinal);
@@ -180,7 +199,7 @@ public sealed class SessionLogActorTests : TestKit
             await AwaitAssertAsync(async () =>
             {
                 var path = SessionLogFile.GetLogPath(sessionId, basePath);
-                var text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+                var text = await ReadLogAsync(path, TestContext.Current.CancellationToken);
                 Assert.Contains("Assistant: audit-line", text, StringComparison.Ordinal);
                 Assert.Contains("Diagnostic: provider sent request", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);

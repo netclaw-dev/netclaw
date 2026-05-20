@@ -1,0 +1,11 @@
+# Approved screenshot baselines for the native smoke harness.
+#
+# The screenshots mode of scripts/smoke/run-smoke.sh compares VHS-captured
+# PNGs byte-for-byte against <frame>.approved.png files committed here.
+#
+# Baselines are NOT generated locally. The first screenshots CI run (or one
+# after an intentional UI change) fails and uploads *.actual.png artifacts.
+# A human reviews those PNGs and commits the approved versions here as
+# tests/smoke/screenshots/<frame>.approved.png.
+#
+# This .gitkeep keeps the directory tracked until the first baselines land.

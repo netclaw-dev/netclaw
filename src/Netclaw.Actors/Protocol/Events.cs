@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Serialization;
+using Netclaw.Configuration;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -40,6 +41,97 @@ public sealed record TurnRecorded : INetclawSerializableMessage
     public string? SourceBackgroundJobId { get; init; }
 
     public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
+}
+
+/// <summary>
+/// Persisted event recording an assistant tool-call batch before any tool is
+/// executed or approval prompt is emitted. This makes in-flight tool history
+/// replayable from the journal instead of relying on snapshots to carry
+/// unjournaled current-turn state.
+/// </summary>
+public sealed record ToolBatchStarted : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public SerializableChatMessage UserMessage { get; init; } = new();
+
+    public SerializableChatMessage AssistantMessage { get; init; } = new();
+
+    public long StartedAtMs { get; init; }
+}
+
+/// <summary>
+/// Persisted event recording a single tool result as soon as it completes.
+/// This lets recovery avoid re-running completed sibling calls when another
+/// call in the same assistant batch is still pending approval.
+/// </summary>
+public sealed record ToolCallRecorded : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public SerializableChatMessage ToolResult { get; init; } = new();
+
+    public long RecordedAtMs { get; init; }
+}
+
+public sealed record ToolApprovalRequested : INetclawSerializableMessage
+{
+    public sealed record ApprovalCandidateRecord
+    {
+        public string Verb { get; init; } = string.Empty;
+
+        public string? Directory { get; init; }
+    }
+
+    public SessionId SessionId { get; init; }
+
+    public string CallId { get; init; } = string.Empty;
+
+    public string ToolName { get; init; } = string.Empty;
+
+    public IReadOnlyList<string> Patterns { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> CandidateVerbs { get; init; } = Array.Empty<string>();
+
+    public TrustAudience Audience { get; init; }
+
+    public TrustBoundary? Boundary { get; init; }
+
+    public string? ChannelType { get; init; }
+
+    public bool? SupportsInteractiveApproval { get; init; }
+
+    public SenderId? RequesterSenderId { get; init; }
+
+    public PrincipalClassification? RequesterPrincipal { get; init; }
+
+    public string? Cwd { get; init; }
+
+    public IReadOnlyList<ApprovalCandidateRecord> Candidates { get; init; } =
+        Array.Empty<ApprovalCandidateRecord>();
+
+    public long RequestedAtMs { get; init; }
+}
+
+public sealed record ToolApprovalResolved : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public string CallId { get; init; } = string.Empty;
+
+    public string Decision { get; init; } = string.Empty;
+
+    public long ResolvedAtMs { get; init; }
+}
+
+public sealed record ToolBatchAbandoned : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public IReadOnlyList<SerializableChatMessage> ToolResults { get; init; } =
+        Array.Empty<SerializableChatMessage>();
+
+    public long AbandonedAtMs { get; init; }
 }
 
 public sealed record AdoptedContextRecorded : INetclawSerializableMessage

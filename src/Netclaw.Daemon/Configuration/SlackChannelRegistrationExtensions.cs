@@ -28,11 +28,10 @@ public static class SlackChannelRegistrationExtensions
         if (!slackOptions.Enabled)
             return;
 
-        slackOptions.BotToken.RequireValid("Slack:BotToken");
-
-        if (slackOptions.SocketMode)
-            slackOptions.AppToken.RequireValid("Slack:AppToken (Socket Mode)");
-
+        // Token validity is NOT checked here: an exception thrown from this
+        // registration path aborts host construction and crashes the daemon.
+        // A missing/invalid token is handled as a contained channel failure in
+        // SlackChannel.StartAsync instead (see issue #1033).
         services.AddHttpClient("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
         services.AddSingleton<IThreadHistoryFetcher>(sp =>
@@ -67,10 +66,17 @@ public static class SlackChannelRegistrationExtensions
 
         services.AddSlackNet(c =>
         {
-            c.UseApiToken(slackOptions.BotToken!.Value);
+            // Placeholder when unconfigured so SlackNet registration does not
+            // NullReferenceException — SlackChannel.StartAsync fails the channel
+            // loud and degrades before this client is ever used.
+            c.UseApiToken(slackOptions.BotToken.IsNullOrEmpty()
+                ? "unconfigured"
+                : slackOptions.BotToken.Value);
 
             if (slackOptions.SocketMode)
-                c.UseAppLevelToken(slackOptions.AppToken!.Value);
+                c.UseAppLevelToken(slackOptions.AppToken.IsNullOrEmpty()
+                    ? "unconfigured"
+                    : slackOptions.AppToken.Value);
 
             c.RegisterEventHandler<MessageEvent, SlackChannel>();
             c.RegisterEventHandler<AppMention, SlackChannel>();
