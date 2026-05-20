@@ -55,7 +55,7 @@ public sealed class GitHubCopilotDescriptor(
         {
             return new ProviderProbeResult(false,
                 "GitHub OAuth token is required. Run "
-                + "'netclaw provider add <name> --type github-copilot' to authenticate.",
+                + "'netclaw provider add <name> github-copilot --auth oauth-device' to authenticate.",
                 []);
         }
 
@@ -67,8 +67,9 @@ public sealed class GitHubCopilotDescriptor(
         catch (CopilotAuthExpiredException)
         {
             return new ProviderProbeResult(false,
-                "GitHub Copilot authorization expired. Re-authenticate with "
-                + "'netclaw provider fix <name>'.",
+                "GitHub Copilot authorization expired. Re-authenticate by running "
+                + "'netclaw provider remove <name>' then "
+                + "'netclaw provider add <name> github-copilot --auth oauth-device'.",
                 []);
         }
         catch (HttpRequestException ex)

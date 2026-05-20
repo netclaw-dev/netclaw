@@ -105,7 +105,8 @@ credential on the operator's behalf.
 - **AND** the endpoint returns `401 Unauthorized`
 - **THEN** the system SHALL raise an authentication-expired error
   identifying the provider entry by name
-- **AND** the remediation message SHALL direct the operator to run
-  `netclaw provider fix <name>` (or equivalent) to re-run the device flow
+- **AND** the remediation message SHALL direct the operator to remove
+  the entry (`netclaw provider remove <name>`) and re-run the device
+  flow (`netclaw provider add <name> github-copilot --auth oauth-device`)
 - **AND** the stored OAuth token SHALL remain in the secrets store
   unchanged so the operator retains visibility into the failing credential

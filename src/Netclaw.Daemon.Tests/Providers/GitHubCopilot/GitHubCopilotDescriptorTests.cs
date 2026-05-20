@@ -142,7 +142,8 @@ public sealed class GitHubCopilotDescriptorTests
 
         Assert.False(result.Success);
         Assert.Contains("expired", result.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("provider fix", result.ErrorMessage);
+        Assert.Contains("provider remove", result.ErrorMessage);
+        Assert.Contains("provider add", result.ErrorMessage);
         Assert.Empty(result.Models);
     }
 

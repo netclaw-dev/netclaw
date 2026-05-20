@@ -51,7 +51,7 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
         ProviderEntry entry, CancellationToken ct = default)
     {
         var oauthToken = entry.OAuthAccessToken.RequireValid(
-            "GitHub OAuth access token (run 'netclaw provider fix <name>')");
+            "GitHub OAuth access token (re-run 'netclaw provider add <name> github-copilot --auth oauth-device')");
 
         var cacheKey = HashKey(oauthToken.Value);
         var now = time.GetUtcNow();
