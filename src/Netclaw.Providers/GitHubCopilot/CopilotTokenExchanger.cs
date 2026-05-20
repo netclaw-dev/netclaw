@@ -118,11 +118,18 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
         // Token=null/ExpiresAt=0 and we'd cache a useless Bearer. Validate
         // here so the failure surfaces at the exchange boundary, not later
         // when the chat call returns 401.
+        //
+        // We deliberately do NOT include the raw response body in these
+        // exception messages — even on validation failure, the body of a
+        // 200 response from /copilot_internal/v2/token may still contain a
+        // token-shaped string, and exception messages can land in logs or
+        // bug reports. The endpoint URL and the missing-field indicator
+        // are sufficient for diagnostics.
         if (string.IsNullOrWhiteSpace(parsed.Token))
         {
             throw new InvalidOperationException(
                 $"GitHub Copilot token exchange at {TokenEndpoint} returned a "
-                + $"payload with no 'token' field: {Truncate(body)}");
+                + "payload with no 'token' field.");
         }
 
         if (parsed.ExpiresAt <= 0)
