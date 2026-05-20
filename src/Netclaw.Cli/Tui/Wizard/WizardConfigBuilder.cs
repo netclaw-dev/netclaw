@@ -32,6 +32,7 @@ public sealed class WizardConfigBuilder
     public ModelConfigSection? Model { get; set; }
     public SlackConfigSection? Slack { get; set; }
     public DiscordConfigSection? Discord { get; set; }
+    public MattermostConfigSection? Mattermost { get; set; }
     public SecurityConfigSection Security { get; set; } = new();
     public SearchConfigSection? Search { get; set; }
     public ToolConfig? Tools { get; set; }
@@ -160,6 +161,43 @@ public sealed class WizardConfigBuilder
                 discordSection["ChannelAudiences"] = new Dictionary<string, string>(Discord.ChannelAudiences);
 
             config["Discord"] = discordSection;
+        }
+
+        // Mattermost section
+        if (Mattermost is { Enabled: true })
+        {
+            var mattermostSection = new Dictionary<string, object>
+            {
+                ["Enabled"] = true
+            };
+
+            if (!string.IsNullOrWhiteSpace(Mattermost.ServerUrl))
+                mattermostSection["ServerUrl"] = Mattermost.ServerUrl;
+
+            if (!string.IsNullOrWhiteSpace(Mattermost.CallbackUrl))
+                mattermostSection["CallbackUrl"] = Mattermost.CallbackUrl;
+
+            if (!string.IsNullOrWhiteSpace(Mattermost.DefaultChannelId))
+                mattermostSection["DefaultChannelId"] = Mattermost.DefaultChannelId;
+
+            if (Mattermost.AllowedChannelIds is { Count: > 0 })
+            {
+                mattermostSection["AllowedChannelIds"] = Mattermost.AllowedChannelIds.ToArray();
+
+                if (!mattermostSection.ContainsKey("DefaultChannelId"))
+                    mattermostSection["DefaultChannelId"] = Mattermost.AllowedChannelIds[0];
+            }
+
+            if (Mattermost.AllowDirectMessages)
+                mattermostSection["AllowDirectMessages"] = true;
+
+            if (Mattermost.AllowedUserIds is { Count: > 0 })
+                mattermostSection["AllowedUserIds"] = Mattermost.AllowedUserIds.ToArray();
+
+            if (Mattermost.ChannelAudiences is { Count: > 0 })
+                mattermostSection["ChannelAudiences"] = new Dictionary<string, string>(Mattermost.ChannelAudiences);
+
+            config["Mattermost"] = mattermostSection;
         }
 
         // Search section
@@ -415,6 +453,18 @@ public sealed class SlackConfigSection
 public sealed class DiscordConfigSection
 {
     public bool Enabled { get; init; }
+    public string? DefaultChannelId { get; init; }
+    public List<string>? AllowedChannelIds { get; init; }
+    public bool AllowDirectMessages { get; init; }
+    public List<string>? AllowedUserIds { get; init; }
+    public Dictionary<string, string>? ChannelAudiences { get; init; }
+}
+
+public sealed class MattermostConfigSection
+{
+    public bool Enabled { get; init; }
+    public string? ServerUrl { get; init; }
+    public string? CallbackUrl { get; init; }
     public string? DefaultChannelId { get; init; }
     public List<string>? AllowedChannelIds { get; init; }
     public bool AllowDirectMessages { get; init; }

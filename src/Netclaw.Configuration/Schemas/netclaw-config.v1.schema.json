@@ -65,6 +65,35 @@
       },
       "additionalProperties": false
     },
+    "Mattermost": {
+      "type": "object",
+      "properties": {
+        "Enabled": { "type": "boolean" },
+        "ServerUrl": { "type": ["string", "null"], "format": "uri", "description": "Base URL of the Mattermost server (e.g. https://mm.example.com)." },
+        "CallbackUrl": { "type": ["string", "null"], "format": "uri", "description": "URL that Mattermost can reach for interactive button callbacks (e.g. http://netclaw-host:5199/api/mattermost/actions). When unset, approvals use the text-reply fallback." },
+        "DefaultChannelId": { "type": ["string", "null"] },
+        "AllowDirectMessages": { "type": "boolean" },
+        "MentionOnly": { "type": "boolean", "default": true },
+        "MentionRequiredInDm": { "type": "boolean", "default": false },
+        "AllowedChannelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "AllowedUserIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ChannelAudiences": {
+          "type": "object",
+          "description": "Per-channel audience overrides. Keys are channel IDs or 'dm'. Values are 'personal', 'team', or 'public'.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["personal", "team", "public"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Logging": {
       "type": "object",
       "properties": {

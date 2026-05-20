@@ -130,7 +130,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
-        });
+        }, ActorRefs.Nobody);
 
         // The parked batch re-drives: the tool executes successfully (the
         // ApprovedOnce pre-seed bypassed the gate without a duplicate prompt)
@@ -394,7 +394,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
-        });
+        }, ActorRefs.Nobody);
 
         await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -523,7 +523,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId("call-never-existed"),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
-        });
+        }, ActorRefs.Nobody);
 
         var notice = await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -577,7 +577,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("U-imposter")
-        });
+        }, ActorRefs.Nobody);
 
         var rejection = await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -639,7 +639,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("U-requester")
-        });
+        }, ActorRefs.Nobody);
 
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -705,7 +705,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
             SenderId = new SenderId("local-user")
-        });
+        }, ActorRefs.Nobody);
 
         var toolResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -772,7 +772,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("U-requester")
-        });
+        }, ActorRefs.Nobody);
 
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -865,7 +865,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId(callId),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
-        });
+        }, ActorRefs.Nobody);
         var notice = await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("expired", notice.Text, StringComparison.OrdinalIgnoreCase);
@@ -903,7 +903,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             CallId = new Netclaw.Tools.ToolCallId("call-never-parked"),
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
-        });
+        }, ActorRefs.Nobody);
 
         // The actor does not stop — passivation was aborted. (The expired-prompt
         // notice has no subscriber to land on here; Passivating only happens

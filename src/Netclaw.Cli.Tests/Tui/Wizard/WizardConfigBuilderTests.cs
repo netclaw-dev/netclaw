@@ -165,6 +165,68 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
     }
 
     [Fact]
+    public void BuildConfigDictionary_IncludesMattermostSection_WhenEnabled()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Mattermost = new MattermostConfigSection
+            {
+                Enabled = true,
+                ServerUrl = "https://mm.example.com",
+                CallbackUrl = "http://netclaw-host:5199/api/mattermost/actions",
+                DefaultChannelId = "4xp9p3onpins8",
+                AllowedChannelIds = ["4xp9p3onpins8"],
+                AllowDirectMessages = true,
+                AllowedUserIds = ["9rp7q1abcdef"],
+                ChannelAudiences = new Dictionary<string, string> { ["dm"] = "team" }
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var mattermost = (Dictionary<string, object>)config["Mattermost"];
+        Assert.Equal(true, mattermost["Enabled"]);
+        Assert.Equal("https://mm.example.com", mattermost["ServerUrl"]);
+        Assert.Equal("http://netclaw-host:5199/api/mattermost/actions", mattermost["CallbackUrl"]);
+        Assert.Equal("4xp9p3onpins8", mattermost["DefaultChannelId"]);
+        Assert.Equal(true, mattermost["AllowDirectMessages"]);
+        Assert.Equal("4xp9p3onpins8", ((string[])mattermost["AllowedChannelIds"])[0]);
+        Assert.Equal("9rp7q1abcdef", ((string[])mattermost["AllowedUserIds"])[0]);
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_OmitsMattermost_WhenNotEnabled()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Mattermost = new MattermostConfigSection { Enabled = false }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.False(config.ContainsKey("Mattermost"));
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_OmitsMattermostCallbackUrl_WhenBlank()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Mattermost = new MattermostConfigSection
+            {
+                Enabled = true,
+                ServerUrl = "https://mm.example.com",
+                CallbackUrl = null
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var mattermost = (Dictionary<string, object>)config["Mattermost"];
+        Assert.False(mattermost.ContainsKey("CallbackUrl"));
+    }
+
+    [Fact]
     public void BuildConfigDictionary_IncludesSecuritySection()
     {
         var builder = new WizardConfigBuilder(Context.Paths)

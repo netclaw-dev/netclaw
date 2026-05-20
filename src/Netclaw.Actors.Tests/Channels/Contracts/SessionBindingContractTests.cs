@@ -43,6 +43,8 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected abstract ChannelType ExpectedChannelType { get; }
 
+    protected virtual bool SupportsApprovalSenderReplies => false;
+
     // --- Thread Hydration Contract (opt-in) ---
 
     protected virtual bool SupportsThreadHydration => false;
@@ -361,6 +363,48 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
+    [Fact]
+    public async Task Approval_response_replies_with_ack_to_sender()
+    {
+        if (!SupportsApprovalSenderReplies)
+            return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-approval-ack");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-ack-1"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
+                DisplayText = "touch /tmp/file",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        var probe = CreateTestProbe();
+        actor.Tell(CreateApprovalResponse("call-ack-1", ApprovalOptionKeys.ApproveOnce, "user-1"), probe.Ref);
+
+        var ack = await probe.ExpectMsgAsync<CommandAck>(cancellationToken: ct);
+        Assert.Equal(sid, ack.SessionId);
+    }
+
     // Conformance for #979: a binding spawned without prior in-memory state (no
     // ToolInteractionRequest seen on its output stream) must still route inbound
     // approval responses to the session via SendFeedbackAsync. This mirrors the
@@ -655,6 +699,48 @@ public abstract class SessionBindingContractTests : TestKit
         // No feedback sent — the pending request is NOT consumed
         var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
         Assert.Empty(feedback);
+    }
+
+    [Fact]
+    public async Task Button_approval_from_wrong_requester_replies_with_nack()
+    {
+        if (!SupportsApprovalSenderReplies)
+            return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-wrong-button-nack");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-wr-nack-1"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
+                DisplayText = "rm -rf /tmp",
+                RequesterSenderId = new SenderId("user-A"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        var probe = CreateTestProbe();
+        actor.Tell(CreateApprovalResponse("call-wr-nack-1", ApprovalOptionKeys.ApproveOnce, "user-B"), probe.Ref);
+
+        var nack = await probe.ExpectMsgAsync<CommandNack>(cancellationToken: ct);
+        Assert.Equal(sid, nack.SessionId);
+        Assert.Equal("approval_wrong_requester", nack.Reason);
     }
 
     [Fact]

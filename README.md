@@ -14,38 +14,52 @@
   <a href="https://discord.gg/ayqrChDtNs">Discord</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/netclaw-dev/netclaw/releases/latest">
+    <img src="https://img.shields.io/github/v/release/netclaw-dev/netclaw?style=flat-square&logo=github&label=latest&color=512BD4" alt="Latest Release" />
+  </a>
+  <a href="https://github.com/netclaw-dev/netclaw/blob/dev/LICENSE">
+    <img src="https://img.shields.io/github/license/netclaw-dev/netclaw?style=flat-square&color=512BD4&logo=github" alt="License" />
+  </a>
+  <a href="https://discord.gg/ayqrChDtNs">
+    <img src="https://img.shields.io/discord/1494176300657545318?style=flat-square&color=5865F2&logo=discord&logoColor=white" alt="Discord" />
+  </a>
+  <a href="https://ghcr.io/netclaw-dev/netclaw">
+    <img src="https://img.shields.io/badge/docker-ghcr.io%2Fnetclaw--dev%2Fnetclaw-512BD4?style=flat-square&logo=docker&logoColor=white" alt="Docker Image" />
+  </a>
+</p>
+
 # Netclaw
 
 Netclaw is an open-source, self-hosted autonomous operations agent that runs
-anywhere — from a Raspberry Pi to a cloud VM. Built on top of a minimal
-actor-driven session framework called Akka.Agents, Netclaw is designed for
-hobbyists, small teams, and businesses who want an AI operations agent with
-strong safety defaults and as few moving parts as possible.
+anywhere — from a Raspberry Pi to a cloud VM. Built on **Akka.NET**, the actor
+framework from Petabridge, it's designed for anyone who wants an AI operations
+agent with strong safety defaults and as few moving parts as possible.
 
 Your data stays on your infrastructure. Your agent keeps running when a
 provider changes their pricing. You control what gets approved and what runs
 autonomously — small models welcome.
 
-Where other agents compete on ecosystem breadth and feature velocity, Netclaw
-takes the opposite approach: **simplicity** (a readable codebase with a small
-configuration footprint), **security** (audience dispositions and approval gates
-from day one, not bolted on after incidents), and **reliability** (curated skill
-feeds managed by your organization, not an unaudited public marketplace).
+Other agents go for feature breadth and release velocity. We went a different
+route: **simplicity** (readable code, minimal config footprint), **security**
+(approval gates and audience dispositions built in, not bolted on after
+incidents), and **reliability** (curated skill feeds managed by your org, not
+an unaudited public marketplace).
 
 Learn more at **[netclaw.dev](https://netclaw.dev)**.
 
 ## How It Works
 
-Netclaw uses a **daemon + thin client** architecture:
+Netclaw runs as a daemon plus a thin CLI:
 
-- **`netclawd`** — an always-on background daemon that hosts LLM sessions,
-  tool execution, and persistence. Start it once and it stays running.
-- **`netclaw`** — a lightweight CLI for interactive chat, daemon management,
-  and configuration. It connects to the running daemon over a local socket.
+- **`netclawd`** — the daemon. It hosts LLM sessions, runs tools, and handles
+  persistence. Start it once and it stays up.
+- **`netclaw`** — the CLI. Talk to the daemon, manage config, run commands.
+  It connects over a local socket.
 
-You start the daemon, then use the CLI to talk to it. Remote devices can
+Start the daemon, then use the CLI. Remote devices can
 [pair with the daemon](https://netclaw.dev/guides/pairing-remote-devices/)
-over Tailscale or Cloudflare Tunnel for access from anywhere.
+over Tailscale or Cloudflare Tunnel.
 
 ## Quick Start
 

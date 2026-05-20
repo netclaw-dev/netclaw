@@ -149,6 +149,14 @@ public interface ISessionPipeline
     /// Sends delivery feedback back to the owning session actor.
     /// </summary>
     Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default);
+
+    /// <summary>
+    /// Sends feedback to the owning session actor and waits for an explicit
+    /// <see cref="CommandAck"/> or <see cref="CommandNack"/>. The caller is
+    /// responsible for time-bounding the wait via <paramref name="ct"/>; pass
+    /// a linked CTS with <c>CancelAfter(timeout)</c> if a deadline is needed.
+    /// </summary>
+    Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default);
 }
 
 /// <summary>
@@ -295,6 +303,12 @@ public sealed class SessionPipeline : ISessionPipeline
     {
         var sessionManager = await _sessionManagerProvider.GetAsync(ct);
         sessionManager.Tell(feedback, ActorRefs.NoSender);
+    }
+
+    public async Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+    {
+        var sessionManager = await _sessionManagerProvider.GetAsync(ct);
+        return await sessionManager.Ask<ICommandReply>(feedback, ct);
     }
 
     private static SendUserMessage MapToCommand(

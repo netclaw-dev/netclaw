@@ -562,20 +562,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (!_pendingToolInteractions.TryGetValue(msg.CallId.Value, out var pending))
             {
                 _log.Warning("Ignoring tool interaction response for unknown call {CallId}", msg.CallId);
+                TryReplyNack("approval_prompt_expired");
                 return;
             }
 
             try
             {
                 if (await AuthorizeApprovalResponseAsync(pending, msg) is not { } decision)
+                {
+                    TryReplyNack("approval_wrong_requester");
                     return;
+                }
 
                 PersistApprovalResolved(msg, decision, () =>
-                    _approvalChannel.Complete(msg.CallId, decision));
+                {
+                    _approvalChannel.Complete(msg.CallId, decision);
+                    TryReplyAck();
+                });
             }
             catch (Exception ex)
             {
                 FailCurrentTurn("I couldn't persist that approval decision. Please try again.", ex, ErrorCategory.ToolFailure);
+                TryReplyNack("approval_persist_failed");
             }
         });
 
@@ -1111,6 +1119,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             _log.Info("Buffering tool interaction response (compaction in progress)");
             _deferredApprovalResponse = msg;
+            TryReplyAck();
         });
 
         Command<ProcessingWatchdogExpired>(HandleCompactionWatchdogExpired);
@@ -3271,6 +3280,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Warning(
                 "Tool interaction response for unknown/expired call {CallId}", msg.CallId);
             EmitExpiredPromptNotice();
+            TryReplyNack("approval_prompt_expired");
             return;
         }
 
@@ -3278,7 +3288,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         try
         {
             if (await AuthorizeApprovalResponseAsync(pending, msg) is not { } authorizedDecision)
+            {
+                TryReplyNack("approval_wrong_requester");
                 return;
+            }
             decision = authorizedDecision;
         }
         catch (Exception ex)
@@ -3291,11 +3304,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 CorrelationId = Guid.NewGuid(),
                 Cause = ex
             });
+            TryReplyNack("approval_persist_failed");
             return;
         }
 
         PersistApprovalResolved(msg, decision, () =>
-            TryRedriveToolBatchAfterApproval(callId));
+        {
+            TryRedriveToolBatchAfterApproval(callId);
+            TryReplyAck();
+        });
     }
 
     private bool TryRedriveToolBatchAfterApproval(string callId)

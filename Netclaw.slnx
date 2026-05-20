@@ -10,6 +10,7 @@
     <Project Path="src/Netclaw.Actors/Netclaw.Actors.csproj" />
     <Project Path="src/Netclaw.Channels/Netclaw.Channels.csproj" />
     <Project Path="src/Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
+    <Project Path="src/Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />
     <Project Path="src/Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
     <Project Path="src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
@@ -27,6 +28,7 @@
     <Project Path="src/Netclaw.Search.Tests/Netclaw.Search.Tests.csproj" />
     <Project Path="src/Netclaw.Security/Netclaw.Security.csproj" />
     <Project Path="src/Netclaw.Security.Tests/Netclaw.Security.Tests.csproj" />
+    <Project Path="src/Netclaw.Channels.Mattermost.IntegrationTests/Netclaw.Channels.Mattermost.IntegrationTests.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj" />

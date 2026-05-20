@@ -150,6 +150,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
                 }));
         options.RejectionStatusCode = 429;
     });
+    builder.Services.AddMattermostActionEndpointRateLimiting();
 
     // SignalR for remote clients (CLI thin client, Blazor ops console)
     builder.Services.AddSignalR();
@@ -213,6 +214,7 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.MapGet("/api/stats/skills", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
         Results.Ok(await statsService.GetSkillUsageStatsAsync(days, ct))).RequireAuthorization();
     app.MapWebhookEndpoints();
+    app.MapMattermostActionEndpoint();
 
     app.MapPairingEndpoints();
 
@@ -964,6 +966,7 @@ static void ConfigureDaemonServices(
 
     services.AddSlackChannelIntegration(configuration);
     services.AddDiscordChannelIntegration(configuration);
+    services.AddMattermostChannelIntegration(configuration);
 
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();

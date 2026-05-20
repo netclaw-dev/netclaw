@@ -71,3 +71,11 @@ public sealed class SessionLogDispatcherActorKey;
 /// the Discord channel's existing routing hierarchy.
 /// </summary>
 public sealed class DiscordGatewayActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// Mattermost gateway parent actor (MattermostGatewayActor → MattermostConversationActor →
+/// MattermostSessionBindingActor). Resolved by the reminder dispatcher to deliver
+/// Mode B reminder turns through the Mattermost channel's existing routing hierarchy.
+/// </summary>
+public sealed class MattermostGatewayActorKey;

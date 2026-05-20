@@ -62,4 +62,18 @@ public static class ApprovalOptionKeys
     /// </summary>
     public static bool IsDangerStyled(string optionKey)
         => optionKey is ApproveEverywhere or Deny;
+
+    /// <summary>
+    /// Maps an approval option key to its short human-readable label. Returns
+    /// the key unchanged when it is not a recognized option.
+    /// </summary>
+    public static string LabelFor(string optionKey) => optionKey switch
+    {
+        ApproveOnce => ApproveOnceLabel,
+        ApproveSession => ApproveSessionLabel,
+        ApproveAlways => ApproveAlwaysLabel,
+        ApproveEverywhere => ApproveEverywhereLabel,
+        Deny => DenyLabel,
+        _ => optionKey
+    };
 }

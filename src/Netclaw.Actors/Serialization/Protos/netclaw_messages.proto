@@ -37,6 +37,7 @@ enum ChannelType {
   CHANNEL_TYPE_REMINDER = 4;
   CHANNEL_TYPE_WEBHOOK = 5;
   CHANNEL_TYPE_DISCORD = 6;
+  CHANNEL_TYPE_MATTERMOST = 7;
 }
 
 // ── Value types ──

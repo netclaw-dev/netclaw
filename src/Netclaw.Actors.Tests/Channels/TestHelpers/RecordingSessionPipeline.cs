@@ -121,4 +121,10 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         RecordedFeedback.Add(feedback);
         return Task.CompletedTask;
     }
+
+    public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
+    {
+        RecordedFeedback.Add(feedback);
+        return Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
+    }
 }

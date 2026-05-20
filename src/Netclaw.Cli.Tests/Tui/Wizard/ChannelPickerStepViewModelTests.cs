@@ -298,6 +298,61 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
         Assert.True(picker.IsAdapterEnabled(0));
     }
 
+    [Fact]
+    public void Adapters_IncludeMattermost()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+
+        Assert.Equal(3, picker.Adapters.Count);
+        Assert.Contains(picker.Adapters, a => a.Type == ChannelType.Mattermost);
+        Assert.Contains(picker.Adapters, a => a.DisplayName == "Mattermost");
+    }
+
+    [Fact]
+    public void ToggleMattermost_EntersSubFlow_AndCompletes()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        picker.OnEnter(Context, NavigationDirection.Forward);
+
+        picker.ToggleAdapter(2); // Toggle Mattermost on — enters sub-flow at server URL
+        Assert.True(picker.IsInSubFlow);
+        Assert.True(picker.IsAdapterEnabled(2));
+
+        var mmVm = (MattermostStepViewModel)picker.ActiveAdapterVm!;
+        mmVm.ServerUrl = "https://mm.example.com";
+        mmVm.BotToken = "mm-bot-token";
+
+        // Advance through server URL -> bot token -> channel IDs -> DM ->
+        // user access -> callback URL (6 advances), then the picker captures completion.
+        for (var i = 0; i < 6; i++)
+            Assert.True(picker.TryAdvance());
+
+        Assert.True(picker.IsInPickerMode);
+        Assert.NotNull(picker.GetAdapterSummary(2));
+    }
+
+    [Fact]
+    public void ContributeConfig_Mattermost_WritesMattermostSection()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        picker.OnEnter(Context, NavigationDirection.Forward);
+
+        picker.ToggleAdapter(2);
+        var mmVm = (MattermostStepViewModel)picker.ActiveAdapterVm!;
+        mmVm.ServerUrl = "https://mm.example.com";
+        mmVm.BotToken = "mm-bot-token";
+        for (var i = 0; i < 6; i++) picker.TryAdvance();
+
+        picker.OnLeave();
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        picker.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Mattermost);
+        Assert.True(builder.Mattermost!.Enabled);
+        Assert.Equal("https://mm.example.com", builder.Mattermost.ServerUrl);
+    }
+
     // ── Regression tests for subscription accumulation (#792) ──
 
     private StepViewCallbacks CreateTestCallbacks(CompositeDisposable subs) => new()

@@ -21,4 +21,5 @@ internal static class WizardStepIds
     public const string HealthCheck = "health-check";
     public const string Slack = "slack";
     public const string Discord = "discord";
+    public const string Mattermost = "mattermost";
 }
