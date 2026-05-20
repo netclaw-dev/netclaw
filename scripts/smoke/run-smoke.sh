@@ -161,8 +161,13 @@ teardown() {
   if declare -f ollama_serve_stop >/dev/null 2>&1; then
     ollama_serve_stop || true
   fi
-  # Kill any stray daemon process.
-  pkill -f netclawd >/dev/null 2>&1 || true
+  # Kill any stray smoke daemon. Scoped to NETCLAW_SMOKE_DAEMON's full path
+  # so a production netclawd on the same box is never targeted — an
+  # unscoped `pkill -f netclawd` used to live here and silently SIGKILLed
+  # the developer's daemon mid-flight (see netclaw-dev/netclaw#1116).
+  if [[ -n "${NETCLAW_SMOKE_DAEMON:-}" ]]; then
+    pkill -f "$NETCLAW_SMOKE_DAEMON" >/dev/null 2>&1 || true
+  fi
   if [[ "${KEEP_RUN_ROOT:-0}" == "1" ]]; then
     echo "    KEEP_RUN_ROOT=1 — run root retained at: $RUN_ROOT"
   else
