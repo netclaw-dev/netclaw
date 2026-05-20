@@ -28,8 +28,13 @@ addition to the standard `Content-Type` and `Accept`:
   detail; the header MUST be present)
 - `openai-intent: conversation-agent`
 
-Model discovery SHALL filter the `/models` response to entries where
-`capabilities.type == "chat"` and `model_picker_enabled != false`.
+Model discovery SHALL filter the `/models` response by removing entries
+whose `capabilities.type` is present and not equal to `"chat"`, and by
+removing entries where `model_picker_enabled` is explicitly `false`.
+Entries that omit `capabilities` entirely SHALL be retained — Copilot's
+`/models` payload includes shape variations across model generations,
+and a missing `capabilities` block is treated as "unknown but
+selectable" rather than implicitly non-chat.
 
 #### Scenario: Operator selects GitHub Copilot in the wizard
 
@@ -66,8 +71,10 @@ Model discovery SHALL filter the `/models` response to entries where
 - **WHEN** `ProviderProbe` runs against the entry
 - **THEN** the system fetches `GET https://api.githubcopilot.com/models`
   with the exchanged Copilot API token
-- **AND** the returned `DiscoveredModel` list includes only entries with
-  `capabilities.type == "chat"` and `model_picker_enabled != false`
+- **AND** the returned `DiscoveredModel` list excludes entries whose
+  `capabilities.type` is present and not `"chat"`, excludes entries with
+  `model_picker_enabled == false`, and retains entries that omit
+  `capabilities` entirely
 
 #### Scenario: Copilot probe falls back to curated models when /models is unreachable
 
