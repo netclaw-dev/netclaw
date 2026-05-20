@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Net;
 using System.Text;
@@ -41,10 +42,10 @@ public sealed class CopilotRequestPolicyTests
     }
 
     [Fact]
-    public async Task ProcessAsync_AppliesAllFourRequiredHeaders()
+    public async Task ProcessAsync_AppliesThreeCopilotHeaders()
     {
         var policy = new CopilotRequestPolicy(
-            ExchangerReturning("copilot-bearer"), OAuthEntry());
+            ExchangerReturning("copilot-bearer"), OAuthEntry(), new ApiKeyCredential("placeholder"));
 
         var clientPipeline = ClientPipeline.Create(new ClientPipelineOptions());
         using var message = clientPipeline.CreateMessage();
@@ -59,9 +60,9 @@ public sealed class CopilotRequestPolicyTests
 
         Assert.True(captured);
 
-        message.Request.Headers.TryGetValue("Authorization", out var auth);
-        Assert.Equal("Bearer copilot-bearer", auth);
-
+        // The policy does NOT set Authorization — the SDK's credential auth
+        // policy owns that header (see CopilotRequestPolicy remarks). The policy
+        // sets only the three Copilot-required custom headers.
         message.Request.Headers.TryGetValue("copilot-integration-id", out var integrationId);
         Assert.Equal("vscode-chat", integrationId);
 
@@ -74,26 +75,28 @@ public sealed class CopilotRequestPolicyTests
     }
 
     [Fact]
-    public async Task ProcessAsync_OverwritesPreviousAuthorizationHeader()
+    public async Task ProcessAsync_UpdatesCredentialWithExchangedToken()
     {
-        // The OpenAI SDK populates Authorization from the placeholder ApiKeyCredential
-        // we pass in. The policy must overwrite it on every call with the real
-        // short-lived Copilot token; a stale placeholder bearer is a 401 in production.
+        // The policy cannot win a header race against the SDK's own credential
+        // auth policy, so instead it feeds the fresh Copilot token into the
+        // shared credential that policy reads downstream. Updating the
+        // credential is what makes the real token reach the wire (verified
+        // end-to-end in GitHubCopilotProviderPluginTests).
+        var credential = new ApiKeyCredential("placeholder");
         var policy = new CopilotRequestPolicy(
-            ExchangerReturning("copilot-real"), OAuthEntry());
+            ExchangerReturning("copilot-real"), OAuthEntry(), credential);
 
         var clientPipeline = ClientPipeline.Create(new ClientPipelineOptions());
         using var message = clientPipeline.CreateMessage();
         message.Request.Method = "POST";
         message.Request.Uri = new Uri("https://api.githubcopilot.com/chat/completions");
-        message.Request.Headers.Set("Authorization", "Bearer placeholder");
 
         IReadOnlyList<PipelinePolicy> pipeline = [policy, new TerminalCapturingPolicy(() => { })];
 
         await policy.ProcessAsync(message, pipeline, 0);
 
-        message.Request.Headers.TryGetValue("Authorization", out var auth);
-        Assert.Equal("Bearer copilot-real", auth);
+        credential.Deconstruct(out var key);
+        Assert.Equal("copilot-real", key);
     }
 
     [Fact]
@@ -103,7 +106,7 @@ public sealed class CopilotRequestPolicyTests
         // The OpenAI SDK uses the async pipeline for chat completions; the sync
         // overload is only hit by misconfigured callers and we fail loudly.
         var policy = new CopilotRequestPolicy(
-            ExchangerReturning("copilot-bearer"), OAuthEntry());
+            ExchangerReturning("copilot-bearer"), OAuthEntry(), new ApiKeyCredential("placeholder"));
 
         var clientPipeline = ClientPipeline.Create(new ClientPipelineOptions());
         using var message = clientPipeline.CreateMessage();
