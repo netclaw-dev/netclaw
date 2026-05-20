@@ -162,18 +162,19 @@ what RFC 8628 §3.4 expects.
 
 - **[Akt-sh as reference implementation]** Akt-sh is a working third-party
   app, not an official GitHub integration. Wire protocol details could
-  change without notice. → **Mitigation:** the probe path exercises both
-  token exchange and model listing on every `netclaw provider probe` call,
-  so silent drift surfaces quickly. Failure messages include the offending
-  endpoint URL so debugging is direct.
+  change without notice. → **Mitigation:** the probe path
+  (`ProviderDescriptorRegistry.ProbeAsync`, invoked by the TUI/CLI add
+  flow) exercises both token exchange and model listing on every probe,
+  so silent drift surfaces quickly. Failure messages include the
+  offending endpoint URL so debugging is direct.
 
 ## Migration Plan
 
 No data migration required. New provider; no existing configs reference it.
 Operators who want to switch to Copilot run `netclaw provider add <name>
---type github-copilot`, which triggers the device flow and persists the
-GitHub OAuth token alongside other secrets. Rollback: `netclaw provider
-remove <name>` clears the entry.
+github-copilot --auth oauth-device`, which triggers the device flow and
+persists the GitHub OAuth token alongside other secrets. Rollback:
+`netclaw provider remove <name>` clears the entry.
 
 ## Open Questions
 

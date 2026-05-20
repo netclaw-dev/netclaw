@@ -86,7 +86,7 @@ None.
   persistence.
 - **System skills:** `feeds/skills/.system/files/netclaw-operations/SKILL.md`
   should mention the `github-copilot` provider type and the
-  `netclaw provider add ... --type github-copilot` flow (per the System
+  `netclaw provider add <name> github-copilot --auth oauth-device` flow (per the System
   Skills Sync Rule in CLAUDE.md).
 - **Security & operational impact:** the GitHub OAuth token is stored
   plaintext in the existing secrets store, same posture as other API keys.

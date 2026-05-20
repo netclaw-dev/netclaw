@@ -26,7 +26,7 @@
   any other non-2xx throws an `InvalidOperationException` with the
   endpoint URL and status code in the message
 - [ ] 2.4 Unit tests in
-  `src/Netclaw.Providers.Tests/GitHubCopilot/CopilotTokenExchangerTests.cs`:
+  `src/Netclaw.Daemon.Tests/Providers/GitHubCopilot/CopilotTokenExchangerTests.cs`:
   cache hit (no HTTP), cache miss, 2-minute refresh buffer (FakeTimeProvider),
   401 → `CopilotAuthExpiredException`, non-401 error → `InvalidOperationException`
 
@@ -60,7 +60,7 @@
   `o3-mini`) using `ModelModality.Text` defaults until Copilot exposes
   modality metadata
 - [ ] 4.4 Unit tests in
-  `src/Netclaw.Providers.Tests/GitHubCopilot/GitHubCopilotDescriptorTests.cs`:
+  `src/Netclaw.Daemon.Tests/Providers/GitHubCopilot/GitHubCopilotDescriptorTests.cs`:
   probe success parses + filters, probe falls back on HTTP failure, probe
   surfaces auth-expired clearly on 401 from token exchange
 
@@ -93,21 +93,24 @@
 - [ ] 7.1 Edit
   `feeds/skills/.system/files/netclaw-operations/SKILL.md` — add the
   `github-copilot` provider type to the listing and document the
-  `netclaw provider add ... --type github-copilot` flow
+  `netclaw provider add <name> github-copilot --auth oauth-device` flow
 - [ ] 7.2 Bump `metadata.version` in the skill's YAML frontmatter (do NOT
   run `generate-skill-manifest.sh` locally — CI handles publishing per
   CLAUDE.md)
 
 ## 8. Quality gates and verification
 
-- [ ] 8.1 `dotnet build Netclaw.sln` clean
-- [ ] 8.2 `dotnet test src/Netclaw.Providers.Tests/Netclaw.Providers.Tests.csproj --filter "FullyQualifiedName~GitHubCopilot"` passes
+- [ ] 8.1 `dotnet build Netclaw.slnx` clean
+- [ ] 8.2 `dotnet test src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj --filter "FullyQualifiedName~GitHubCopilot"` passes
 - [ ] 8.3 `dotnet test src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj --filter "FullyQualifiedName~OAuthDeviceFlow"` passes
 - [ ] 8.4 `dotnet slopwatch analyze` — no new violations
 - [ ] 8.5 `./scripts/Add-FileHeaders.ps1 -Verify` — all new `.cs` files
   carry the Petabridge copyright header
-- [ ] 8.6 `./scripts/smoke/run-tapes.sh init-wizard --no-up --keep-stack` —
+- [ ] 8.6 `./scripts/smoke/run-smoke.sh light` —
   TUI provider picker shows "GitHub Copilot" without breaking existing tapes
 - [ ] 8.7 Manual end-to-end smoke against a real Copilot subscription:
-  `netclaw provider add copilot-personal --type github-copilot`,
-  `netclaw provider probe copilot-personal`, and a one-shot chat
+  `netclaw provider add copilot-personal github-copilot --auth oauth-device`
+  then re-run the same `provider add` command to confirm the cached
+  Copilot API token round-trips, plus a one-shot chat through the new
+  provider entry. (No `netclaw provider probe` subcommand exists today;
+  the add flow exercises the probe path internally.)

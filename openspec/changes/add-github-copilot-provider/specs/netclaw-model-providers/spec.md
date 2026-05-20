@@ -110,8 +110,12 @@ credential on the operator's behalf.
 - **WHEN** the system attempts to exchange the OAuth token at
   `/copilot_internal/v2/token`
 - **AND** the endpoint returns `401 Unauthorized`
-- **THEN** the system SHALL raise an authentication-expired error
-  identifying the provider entry by name
+- **THEN** the system SHALL raise an authentication-expired error.
+  Higher-level callers (the probe path, the chat-completion path) SHALL
+  include the operator-chosen provider entry name when surfacing the
+  failure to the operator — the name is held by the caller (it is the
+  dictionary key in the `Providers` config), not by the
+  `CopilotAuthExpiredException` itself
 - **AND** the remediation message SHALL direct the operator to remove
   the entry (`netclaw provider remove <name>`) and re-run the device
   flow (`netclaw provider add <name> github-copilot --auth oauth-device`)
