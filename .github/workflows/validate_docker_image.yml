@@ -120,6 +120,10 @@ jobs:
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
           exit 1
 
+      - name: "Set up QEMU for multi-arch verification"
+        if: github.event_name == 'push'
+        uses: docker/setup-qemu-action@v3
+
       - name: "Verify multi-arch manifest has distinct per-platform digests"
         if: github.event_name == 'push'
         shell: bash
@@ -162,6 +166,40 @@ jobs:
           echo "✓ Multi-arch manifest verified: amd64 and arm64 have distinct digests"
           echo "  amd64: $AMD64_DIGEST"
           echo "  arm64: $ARM64_DIGEST"
+
+      - name: "Verify TARGETARCH is declared before FROM"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # In a multi-platform build, ARGs declared after FROM are not
+          # per-platform — buildx resolves them to their default for all
+          # architectures. This catches the #1091 class of bug on every
+          # PR/merge, not just pushes (since --load needs QEMU).
+          DOCKERFILE="docker/Dockerfile"
+
+          # Find line numbers of FROM and all ARG declarations
+          FROM_LINE=$(grep -n "^FROM" "$DOCKERFILE" | head -1 | cut -d: -f1)
+          ARG_BEFORE_FROM=$(grep -n "^ARG TARGET" "$DOCKERFILE" | while IFS=: read -r line _; do
+            if [[ "$line" -lt "$FROM_LINE" ]]; then
+              echo "FOUND"
+              break
+            fi
+          done)
+
+          if [[ -z "$ARG_BEFORE_FROM" ]]; then
+            echo "ERROR: ARG TARGETARCH must be declared BEFORE FROM for multi-arch builds (#1091)" >&2
+            echo "  FROM is on line $FROM_LINE" >&2
+            echo "  ARG TARGET declarations must appear above it" >&2
+            echo "" >&2
+            echo "Example:" >&2
+            echo "  ARG TARGETARCH=amd64" >&2
+            echo "  ARG NETCLAW_VERSION=unknown" >&2
+            echo "  FROM ubuntu:24.04" >&2
+            exit 1
+          fi
+
+          echo "✓ ARG TARGETARCH is declared before FROM (line $FROM_LINE)"
 
       - name: "Cleanup validation containers"
         if: always()
