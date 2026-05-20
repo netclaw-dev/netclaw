@@ -55,6 +55,10 @@ jobs:
         with:
           global-json-file: "./global.json"
 
+      - name: "Set up QEMU for multi-arch emulation"
+        if: github.event_name == 'push'
+        uses: docker/setup-qemu-action@v3
+
       - name: "Set up Docker Buildx"
         uses: docker/setup-buildx-action@v4
 
@@ -120,10 +124,6 @@ jobs:
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
           exit 1
 
-      - name: "Set up QEMU for multi-arch verification"
-        if: github.event_name == 'push'
-        uses: docker/setup-qemu-action@v3
-
       - name: "Verify multi-arch manifest has distinct per-platform digests"
         if: github.event_name == 'push'
         shell: bash
@@ -133,6 +133,7 @@ jobs:
           # Build both platforms locally and inspect their digests.
           # This catches the bug from #1091 where TARGETARCH was declared
           # after FROM and buildx defaulted both platforms to amd64.
+          # QEMU must be set up before buildx to enable arm64 emulation.
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
             -t netclawd-pr:multi-arch-test \
