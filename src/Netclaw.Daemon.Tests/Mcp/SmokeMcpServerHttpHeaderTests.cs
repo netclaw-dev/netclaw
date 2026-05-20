@@ -179,14 +179,10 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
             {
                 while (await process.StandardOutput.ReadLineAsync(ct).ConfigureAwait(false) is not null) { }
             }
-            catch (OperationCanceledException)
-            {
-                // Drain ends with the test's cancellation token — expected on teardown.
-            }
-            catch (IOException)
-            {
-                // Stream closes when the child is killed in DisposeAsync.
-            }
+            // slopwatch-ignore: SW003 stdout drain ends with the test cancellation token; this is the expected teardown exit, not a swallowed error.
+            catch (OperationCanceledException) { }
+            // slopwatch-ignore: SW003 the child's stdout stream closes when DisposeAsync kills the process; expected teardown race, not a swallowed error.
+            catch (IOException) { }
         }, ct);
 
         // Bounded wait for the child to publish its listening URL on stderr;
@@ -229,10 +225,8 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
         {
             process.Kill(entireProcessTree: true);
         }
-        catch (InvalidOperationException)
-        {
-            // Process exited between HasExited and Kill — nothing to do.
-        }
+        // slopwatch-ignore: SW003 race between HasExited check and Kill — the child exited on its own, nothing to do.
+        catch (InvalidOperationException) { }
     }
 
     private static async Task IgnoreCancellationAsync(Task task)
@@ -241,16 +235,9 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
         {
             await task.ConfigureAwait(false);
         }
-        catch (OperationCanceledException)
-        {
-            // Drains are tied to the test's CancellationToken; cancellation
-            // on teardown is the expected exit, not a failure to report.
-        }
-        catch (InvalidOperationException)
-        {
-            // The stderr drain TCS surfaces this when the child exits before
-            // publishing a listening URL; the caller already saw the
-            // TimeoutException that StartAsync threw.
-        }
+        // slopwatch-ignore: SW003 drains are tied to the test cancellation token; cancellation on teardown is the expected exit, not a failure to surface.
+        catch (OperationCanceledException) { }
+        // slopwatch-ignore: SW003 stderr drain TCS surfaces this when the child exits before publishing a listening URL; the caller already saw the TimeoutException StartAsync threw.
+        catch (InvalidOperationException) { }
     }
 }
