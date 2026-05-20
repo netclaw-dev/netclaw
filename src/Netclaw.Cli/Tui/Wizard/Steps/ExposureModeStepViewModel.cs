@@ -119,12 +119,15 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     {
         // Gate: cannot leave the trusted-proxies sub-step until ≥1 entry is present.
         // Mirrors DaemonExposureValidator's startup contract so the wizard never emits
-        // a config the daemon would refuse.
+        // a config the daemon would refuse. Return true (not false): per IWizardStepViewModel,
+        // true means "handled internally — stay in this step." Returning false here would
+        // tell the orchestrator the step is complete and to advance to the next wizard step,
+        // which would skip the notice + webhook sub-steps entirely.
         if (IsReverseProxy
             && _currentSubStep == ReverseProxyTrustedProxiesSubStep
             && TrustedProxies.Count == 0)
         {
-            return false;
+            return true;
         }
 
         var next = _currentSubStep + 1;

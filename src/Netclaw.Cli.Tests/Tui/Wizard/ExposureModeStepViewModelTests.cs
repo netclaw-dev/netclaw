@@ -405,8 +405,10 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
         Assert.True(step.TryAdvance());
         Assert.Equal(step.ReverseProxyTrustedProxiesSubStep, step.CurrentSubStep);
 
-        // Gate: cannot advance with empty trusted proxies.
-        Assert.False(step.TryAdvance());
+        // Gate: blocked on empty trusted proxies. Returns true ("handled — staying put")
+        // so the orchestrator does NOT interpret it as step-complete and skip ahead.
+        // The sub-step pointer must not move.
+        Assert.True(step.TryAdvance());
         Assert.Equal(step.ReverseProxyTrustedProxiesSubStep, step.CurrentSubStep);
 
         step.TrustedProxies = ["10.0.0.0/24"];
