@@ -6,12 +6,19 @@
 #   publish/daemon-{amd64,arm64}/netclawd
 # The TARGETARCH arg (injected by buildx) selects the right directory.
 #
-# For single-arch local builds (build-image.sh), the binaries are at:
-#   publish/cli/netclaw
-#   publish/daemon/netclawd
-# TARGETARCH defaults to amd64, and the COPY falls through to the
-# arch-suffixed path — the build script symlinks the single-arch
-# layout to the expected path.
+# For single-arch local builds (build-image.sh), the binaries are at
+# publish/cli/netclaw and publish/daemon/netclawd; the build script
+# hard-link-copies them to publish/cli-${arch}/ and publish/daemon-${arch}/
+# and passes --build-arg TARGETARCH=$arch explicitly so the same Dockerfile
+# works for both buildx (multi-arch) and plain `docker build` (single-arch).
+#
+# Why TARGETARCH has no default value (#1091): buildx auto-injects the
+# predefined TARGETARCH per-platform, but ONLY if the in-stage `ARG`
+# declaration has no default. Writing `ARG TARGETARCH=amd64` makes the
+# default win over buildx's per-platform injection, so the arm64 manifest
+# silently ends up with amd64 binaries. Leaving it bare is the canonical
+# Docker pattern; failures when neither buildx nor --build-arg supply a
+# value are intentional ("no silent fallbacks" — see CLAUDE.md).
 #
 # A wrapper entrypoint (entrypoint.sh) runs as PID 1 and supervises the
 # netclawd process, restarting it on exit so the container survives
@@ -26,10 +33,12 @@
 #
 # The companion `netclaw` CLI binary is also installed so shell_execute
 # can invoke it from inside the container (e.g., `netclaw doctor`).
-FROM ubuntu:24.04
-
+ARG TARGETARCH
 ARG NETCLAW_VERSION=unknown
-ARG TARGETARCH=amd64
+
+FROM ubuntu:24.04
+ARG TARGETARCH
+ARG NETCLAW_VERSION=unknown
 
 # Pre-install the general-purpose toolkit an autonomous agent is expected
 # to reach for via its shell_execute tool. An Ubuntu base (not a chiseled

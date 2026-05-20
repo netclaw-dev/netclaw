@@ -120,6 +120,45 @@ jobs:
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
           exit 1
 
+      - name: "Lint: ARG TARGETARCH must have no default (#1091)"
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # #1091 root cause: writing `ARG TARGETARCH=<default>` inside a
+          # build stage shadows buildx's per-platform injection. Both
+          # manifest entries silently get the same arch (whatever the
+          # default is). Verified empirically: `docker buildx build
+          # --platform linux/386 ...` with `ARG TARGETARCH=amd64` after
+          # FROM resolves TARGETARCH to `amd64`, not `386`.
+          #
+          # Canonical Docker pattern is `ARG TARGETARCH` (no default).
+          # The same applies to TARGETOS, TARGETPLATFORM, TARGETVARIANT,
+          # BUILDARCH, BUILDOS, BUILDPLATFORM, BUILDVARIANT — all of the
+          # predefined platform ARGs auto-injected by buildx.
+          DOCKERFILE="docker/Dockerfile"
+          PREDEFINED='TARGETARCH|TARGETOS|TARGETPLATFORM|TARGETVARIANT|BUILDARCH|BUILDOS|BUILDPLATFORM|BUILDVARIANT'
+
+          if matches=$(grep -nE "^ARG (${PREDEFINED})=" "$DOCKERFILE"); then
+            echo "ERROR: predefined platform ARG declared with a default value (#1091)" >&2
+            echo "$matches" | sed 's/^/  /' >&2
+            echo "" >&2
+            echo "  A default value shadows buildx's per-platform injection," >&2
+            echo "  causing all manifest entries to use the same architecture." >&2
+            echo "  Use \`ARG <NAME>\` (no default). For single-arch builds," >&2
+            echo "  pass --build-arg <NAME>=<value> explicitly (see build-image.sh)." >&2
+            exit 1
+          fi
+
+          if ! grep -qE "^ARG TARGETARCH(\$|[[:space:]])" "$DOCKERFILE"; then
+            echo "ERROR: ARG TARGETARCH (no default) not declared in $DOCKERFILE" >&2
+            echo "  Expected at least one bare \`ARG TARGETARCH\` declaration so" >&2
+            echo "  buildx's per-platform value flows into the build stage." >&2
+            exit 1
+          fi
+
+          echo "OK: no predefined platform ARG has a default; ARG TARGETARCH is declared."
+
       - name: "Cleanup validation containers"
         if: always()
         shell: bash
