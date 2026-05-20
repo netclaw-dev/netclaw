@@ -144,6 +144,28 @@ public sealed class ProviderCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Add_OAuthOnlyProvider_WithoutAuthFlag_RefusesAndGuides()
+    {
+        // GitHub Copilot supports only OAuthDevice. Without --auth oauth-device
+        // we must not silently write an entry with no credentials — fail loudly
+        // and tell the operator how to authenticate.
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-copilot", "github-copilot"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        var output = _output.ToString();
+        Assert.Contains("--auth oauth-device", output);
+        Assert.Contains("requires OAuth device flow", output);
+
+        // No partial entry written to netclaw.json
+        Assert.False(File.Exists(_paths.NetclawConfigPath)
+            && ReadConfigFile(_paths.NetclawConfigPath).RootElement
+                .TryGetProperty("Providers", out var providers)
+            && providers.TryGetProperty("my-copilot", out _));
+    }
+
+    [Fact]
     public async Task Remove_UnreferencedProvider_Succeeds()
     {
         // Arrange: add a provider
