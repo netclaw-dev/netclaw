@@ -29,7 +29,9 @@
 ARG TARGETARCH=amd64
 ARG NETCLAW_VERSION=unknown
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS base
+ARG TARGETARCH=amd64
+ARG NETCLAW_VERSION=unknown
 
 # Pre-install the general-purpose toolkit an autonomous agent is expected
 # to reach for via its shell_execute tool. An Ubuntu base (not a chiseled
