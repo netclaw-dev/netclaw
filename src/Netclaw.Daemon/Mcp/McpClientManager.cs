@@ -548,7 +548,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 EnvironmentVariables = entry.EnvironmentVariables is { Count: > 0 }
                     ? entry.EnvironmentVariables.ToDictionary(
                         kvp => kvp.Key,
-                        kvp => (string?)kvp.Value,
+                        kvp => (string?)kvp.Value.Value,
                         StringComparer.OrdinalIgnoreCase)
                     : null,
                 Name = serverName.Value,
@@ -556,8 +556,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             });
         }
 
+        // Unwrap SensitiveString → raw header value here at the transport
+        // boundary so the SDK sees the actual credential, not the wrapper's
+        // redacted ToString().
         Dictionary<string, string>? headers = entry.Headers is { Count: > 0 }
-            ? new Dictionary<string, string>(entry.Headers)
+            ? entry.Headers.ToDictionary(
+                kvp => kvp.Key,
+                kvp => kvp.Value.Value,
+                StringComparer.OrdinalIgnoreCase)
             : null;
 
         return new HttpClientTransport(new HttpClientTransportOptions

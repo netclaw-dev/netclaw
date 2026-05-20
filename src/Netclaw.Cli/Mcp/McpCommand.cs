@@ -795,7 +795,10 @@ internal static class McpCommand
         if (entry.Transport is "stdio")
         {
             var envVars = entry.EnvironmentVariables is { Count: > 0 }
-                ? new Dictionary<string, string?>(entry.EnvironmentVariables!)
+                ? entry.EnvironmentVariables.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => (string?)kvp.Value.Value,
+                    StringComparer.OrdinalIgnoreCase)
                 : null;
 
             transport = new StdioClientTransport(new StdioClientTransportOptions
@@ -814,7 +817,11 @@ internal static class McpCommand
                 Endpoint = new Uri(entry.Url!),
                 Name = serverName.Value,
                 AdditionalHeaders = entry.Headers is { Count: > 0 }
-                    ? new Dictionary<string, string>(entry.Headers) : null,
+                    ? entry.Headers.ToDictionary(
+                        kvp => kvp.Key,
+                        kvp => kvp.Value.Value,
+                        StringComparer.OrdinalIgnoreCase)
+                    : null,
                 TransportMode = entry.Transport is "sse"
                     ? HttpTransportMode.Sse : HttpTransportMode.AutoDetect,
             });
@@ -879,7 +886,7 @@ internal static class McpCommand
                     foreach (var ev in envVars.EnumerateObject())
                     {
                         var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, ev.Value.GetString());
-                        entry.EnvironmentVariables[ev.Name] = decrypted;
+                        entry.EnvironmentVariables[ev.Name] = new SensitiveString(decrypted);
                     }
                 }
 
@@ -889,7 +896,7 @@ internal static class McpCommand
                     foreach (var h in hdrs.EnumerateObject())
                     {
                         var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, h.Value.GetString());
-                        entry.Headers[h.Name] = decrypted;
+                        entry.Headers[h.Name] = new SensitiveString(decrypted);
                     }
                 }
             }
