@@ -119,20 +119,6 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         SlackThreadTs threadTs,
         CancellationToken cancellationToken)
     {
-        var audienceResult = ResolveHistoricalAudience(channelId, threadTs);
-        if (audienceResult.Error is { } audienceError)
-        {
-            _logger.LogWarning(
-                "Invalid Slack audience configuration while fetching history for {ChannelId}/{ThreadTs}: {Error}",
-                channelId.Value,
-                threadTs.Value,
-                audienceError);
-            return [];
-        }
-
-        var audience = audienceResult.Audience;
-        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_audienceProfiles, audience);
-        var attachmentPolicy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
         var inlineImages = _modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
 
         var results = new List<ChannelInput>();
@@ -176,11 +162,27 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
                 if (isBotAuthored && !isThreadRoot)
                     continue;
 
+                var trustResult = ResolveHistoricalTrust(channelId, senderId);
+                if (trustResult.Error is { } audienceError)
+                {
+                    _logger.LogWarning(
+                        "Invalid Slack audience configuration while fetching history for {ChannelId}/{ThreadTs}: {Error}",
+                        channelId.Value,
+                        threadTs.Value,
+                        audienceError);
+                    return [];
+                }
+
+                var attachmentPolicy = ToolAudienceProfileDefaults
+                    .GetResolvedProfile(_audienceProfiles, trustResult.Audience)
+                    .ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
+
                 var input = await ConvertMessageAsync(
                     message,
                     senderId,
                     channelId,
-                    audience,
+                    trustResult.Audience,
+                    trustResult.Principal,
                     attachmentPolicy,
                     inlineImages,
                     inboxDir,
@@ -206,6 +208,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         string senderId,
         SlackChannelId channelId,
         TrustAudience audience,
+        PrincipalClassification principal,
         ChannelAttachmentPolicy attachmentPolicy,
         bool inlineImages,
         string inboxDir,
@@ -264,7 +267,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             MessageId = $"{channelId.Value}:{message.Ts ?? string.Empty}",
             Audience = audience,
             Boundary = TrustBoundary.TrustedInstance,
-            Principal = PrincipalClassification.UntrustedExternal,
+            Principal = principal,
             Provenance = new SourceProvenance(
                 TransportAuthenticity.Verified,
                 PayloadTaint.Public)
@@ -455,17 +458,28 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         return [line, new DataContent(bytes, mimeType)];
     }
 
-    private AudienceResult ResolveHistoricalAudience(SlackChannelId channelId, SlackThreadTs threadTs)
+    private HistoricalTrustResult ResolveHistoricalTrust(SlackChannelId channelId, string senderId)
     {
         var isExplicitChannel = _options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
+        var isExplicitUser = _options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
         var isDirectMessage = channelId.Value.StartsWith("D", StringComparison.Ordinal);
 
-        return AudienceResult.Resolve(
+        var audienceResult = AudienceResult.Resolve(
             channelId.Value, isDirectMessage,
             _options.ChannelAudiences,
-            isExplicitUser: false,
+            isExplicitUser: isExplicitUser,
             isExplicitChannel: isExplicitChannel);
+
+        return new HistoricalTrustResult(
+            audienceResult.Audience,
+            isExplicitUser ? PrincipalClassification.TrustedInternal : PrincipalClassification.UntrustedExternal,
+            audienceResult.Error);
     }
+
+    private readonly record struct HistoricalTrustResult(
+        TrustAudience Audience,
+        PrincipalClassification Principal,
+        string? Error);
 
     private static TextContent BuildHistoricalAttachmentRejected(string detail)
         => new($"[attachment rejected: {detail}]");

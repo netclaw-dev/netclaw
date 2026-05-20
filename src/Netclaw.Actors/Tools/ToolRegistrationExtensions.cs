@@ -37,6 +37,7 @@ public static class ToolRegistrationExtensions
     {
         registry.Register(new ShellTool(config, pathPolicy, shellCommandPolicy));
         registry.Register(new FileReadTool(config, pathPolicy, paths));
+        registry.Register(new FileListTool(config, paths, pathPolicy));
         registry.Register(new FileWriteTool(config, pathPolicy));
         registry.Register(new FileEditTool(config, pathPolicy));
         registry.Register(new AttachFileTool(config));

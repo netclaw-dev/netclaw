@@ -521,6 +521,57 @@ public sealed class ConfigSchemaDoctorCheckTests
         Assert.Equal(DoctorSeverity.Error, result.Severity);
     }
 
+    [Fact]
+    public async Task ReturnsPass_WhenSessionMaxToolIterationsPerTurnSet()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Session": {
+                "MaxToolIterationsPerTurn": 50
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
+    public async Task ReturnsError_WhenStaleSessionMaxToolCallsPerTurnPresent()
+    {
+        // Regression guard for the rename: the old MaxToolCallsPerTurn property
+        // must be rejected as an unknown property by the Session schema, so
+        // operators upgrading discover the rename via netclaw doctor instead of
+        // a silently-ignored value at runtime.
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Session": {
+                "MaxToolCallsPerTurn": 30
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("MaxToolCallsPerTurn", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string CreateTempBasePath()
     {
         var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));

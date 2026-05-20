@@ -34,7 +34,7 @@ public sealed class TurnStateTrackerTests
     {
         var tracker = new TurnStateTracker();
         if (phase == ToolPhase.AfterToolUse)
-            tracker.RecordToolCompletion(resultCount: 1, maxToolCallsPerTurn: 30);
+            tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
 
         var action = tracker.EvaluateEmptyResponse(kind);
 
@@ -49,7 +49,7 @@ public sealed class TurnStateTrackerTests
     public void PostToolThinkingOnly_RetriesSeveralTimesBeforeFailing()
     {
         var tracker = new TurnStateTracker();
-        tracker.RecordToolCompletion(resultCount: 1, maxToolCallsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
 
         // The first three consecutive thinking-only responses retry.
         Assert.IsType<EmptyResponseAction.Retry>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly));
@@ -58,5 +58,62 @@ public sealed class TurnStateTrackerTests
 
         // Only the fourth fails the turn.
         Assert.IsType<EmptyResponseAction.Fail>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly));
+    }
+
+    [Fact]
+    public void ParallelToolBatch_CountsAsOneIteration()
+    {
+        var tracker = new TurnStateTracker();
+
+        var status = tracker.RecordToolCompletion(resultCount: 8, maxToolIterationsPerTurn: 30);
+
+        Assert.IsType<ToolBudgetStatus.Ok>(status);
+        Assert.Equal(1, tracker.ToolIterationCount);
+        // ToolCallCount remains for telemetry only — it counts results, not iterations.
+        Assert.Equal(8, tracker.ToolCallCount);
+    }
+
+    [Fact]
+    public void MultipleSerialRounds_CountAsMultipleIterations()
+    {
+        var tracker = new TurnStateTracker();
+
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+
+        Assert.Equal(3, tracker.ToolIterationCount);
+    }
+
+    [Fact]
+    public void ReachingIterationCap_ReturnsExhausted()
+    {
+        var tracker = new TurnStateTracker();
+        const int cap = 4;
+
+        // First (cap - 1) iterations stay below the limit.
+        for (var i = 0; i < cap - 1; i++)
+        {
+            var status = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
+            Assert.IsNotType<ToolBudgetStatus.Exhausted>(status);
+        }
+
+        // The cap-th iteration hits the limit.
+        var capped = tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: cap);
+        Assert.IsType<ToolBudgetStatus.Exhausted>(capped);
+        Assert.Equal(cap, tracker.ToolIterationCount);
+    }
+
+    [Fact]
+    public void RawCallVolume_DoesNotControlTheLimit()
+    {
+        // 100 tool results delivered in a single iteration must NOT trigger the cap.
+        var tracker = new TurnStateTracker();
+
+        var status = tracker.RecordToolCompletion(resultCount: 100, maxToolIterationsPerTurn: 5);
+
+        Assert.IsType<ToolBudgetStatus.Ok>(status);
+        Assert.Equal(1, tracker.ToolIterationCount);
+        Assert.Equal(100, tracker.ToolCallCount);
     }
 }

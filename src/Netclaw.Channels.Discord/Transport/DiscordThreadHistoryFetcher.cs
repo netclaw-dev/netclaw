@@ -101,19 +101,6 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             return [];
         }
 
-        var audienceResult = ResolveHistoricalAudience(channelId, threadOrMessageId);
-        if (audienceResult.Error is { } audienceError)
-        {
-            _logger.LogWarning(
-                "Invalid Discord audience configuration while fetching history for {SessionId}: {Error}",
-                sessionId.Value,
-                audienceError);
-            return [];
-        }
-
-        var audience = audienceResult.Audience;
-        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_audienceProfiles, audience);
-        var attachmentPolicy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
         var inlineImages = _modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
         var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
         var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
@@ -144,11 +131,26 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
                 if (message.IsBot && !isThreadRoot)
                     continue;
 
+                var trustResult = ResolveHistoricalTrust(channelId, threadOrMessageId, message.SenderId);
+                if (trustResult.Error is { } audienceError)
+                {
+                    _logger.LogWarning(
+                        "Invalid Discord audience configuration while fetching history for {SessionId}: {Error}",
+                        sessionId.Value,
+                        audienceError);
+                    return [];
+                }
+
+                var attachmentPolicy = ToolAudienceProfileDefaults
+                    .GetResolvedProfile(_audienceProfiles, trustResult.Audience)
+                    .ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
+
                 var input = await ConvertMessageAsync(
                     message,
                     channelId,
                     threadChannelId,
-                    audience,
+                    trustResult.Audience,
+                    trustResult.Principal,
                     attachmentPolicy,
                     inlineImages,
                     inboxDir,
@@ -173,6 +175,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         DiscordChannelId channelId,
         ulong threadChannelId,
         TrustAudience audience,
+        PrincipalClassification principal,
         ChannelAttachmentPolicy attachmentPolicy,
         bool inlineImages,
         string inboxDir,
@@ -225,7 +228,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
             MessageId = message.MessageId,
             Audience = audience,
             Boundary = TrustBoundary.TrustedInstance,
-            Principal = PrincipalClassification.UntrustedExternal,
+            Principal = principal,
             Provenance = new SourceProvenance(
                 TransportAuthenticity.Verified,
                 PayloadTaint.Public)
@@ -423,19 +426,31 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         return [line, new DataContent(bytes, mimeType)];
     }
 
-    private AudienceResult ResolveHistoricalAudience(
+    private HistoricalTrustResult ResolveHistoricalTrust(
         DiscordChannelId channelId,
-        DiscordThreadOrMessageId threadOrMessageId)
+        DiscordThreadOrMessageId threadOrMessageId,
+        SenderId senderId)
     {
         var isExplicitChannel = _options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
+        var isExplicitUser = _options.AllowedUserIds.Contains(senderId.Value, StringComparer.Ordinal);
         var isDirectMessage = string.Equals(channelId.Value, threadOrMessageId.Value, StringComparison.Ordinal);
 
-        return AudienceResult.Resolve(
+        var audienceResult = AudienceResult.Resolve(
             channelId.Value, isDirectMessage,
             _options.ChannelAudiences,
-            isExplicitUser: false,
+            isExplicitUser: isExplicitUser,
             isExplicitChannel: isExplicitChannel);
+
+        return new HistoricalTrustResult(
+            audienceResult.Audience,
+            isExplicitUser ? PrincipalClassification.TrustedInternal : PrincipalClassification.UntrustedExternal,
+            audienceResult.Error);
     }
+
+    private readonly record struct HistoricalTrustResult(
+        TrustAudience Audience,
+        PrincipalClassification Principal,
+        string? Error);
 
     private static async Task<IReadOnlyList<HistoricalMessage>> FetchRawMessagesAsync(
         DiscordSocketClient client,

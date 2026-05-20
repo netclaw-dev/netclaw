@@ -93,31 +93,35 @@ internal sealed class TurnStateTracker
     /// <summary>
     /// Record completed tool results and determine what the actor should do next.
     /// Call after tool execution completes with the number of results in the batch.
+    /// Enforcement is iteration-based: one completed LLM-to-tools round increments
+    /// <see cref="ToolIterationCount"/> by 1 regardless of how many tool calls
+    /// were issued in parallel. <see cref="ToolCallCount"/> is retained for
+    /// telemetry only.
     /// </summary>
-    public ToolBudgetStatus RecordToolCompletion(int resultCount, int maxToolCallsPerTurn)
+    public ToolBudgetStatus RecordToolCompletion(int resultCount, int maxToolIterationsPerTurn)
     {
         ToolCallCount += resultCount;
         ToolIterationCount++;
 
-        if (ToolCallCount >= maxToolCallsPerTurn)
+        if (ToolIterationCount >= maxToolIterationsPerTurn)
         {
             return new ToolBudgetStatus.Exhausted(
-                $"You have reached the tool call limit for this turn. "
+                $"You have reached the tool iteration limit for this turn. "
                 + "Do NOT request any more tools. "
                 + "Summarize the work you completed and answer the user's question "
                 + "based on the information you have gathered so far. "
                 + "If you could not complete the task, explain what you found and what remains.");
         }
 
-        var budgetThreshold = (int)(maxToolCallsPerTurn * BudgetNudgeRatio);
-        if (ToolCallCount >= budgetThreshold && !_budgetNudgeSent)
+        var budgetThreshold = (int)(maxToolIterationsPerTurn * BudgetNudgeRatio);
+        if (ToolIterationCount >= budgetThreshold && !_budgetNudgeSent)
         {
             _budgetNudgeSent = true;
-            var remaining = maxToolCallsPerTurn - ToolCallCount;
+            var remaining = maxToolIterationsPerTurn - ToolIterationCount;
             return new ToolBudgetStatus.NudgeNeeded(
                 remaining,
-                $"You have used {ToolCallCount} of {maxToolCallsPerTurn} tool calls for this turn. "
-                + $"You have approximately {remaining} tool calls remaining. "
+                $"You have used {ToolIterationCount} of {maxToolIterationsPerTurn} tool iterations for this turn. "
+                + $"You have approximately {remaining} iterations remaining. "
                 + "Start wrapping up your tool usage and prepare to answer the user's question.");
         }
 

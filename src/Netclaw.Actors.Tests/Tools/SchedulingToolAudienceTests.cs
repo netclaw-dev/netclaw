@@ -12,8 +12,8 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Tools;
 
 /// <summary>
-/// Verifies that scheduling tools are profile-managed and therefore blocked
-/// for Public and Team audiences by default, while Personal retains access.
+/// Verifies that scheduling tools are profile-managed: blocked for the Public
+/// audience by default, and granted to Team and Personal by default.
 /// </summary>
 public sealed class SchedulingToolAudienceTests
 {
@@ -45,13 +45,13 @@ public sealed class SchedulingToolAudienceTests
     [InlineData("list_reminders")]
     [InlineData("cancel_reminder")]
     [InlineData("get_reminder_history")]
-    public void SchedulingTools_BlockedForTeamAudience_ByDefault(string toolName)
+    public void SchedulingTools_AllowedForTeamAudience_ByDefault(string toolName)
     {
         var config = new ToolConfig();
         var policy = new ToolAccessPolicy(config, Defaults);
         var tool = CreateFakeTool(toolName, "scheduling");
 
-        Assert.False(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
+        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
     }
 
     [Theory]
@@ -66,21 +66,6 @@ public sealed class SchedulingToolAudienceTests
         var tool = CreateFakeTool(toolName, "scheduling");
 
         Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Personal)));
-    }
-
-    [Theory]
-    [InlineData("set_reminder")]
-    [InlineData("list_reminders")]
-    [InlineData("cancel_reminder")]
-    [InlineData("get_reminder_history")]
-    public void SchedulingTools_AllowedForTeam_WhenExplicitlyGranted(string toolName)
-    {
-        var config = new ToolConfig();
-        config.AudienceProfiles.Team.AllowedTools.Add(toolName);
-        var policy = new ToolAccessPolicy(config, Defaults);
-        var tool = CreateFakeTool(toolName, "scheduling");
-
-        Assert.True(policy.IsToolExposed(tool, CreateContext(TrustAudience.Team)));
     }
 
     private static FakeNetclawTool CreateFakeTool(string name, string grantCategory)

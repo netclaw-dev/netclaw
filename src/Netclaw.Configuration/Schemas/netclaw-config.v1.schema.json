@@ -110,11 +110,12 @@
       "type": "object",
       "description": "Operator-facing session configuration.",
       "properties": {
-        "MaxToolCallsPerTurn": {
+        "MaxToolIterationsPerTurn": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 100,
-          "description": "Maximum individual tool calls allowed per turn."
+          "maximum": 500,
+          "default": 60,
+          "description": "Maximum LLM-to-tools-to-LLM iterations allowed per turn. One LLM response with any number of parallel tool calls counts as exactly one iteration."
         },
         "MemoryObserverIdleSeconds": {
           "type": "integer",

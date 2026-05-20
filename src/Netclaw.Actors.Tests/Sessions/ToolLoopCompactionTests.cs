@@ -41,7 +41,7 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
         });
         services.AddSingleton(new SessionConfig
         {
-            MaxToolCallsPerTurn = 10,
+            MaxToolIterationsPerTurn = 10,
             Tuning = new SessionTuning
             {
                 CompactionThreshold = 0.75,

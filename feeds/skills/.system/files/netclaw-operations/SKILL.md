@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.4.0"
+  version: "2.5.0"
 ---
 
 # Netclaw Operations
@@ -47,7 +47,7 @@ Rules:
 
 - The path must be an absolute path to an existing directory
 - The path must be within the session's allowed file access roots
-- Profile-managed: not available to Public or Team audiences by default
+- Profile-managed: granted to Team and Personal audiences by default, not Public
 - Project identity files are re-read from disk on each `SetSystemPrompt()` call,
   so edits to the project's `AGENTS.md` take effect on the next project switch
   or daemon restart
@@ -238,10 +238,19 @@ Sessions receive granted tool categories. `builtin` is always granted.
 Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
 
+Built-in tool grants follow the audience and are monotonic (Public ⊆ Team ⊆
+Personal). **Public** sessions get read-only file tools only — `file_read`,
+`file_list`, `attach_file` — and no outbound web access. **Team** adds
+`file_write`, `file_edit`, `web_search`, `web_fetch`, the scheduling tools,
+`skill_manage`, and `set_working_directory`. **Personal** gets everything.
+`shell_execute` is Personal-only — in a Team or Public session, use `file_list`
+to enumerate a directory instead of `ls`.
+
 Tools belonging to disabled subsystems (see [Feature Kill Switches](#feature-kill-switches))
 are hidden from `search_tools` results for all audiences. Public sessions
-additionally cannot discover or load skills, subagents, memory tools, or
-scheduling tools regardless of feature flags.
+additionally cannot discover or load skills, subagents, memory tools,
+scheduling tools, or the `web_search` / `web_fetch` tools regardless of
+feature flags.
 
 ### Adding MCP servers (fail-closed by default)
 

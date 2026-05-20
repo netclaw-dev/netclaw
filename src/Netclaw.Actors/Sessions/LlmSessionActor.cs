@@ -102,7 +102,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly TurnStateTracker _turnState = new();
 
     private const string ToolBudgetExhaustedMessage =
-        "I used all available tool calls for this turn and couldn't produce a final summary. "
+        "I used all available tool iterations for this turn and couldn't produce a final summary. "
         + "You can ask me to summarize what was done, or rephrase your request.";
 
     // Delivery retry handler (eligibility tracking, retry counting, nudge builders)
@@ -735,7 +735,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 "turn_force_no_tools_violation toolCallCount={ToolCallCount} budgetUsed={BudgetUsed} max={Max}",
                 analysis.ToolCalls.Count,
                 _turnState.ToolCallCount,
-                _config.MaxToolCallsPerTurn);
+                _config.MaxToolIterationsPerTurn);
             FailCurrentTurn(
                 ToolBudgetExhaustedMessage,
                 new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
@@ -934,7 +934,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.Files);
         }
 
-        var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolCallsPerTurn);
+        var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolIterationsPerTurn);
         var dupNudge = _turnState.CheckForDuplicates();
         if (dupNudge is not null)
         {
@@ -960,7 +960,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             case ToolBudgetStatus.Exhausted exhausted:
                 TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                    _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
+                    _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, _turnState.ToolIterationCount);
                 _state = _state.AddSystemNudge(exhausted.NudgeText);
                 FireLlmCall(forceNoTools: true);
                 return;
@@ -982,7 +982,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, msg.ToolResults.Count);
+            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, msg.ToolResults.Count);
         FireLlmCall();
     }
 
@@ -3725,7 +3725,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CompleteToolBatch(int resultCount)
     {
-        var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolCallsPerTurn);
+        var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolIterationsPerTurn);
 
         var dupNudge = _turnState.CheckForDuplicates();
         if (dupNudge is not null)
@@ -3752,7 +3752,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             case ToolBudgetStatus.Exhausted exhausted:
                 TurnLog().Warning("turn_tool_call_limit_reached callCount={CallCount} max={Max} iteration={Iteration}",
-                    _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, _turnState.ToolIterationCount);
+                    _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, _turnState.ToolIterationCount);
                 _state = _state.AddSystemNudge(exhausted.NudgeText);
                 FireLlmCall(forceNoTools: true);
                 return;
@@ -3775,7 +3775,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _resolvedToolApprovals.Clear();
         ClearActiveToolBatchTracking();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
-            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolCallsPerTurn, resultCount);
+            _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, resultCount);
         FireLlmCall();
     }
 

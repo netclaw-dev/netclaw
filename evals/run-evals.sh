@@ -979,6 +979,10 @@ assert_tool_cli_invoke() {
     stdout_contains '\[tool:call\] list_reminders'
 }
 
+assert_tool_file_list() {
+    stdout_contains '\[tool:call\] file_list'
+}
+
 # Category 5: Grounding & Alignment
 assert_grounding_no_hallucinate_version() {
     stdout_contains '\[tool:call\]'
@@ -1382,6 +1386,9 @@ run_all() {
 
     run_case tool_cli_invoke "list_reminders called" \
         "List my active reminders"
+
+    run_case tool_file_list "file_list called" \
+        "What files are in my session directory?"
 
     end_category
 

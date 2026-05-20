@@ -45,6 +45,13 @@ public sealed class SessionConfigDefaultsTests
     }
 
     [Fact]
+    public void Max_tool_iterations_per_turn_defaults_to_60()
+    {
+        var config = new SessionConfig();
+        Assert.Equal(60, config.MaxToolIterationsPerTurn);
+    }
+
+    [Fact]
     public void BindFromConfiguration_supports_legacy_root_level_tuning_keys()
     {
         var config = new ConfigurationBuilder()
