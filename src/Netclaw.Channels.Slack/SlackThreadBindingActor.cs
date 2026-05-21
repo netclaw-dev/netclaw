@@ -37,10 +37,14 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private PostResult? _lastFailedPost;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    // Distinguishes "cold-spawned binding that never observed a ToolInteractionRequest"
-    // from "binding that observed at least one, then cleared its list on TurnCompleted."
-    // The former blind-forwards approval responses to the session (#979); the latter
-    // treats unknown callIds as stale and drops them.
+    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
+    // A binding that has never observed any ToolInteractionRequest treats an
+    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
+    // restarted out from under it. Once we've observed at least one prompt,
+    // subsequent ambiguous text from the user is ordinary conversation, not an
+    // approval reply, so the cold path stays off. This does NOT gate button
+    // clicks — those always route to the session, which is the authority on
+    // CallId staleness.
     private bool _hasObservedApprovalRequest;
 
     private readonly SessionPipelineHandle _handle;
@@ -1314,18 +1318,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
             request.Request.CallId == message.CallId);
         var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
-
-        // Stale path: this binding has previously observed an approval request and
-        // cleared its list (e.g., on TurnCompleted). Subsequent responses for unknown
-        // callIds are stale — drop them at the binding rather than forwarding to the
-        // session. This preserves Approvals_cleared_on_turn_completed semantics.
-        if (pending is null && _hasObservedApprovalRequest)
-        {
-            _log.Info(
-                "Dropping stale Slack button approval response for call {CallId}; no local pending entry after turn-cleared list",
-                message.CallId);
-            return;
-        }
 
         // CanApprove fast-path: if the binding still holds the original request we can
         // post the wrong-requester warning locally without round-tripping through the

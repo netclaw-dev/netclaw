@@ -46,10 +46,14 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private readonly ILoggingAdapter _log;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    // Distinguishes "cold-spawned binding that never observed a ToolInteractionRequest"
-    // from "binding that observed at least one, then cleared its list on TurnCompleted."
-    // The former blind-forwards approval responses to the session (#979); the latter
-    // treats unknown callIds as stale and drops them.
+    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
+    // A binding that has never observed any ToolInteractionRequest treats an
+    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
+    // restarted out from under it. Once we've observed at least one prompt,
+    // subsequent ambiguous text from the user is ordinary conversation, not an
+    // approval reply, so the cold path stays off. This does NOT gate button
+    // clicks — those always route to the session, which is the authority on
+    // CallId staleness.
     private bool _hasObservedApprovalRequest;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
@@ -797,16 +801,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (result is ApprovalLookupResult.WrongRequester)
         {
             await SafeReplyAsync(WrongRequesterWarning);
-            return;
-        }
-
-        // Stale path: this binding has previously observed an approval request and
-        // cleared its list (e.g., on TurnCompleted). Subsequent responses for unknown
-        // callIds are stale — drop at the binding rather than forwarding to the session.
-        if (pending is null && _hasObservedApprovalRequest)
-        {
-            _log.Info("Dropping stale Discord approval response for call {0}; no local pending entry after turn-cleared list", message.CallId);
-            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "stale_after_turn");
             return;
         }
 

@@ -46,6 +46,16 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private readonly ILoggingAdapter _log;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
+    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
+    // A binding that has never observed any ToolInteractionRequest treats an
+    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
+    // restarted out from under it. Once we've observed at least one prompt,
+    // subsequent ambiguous text from the user is ordinary conversation, not an
+    // approval reply, so the cold path stays off. This does NOT gate button
+    // clicks — those always route to the session, which is the authority on
+    // CallId staleness.
+    private bool _hasObservedApprovalRequest;
+
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
@@ -54,12 +64,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private TurnNumber _turnNumber;
     private string? _cursorPostId;
     private string? _pendingCursorPostId;
-
-    // Distinguishes a cold-spawned binding that never observed a ToolInteractionRequest
-    // from one whose pending list was cleared after a completed turn. The former
-    // blind-forwards approval responses to the session (#979); the latter drops them
-    // as stale rather than re-routing a response for an already-finished turn.
-    private bool _hasObservedApprovalRequest;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -774,20 +778,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         {
             await SafeReplyAsync(WrongRequesterWarning);
             ReplyIfExpected(replyTo, CommandNack.For(_sessionId, "approval_wrong_requester"));
-            return;
-        }
-
-        // Stale path: this binding previously observed an approval request and
-        // cleared its pending list (e.g., on TurnCompleted). A later response for
-        // an unknown call is stale — drop it at the binding rather than routing a
-        // response for an already-finished turn.
-        if (pending is null && _hasObservedApprovalRequest)
-        {
-            _log.Info(
-                "Dropping stale Mattermost approval response for call {0}; no local pending entry after turn-cleared list",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "stale_after_turn");
-            ReplyIfExpected(replyTo, CommandNack.For(_sessionId, "approval_prompt_expired"));
             return;
         }
 

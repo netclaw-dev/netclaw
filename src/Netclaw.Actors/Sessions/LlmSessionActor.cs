@@ -3215,6 +3215,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, OutputFilter.Text);
 
     /// <summary>
+    /// Classifies why a tool-interaction response could not be matched to a
+    /// pending interaction. Intent is operational triage: the same expired
+    /// notice ships to the channel either way, but the log line tells the
+    /// operator whether the click was redundant (already resolved or completed)
+    /// or genuinely unknown (silent-drop suspect).
+    /// </summary>
+    private string ClassifyUnknownApprovalCall(string callId)
+    {
+        if (_resolvedToolApprovals.ContainsKey(callId))
+            return "already_resolved";
+
+        if (ParkedToolBatchHistory.HasToolResult(_state.History, callId))
+            return "already_completed";
+
+        if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId) is not null)
+            return "orphaned_assistant_tool_use";
+
+        return "unknown";
+    }
+
+    /// <summary>
     /// Shared authorization and grant-persistence for a tool-approval response.
     /// Used by both the live-<c>Processing</c> handler and the idle re-drive
     /// handler so the requester check and grant-scope rules stay in lockstep.
@@ -3424,8 +3445,19 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // tail still carries the tool_use block, treat the prompt as
             // expired and fail loud with a channel-visible message rather
             // than silently dropping the click.
+            //
+            // The classification helps triage "where did my click go" reports:
+            // already_resolved means the approval landed but the click is a
+            // duplicate (e.g., user double-clicked, or text + button both
+            // arrived); no_history means the CallId was never observed by this
+            // session — the most common silent-drop scenario when a binding
+            // misroutes; orphaned_history means a tool_use exists with no
+            // pending or resolved record, suggesting the batch was abandoned
+            // (e.g., user sent a new message instead of approving).
+            var classification = ClassifyUnknownApprovalCall(callId);
             _log.Warning(
-                "Tool interaction response for unknown/expired call {CallId}", msg.CallId);
+                "Tool interaction response for unknown/expired call {CallId} ({Classification}); pending={PendingCount} resolved={ResolvedCount}",
+                msg.CallId, classification, _pendingToolInteractions.Count, _resolvedToolApprovals.Count);
             EmitExpiredPromptNotice();
             TryReplyNack("approval_prompt_expired");
             return;
