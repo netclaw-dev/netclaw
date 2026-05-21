@@ -10,10 +10,10 @@
 
 ## 2. Phase 1.5 — Aspire MCP integration
 
-- [ ] 2.1 Verify the Aspire dashboard MCP server surface against the installed Aspire version (CLI command `aspire mcp` vs `builder.AddMcpServer()` API or equivalent). Record findings in the demo README's "Driving the demo from Claude Code" section.
-- [ ] 2.2 Register the Aspire MCP server at the repo root via the repo's MCP configuration file (e.g., `.mcp.json` or equivalent). Document the connection command.
-- [ ] 2.3 Author the "Driving the demo from Claude Code" section in `samples/Netclaw.Demo.AppHost/README.md`.
-- [ ] 2.4 Verify Phase 1.5: from a Claude Code session, connect to the registered MCP server while the AppHost is running, enumerate resources, fetch recent log lines from the daemon, and hit `/api/health/ready` via the agent — all without manual human intervention.
+- [x] 2.1 Verify the Aspire dashboard MCP server surface against the installed Aspire version (CLI command `aspire mcp` vs `builder.AddMcpServer()` API or equivalent). Record findings in the demo README's "Driving the demo from Claude Code" section.
+- [x] 2.2 Register the Aspire MCP server at the repo root via the repo's MCP configuration file (e.g., `.mcp.json` or equivalent). Document the connection command.
+- [x] 2.3 Author the "Driving the demo from Claude Code" section in `samples/Netclaw.Demo.AppHost/README.md`.
+- [x] 2.4 Verify Phase 1.5: from a Claude Code session, connect to the registered MCP server while the AppHost is running, enumerate resources, fetch recent log lines from the daemon, and hit `/api/health/ready` via the agent — all without manual human intervention.
 
 ## 3. Phase 2 — Mattermost orchestration + bootstrapper extraction
 
