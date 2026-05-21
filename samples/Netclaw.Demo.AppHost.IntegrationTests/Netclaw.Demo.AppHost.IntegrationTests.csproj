@@ -17,6 +17,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Netclaw.Demo.AppHost\Netclaw.Demo.AppHost.csproj" />
+    <!-- BootstrapOptions defaults are the single source of truth for the seeded
+         Mattermost credentials/channel name the test posts as. -->
+    <ProjectReference Include="..\..\src\Netclaw.Channels.Mattermost.Bootstrap\Netclaw.Channels.Mattermost.Bootstrap.csproj"
+                      IsAspireProjectResource="false" />
   </ItemGroup>
 
 </Project>

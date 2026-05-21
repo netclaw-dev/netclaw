@@ -8,58 +8,40 @@ using Netclaw.Channels.Mattermost.Bootstrap;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// .demo-home lives next to this AppHost project. We sandbox the daemon's
-// state under it via NETCLAW_HOME so a host-installed NetClaw at
-// ~/.netclaw/ keeps its own SQLite, keys, secrets, and identity files
-// untouched. The 8 other SpecialFolder.UserProfile callsites in NetClaw
-// intentionally read the real operator home and are not redirected by
-// NETCLAW_HOME — that asymmetry is correct, not a bug.
+// Sandbox NetClaw state under .demo-home/.netclaw so a host-installed
+// NetClaw at ~/.netclaw/ is untouched. NETCLAW_HOME re-roots only
+// NetClaw's own state; the other SpecialFolder.UserProfile callsites
+// in NetClaw (real Chrome install, real ~/.claude/skills, etc.) are
+// intentionally NOT redirected.
 var demoHome = Path.GetFullPath(
     Path.Combine(builder.AppHostDirectory, ".demo-home", ".netclaw"));
 
-// Ollama container with qwen3:4b pulled on first run. WithDataVolume()
-// keeps the ~3GB model cache across AppHost restarts. qwen3:4b is the
-// smallest model in the qwen3 generation that still does tool calling
-// reliably enough for the demo and runs on CPU in tens of seconds per
-// reply. The community Aspire Ollama integration handles the pull +
-// the model's own resource lifecycle.
 var ollama = builder.AddOllama("ollama")
     .WithDataVolume();
 var qwen = ollama.AddModel("qwen3:4b");
 
-// mattermost-preview ships DB + everything else in a single image; fine
-// for a demo (deprecated upstream — documented in the README as a
-// future migration to mattermost-team-edition + Postgres). Testing-mode
-// env vars come from MattermostBootstrapper so the fixture and the demo
-// share one source of truth.
+// mattermost-preview ships DB + everything in a single image (no
+// separate Postgres needed). Deprecated upstream — documented in the
+// README as a future migration. Testing-mode env vars come from the
+// bootstrap library so the fixture and the demo share one source.
 var mattermost = builder.AddContainer("mattermost", "mattermost/mattermost-preview")
     .WithHttpEndpoint(targetPort: 8065, name: "web");
 foreach (var (envName, envValue) in MattermostBootstrapper.DefaultEnvironmentVariables)
     mattermost = mattermost.WithEnvironment(envName, envValue);
 
-// Bootstrap result is published by a ResourceReadyEvent subscription on
-// the Mattermost resource and awaited by the daemon's env-var callback.
-// The daemon then sees NETCLAW_Mattermost__BotToken etc. populated
-// before its process starts, matching the Channels.Mattermost
-// registration path's expectation that credentials exist at process
-// start.
 var bootstrapResult = new TaskCompletionSource<BootstrapResult>(
     TaskCreationOptions.RunContinuationsAsynchronously);
 
 builder.Eventing.Subscribe<ResourceReadyEvent>(mattermost.Resource, async (evt, ct) =>
 {
     // ResourceReadyEvent can fire more than once if Mattermost is
-    // restarted mid-session (manually via the dashboard, or via a
-    // resource-restart command). The seed sequence is NOT idempotent —
+    // restarted mid-session. The seed sequence is NOT idempotent —
     // creating the admin user a second time throws because it already
-    // exists. We accept the first ready signal and ignore subsequent
-    // ones; an operator who really needs a clean reseed should
-    // Ctrl+C the AppHost and remove the Mattermost container.
+    // exists. First-ready wins; subsequent fires are ignored.
     if (bootstrapResult.Task.IsCompleted)
         return;
 
-    var endpoint = mattermost.GetEndpoint("web");
-    var serverUrl = new Uri(endpoint.Url);
+    var serverUrl = new Uri(mattermost.GetEndpoint("web").Url);
     try
     {
         var result = await MattermostBootstrapper.SeedAsync(serverUrl, new BootstrapOptions(), ct);
@@ -81,22 +63,19 @@ builder.AddProject<Projects.Netclaw_Daemon>("daemon")
     {
         var result = await bootstrapResult.Task.WaitAsync(ctx.CancellationToken);
         ctx.EnvironmentVariables["NETCLAW_Mattermost__Enabled"] = "true";
-        // Trim trailing slash so Mattermost.NET doesn't end up with `//api/...`.
-        ctx.EnvironmentVariables["NETCLAW_Mattermost__ServerUrl"] =
-            result.ServerUrl.ToString().TrimEnd('/');
+        ctx.EnvironmentVariables["NETCLAW_Mattermost__ServerUrl"] = result.ServerUrl.ToString();
         ctx.EnvironmentVariables["NETCLAW_Mattermost__BotToken"] = result.Bot.Token;
         ctx.EnvironmentVariables["NETCLAW_Mattermost__DefaultChannelId"] = result.ChannelId;
-        // CallbackUrl deliberately unset: the host-process daemon can't be
-        // reached from the Mattermost container without poking holes in
-        // ExposureMode.Local, so interactive button approvals fall back
-        // to text-reply mode. Documented in the README.
+        // CallbackUrl deliberately unset — the host-process daemon
+        // can't be reached from the Mattermost container without
+        // poking holes in ExposureMode.Local, so approvals fall back
+        // to text-reply mode.
         ctx.EnvironmentVariables["NETCLAW_Mattermost__MentionOnly"] = "false";
         ctx.EnvironmentVariables["NETCLAW_Mattermost__AllowDirectMessages"] = "true";
 
-        // Ollama provider. NetClaw's Providers section is a dictionary
-        // keyed by provider name (see Netclaw.Configuration.ProviderEntry),
-        // so the key segment after Providers__ is the lookup name that
-        // NETCLAW_Models__Main__Provider must match.
+        // NetClaw's Providers section is a dictionary keyed by
+        // provider name — Models__Main__Provider has to match the key
+        // segment used here (lowercase "ollama").
         var ollamaUrl = await ollama.Resource.PrimaryEndpoint
             .GetValueAsync(ctx.CancellationToken);
         ctx.EnvironmentVariables["NETCLAW_Providers__ollama__Type"] = "ollama";

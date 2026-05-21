@@ -8,7 +8,6 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using DotNet.Testcontainers.Builders;
-using DotNet.Testcontainers.Configurations;
 using DotNet.Testcontainers.Containers;
 using Netclaw.Channels.Mattermost.Bootstrap;
 using Xunit;
@@ -72,8 +71,7 @@ public sealed class MattermostFixture : IAsyncLifetime
                     .UntilHttpRequestIsSucceeded(r => r
                         .ForPort(8065)
                         .ForPath("/api/v4/system/ping")
-                        .ForStatusCode(HttpStatusCode.OK))
-                    .AddCustomWaitStrategy(new WaitUntilApiReady()))
+                        .ForStatusCode(HttpStatusCode.OK)))
                 .Build();
 
             await container.StartAsync();
@@ -162,25 +160,16 @@ public sealed class MattermostFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// Creates an authenticated HttpClient that can act as the test user.
+    /// Creates an authenticated HttpClient that can act as the test
+    /// user. Reuses the access token captured at seed time —
+    /// Mattermost personal-session tokens are reusable, so there's no
+    /// reason to spend a round-trip re-logging in on every call.
     /// </summary>
-    public async Task<(HttpClient Client, string Token)> CreateTestUserClientAsync()
+    public Task<(HttpClient Client, string Token)> CreateTestUserClientAsync()
     {
         var http = CreateHttpClient();
-        // Re-login each call to keep parity with the prior behavior — tests
-        // that hold the client across the fixture's lifetime get a fresh
-        // token rather than reusing the one cached at seed time.
-        var loginResponse = await http.PostAsJsonAsync("/api/v4/users/login", new
-        {
-            login_id = SeedOptions.TestUserUsername,
-            password = SeedOptions.TestUserPassword,
-        });
-        loginResponse.EnsureSuccessStatusCode();
-        if (!loginResponse.Headers.TryGetValues("Token", out var tokens))
-            throw new InvalidOperationException("Mattermost login did not return a Token header.");
-        var token = tokens.First();
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return (http, token);
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _testUserToken!);
+        return Task.FromResult((http, _testUserToken!));
     }
 
     /// <summary>
@@ -203,33 +192,6 @@ public sealed class MattermostFixture : IAsyncLifetime
             response.EnsureSuccessStatusCode();
             var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
             return doc.RootElement.GetProperty("id").GetString()!;
-        }
-    }
-}
-
-/// <summary>
-/// Additional wait strategy that ensures the API is actually ready to accept user registration,
-/// not just returning 200 on /ping.
-/// </summary>
-internal sealed class WaitUntilApiReady : IWaitUntil
-{
-    public async Task<bool> UntilAsync(IContainer container)
-    {
-        try
-        {
-            var port = container.GetMappedPublicPort(8065);
-            using var http = new HttpClient { BaseAddress = new Uri($"http://localhost:{port}") };
-
-            // The /ping endpoint returns 200 early, but the API may not be ready
-            // for user creation yet. Try the users endpoint to confirm.
-            var response = await http.GetAsync("/api/v4/users/me");
-
-            // 401 means the API is up and rejecting unauthenticated requests — ready
-            return response.StatusCode == HttpStatusCode.Unauthorized;
-        }
-        catch
-        {
-            return false;
         }
     }
 }

@@ -17,10 +17,10 @@ namespace Netclaw.Channels.Mattermost.Bootstrap;
 /// member of, and a non-admin test user added to the same channel.
 ///
 /// Shared between the integration test fixture
-/// (Netclaw.Channels.Mattermost.IntegrationTests.MattermostFixture) and
-/// the Aspire demo's bootstrap resource
-/// (samples/Netclaw.Demo.Bootstrap) so the seeding sequence lives in
-/// exactly one place.
+/// (<c>Netclaw.Channels.Mattermost.IntegrationTests.MattermostFixture</c>)
+/// and the Aspire demo AppHost
+/// (<c>samples/Netclaw.Demo.AppHost/Program.cs</c>) so the seeding
+/// sequence lives in exactly one place.
 /// </summary>
 public static class MattermostBootstrapper
 {
@@ -60,6 +60,10 @@ public static class MattermostBootstrapper
                 lastStatus = $"{ex.GetType().Name}: {ex.Message}";
             }
 
+            // Polling against a real external server is the documented
+            // exception to CLAUDE.md's no-Task.Delay rule (the rule
+            // forbids it in test orchestration; Mattermost startup has
+            // no client-observable signal short of polling).
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
 
@@ -107,10 +111,22 @@ public static class MattermostBootstrapper
         await AddUserToChannelAsync(http, channelId, testUserId, cancellationToken);
         var testUserToken = await LoginAsync(http, options.TestUserUsername, options.TestUserPassword, cancellationToken);
 
+        // Strip the trailing slash so consumers building URLs like
+        // $"{ServerUrl}/api/..." don't end up with `//api/...` — a
+        // Mattermost.NET quirk that bit the demo AppHost on its first
+        // env-var wiring.
+        var normalizedServerUrl = new Uri(serverUrl.ToString().TrimEnd('/'));
+
         return new BootstrapResult(
-            ServerUrl: serverUrl,
-            Admin: new BootstrapCredentials(adminUserId, options.AdminUsername, options.AdminPassword, adminToken),
-            Bot: new BootstrapCredentials(botUserId, options.BotUsername, Password: string.Empty, botToken),
+            ServerUrl: normalizedServerUrl,
+            // Admin password is intentionally not republished on the
+            // result — callers that need to re-authenticate as admin
+            // already have it from the options they passed in, and
+            // shrinking the secret footprint of the returned record
+            // keeps tokens out of long-lived AppHost heap dumps.
+            Admin: new BootstrapCredentials(adminUserId, options.AdminUsername, Password: null, adminToken),
+            // Bots don't have passwords; null is the truthful value.
+            Bot: new BootstrapCredentials(botUserId, options.BotUsername, Password: null, botToken),
             TestUser: new BootstrapCredentials(testUserId, options.TestUserUsername, options.TestUserPassword, testUserToken),
             TeamId: teamId,
             ChannelId: channelId);
@@ -143,8 +159,14 @@ public static class MattermostBootstrapper
         return await ReadStringPropertyAsync(response, "id", ct);
     }
 
-    private static async Task<string> LoginAsync(
-        HttpClient http, string loginId, string password, CancellationToken ct)
+    /// <summary>
+    /// Authenticates against a Mattermost server and returns the bearer
+    /// token from the <c>Token</c> response header. Public so the
+    /// integration test fixture and the Aspire smoke test can reuse it
+    /// instead of re-implementing the login REST call.
+    /// </summary>
+    public static async Task<string> LoginAsync(
+        HttpClient http, string loginId, string password, CancellationToken ct = default)
     {
         var response = await http.PostAsJsonAsync(
             "/api/v4/users/login",
@@ -288,12 +310,16 @@ public sealed record BootstrapResult(
     string ChannelId);
 
 /// <summary>
-/// Identity + auth material for a single Mattermost principal. Bot
-/// principals always have an empty <see cref="Password"/> because they
-/// don't have one — only the access token.
+/// Identity + auth material for a single Mattermost principal.
+/// <see cref="Password"/> is <c>null</c> for bot principals (they
+/// only have access tokens) and for the admin principal on the
+/// returned <see cref="BootstrapResult"/> (callers already pass the
+/// admin password in via <see cref="BootstrapOptions.AdminPassword"/>;
+/// not republishing it keeps the secret footprint of the result
+/// small).
 /// </summary>
 public sealed record BootstrapCredentials(
     string UserId,
     string Username,
-    string Password,
+    string? Password,
     string Token);

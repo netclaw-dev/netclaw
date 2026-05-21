@@ -6,9 +6,8 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
-using Aspire.Hosting;
-using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Testing;
+using Netclaw.Channels.Mattermost.Bootstrap;
 using Xunit;
 
 namespace Netclaw.Demo.AppHost.IntegrationTests;
@@ -33,14 +32,12 @@ namespace Netclaw.Demo.AppHost.IntegrationTests;
 [Trait("Category", "SlowSmoke")]
 public sealed class DemoEndToEndSmokeTests
 {
-    // Total wallclock budget for the AppHost to come up healthy.
-    // Generous to absorb cold-cache image pulls on first run.
+    // Generous total budget to absorb cold-cache image pulls.
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromMinutes(15);
 
-    // Best-effort window for the bot to actually reply. Overridable via
-    // env var so CPU-only machines can extend it. Default of 5 minutes
-    // covers most warm-GPU runs and gives CPU machines a fair shot
-    // without locking up CI forever.
+    // Overridable via env var so CPU-only machines can extend the
+    // window; default 5 minutes covers warm-GPU and gives CPU machines
+    // a fair shot without locking up CI forever.
     private static TimeSpan ReplyTimeout =>
         int.TryParse(
             Environment.GetEnvironmentVariable("NETCLAW_DEMO_TEST_REPLY_TIMEOUT_SECONDS"),
@@ -48,9 +45,14 @@ public sealed class DemoEndToEndSmokeTests
             ? TimeSpan.FromSeconds(seconds)
             : TimeSpan.FromMinutes(5);
 
-    private const string TestUserLogin = "testuser";
-    private const string TestUserPassword = "TestUser1234!";
-    private const string SeededChannelName = "test-channel";
+    // BootstrapOptions defaults are the single source of truth for the
+    // seeded admin/test-user credentials and the test channel name.
+    // Reading them via this static instance avoids string drift
+    // between the bootstrapper and this test.
+    private static readonly BootstrapOptions Seed = new();
+
+    private static readonly string[] ExpectedResources =
+        ["mattermost", "ollama", "ollama-qwen3", "daemon"];
 
     [Fact]
     public async Task Demo_AppHost_boots_and_routes_a_mattermost_message_to_the_daemon()
@@ -67,29 +69,21 @@ public sealed class DemoEndToEndSmokeTests
 
         await app.StartAsync(startCts.Token);
 
-        // Every resource the demo declares must reach healthy. Failure
-        // here surfaces as a TaskCanceledException after the global
-        // startup timeout, which is exactly the right signal — the
-        // demo's promise is "single command, everything comes up."
-        var notifications = app.ResourceNotifications;
-        foreach (var resourceName in new[] { "mattermost", "ollama", "ollama-qwen3", "daemon" })
-        {
-            await notifications.WaitForResourceHealthyAsync(resourceName, startCts.Token);
-        }
+        // Wait for all four resources in parallel; the slowest dictates
+        // wall time rather than the sum of out-of-order awaits.
+        await Task.WhenAll(
+            ExpectedResources.Select(name =>
+                app.ResourceNotifications.WaitForResourceHealthyAsync(name, startCts.Token)));
 
-        // The Mattermost endpoint is allocated dynamically on the host;
-        // GetEndpoint resolves to something like http://localhost:38977.
         var mattermostUri = app.GetEndpoint("mattermost", "web");
 
         using var http = new HttpClient { BaseAddress = mattermostUri };
 
-        // Log in as the seeded test user. The bootstrap library's
-        // defaults are the source of truth for these creds — kept in
-        // sync here as constants.
-        var token = await LoginAsync(http, TestUserLogin, TestUserPassword, startCts.Token);
+        var token = await MattermostBootstrapper.LoginAsync(
+            http, Seed.TestUserUsername, Seed.TestUserPassword, startCts.Token);
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
 
-        var (channelId, _) = await ResolveSeededChannelAsync(http, startCts.Token);
+        var channelId = await ResolveSeededChannelAsync(http, Seed.ChannelName, startCts.Token);
 
         var rootPostId = await PostMessageAsync(
             http,
@@ -99,20 +93,16 @@ public sealed class DemoEndToEndSmokeTests
 
         Assert.False(string.IsNullOrWhiteSpace(rootPostId), "Mattermost should have returned a post id.");
 
-        // Best-effort wait for a bot reply. Times out cleanly on
-        // CPU-only hosts without GPU; the structural assertions above
-        // are what gate the test pass.
         using var replyCts = CancellationTokenSource.CreateLinkedTokenSource(testCt);
         replyCts.CancelAfter(ReplyTimeout);
 
-        var reply = await TryWaitForBotReplyAsync(http, channelId, rootPostId, replyCts.Token);
+        var reply = await TryWaitForBotReplyAsync(http, rootPostId, replyCts.Token);
 
         if (reply is null)
         {
-            // No reply within ReplyTimeout. The test still passes
-            // because the wiring is verifiably correct (we got this
-            // far, every resource came up, and the message reached
-            // Mattermost). Surface the latency so a CI run can see it.
+            // Wiring is verifiably correct (every resource healthy +
+            // post accepted). Surface the latency so a CI run flags
+            // slow inference instead of silently passing.
             Console.WriteLine(
                 $"[DemoSmoke] No bot reply observed within {ReplyTimeout.TotalSeconds:n0}s. " +
                 "Wiring is verified; inference may be running slow on CPU. " +
@@ -126,21 +116,8 @@ public sealed class DemoEndToEndSmokeTests
             "Bot replied with an empty message; that's a regression.");
     }
 
-    private static async Task<string> LoginAsync(
-        HttpClient http, string loginId, string password, CancellationToken ct)
-    {
-        var response = await http.PostAsJsonAsync(
-            "/api/v4/users/login",
-            new { login_id = loginId, password },
-            ct);
-        response.EnsureSuccessStatusCode();
-        if (!response.Headers.TryGetValues("Token", out var tokens))
-            throw new InvalidOperationException("Mattermost login did not return a Token header.");
-        return tokens.First();
-    }
-
-    private static async Task<(string ChannelId, string TeamId)> ResolveSeededChannelAsync(
-        HttpClient http, CancellationToken ct)
+    private static async Task<string> ResolveSeededChannelAsync(
+        HttpClient http, string channelName, CancellationToken ct)
     {
         var me = await http.GetFromJsonAsync<JsonElement>("/api/v4/users/me", ct);
         var userId = me.GetProperty("id").GetString()!;
@@ -154,12 +131,12 @@ public sealed class DemoEndToEndSmokeTests
 
         foreach (var channel in channels.EnumerateArray())
         {
-            if (channel.GetProperty("name").GetString() == SeededChannelName)
-                return (channel.GetProperty("id").GetString()!, teamId);
+            if (channel.GetProperty("name").GetString() == channelName)
+                return channel.GetProperty("id").GetString()!;
         }
 
         throw new InvalidOperationException(
-            $"Seeded channel '{SeededChannelName}' was not found on team {teamId}.");
+            $"Seeded channel '{channelName}' was not found on team {teamId}.");
     }
 
     private static async Task<string> PostMessageAsync(
@@ -177,7 +154,6 @@ public sealed class DemoEndToEndSmokeTests
 
     private static async Task<string?> TryWaitForBotReplyAsync(
         HttpClient http,
-        string channelId,
         string rootPostId,
         CancellationToken ct)
     {
@@ -192,9 +168,9 @@ public sealed class DemoEndToEndSmokeTests
                 {
                     foreach (var entry in posts.EnumerateObject())
                     {
-                        var post = entry.Value;
                         if (entry.Name == rootPostId)
                             continue;
+                        var post = entry.Value;
                         if (!post.TryGetProperty("root_id", out var rootIdEl)
                             || rootIdEl.GetString() != rootPostId)
                             continue;
@@ -206,13 +182,18 @@ public sealed class DemoEndToEndSmokeTests
                     }
                 }
 
+                // Polling Mattermost is the same pattern the bootstrap
+                // library uses against the real server — CLAUDE.md's
+                // no-Task.Delay rule targets test orchestration that
+                // hides missing sync signals, not loops against an
+                // external system whose readiness has no push channel
+                // available here.
                 await Task.Delay(TimeSpan.FromSeconds(2), ct);
             }
         }
         catch (OperationCanceledException)
         {
-            // Fall through and return null — caller treats this as a
-            // best-effort timeout.
+            // Timeout / cancellation: caller treats null as best-effort.
         }
 
         return null;
