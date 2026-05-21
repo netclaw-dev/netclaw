@@ -17,6 +17,16 @@ var builder = DistributedApplication.CreateBuilder(args);
 var demoHome = Path.GetFullPath(
     Path.Combine(builder.AppHostDirectory, ".demo-home", ".netclaw"));
 
+// Ollama container with qwen3:4b pulled on first run. WithDataVolume()
+// keeps the ~3GB model cache across AppHost restarts. qwen3:4b is the
+// smallest model in the qwen3 generation that still does tool calling
+// reliably enough for the demo and runs on CPU in tens of seconds per
+// reply. The community Aspire Ollama integration handles the pull +
+// the model's own resource lifecycle.
+var ollama = builder.AddOllama("ollama")
+    .WithDataVolume();
+var qwen = ollama.AddModel("qwen3:4b");
+
 // mattermost-preview ships DB + everything else in a single image; fine
 // for a demo (deprecated upstream — documented in the README as a
 // future migration to mattermost-team-edition + Postgres). Testing-mode
@@ -82,7 +92,20 @@ builder.AddProject<Projects.Netclaw_Daemon>("daemon")
         // to text-reply mode. Documented in the README.
         ctx.EnvironmentVariables["NETCLAW_Mattermost__MentionOnly"] = "false";
         ctx.EnvironmentVariables["NETCLAW_Mattermost__AllowDirectMessages"] = "true";
+
+        // Ollama provider. NetClaw's Providers section is a dictionary
+        // keyed by provider name (see Netclaw.Configuration.ProviderEntry),
+        // so the key segment after Providers__ is the lookup name that
+        // NETCLAW_Models__Main__Provider must match.
+        var ollamaUrl = await ollama.Resource.PrimaryEndpoint
+            .GetValueAsync(ctx.CancellationToken);
+        ctx.EnvironmentVariables["NETCLAW_Providers__ollama__Type"] = "ollama";
+        ctx.EnvironmentVariables["NETCLAW_Providers__ollama__Endpoint"] = ollamaUrl!;
+        ctx.EnvironmentVariables["NETCLAW_Providers__ollama__AuthMethod"] = "None";
+        ctx.EnvironmentVariables["NETCLAW_Models__Main__Provider"] = "ollama";
+        ctx.EnvironmentVariables["NETCLAW_Models__Main__ModelId"] = "qwen3:4b";
     })
-    .WaitFor(mattermost);
+    .WaitFor(mattermost)
+    .WaitFor(qwen);
 
 builder.Build().Run();
