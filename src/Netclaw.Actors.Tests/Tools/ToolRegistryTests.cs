@@ -222,6 +222,42 @@ public class ToolRegistryTests
         Assert.DoesNotContain("memorizer", index);
     }
 
+    [Fact]
+    public void GetByName_resolves_McpTool_by_sanitized_alias()
+    {
+        // tool_use responses from Anthropic come back with the sanitized name
+        // (server__tool), but skill text and load_tool results use the
+        // canonical server/tool form. The registry has to accept either.
+        var registry = new ToolRegistry();
+        var adapter = new McpToolAdapter(
+            CreateFakeTool("store"), "memorizer", "store");
+        registry.Register(adapter);
+
+        var byCanonical = registry.GetByName("memorizer/store");
+        var bySanitized = registry.GetByName("memorizer__store");
+
+        Assert.NotNull(byCanonical);
+        Assert.NotNull(bySanitized);
+        Assert.Same(adapter, byCanonical);
+        Assert.Same(adapter, bySanitized);
+    }
+
+    [Fact]
+    public void GetRegistrationByToolName_resolves_McpTool_by_sanitized_alias()
+    {
+        var registry = new ToolRegistry();
+        var adapter = new McpToolAdapter(
+            CreateFakeTool("search_memories"), "memorizer", "search_memories");
+        registry.Register(adapter);
+
+        var byCanonical = registry.GetRegistrationByToolName("memorizer/search_memories");
+        var bySanitized = registry.GetRegistrationByToolName("memorizer__search_memories");
+
+        Assert.NotNull(byCanonical);
+        Assert.NotNull(bySanitized);
+        Assert.Same(byCanonical, bySanitized);
+    }
+
     private static AIFunction CreateFakeTool(string name)
     {
         return AIFunctionFactory.Create(() => "result", name);
