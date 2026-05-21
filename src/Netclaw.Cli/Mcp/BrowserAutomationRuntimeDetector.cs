@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Runtime.InteropServices;
+using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Mcp;
 
@@ -97,7 +98,7 @@ internal static class BrowserAutomationRuntimeDetector
         return ResolveCommandPath("npx") ?? "npx";
     }
 
-    public static Dictionary<string, string>? BuildMcpEnvironmentOverlay(string commandPath)
+    public static Dictionary<string, SensitiveString>? BuildMcpEnvironmentOverlay(string commandPath)
     {
         if (!Path.IsPathRooted(commandPath))
             return null;
@@ -112,17 +113,17 @@ internal static class BrowserAutomationRuntimeDetector
             ? commandDir
             : $"{commandDir}{separator}{existingPath}";
 
-        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        return new Dictionary<string, SensitiveString>(StringComparer.OrdinalIgnoreCase)
         {
-            ["PATH"] = combinedPath
+            ["PATH"] = new SensitiveString(combinedPath)
         };
     }
 
-    public static Dictionary<string, string>? BuildPlaywrightEnvironmentOverlay(string commandPath)
+    public static Dictionary<string, SensitiveString>? BuildPlaywrightEnvironmentOverlay(string commandPath)
     {
         var env = BuildMcpEnvironmentOverlay(commandPath)
-            ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        env["PLAYWRIGHT_BROWSERS_PATH"] = GetPlaywrightBrowsersPath();
+            ?? new Dictionary<string, SensitiveString>(StringComparer.OrdinalIgnoreCase);
+        env["PLAYWRIGHT_BROWSERS_PATH"] = new SensitiveString(GetPlaywrightBrowsersPath());
         return env;
     }
 

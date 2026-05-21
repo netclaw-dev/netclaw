@@ -1,3 +1,39 @@
+#### 0.20.0 2026-05-21 ####
+
+Netclaw v0.20.0 — GitHub Copilot provider, Mattermost channel, reverse-proxy init mode, and a wave of MCP/Slack/security fixes
+
+**Features**
+
+* **GitHub Copilot as a provider** — initial implementation of GitHub Copilot as an LLM provider, enabling Copilot Chat models as a drop-in replacement for existing providers. ([#1075](https://github.com/netclaw-dev/netclaw/pull/1075))
+
+* **Mattermost channel integration** — new channel adapter for Mattermost, bringing Netclaw to Mattermost workspaces at feature parity with existing Slack and Discord integrations. ([#1095](https://github.com/netclaw-dev/netclaw/pull/1095))
+
+* **Reverse-proxy exposure mode in init wizard** — `netclaw init` now surfaces an option for reverse-proxy/container deployments, simplifying setup behind nginx, Caddy, cloud load balancers, and similar setups. Closes [#1114](https://github.com/netclaw-dev/netclaw/issues/1114). ([#1120](https://github.com/netclaw-dev/netclaw/pull/1120))
+
+**Bug Fixes**
+
+* **MCP secrets.json decryption** — `Headers` and `EnvironmentVariables` in MCP secrets.json are now properly decrypted on the daemon side. ([#1129](https://github.com/netclaw-dev/netclaw/pull/1129))
+
+* **Copilot provider token** — the Copilot provider now sends the exchanged access token instead of the SDK placeholder token. ([#1124](https://github.com/netclaw-dev/netclaw/pull/1124))
+
+* **Iteration cap instead of per-turn tool call cap** — switched from a per-turn tool call limit to a per-session iteration limit, fixing cases where genuine multi-tool interactions were prematurely terminated. ([#1112](https://github.com/netclaw-dev/netclaw/pull/1112))
+
+* **Security: audience tool profile realignment** — closed audience gaps in tool permissions, ensuring tools are only accessible to the intended audience levels. ([#1111](https://github.com/netclaw-dev/netclaw/pull/1111))
+
+* **MCP schema-driven tool-argument coercion** — tool argument handling in MCP is now schema-driven, providing more reliable type coercion. ([#1105](https://github.com/netclaw-dev/netclaw/pull/1105))
+
+* **Restored structured JSON args in MCP** — fixed an issue where upstream LLM SDK stringified JSON arguments that should have remained structured. ([#1094](https://github.com/netclaw-dev/netclaw/pull/1094))
+
+* **Docker buildx TARGETARCH fix** — dropped an `ARG TARGETARCH` default that shadowed buildx's automatic architecture injection, fixing cross-platform image builds. ([#1091](https://github.com/netclaw-dev/netclaw/pull/1091), [#1122](https://github.com/netclaw-dev/netclaw/pull/1122))
+
+* **Slack URL fixes** — preserved parentheses in markdown link URLs and normalized all outbound Slack URLs at the boundary. Partially closes [#1092](https://github.com/netclaw-dev/netclaw/issues/1092). ([#1102](https://github.com/netclaw-dev/netclaw/pull/1102), [#1108](https://github.com/netclaw-dev/netclaw/pull/1108))
+
+* **Session: recover thinking-only LLM responses** — sessions no longer fail when the LLM returns thinking-only responses; they are gracefully recovered instead. ([#1103](https://github.com/netclaw-dev/netclaw/pull/1103))
+
+* **Daemon: resilient reconnect + clear connection states** — improved reconnection handling and clarified connection state reporting for more robust operation under network instability. ([#1090](https://github.com/netclaw-dev/netclaw/pull/1090))
+
+* **`file_read` improved truncation hints** — better guidance on Offset/Limit usage when files are truncated, with actionable hints in the output. ([#1106](https://github.com/netclaw-dev/netclaw/pull/1106))
+
 #### 0.19.0 2026-05-19 ####
 
 Netclaw v0.19.0 — Streaming tool-call execution, Discord proactive posting, isolated channel failures, and durable approval recovery

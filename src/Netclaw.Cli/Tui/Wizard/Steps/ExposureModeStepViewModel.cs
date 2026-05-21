@@ -15,10 +15,18 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Wizard step for selecting the daemon network exposure mode and inbound webhook enablement.
-/// Sub-steps: mode selection → optional confirmation/notice → webhook toggle.
+/// Sub-step plan by mode:
+///   Local:        mode → webhook (2 sub-steps)
+///   ReverseProxy: mode → bind address → trusted proxies → notice → webhook (5 sub-steps)
+///   Tailscale*/Cloudflare: mode → notice → webhook (3 sub-steps)
+/// One <c>TextInputNode</c> per sub-step matches the established wizard pattern
+/// (see SlackStepView, IdentityStepView).
 /// </summary>
 public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 {
+    /// <summary>Default bind address suggested in the reverse-proxy config sub-step.</summary>
+    public const string DefaultReverseProxyHost = "0.0.0.0";
+
     private static readonly JsonSerializerOptions DevicesJsonOptions = new()
     {
         WriteIndented = true,
@@ -41,24 +49,48 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     /// <summary>Whether inbound webhook ingestion is enabled.</summary>
     public bool WebhooksEnabled { get; set; }
 
+    /// <summary>
+    /// Bind address collected on the reverse-proxy config sub-step. Loopback / format
+    /// validation is left to <c>DaemonExposureValidator</c> and the doctor check —
+    /// the wizard does not duplicate that logic.
+    /// </summary>
+    public string Host { get; set; } = DefaultReverseProxyHost;
+
+    /// <summary>
+    /// Trusted reverse-proxy IPs / CIDR ranges collected on the reverse-proxy config sub-step.
+    /// At least one entry is required to advance past that sub-step (matches the runtime contract
+    /// in <c>DaemonExposureValidator.Validate</c>).
+    /// </summary>
+    public IReadOnlyList<string> TrustedProxies { get; set; } = [];
+
     public bool IsApplicable(WizardContext context) => true;
 
     public int CurrentSubStep => _currentSubStep;
 
-    /// <summary>
-    /// Sub-steps: mode selection + optional confirmation/notice + webhook toggle.
-    /// </summary>
-    public int SubStepCount => NeedsConfirmation ? 3 : 2;
+    /// <summary>Sub-step count varies by mode — see class summary.</summary>
+    public int SubStepCount => IsReverseProxy ? 5 : (NeedsConfirmation ? 3 : 2);
 
     /// <summary>True when the selected mode requires a confirmation or notice screen.</summary>
     internal bool NeedsConfirmation => SelectedMode != ExposureMode.Local;
+
+    /// <summary>True when the selected mode is reverse proxy.</summary>
+    internal bool IsReverseProxy => SelectedMode == ExposureMode.ReverseProxy;
 
     /// <summary>True for modes that expose the daemon to the public internet.</summary>
     public bool IsHighRisk =>
         SelectedMode is ExposureMode.TailscaleFunnel or ExposureMode.CloudflareTunnel;
 
-    /// <summary>The sub-step index for the inbound webhook toggle (always last).</summary>
-    internal int WebhookSubStep => NeedsConfirmation ? 2 : 1;
+    /// <summary>Sub-step index of the reverse-proxy bind-address input. Only valid when <see cref="IsReverseProxy"/>.</summary>
+    internal int ReverseProxyHostSubStep => 1;
+
+    /// <summary>Sub-step index of the reverse-proxy trusted-proxies input. Only valid when <see cref="IsReverseProxy"/>.</summary>
+    internal int ReverseProxyTrustedProxiesSubStep => 2;
+
+    /// <summary>The sub-step index for the confirmation/notice screen. Only valid when <see cref="NeedsConfirmation"/>.</summary>
+    internal int NoticeSubStep => IsReverseProxy ? 3 : 1;
+
+    /// <summary>The sub-step index for the inbound webhook toggle (always last in the plan).</summary>
+    internal int WebhookSubStep => SubStepCount - 1;
 
     public string GetHelpText()
     {
@@ -68,7 +100,16 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         if (_currentSubStep == WebhookSubStep)
             return "  Inbound webhooks let external services trigger autonomous runs via HTTP POST.";
 
-        // Sub-step 1 confirmation (non-Local modes only)
+        if (IsReverseProxy && _currentSubStep == ReverseProxyHostSubStep)
+            return "  Bind to a non-loopback address. Loopback auto-auth cannot be inherited through a proxy.";
+
+        if (IsReverseProxy && _currentSubStep == ReverseProxyTrustedProxiesSubStep)
+            return "  Comma-separated IPs / CIDRs. At least one is required — the daemon refuses to start without it.";
+
+        if (IsReverseProxy && _currentSubStep == NoticeSubStep)
+            return "  Point your reverse proxy at the serving URL shown above. Press Enter to continue.";
+
+        // Notice sub-step for non-reverse-proxy modes.
         return IsHighRisk
             ? "  This mode exposes your daemon beyond your tailnet. Ensure hub authentication is configured."
             : "  Tailscale Serve limits access to your tailnet only. Press Enter to confirm.";
@@ -76,21 +117,27 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     public bool TryAdvance()
     {
-        if (_currentSubStep == 0 && NeedsConfirmation)
+        // Gate: cannot leave the trusted-proxies sub-step until ≥1 entry is present.
+        // Mirrors DaemonExposureValidator's startup contract so the wizard never emits
+        // a config the daemon would refuse. Return true (not false): per IWizardStepViewModel,
+        // true means "handled internally — stay in this step." Returning false here would
+        // tell the orchestrator the step is complete and to advance to the next wizard step,
+        // which would skip the notice + webhook sub-steps entirely.
+        if (IsReverseProxy
+            && _currentSubStep == ReverseProxyTrustedProxiesSubStep
+            && TrustedProxies.Count == 0)
         {
-            _currentSubStep = 1;
-            _highWaterSubStep = 1;
-            return true; // mode selection → confirmation
+            return true;
         }
 
-        if (_currentSubStep < WebhookSubStep)
-        {
-            _currentSubStep = WebhookSubStep;
-            _highWaterSubStep = WebhookSubStep;
-            return true; // → webhook toggle
-        }
+        var next = _currentSubStep + 1;
+        if (next >= SubStepCount)
+            return false; // step complete; orchestrator advances the wizard
 
-        return false; // step complete, orchestrator advances
+        _currentSubStep = next;
+        if (_currentSubStep > _highWaterSubStep)
+            _highWaterSubStep = _currentSubStep;
+        return true;
     }
 
     public bool TryGoBack()
@@ -106,15 +153,24 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         if (direction == NavigationDirection.Back)
-            _currentSubStep = _highWaterSubStep;
+        {
+            // SubStepCount depends on SelectedMode, which the operator can change
+            // at sub-step 0. Clamp so we don't restore a high-water mark from a
+            // mode with more sub-steps than the currently selected one.
+            _currentSubStep = Math.Min(_highWaterSubStep, SubStepCount - 1);
+        }
         else
+        {
             _currentSubStep = 0;
+        }
     }
 
     public void OnLeave() { }
 
     /// <summary>
     /// Writes the Daemon section (non-local modes) and Webhooks section (when enabled).
+    /// For reverse-proxy mode the section also carries the operator-supplied bind address
+    /// and trusted-proxy list — required by <c>DaemonExposureValidator</c> at startup.
     /// </summary>
     public void ContributeConfig(WizardConfigBuilder builder)
     {
@@ -122,7 +178,9 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         {
             builder.Daemon = new DaemonConfigSection
             {
-                ExposureMode = SelectedMode
+                ExposureMode = SelectedMode,
+                Host = IsReverseProxy ? Host : null,
+                TrustedProxies = IsReverseProxy ? TrustedProxies : [],
             };
         }
 

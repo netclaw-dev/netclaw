@@ -11,7 +11,7 @@ namespace Netclaw.Configuration;
 /// </summary>
 public static class DaemonControlPlaneEndpointResolver
 {
-    public const string DefaultEndpoint = "http://127.0.0.1:5199";
+    public static readonly string DefaultEndpoint = $"http://127.0.0.1:{DaemonConfig.DefaultPort}";
 
     public static string ResolveFallbackEndpoint(DaemonConfig daemonConfig)
     {

@@ -1,8 +1,10 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ExposureModeStepView.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
+using System.Net.Sockets;
 using Netclaw.Configuration;
 using R3;
 using Termina.Extensions;
@@ -14,18 +16,27 @@ using Termina.Terminal;
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
-/// Termina view for the ExposureMode wizard step.
-/// Sub-step 0: mode selection list (four modes, local pre-selected).
-/// Sub-step 1 (non-local only): informational notice (tailscale-serve) or high-risk warning
-///             with explicit confirmation (tailscale-funnel, cloudflare-tunnel).
-/// Last sub-step: inbound webhook enable/disable toggle.
+/// Termina view for the ExposureMode wizard step. Sub-step layout depends on the
+/// selected mode — see <see cref="ExposureModeStepViewModel"/> summary.
+///
+/// Reverse-proxy adds three sub-steps: bind-address input, trusted-proxies input,
+/// and an informational notice that echoes the resulting serving URL.
 /// </summary>
 public sealed class ExposureModeStepView : IWizardStepView
 {
     private IDisposable? _modeList;
     private SelectionListNode<string>? _confirmList;
     private IDisposable? _webhookList;
+    private TextInputNode? _hostInput;
+    private TextInputNode? _trustedProxiesInput;
     private IFocusable? _lastFocusedList;
+    private TextInputNode? _lastFocusedInput;
+
+    // Transient validation error messages, set by submit handlers and rendered
+    // above the corresponding input on the next layout build. Cleared on every
+    // ClearFocusState (i.e. when navigating away from this wizard step).
+    private string? _hostInputError;
+    private string? _trustedProxiesInputError;
 
     public string StepId => WizardStepIds.ExposureMode;
 
@@ -36,10 +47,18 @@ public sealed class ExposureModeStepView : IWizardStepView
         if (vm.CurrentSubStep == 0)
             return BuildModeSelection(vm, callbacks);
 
+        if (vm.IsReverseProxy && vm.CurrentSubStep == vm.ReverseProxyHostSubStep)
+            return BuildReverseProxyHost(vm, callbacks);
+
+        if (vm.IsReverseProxy && vm.CurrentSubStep == vm.ReverseProxyTrustedProxiesSubStep)
+            return BuildReverseProxyTrustedProxies(vm, callbacks);
+
+        if (vm.IsReverseProxy && vm.CurrentSubStep == vm.NoticeSubStep)
+            return BuildReverseProxyNotice(vm, callbacks);
+
         if (vm.CurrentSubStep == vm.WebhookSubStep)
             return BuildWebhookToggle(vm, callbacks);
 
-        // Sub-step 1 confirmation (non-Local modes only)
         return BuildConfirmation(vm, callbacks);
     }
 
@@ -47,6 +66,8 @@ public sealed class ExposureModeStepView : IWizardStepView
     {
         var localOption = new SelectionOption<ExposureMode>(ExposureMode.Local,
             "Local — loopback only, safest (recommended)");
+        var reverseProxyOption = new SelectionOption<ExposureMode>(ExposureMode.ReverseProxy,
+            "Reverse Proxy — behind nginx, Caddy, Traefik, IIS, ALB, etc.");
         var serveOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleServe,
             "Tailscale Serve — accessible within your tailnet");
         var funnelOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleFunnel,
@@ -55,15 +76,19 @@ public sealed class ExposureModeStepView : IWizardStepView
             "Cloudflare Tunnel — public internet ⚠");
 
         var modeList = Layouts.SelectionList<SelectionOption<ExposureMode>>(
-                [localOption, serveOption, funnelOption, cloudflareOption], static o => o.ToString())
+                [localOption, reverseProxyOption, serveOption, funnelOption, cloudflareOption],
+                static o => o.ToString())
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
 
         _modeList = modeList;
         modeList.OnFocused();
         _lastFocusedList = modeList;
+        _lastFocusedInput = null;
         _confirmList = null;
         _webhookList = null;
+        _hostInput = null;
+        _trustedProxiesInput = null;
 
         modeList.SelectionConfirmed
             .Subscribe(selected =>
@@ -85,11 +110,176 @@ public sealed class ExposureModeStepView : IWizardStepView
                 .WithForeground(Color.BrightBlack));
     }
 
+    private ILayoutNode BuildReverseProxyHost(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _hostInput = new TextInputNode().WithPlaceholder(ExposureModeStepViewModel.DefaultReverseProxyHost);
+        _hostInput.Text = vm.Host;
+        _hostInput.OnFocused();
+        _lastFocusedInput = _hostInput;
+        _lastFocusedList = null;
+
+        _hostInput.Submitted
+            .Subscribe(text =>
+            {
+                var candidate = string.IsNullOrWhiteSpace(text)
+                    ? ExposureModeStepViewModel.DefaultReverseProxyHost
+                    : text.Trim();
+
+                // Mirror DaemonExposureValidator.IsLoopbackHost — reject inline so the
+                // operator sees the error in the wizard instead of at daemon startup.
+                if (DaemonExposureValidator.IsLoopbackHost(candidate))
+                {
+                    _hostInputError = $"'{candidate}' is loopback — not allowed for reverse-proxy mode. Use a non-loopback bind address (e.g. 0.0.0.0 or this host's internal IP).";
+                    callbacks.InvalidateAndRedraw();
+                    return;
+                }
+
+                _hostInputError = null;
+                vm.Host = candidate;
+                callbacks.AdvanceStep();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        var layout = Layouts.Vertical()
+            .WithChild(new TextNode("  Reverse proxy: bind address").WithForeground(Color.White))
+            .WithChild(new TextNode("  Daemon will listen on this address. Loopback (127.0.0.1, ::1, localhost)")
+                .WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("  is not allowed — loopback auto-auth cannot be inherited through a proxy.")
+                .WithForeground(Color.BrightBlack))
+            .WithSpacing(1)
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_hostInput, "Bind address"));
+
+        if (_hostInputError is not null)
+            layout = layout.WithChild(new TextNode($"  ✗ {_hostInputError}").WithForeground(Color.Red));
+
+        return layout;
+    }
+
+    private ILayoutNode BuildReverseProxyTrustedProxies(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _trustedProxiesInput = new TextInputNode().WithPlaceholder("10.0.0.0/24, 192.168.1.5");
+        _trustedProxiesInput.Text = string.Join(", ", vm.TrustedProxies);
+        _trustedProxiesInput.OnFocused();
+        _lastFocusedInput = _trustedProxiesInput;
+        _lastFocusedList = null;
+
+        _trustedProxiesInput.Submitted
+            .Subscribe(text =>
+            {
+                var parsed = WizardStepHelpers.ParseUserIds(text);
+
+                // Empty submit: do NOT overwrite previously captured entries. The yellow
+                // help-line below the input already tells the operator what's required;
+                // we add an inline error indicator so a no-op Enter is visibly distinct
+                // from a successful submit.
+                if (parsed.Count == 0)
+                {
+                    _trustedProxiesInputError = vm.TrustedProxies.Count > 0
+                        ? "Empty input ignored — your previous entries are kept. Enter to continue, or type new values to replace them."
+                        : "Empty input rejected — enter at least one IP or CIDR.";
+                    callbacks.InvalidateAndRedraw();
+                    return;
+                }
+
+                // Per-entry IP/CIDR validation — same canonical helper the daemon uses
+                // at startup (DaemonExposureValidator.TryParseTrustedProxy). The wizard's
+                // job is to produce a config the daemon will actually start with; let
+                // the operator fix typos here, not after the wizard exits.
+                var errors = new List<string>();
+                foreach (var entry in parsed)
+                {
+                    if (!DaemonExposureValidator.TryParseTrustedProxy(entry, out _, out var error))
+                        errors.Add(error ?? $"'{entry}' is not a valid IP or CIDR.");
+                }
+
+                if (errors.Count > 0)
+                {
+                    _trustedProxiesInputError = string.Join("  ", errors);
+                    callbacks.InvalidateAndRedraw();
+                    return;
+                }
+
+                _trustedProxiesInputError = null;
+                vm.TrustedProxies = parsed;
+                callbacks.AdvanceStep();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        var helpLine = vm.TrustedProxies.Count == 0
+            ? new TextNode("  At least one IP or CIDR is required — the daemon will not start without it.")
+                .WithForeground(Color.Yellow)
+            : new TextNode($"  {vm.TrustedProxies.Count} trusted proxy entr{(vm.TrustedProxies.Count == 1 ? "y" : "ies")} captured. Press Enter to continue.")
+                .WithForeground(Color.BrightBlack);
+
+        var layout = Layouts.Vertical()
+            .WithChild(new TextNode("  Reverse proxy: trusted proxies").WithForeground(Color.White))
+            .WithChild(new TextNode("  Comma-separated IP addresses or CIDR ranges. Forwarded headers from any")
+                .WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("  other source will be ignored.")
+                .WithForeground(Color.BrightBlack))
+            .WithSpacing(1)
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_trustedProxiesInput, "Trusted proxies"))
+            .WithChild(helpLine);
+
+        if (_trustedProxiesInputError is not null)
+            layout = layout.WithChild(new TextNode($"  ✗ {_trustedProxiesInputError}").WithForeground(Color.Red));
+
+        return layout;
+    }
+
+    private ILayoutNode BuildReverseProxyNotice(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        _confirmList = Layouts.SelectionList("Got it — continue")
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Cyan);
+
+        _confirmList.OnFocused();
+        _lastFocusedList = _confirmList;
+        _lastFocusedInput = null;
+
+        var servingUrl = FormatServingUrl(vm.Host);
+        var bindsToAllInterfaces = vm.Host == "0.0.0.0" || vm.Host == "::";
+        var proxiesLabel = vm.TrustedProxies.Count == 0
+            ? "(none)"
+            : string.Join(", ", vm.TrustedProxies);
+
+        _confirmList.SelectionConfirmed
+            .Subscribe(_ => callbacks.AdvanceStep())
+            .DisposeWith(callbacks.Subscriptions);
+
+        var layout = Layouts.Vertical()
+            .WithChild(new TextNode("  Reverse proxy configured").WithForeground(Color.Cyan))
+            .WithSpacing(1)
+            .WithChild(new TextNode($"  Daemon listen address:    {servingUrl}").WithForeground(Color.White))
+            .WithChild(new TextNode($"  Trusted proxies:          {proxiesLabel}").WithForeground(Color.White))
+            .WithSpacing(1);
+
+        if (bindsToAllInterfaces)
+        {
+            layout = layout
+                .WithChild(new TextNode($"  {vm.Host} binds all interfaces. In your reverse proxy's upstream config,").WithForeground(Color.BrightBlack))
+                .WithChild(new TextNode($"  use a reachable address: this host's loopback if the proxy runs on the").WithForeground(Color.BrightBlack))
+                .WithChild(new TextNode($"  same machine, or this host's LAN/internal IP if the proxy is remote.").WithForeground(Color.BrightBlack));
+        }
+        else
+        {
+            layout = layout
+                .WithChild(new TextNode($"  Point your reverse proxy at {servingUrl} and terminate TLS at").WithForeground(Color.BrightBlack))
+                .WithChild(new TextNode("  the proxy. Forwarded headers from any other source IP will be ignored.").WithForeground(Color.BrightBlack));
+        }
+
+        return layout
+            .WithSpacing(1)
+            .WithChild(new TextNode("  You are responsible for:").WithForeground(Color.White))
+            .WithChild(new TextNode("    • Terminating TLS at the proxy").WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("    • Restricting inbound access at the proxy / firewall").WithForeground(Color.BrightBlack))
+            .WithChild(new TextNode("    • Setting X-Forwarded-For and X-Forwarded-Proto correctly").WithForeground(Color.BrightBlack))
+            .WithSpacing(1)
+            .WithChild(_confirmList);
+    }
+
     private ILayoutNode BuildConfirmation(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        _modeList = null;
-        _webhookList = null;
-
         if (vm.IsHighRisk)
             return BuildHighRiskWarning(vm, callbacks);
 
@@ -108,6 +298,7 @@ public sealed class ExposureModeStepView : IWizardStepView
 
         _confirmList.OnFocused();
         _lastFocusedList = _confirmList;
+        _lastFocusedInput = null;
 
         _confirmList.SelectionConfirmed
             .Subscribe(_ => callbacks.AdvanceStep())
@@ -133,6 +324,7 @@ public sealed class ExposureModeStepView : IWizardStepView
 
         _confirmList.OnFocused();
         _lastFocusedList = _confirmList;
+        _lastFocusedInput = null;
 
         _confirmList.SelectionConfirmed
             .Subscribe(_ => callbacks.AdvanceStep())
@@ -155,9 +347,6 @@ public sealed class ExposureModeStepView : IWizardStepView
         var disableOption = new SelectionOption<bool>(false, "No — do not accept inbound webhooks (default)");
         var enableOption = new SelectionOption<bool>(true, "Yes — accept inbound webhook requests");
 
-        _modeList = null;
-        _confirmList = null;
-
         var webhookList = Layouts.SelectionList<SelectionOption<bool>>(
                 [disableOption, enableOption], static o => o.ToString())
             .WithMode(SelectionMode.Single)
@@ -166,6 +355,7 @@ public sealed class ExposureModeStepView : IWizardStepView
         _webhookList = webhookList;
         webhookList.OnFocused();
         _lastFocusedList = webhookList;
+        _lastFocusedInput = null;
 
         webhookList.SelectionConfirmed
             .Subscribe(selected =>
@@ -189,6 +379,20 @@ public sealed class ExposureModeStepView : IWizardStepView
                 .WithForeground(Color.BrightBlack));
     }
 
+    private static string FormatServingUrl(string host)
+    {
+        // Bracket-wrap raw IPv6 addresses for URL syntax. Use IPAddress.TryParse rather
+        // than a colon-substring check so a typo like 'hostname:port' isn't treated as IPv6.
+        var displayHost = host;
+        if (!host.StartsWith('[')
+            && IPAddress.TryParse(host, out var parsed)
+            && parsed.AddressFamily == AddressFamily.InterNetworkV6)
+        {
+            displayHost = $"[{host}]";
+        }
+        return $"http://{displayHost}:{DaemonConfig.DefaultPort}";
+    }
+
     public bool HandleKeyPress(KeyPressed key)
     {
         if (_lastFocusedList is not null)
@@ -196,19 +400,29 @@ public sealed class ExposureModeStepView : IWizardStepView
             _lastFocusedList.HandleInput(key.KeyInfo);
             return true;
         }
+        if (_lastFocusedInput is not null)
+        {
+            _lastFocusedInput.HandleInput(key.KeyInfo);
+            return true;
+        }
         return false;
     }
 
     public void HandlePaste(PasteEvent paste)
     {
-        // No text inputs in this step
+        _lastFocusedInput?.HandlePaste(paste);
     }
 
     public void ClearFocusState()
     {
         _lastFocusedList = null;
+        _lastFocusedInput = null;
         _modeList = null;
         _confirmList = null;
         _webhookList = null;
+        _hostInput = null;
+        _trustedProxiesInput = null;
+        _hostInputError = null;
+        _trustedProxiesInputError = null;
     }
 }

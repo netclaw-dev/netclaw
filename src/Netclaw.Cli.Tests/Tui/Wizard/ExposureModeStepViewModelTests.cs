@@ -274,6 +274,7 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
 
     [Theory]
     [InlineData(ExposureMode.Local, 2, 1)]
+    [InlineData(ExposureMode.ReverseProxy, 5, 4)]
     [InlineData(ExposureMode.TailscaleServe, 3, 2)]
     [InlineData(ExposureMode.TailscaleFunnel, 3, 2)]
     [InlineData(ExposureMode.CloudflareTunnel, 3, 2)]
@@ -284,6 +285,210 @@ public sealed class ExposureModeStepViewModelTests : WizardStepTestBase
 
         Assert.Equal(expectedSubStepCount, step.SubStepCount);
         Assert.Equal(expectedWebhookSubStep, step.WebhookSubStep);
+    }
+
+    // ── Reverse proxy — config emission ──────────────────────────────────────
+
+    [Fact]
+    public void ContributeConfig_ReverseProxy_WritesHostAndTrustedProxies()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.ReverseProxy;
+        step.Host = "10.0.0.5";
+        step.TrustedProxies = ["10.0.0.0/24", "192.168.1.5"];
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Daemon);
+        Assert.Equal(ExposureMode.ReverseProxy, builder.Daemon.ExposureMode);
+        Assert.Equal("10.0.0.5", builder.Daemon.Host);
+        Assert.Equal(["10.0.0.0/24", "192.168.1.5"], builder.Daemon.TrustedProxies);
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public void ContributeConfig_NonReverseProxy_DoesNotEmitHostOrTrustedProxies(ExposureMode mode)
+    {
+        // Even if Host / TrustedProxies were collected on a previous reverse-proxy
+        // pass and the operator backed out to switch modes, we must not leak them
+        // into a tailscale/cloudflare Daemon section.
+        using var step = new ExposureModeStepViewModel();
+        step.Host = "10.0.0.5";
+        step.TrustedProxies = ["10.0.0.0/24"];
+        step.SelectedMode = mode;
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Daemon);
+        Assert.Null(builder.Daemon.Host);
+        Assert.Empty(builder.Daemon.TrustedProxies);
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_ReverseProxy_WritesHostAndTrustedProxies()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection
+            {
+                ExposureMode = ExposureMode.ReverseProxy,
+                Host = "10.0.0.5",
+                TrustedProxies = ["10.0.0.0/24", "192.168.1.5"],
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.True(config.ContainsKey("Daemon"));
+        var daemon = (Dictionary<string, object>)config["Daemon"];
+        Assert.Equal("reverse-proxy", daemon["ExposureMode"]);
+        Assert.Equal("10.0.0.5", daemon["Host"]);
+        Assert.Equal(new[] { "10.0.0.0/24", "192.168.1.5" }, (IEnumerable<string>)daemon["TrustedProxies"]);
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_ReverseProxy_EmptyTrustedProxies_OmitsTrustedProxiesKey()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection
+            {
+                ExposureMode = ExposureMode.ReverseProxy,
+                Host = "10.0.0.5",
+                TrustedProxies = [],
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var daemon = (Dictionary<string, object>)config["Daemon"];
+        Assert.Equal("reverse-proxy", daemon["ExposureMode"]);
+        Assert.Equal("10.0.0.5", daemon["Host"]);
+        Assert.False(daemon.ContainsKey("TrustedProxies"));
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_NonReverseProxy_OmitsHostAndTrustedProxies()
+    {
+        // Defensive: even if a caller populates Host/TrustedProxies on the builder
+        // for a non-reverse-proxy mode, the serializer should still emit them when
+        // explicitly present — guarding against leakage is the ViewModel's job
+        // (see ContributeConfig_NonReverseProxy_DoesNotEmitHostOrTrustedProxies).
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection { ExposureMode = ExposureMode.TailscaleServe }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var daemon = (Dictionary<string, object>)config["Daemon"];
+        Assert.False(daemon.ContainsKey("Host"));
+        Assert.False(daemon.ContainsKey("TrustedProxies"));
+    }
+
+    // ── Reverse proxy — sub-step navigation ──────────────────────────────────
+
+    [Fact]
+    public void TryAdvance_ReverseProxy_WalksMode_Host_TrustedProxies_Notice_Webhook()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.SelectedMode = ExposureMode.ReverseProxy;
+
+        Assert.True(step.TryAdvance());
+        Assert.Equal(step.ReverseProxyHostSubStep, step.CurrentSubStep);
+
+        Assert.True(step.TryAdvance());
+        Assert.Equal(step.ReverseProxyTrustedProxiesSubStep, step.CurrentSubStep);
+
+        // Gate: blocked on empty trusted proxies. Returns true ("handled — staying put")
+        // so the orchestrator does NOT interpret it as step-complete and skip ahead.
+        // The sub-step pointer must not move.
+        Assert.True(step.TryAdvance());
+        Assert.Equal(step.ReverseProxyTrustedProxiesSubStep, step.CurrentSubStep);
+
+        step.TrustedProxies = ["10.0.0.0/24"];
+
+        Assert.True(step.TryAdvance());
+        Assert.Equal(step.NoticeSubStep, step.CurrentSubStep);
+
+        Assert.True(step.TryAdvance());
+        Assert.Equal(step.WebhookSubStep, step.CurrentSubStep);
+
+        Assert.False(step.TryAdvance()); // step complete
+    }
+
+    [Fact]
+    public void TryGoBack_ReverseProxy_FromWebhook_WalksBackThroughEachSubStep()
+    {
+        using var step = new ExposureModeStepViewModel();
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.SelectedMode = ExposureMode.ReverseProxy;
+        step.Host = "10.0.0.5";
+        step.TrustedProxies = ["10.0.0.0/24"];
+
+        step.TryAdvance(); // host
+        step.TryAdvance(); // trusted proxies
+        step.TryAdvance(); // notice
+        step.TryAdvance(); // webhook
+        Assert.Equal(step.WebhookSubStep, step.CurrentSubStep);
+
+        Assert.True(step.TryGoBack());
+        Assert.Equal(step.NoticeSubStep, step.CurrentSubStep);
+
+        Assert.True(step.TryGoBack());
+        Assert.Equal(step.ReverseProxyTrustedProxiesSubStep, step.CurrentSubStep);
+
+        Assert.True(step.TryGoBack());
+        Assert.Equal(step.ReverseProxyHostSubStep, step.CurrentSubStep);
+
+        Assert.True(step.TryGoBack());
+        Assert.Equal(0, step.CurrentSubStep);
+
+        Assert.False(step.TryGoBack());
+    }
+
+    [Fact]
+    public void OnEnter_Back_AfterModeDowngrade_ClampsToNewSubStepCount()
+    {
+        // Operator selects reverse-proxy, walks to webhook (sub-step 4),
+        // leaves this wizard step, comes back via Back, switches mode to Local.
+        // The high-water mark from reverse-proxy (4) must NOT restore us past
+        // Local's max sub-step index (SubStepCount - 1 == 1).
+        using var step = new ExposureModeStepViewModel();
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.SelectedMode = ExposureMode.ReverseProxy;
+        step.TrustedProxies = ["10.0.0.0/24"];
+        step.TryAdvance();
+        step.TryAdvance();
+        step.TryAdvance();
+        step.TryAdvance();
+        Assert.Equal(4, step.CurrentSubStep);
+
+        step.OnLeave();
+        step.SelectedMode = ExposureMode.Local;
+        step.OnEnter(Context, NavigationDirection.Back);
+
+        Assert.InRange(step.CurrentSubStep, 0, step.SubStepCount - 1);
+    }
+
+    [Fact]
+    public void ContributeSecrets_ReverseProxy_AddsDeviceToken()
+    {
+        // Reverse proxy is non-local, so the bootstrap device must still be
+        // generated to give the operator a way to pair the first remote client.
+        using var step = new ExposureModeStepViewModel();
+        step.SelectedMode = ExposureMode.ReverseProxy;
+
+        var builder = new WizardSecretsBuilder(Context.Paths);
+        step.ContributeSecrets(builder);
+
+        Assert.NotNull(step.BootstrapRawToken);
+        Assert.NotNull(step.BootstrapDevice);
     }
 
     // ── Bootstrap device pairing (#540) ──────────────────────────────────────
