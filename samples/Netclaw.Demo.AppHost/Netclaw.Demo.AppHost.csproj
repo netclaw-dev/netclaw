@@ -18,6 +18,9 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Netclaw.Daemon\Netclaw.Daemon.csproj" />
+    <!-- Bootstrap is a library consumed in-AppHost (lifecycle hook calls SeedAsync); not an Aspire resource. -->
+    <ProjectReference Include="..\..\src\Netclaw.Channels.Mattermost.Bootstrap\Netclaw.Channels.Mattermost.Bootstrap.csproj"
+                      IsAspireProjectResource="false" />
   </ItemGroup>
 
 </Project>

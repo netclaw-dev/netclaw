@@ -28,6 +28,7 @@
     <Project Path="src/Netclaw.Search.Tests/Netclaw.Search.Tests.csproj" />
     <Project Path="src/Netclaw.Security/Netclaw.Security.csproj" />
     <Project Path="src/Netclaw.Security.Tests/Netclaw.Security.Tests.csproj" />
+    <Project Path="src/Netclaw.Channels.Mattermost.Bootstrap/Netclaw.Channels.Mattermost.Bootstrap.csproj" />
     <Project Path="src/Netclaw.Channels.Mattermost.IntegrationTests/Netclaw.Channels.Mattermost.IntegrationTests.csproj" />
     <Project Path="src/Netclaw.ServiceDefaults/Netclaw.ServiceDefaults.csproj" />
   </Folder>
