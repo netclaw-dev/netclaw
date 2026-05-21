@@ -122,6 +122,19 @@ The Aspire CLI ships an MCP server that lets an LLM agent observe and
 control the running AppHost. With Claude Code, you can drive the demo
 end-to-end without clicking through the dashboard yourself.
 
+If you don't already have the Aspire CLI installed, the cleanest install
+path is via the .NET tool:
+
+```bash
+dotnet tool install --global Aspire.Cli
+# or upgrade an existing dotnet-tool install
+dotnet tool update --global Aspire.Cli
+```
+
+The CLI version must match (or be newer than) the AppHost's
+`Aspire.Hosting.AppHost` pin in `Directory.Packages.props`; otherwise
+`aspire mcp` may fail to detect the running AppHost.
+
 One-time setup (run interactively in your terminal, not via Claude Code —
 the init flow asks which agent integrations to wire up):
 
