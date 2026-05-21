@@ -8,45 +8,14 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.20.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.19.0 — Streaming tool-call execution, Discord proactive posting, isolated channel failures, and durable approval recovery
-
-**Features**
-
-* **Streaming tool-call execution** — tool execution now yields an `IAsyncEnumerable&lt;ToolCallUpdate&gt;` stream monitored by a per-call, two-phase inactivity watchdog, replacing the flat per-attempt timeout. A `spawn_agent` sub-agent making progress is no longer killed mid-run by an uncoordinated ~90s timeout, while a genuinely stalled tool call is still caught. All existing tools inherit a single-completion-item default unchanged. ([#1045](https://github.com/netclaw-dev/netclaw/pull/1045))
-
-* **`send_discord_message` proactive-post tool** — the agent can now start a new Discord conversation for channel-targeted reminder delivery and cross-channel outreach, at parity with `send_slack_message`. The posted message becomes the thread root, and user replies in the created thread route back to a live session. Discord reminder delivery is hardened to explicit channel targets only (`channel:&lt;id&gt;` or `&lt;#id&gt;`); DM, user, and bare-snowflake targets are rejected. Closes [#953](https://github.com/netclaw-dev/netclaw/issues/953). ([#1026](https://github.com/netclaw-dev/netclaw/pull/1026))
-
-* **Service identity on operational webhook alerts** — operational webhook alerts now carry OpenTelemetry `service.*` resource attributes (`service.name`, `service.namespace`, `service.instance.id`, `service.version`), so alerts from multiple Netclaw instances posting to the same Slack channel or endpoint can be told apart. Service identity is sourced purely from the standard OpenTelemetry environment variables (`OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES`); the short-lived `Telemetry:ServiceName` config property from 0.18.2 is removed in favor of this standard configuration. ([#1078](https://github.com/netclaw-dev/netclaw/pull/1078))
-
-* **Expanded safe-verb auto-allow list** — trivially read-only verbs (`date`, `whoami`, `uname`, `ps`, read-only `git`/`gh` query subcommands like `git describe` and `gh pr view`) no longer hit the interactive approval gate, cutting the dominant fixable source of approval-prompt spam. Command-prefixing and mutating/network-writing verbs remain excluded. ([#1071](https://github.com/netclaw-dev/netclaw/pull/1071))
+    <VersionPrefix>0.20.1</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.20.1 — Bug fixes for Anthropic MCP tool names, stale approval buttons, and sub-agent working directories
 
 **Bug Fixes**
 
-* **Tool-approval recovery is now journal-backed** — a tool-approval prompt that outlived its session via idle passivation, turn failure, or daemon restart is now recovered from the event journal rather than snapshot-only state. Pending approvals, approval resolution, requester identity, and trust context all survive a cold re-drive, and already-completed sibling calls are no longer replayed in a recovered mixed batch. ([#1044](https://github.com/netclaw-dev/netclaw/pull/1044))
-
-* **Channel connection failures are contained** — a misconfigured channel (such as a Discord bot missing the Message Content privileged intent) previously took the whole daemon down by escalating into a full Akka coordinated shutdown. Discord and Slack channels now fail in isolation: fatal gateway close codes are classified and reported via the existing `channel.disconn` path instead of rethrowing and aborting the host. ([#1033](https://github.com/netclaw-dev/netclaw/pull/1033), [#1083](https://github.com/netclaw-dev/netclaw/pull/1083))
-
-* **`spawn_agent` routes through its streaming override** — `SpawnAgentTool.ExecuteStreamAsync` was an unreachable orphan method, so `spawn_agent` collapsed to the non-streaming path and a healthy, actively-streaming sub-agent was still killed at the flat 90s timeout. The streaming override is now compiler-enforced through the whole tool hierarchy, so this class of bug cannot recur silently. ([#1080](https://github.com/netclaw-dev/netclaw/pull/1080))
-
-* **`file_edit`/`file_write` no longer lose updates** — concurrent `file_edit` calls against the same file in one assistant turn each read the same original content, and the last write clobbered the others while every call still reported success — a lost-update race present since `file_edit` was introduced. A new process-wide, per-path serialization gate routes the read-modify-write through, so disjoint same-file edits all compose and apply. ([#1062](https://github.com/netclaw-dev/netclaw/pull/1062))
-
-* **Shell timeout countdown starts after process spawn** — `shell_execute` charged process-spawn overhead against the command's timeout budget, so a configured or requested timeout now means "the command gets N seconds" rather than "N seconds minus shell-spawn overhead." ([#1074](https://github.com/netclaw-dev/netclaw/pull/1074))
-
-* **Release notes deduplicated** — a separate lowercase `release_notes.md` introduced in the 0.18.2 release collided with the canonical `RELEASE_NOTES.md` on case-insensitive filesystems; the 0.18.2 entry is now folded into the cumulative changelog and the duplicate file removed. ([#1082](https://github.com/netclaw-dev/netclaw/pull/1082))
-
-**Build/CI**
-
-* **Native cross-platform smoke harness** — the smoke-testing suite was restructured across multiple phases: a native cross-platform harness replaces the Docker-based one, with screenshot-regression mode, an MCP-integration scenario and test server, a macOS smoke leg with a `netclaw doctor` check, and a split Linux/macOS CI cadence. ([#1047](https://github.com/netclaw-dev/netclaw/pull/1047), [#1048](https://github.com/netclaw-dev/netclaw/pull/1048), [#1049](https://github.com/netclaw-dev/netclaw/pull/1049), [#1051](https://github.com/netclaw-dev/netclaw/pull/1051), [#1054](https://github.com/netclaw-dev/netclaw/pull/1054), [#1056](https://github.com/netclaw-dev/netclaw/pull/1056), [#1061](https://github.com/netclaw-dev/netclaw/pull/1061), [#1067](https://github.com/netclaw-dev/netclaw/pull/1067), [#1076](https://github.com/netclaw-dev/netclaw/pull/1076))
-
-* **Canonical publish script** — the `dotnet publish` flags for shipped self-contained binaries are now consolidated into a single `publish-binaries.sh` script shared by the release and image-build callers. Single-file compression is disabled for `osx-arm64`, which corrupted memory on Apple Silicon during single-file self-extract. ([#1047](https://github.com/netclaw-dev/netclaw/pull/1047))
-
-* Fixed a mislabeled "Upload Linux install script" CI step and stabilized flaky reminder and shell timeout tests. ([#1050](https://github.com/netclaw-dev/netclaw/pull/1050), [#1053](https://github.com/netclaw-dev/netclaw/pull/1053), [#1066](https://github.com/netclaw-dev/netclaw/pull/1066))
-
-**Dependencies**
-
-* Bumped all Akka.Hosting-linked packages (Akka.Hosting, Akka.Cluster.Sharding, Akka.Persistence, Akka.Persistence.Hosting, Akka.Hosting.TestKit) from 1.5.67 to 1.5.68. ([#1081](https://github.com/netclaw-dev/netclaw/pull/1081))
-* Updated the Termina package to 0.9.0. ([#1073](https://github.com/netclaw-dev/netclaw/pull/1073))</PackageReleaseNotes>
+* **MCP Anthropic tool-name alias** — MCP tools with `/` in their names now use an Anthropic-safe alias, fixing `BadRequest` errors on every LLM call when using Anthropic models with MCP tools. ([#1134](https://github.com/netclaw-dev/netclaw/pull/1134))
+* **Stale approval button forwarding** — Slack, Discord, and Mattermost approval buttons now correctly forward stale approval clicks back to the session instead of becoming dead/unresponsive after a turn completes. ([#1139](https://github.com/netclaw-dev/netclaw/pull/1139))
+* **Sub-agent working directory propagation** — parent's resolved `cwd` is now propagated to spawned sub-agents, fixing shell approvals showing "(no working directory)" and broken folder-scoped grant matching. ([#1130](https://github.com/netclaw-dev/netclaw/pull/1130))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
