@@ -74,3 +74,23 @@ public sealed record ToolInteractionResponse : IWithSessionId, INoSerializationV
     /// </summary>
     public required SenderId SenderId { get; init; }
 }
+
+/// <summary>
+/// Text-only approval reply for a pending <see cref="ToolInteractionRequest"/>
+/// when the channel binding does not have the original prompt state locally.
+/// The session resolves the applicable pending interaction from its own
+/// journal-backed state and parses the text against that prompt's option order.
+/// </summary>
+public sealed record ToolInteractionTextResponse : IWithSessionId, INoSerializationVerificationNeeded
+{
+    public required SessionId SessionId { get; init; }
+
+    /// <summary>The raw user reply, e.g. <c>A</c> or <c>approve everywhere</c>.</summary>
+    public required string Text { get; init; }
+
+    /// <summary>
+    /// Identity of the user who sent the text reply. Used to resolve which
+    /// pending prompt they are allowed to answer.
+    /// </summary>
+    public required SenderId SenderId { get; init; }
+}

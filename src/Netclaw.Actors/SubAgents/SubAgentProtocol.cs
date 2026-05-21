@@ -95,6 +95,13 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     public string? ParentProjectDirectory { get; init; }
 
     /// <summary>
+    /// Snapshot of the parent's <c>ToolExecutionContext.ResolveShellCwd(null)</c>
+    /// at spawn time. Seeds the child's <c>InheritedCwd</c>. Null when the
+    /// parent itself had no resolvable cwd.
+    /// </summary>
+    public string? ParentCwd { get; init; }
+
+    /// <summary>
     /// Parent session's approval bridge. When provided, the sub-agent can route
     /// approval requests back to the interactive user instead of auto-denying.
     /// </summary>

@@ -145,6 +145,7 @@ message ToolApprovalRequestedProto {
   optional string channel_type = 12;
   optional bool supports_interactive_approval = 13;
   int64 requested_at_ms = 14;
+  repeated string option_keys = 15;
 }
 
 message ToolApprovalResolvedProto {

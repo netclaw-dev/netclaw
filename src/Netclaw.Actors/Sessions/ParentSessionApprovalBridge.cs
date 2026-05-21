@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
@@ -51,13 +52,19 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         string displayText,
         IReadOnlyList<string> patterns,
         IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
         bool isMessy,
         CancellationToken ct)
     {
         var waitTask = _channel.WaitForApprovalAsync(callId, Timeout.InfiniteTimeSpan, ct);
 
-        // Labels are the fixed `ApprovalOptionKeys` constants — see that type
-        // for `MaxLabelLength` and the channel-cap rationale.
+        // Emit verbatim from the gate's computed options so persistent-grant
+        // buttons (Always here / Always anywhere) and the messy-command
+        // four-button fallback stay in lock-step with the parent path. The
+        // earlier hardcoded list silently dropped "Always anywhere" for
+        // sub-agents.
         _emitRequest(new ToolInteractionRequest
         {
             SessionId = _sessionId,
@@ -69,18 +76,16 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             RequesterPrincipal = _requesterPrincipal,
             Patterns = patterns,
             CandidateVerbs = candidateVerbs,
+            Candidates = candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToList(),
+            Cwd = cwd,
             IsMessy = isMessy,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
             PersistedAdoptedContext = _hasAdoptedContext,
-            Options =
-            [
-                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
-                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
-                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
-            ]
+            Options = options
+                .Select(o => new ToolInteractionOption(new ApprovalOptionKey(o.Key), o.Label))
+                .ToList()
         });
 
         var decision = await waitTask;

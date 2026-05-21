@@ -361,7 +361,7 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 _chatHistory.AppendLine($"  {msg.DisplayText}", Color.White);
                 if (msg.Patterns.Count > 0)
                     _chatHistory.AppendLine($"  Patterns: {string.Join(", ", msg.Patterns)}", Color.BrightBlack);
-                _chatHistory.AppendLine("  Choose Once, This chat, Always here, Always anywhere, or Deny below.", Color.Yellow);
+                _chatHistory.AppendLine($"  Options: {string.Join(", ", msg.Options.Select(o => o.Label))}", Color.Yellow);
                 _chatHistory.ScrollToBottom();
                 break;
 

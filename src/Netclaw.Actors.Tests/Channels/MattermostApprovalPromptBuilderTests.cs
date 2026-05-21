@@ -26,6 +26,7 @@ public sealed class MattermostApprovalPromptBuilderTests
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveEverywhereLabel),
                 new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
             ]
         };
@@ -39,6 +40,8 @@ public sealed class MattermostApprovalPromptBuilderTests
         Assert.Contains("B)", prompt);
         Assert.Contains("C)", prompt);
         Assert.Contains("D)", prompt);
+        Assert.Contains("E)", prompt);
+        Assert.Contains(ApprovalOptionKeys.ApproveEverywhereLabel, prompt);
     }
 
     [Fact]
@@ -145,7 +148,7 @@ public sealed class MattermostApprovalPromptBuilderTests
     }
 
     [Fact]
-    public void BuildButtonPrompt_produces_attachment_with_four_buttons()
+    public void BuildButtonPrompt_produces_attachment_with_five_buttons()
     {
         var request = CreateStandardRequest();
 
@@ -154,12 +157,12 @@ public sealed class MattermostApprovalPromptBuilderTests
 
         Assert.Contains("Tool approval required", text);
         Assert.Contains("git_push", text);
-        Assert.Contains("reply with `A`, `B`, `C`, or `D`", text);
+        Assert.Contains("reply with `A`, `B`, `C`, `D`, `E`", text);
 
         Assert.Single(attachments);
         var attachment = attachments[0];
         Assert.NotNull(attachment.Actions);
-        Assert.Equal(4, attachment.Actions!.Count);
+        Assert.Equal(5, attachment.Actions!.Count);
     }
 
     [Fact]
@@ -293,6 +296,7 @@ public sealed class MattermostApprovalPromptBuilderTests
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
                 new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveEverywhereLabel),
                 new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
             ]
         };
