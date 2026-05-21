@@ -107,6 +107,8 @@ public sealed record ToolApprovalRequested : INetclawSerializableMessage
 
     public string? Cwd { get; init; }
 
+    public IReadOnlyList<string> OptionKeys { get; init; } = Array.Empty<string>();
+
     public IReadOnlyList<ApprovalCandidateRecord> Candidates { get; init; } =
         Array.Empty<ApprovalCandidateRecord>();
 

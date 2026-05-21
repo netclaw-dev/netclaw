@@ -8,7 +8,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.19.0</VersionPrefix>
+    <VersionPrefix>0.20.0</VersionPrefix>
     <PackageReleaseNotes>Netclaw v0.19.0 — Streaming tool-call execution, Discord proactive posting, isolated channel failures, and durable approval recovery
 
 **Features**

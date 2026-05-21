@@ -3,9 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.ClientModel;
 using System.ClientModel.Primitives;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Netclaw.Providers.OpenAi;
@@ -41,36 +39,23 @@ internal sealed class OpenAiCodexRequestPolicy(string? accountId) : PipelinePoli
 
     private void Modify(PipelineMessage message)
     {
-        var request = message.Request;
-
-        // Inject ChatGPT-Account-Id header (extracted from JWT by JwtAccountIdExtractor)
+        // Inject ChatGPT-Account-Id header (extracted from JWT by JwtAccountIdExtractor).
+        // Set even when the body is empty/non-JSON; the header is always required.
         if (accountId is not null)
-            request.Headers.Set("ChatGPT-Account-Id", accountId);
+            message.Request.Headers.Set("ChatGPT-Account-Id", accountId);
 
-        // Rewrite request body
-        if (request.Content is null)
-            return;
+        PipelineRequestBodyEditor.EditJsonBody(message, obj =>
+        {
+            // Codex backend requires "store": false
+            obj["store"] = false;
 
-        using var stream = new MemoryStream();
-        request.Content.WriteTo(stream, default);
-        var bytes = stream.ToArray();
+            // Move system messages from "input" to "instructions" — the Codex backend
+            // rejects system role messages in the input array.
+            MoveSystemMessagesToInstructions(obj);
 
-        var node = JsonNode.Parse(bytes);
-        if (node is not JsonObject obj)
-            return;
-
-        // Codex backend requires "store": false
-        obj["store"] = false;
-
-        // Move system messages from "input" to "instructions" — the Codex backend
-        // rejects system role messages in the input array.
-        MoveSystemMessagesToInstructions(obj);
-
-        // Strip "strict": null from tool definitions — Codex backend rejects null values
-        StripNullStrict(obj);
-
-        var modified = JsonSerializer.SerializeToUtf8Bytes(obj);
-        request.Content = BinaryContent.Create(BinaryData.FromBytes(modified));
+            // Strip "strict": null from tool definitions — Codex backend rejects null values
+            StripNullStrict(obj);
+        });
     }
 
     /// <summary>

@@ -24,6 +24,10 @@ internal sealed record PendingToolInteraction(
     string? RequesterSenderId,
     PrincipalClassification? RequesterPrincipal,
     string? Cwd,
+    long RequestedAtMs,
+    // Option keys that were actually offered to the user when the prompt was
+    // rendered. Persisted so a later response cannot select a pruned scope.
+    IReadOnlyList<string> OptionKeys,
     // Per-clause (verb, directory) pairs preserved across the pause-for-approval
     // round trip so persistent approvals can write folder-scoped grants from the
     // path arguments the agent originally passed, rather than collapsing to cwd.

@@ -166,6 +166,18 @@ public sealed class ToolExecutionContext
     public string? Cwd { get; set; }
 
     /// <summary>
+    /// Parent session's resolved cwd snapshot, captured at spawn time for
+    /// sub-agent contexts. Read by <see cref="ResolveShellCwd"/> as the
+    /// last-resort fallback so a sub-agent whose own
+    /// <see cref="ProjectDirectory"/> and <see cref="SessionDirectory"/>
+    /// happen to be unset still surfaces the parent's effective working
+    /// directory to the approval gate. Distinct from <see cref="Cwd"/>:
+    /// <c>Cwd</c> is the per-call resolved <i>output</i> the approval gate
+    /// writes; <c>InheritedCwd</c> is a one-shot snapshot <i>input</i>.
+    /// </summary>
+    public string? InheritedCwd { get; init; }
+
+    /// <summary>
     /// Absolute path to the project directory the agent is currently working
     /// on, mirroring <c>WorkingContext.ProjectDirectory</c> from the session
     /// state. Set by the session pipeline at context-build time so tools and
@@ -184,9 +196,13 @@ public sealed class ToolExecutionContext
     /// <item><see cref="ProjectDirectory"/> — the session's declared project
     /// root, populated from <c>WorkingContext.ProjectDirectory</c>;</item>
     /// <item><see cref="SessionDirectory"/> — the per-session scratch
-    /// directory under <c>~/.netclaw/sessions/&lt;id&gt;/</c>.</item>
+    /// directory under <c>~/.netclaw/sessions/&lt;id&gt;/</c>;</item>
+    /// <item><see cref="InheritedCwd"/> — a sub-agent's snapshot of the
+    /// parent's resolved cwd, used when the child has no
+    /// <see cref="ProjectDirectory"/> or <see cref="SessionDirectory"/> of
+    /// its own.</item>
     /// </list>
-    /// Returns <c>null</c> only when none of the three is available, which is
+    /// Returns <c>null</c> only when none of the four is available, which is
     /// the contract for tools that are not directory-anchored. Shell tools
     /// SHALL never inherit the daemon process's cwd — that defeats the
     /// approval policy's safe-space invariant because the daemon's cwd is
@@ -200,6 +216,8 @@ public sealed class ToolExecutionContext
             return ProjectDirectory;
         if (!string.IsNullOrWhiteSpace(SessionDirectory))
             return SessionDirectory;
+        if (!string.IsNullOrWhiteSpace(InheritedCwd))
+            return InheritedCwd;
         return null;
     }
 

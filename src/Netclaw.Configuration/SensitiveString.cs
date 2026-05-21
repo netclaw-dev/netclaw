@@ -44,6 +44,39 @@ public static class SensitiveStringExtensions
             throw new InvalidOperationException($"{context} is required but was not configured.");
         return token;
     }
+
+    /// <summary>
+    /// Projects a <see cref="SensitiveString"/>-valued map into raw strings — the form
+    /// the SDK transport layer needs (HTTP <c>AdditionalHeaders</c> and similar).
+    /// Returns <see langword="null"/> for null or empty input so the caller can pass
+    /// the result straight to a transport option without an extra branch. Necessary
+    /// because <see cref="SensitiveString.ToString"/> returns the redacted sentinel,
+    /// so a casual <c>new Dictionary&lt;string,string&gt;(map)</c> would compile but
+    /// silently ship "***REDACTED***" over the wire.
+    /// </summary>
+    public static Dictionary<string, string>? ToRawValues(
+        this IDictionary<string, SensitiveString>? source,
+        StringComparer? comparer = null)
+    {
+        if (source is not { Count: > 0 })
+            return null;
+        return source.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.Value, comparer ?? StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Same as <see cref="ToRawValues"/> but with <c>string?</c> values — what
+    /// <see cref="ModelContextProtocol.Client.StdioClientTransportOptions.EnvironmentVariables"/>
+    /// requires. Keep this overload distinct: there is no useful covariance from
+    /// <c>Dictionary&lt;string,string&gt;</c> to a nullable-value dictionary.
+    /// </summary>
+    public static Dictionary<string, string?>? ToRawNullableValues(
+        this IDictionary<string, SensitiveString>? source,
+        StringComparer? comparer = null)
+    {
+        if (source is not { Count: > 0 })
+            return null;
+        return source.ToDictionary(kvp => kvp.Key, kvp => (string?)kvp.Value.Value, comparer ?? StringComparer.Ordinal);
+    }
 }
 
 /// <summary>

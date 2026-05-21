@@ -15,14 +15,20 @@ namespace Netclaw.Configuration;
 public sealed record DaemonConfig
 {
     /// <summary>
+    /// Default TCP port the daemon listens on when <c>Daemon.Port</c> is not set
+    /// in <c>netclaw.json</c>. Single source of truth for the port literal.
+    /// </summary>
+    public const int DefaultPort = 5199;
+
+    /// <summary>
     /// IP address the daemon binds to. Defaults to loopback (<c>127.0.0.1</c>).
     /// </summary>
     public string Host { get; init; } = "127.0.0.1";
 
     /// <summary>
-    /// TCP port the daemon listens on. Defaults to <c>5199</c>.
+    /// TCP port the daemon listens on. Defaults to <see cref="DefaultPort"/>.
     /// </summary>
-    public int Port { get; init; } = 5199;
+    public int Port { get; init; } = DefaultPort;
 
     /// <summary>
     /// Declares which tunnel infrastructure (if any) is in front of the daemon.
@@ -62,7 +68,7 @@ public sealed record DaemonConfig
             return new DaemonConfig();
 
         var host = section["Host"] ?? "127.0.0.1";
-        var port = section.GetValue<int?>("Port") ?? 5199;
+        var port = section.GetValue<int?>("Port") ?? DefaultPort;
         var modeStr = section["ExposureMode"];
         var mode = ParseExposureMode(modeStr);
         var disableSelfUpdate = section.GetValue<bool?>("DisableSelfUpdate") ?? false;

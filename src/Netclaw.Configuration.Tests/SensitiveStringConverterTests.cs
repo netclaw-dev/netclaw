@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Netclaw.Configuration.Tests;
 
+[Collection(SensitiveStringStaticStateCollection.Name)]
 public sealed class SensitiveStringConverterTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();

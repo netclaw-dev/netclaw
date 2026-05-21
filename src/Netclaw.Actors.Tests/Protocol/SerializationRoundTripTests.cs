@@ -714,6 +714,7 @@ public sealed class SerializationRoundTripTests : TestKit
             RequesterSenderId = new SenderId("U12345"),
             RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.Operator,
             Cwd = "/home/user/project",
+            OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
             [
                 new ToolApprovalRequested.ApprovalCandidateRecord { Verb = "git", Directory = "/home/user/project" },
@@ -736,6 +737,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
         Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
         Assert.Equal(wrapped.Cwd, result.Cwd);
+        Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);
         Assert.Equal("/home/user/project", result.Candidates[0].Directory);

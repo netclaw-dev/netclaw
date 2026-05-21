@@ -38,6 +38,15 @@ public sealed class ParentSessionApprovalBridgeTests
             "grep timeout logs/app.log | wc -l",
             ["grep timeout logs/app.log | wc -l"],
             ["grep timeout logs/app.log"],
+            [new ParentApprovalCandidate("grep timeout logs/app.log", "/home/user/repos/foo")],
+            "/home/user/repos/foo",
+            [
+                new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
+                new ParentApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
+                new ParentApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ParentApprovalOption(ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.ApproveEverywhereLabel),
+                new ParentApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel),
+            ],
             isMessy: false,
             TestContext.Current.CancellationToken);
 
@@ -51,8 +60,12 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.Equal(["user-123", "user-456"], emitted.AdoptedSpeakerIds);
         Assert.Equal(["grep timeout logs/app.log | wc -l"], emitted.Patterns);
         Assert.Equal(["grep timeout logs/app.log"], emitted.CandidateVerbs);
+        Assert.Equal("/home/user/repos/foo", emitted.Cwd);
+        Assert.Single(emitted.Candidates);
+        Assert.Equal("/home/user/repos/foo", emitted.Candidates[0].Directory);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
+        Assert.Equal(ApprovalOptionKeys.ApproveEverywhereLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveEverywhere).Label);
     }
 
     [Fact]
@@ -80,6 +93,9 @@ public sealed class ParentSessionApprovalBridgeTests
             "cat logs/app.log",
             ["cat logs/app.log"],
             ["cat logs/app.log"],
+            [new ParentApprovalCandidate("cat logs/app.log", null)],
+            cwd: null,
+            [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,
             TestContext.Current.CancellationToken);
 

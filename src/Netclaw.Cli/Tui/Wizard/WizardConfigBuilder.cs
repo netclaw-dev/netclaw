@@ -308,10 +308,18 @@ public sealed class WizardConfigBuilder
         // Daemon section — only written for non-default exposure modes (local = omit)
         if (Daemon is not null && Daemon.ExposureMode != ExposureMode.Local)
         {
-            config["Daemon"] = new Dictionary<string, object>
+            var daemonSection = new Dictionary<string, object>
             {
                 ["ExposureMode"] = Daemon.ExposureMode.ToWireValue()
             };
+
+            if (!string.IsNullOrWhiteSpace(Daemon.Host))
+                daemonSection["Host"] = Daemon.Host;
+
+            if (Daemon.TrustedProxies.Count > 0)
+                daemonSection["TrustedProxies"] = Daemon.TrustedProxies;
+
+            config["Daemon"] = daemonSection;
         }
 
         // Webhooks section — only written when enabled (disabled = default, omit)
@@ -511,6 +519,20 @@ public sealed class IdentityConfigSection
 public sealed class DaemonConfigSection
 {
     public ExposureMode ExposureMode { get; init; } = ExposureMode.Local;
+
+    /// <summary>
+    /// Bind address for the daemon. Only emitted when set; the daemon defaults to
+    /// <c>127.0.0.1</c> when absent. Required (non-loopback) for
+    /// <see cref="ExposureMode.ReverseProxy"/>.
+    /// </summary>
+    public string? Host { get; init; }
+
+    /// <summary>
+    /// Trusted reverse-proxy source IPs / CIDR ranges. Only meaningful for
+    /// <see cref="ExposureMode.ReverseProxy"/>, where at least one entry is required
+    /// for the daemon to start. Emitted only when non-empty.
+    /// </summary>
+    public IReadOnlyList<string> TrustedProxies { get; init; } = [];
 }
 
 public sealed class WebhooksConfigSection

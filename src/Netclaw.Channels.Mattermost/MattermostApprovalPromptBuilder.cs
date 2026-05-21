@@ -21,7 +21,7 @@ internal static class MattermostApprovalPromptBuilder
         sb.AppendLine(":lock: **Tool approval required**");
         AppendToolSummary(sb, request);
         sb.AppendLine();
-        sb.Append("You can also reply with `A`, `B`, `C`, or `D` in this thread.");
+        sb.Append("You can also reply with ").Append(FormatReplyLetters(request.Options)).Append(" in this thread.");
 
         var requesterSenderId = request.RequesterSenderId?.Value ?? string.Empty;
         var actions = request.Options
@@ -51,7 +51,7 @@ internal static class MattermostApprovalPromptBuilder
             .ToList();
 
         var attachment = new MattermostAttachment(
-            Fallback: "Tool approval required — reply with A, B, C, or D",
+            Fallback: $"Tool approval required — reply with {string.Join(", ", Enumerable.Range(0, actions.Count).Select(GetReplyLetter))}",
             Color: "#3AA3E3",
             Actions: actions);
 
@@ -66,10 +66,7 @@ internal static class MattermostApprovalPromptBuilder
 
         sb.AppendLine();
         sb.AppendLine("Reply with:");
-        sb.Append("**A)** ").AppendLine(ApprovalOptionKeys.ApproveOnceLabel);
-        sb.Append("**B)** ").AppendLine(ApprovalOptionKeys.ApproveSessionLabel);
-        sb.Append("**C)** ").AppendLine(ApprovalOptionKeys.ApproveAlwaysLabel);
-        sb.Append("**D)** ").AppendLine(ApprovalOptionKeys.DenyLabel);
+        AppendReplyOptions(sb, request.Options);
         return sb.ToString().TrimEnd();
     }
 
@@ -142,6 +139,18 @@ internal static class MattermostApprovalPromptBuilder
         sb.Append("**Adopted context:** present").AppendLine();
         sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).AppendLine("`");
     }
+
+    private static void AppendReplyOptions(StringBuilder sb, IReadOnlyList<ToolInteractionOption> options)
+    {
+        for (var i = 0; i < options.Count; i++)
+            sb.Append("**").Append(GetReplyLetter(i)).Append(")** ").AppendLine(options[i].Label);
+    }
+
+    private static string FormatReplyLetters(IReadOnlyList<ToolInteractionOption> options)
+        => string.Join(", ", Enumerable.Range(0, options.Count).Select(i => $"`{GetReplyLetter(i)}`"));
+
+    private static string GetReplyLetter(int index)
+        => ((char)('A' + index)).ToString();
 
     private static string GetButtonStyle(string optionKey)
         => optionKey switch

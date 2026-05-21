@@ -199,9 +199,13 @@ public partial class ChatViewModel : ReactiveViewModel
             return;
         }
 
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(text, out var selectedKey) || selectedKey is null)
+        var interaction = CurrentInteraction;
+        if (interaction is null)
+            return;
+
+        if (!ToolInteractionResponseParser.TryParseApprovalResponse(text, interaction.Options, out var selectedKey) || selectedKey is null)
         {
-            StatusMessage.Value = "Approval required: reply A, B, C, or D.";
+            StatusMessage.Value = $"Approval required: reply with {FormatReplyLetters(interaction.Options)}.";
             RequestRedraw();
             return;
         }
@@ -396,4 +400,10 @@ public partial class ChatViewModel : ReactiveViewModel
 
         UiVersion.Value++;
     }
+
+    private static string FormatReplyLetters(IReadOnlyList<ToolInteractionOption> options)
+        => string.Join(", ", Enumerable.Range(0, options.Count).Select(i => GetReplyLetter(i)));
+
+    private static string GetReplyLetter(int index)
+        => ((char)('A' + index)).ToString();
 }

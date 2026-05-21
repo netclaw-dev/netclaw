@@ -82,7 +82,7 @@ public sealed class McpCommandTests : IDisposable
 
         // Loader should transparently decrypt encrypted values
         var loaded = McpCommand.LoadMcpServers(_paths);
-        Assert.Equal("secret123", loaded["myserver"].EnvironmentVariables?["API_KEY"]);
+        Assert.Equal("secret123", loaded["myserver"].EnvironmentVariables?["API_KEY"].Value);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class McpCommandTests : IDisposable
 
         // Loader should transparently decrypt encrypted values
         var loaded = McpCommand.LoadMcpServers(_paths);
-        Assert.Equal("Bearer tok-123", loaded["myapi"].Headers?["Authorization"]);
+        Assert.Equal("Bearer tok-123", loaded["myapi"].Headers?["Authorization"].Value);
     }
 
     // ── Fail-closed defaults for new MCP servers ──

@@ -545,20 +545,16 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             {
                 Command = entry.Command!,
                 Arguments = args,
-                EnvironmentVariables = entry.EnvironmentVariables is { Count: > 0 }
-                    ? entry.EnvironmentVariables.ToDictionary(
-                        kvp => kvp.Key,
-                        kvp => (string?)kvp.Value,
-                        StringComparer.OrdinalIgnoreCase)
-                    : null,
+                EnvironmentVariables = entry.EnvironmentVariables.ToRawNullableValues(StringComparer.OrdinalIgnoreCase),
                 Name = serverName.Value,
                 ShutdownTimeout = TimeSpan.FromSeconds(10),
             });
         }
 
-        Dictionary<string, string>? headers = entry.Headers is { Count: > 0 }
-            ? new Dictionary<string, string>(entry.Headers)
-            : null;
+        // Unwrap SensitiveString here at the transport boundary so the SDK
+        // sees the actual credential, not SensitiveString.ToString()'s
+        // redacted sentinel.
+        var headers = entry.Headers.ToRawValues(StringComparer.OrdinalIgnoreCase);
 
         return new HttpClientTransport(new HttpClientTransportOptions
         {
