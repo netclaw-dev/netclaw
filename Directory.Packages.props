@@ -60,7 +60,7 @@
   <ItemGroup>
     <PackageVersion Include="Google.Protobuf" Version="3.34.1" />
     <PackageVersion Include="Grpc.Tools" Version="2.80.0" />
-    <PackageVersion Include="YamlDotNet" Version="16.3.0" />
+    <PackageVersion Include="YamlDotNet" Version="17.1.0" />
   </ItemGroup>
   <!-- Test dependencies -->
   <ItemGroup>
