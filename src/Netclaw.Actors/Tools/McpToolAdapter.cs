@@ -44,6 +44,13 @@ public sealed class McpToolAdapter : INetclawTool
         _invoker = invoker;
         ServerName = serverName;
         Name = $"{serverName}/{toolName}";
+        // LLM-facing alias with Anthropic-safe separator. Anthropic API rejects
+        // tool names with `/` (regex ^[a-zA-Z0-9_-]{1,128}$). The internal Name
+        // keeps the slash for backward compat (skill text, registry keys);
+        // SanitizedName is what's surfaced to the LLM in tool definitions and
+        // what comes back in tool_use responses. ToolRegistry.GetByName
+        // accepts either form.
+        SanitizedName = $"{serverName}__{toolName}";
         GrantCategory = grantCategory ?? $"mcp:{serverName}";
 
         if (mcpTool is AIFunction func)
@@ -55,7 +62,7 @@ public sealed class McpToolAdapter : INetclawTool
             _rawSchema = func.JsonSchema;
             var sanitized = McpSchemaSanitizer.SanitizeSchema(func.JsonSchema);
             ParameterSchema = McpSchemaSanitizer.InjectMetaProperties(sanitized, Name, logger);
-            _sanitizedTool = new SanitizedAIFunction(func, Name, Description, ParameterSchema);
+            _sanitizedTool = new SanitizedAIFunction(func, SanitizedName, Description, ParameterSchema);
         }
         else
         {
@@ -87,6 +94,12 @@ public sealed class McpToolAdapter : INetclawTool
     }
 
     public string Name { get; }
+    /// <summary>
+    /// Anthropic-safe alias for <see cref="Name"/>. Format
+    /// <c>{server}__{tool}</c>. Surfaced to the LLM in tool definitions so the
+    /// Anthropic API does not reject the request for invalid tool-name chars.
+    /// </summary>
+    public string SanitizedName { get; }
     public string Description { get; }
     public string GrantCategory { get; }
     public string ServerName { get; }
