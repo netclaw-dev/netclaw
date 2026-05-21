@@ -147,6 +147,19 @@ With the AppHost running, an agent has tools like:
 - `mcp__aspire__list_structured_logs`, `list_traces` — OpenTelemetry-backed
   observability.
 
+### Running the test
+
+```bash
+NETCLAW_RUN_DEMO_SMOKE=1 \
+  dotnet test samples/Netclaw.Demo.AppHost.IntegrationTests \
+    --filter Category=SlowSmoke
+```
+
+The test self-skips on a bare `dotnet test` unless
+`NETCLAW_RUN_DEMO_SMOKE=1` is set. Override
+`NETCLAW_DEMO_TEST_REPLY_TIMEOUT_SECONDS` to extend the bot-reply
+window on CPU-only hosts.
+
 A typical agent verification flow:
 
 ```text

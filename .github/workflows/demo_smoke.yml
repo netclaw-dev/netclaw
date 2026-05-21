@@ -47,6 +47,7 @@ jobs:
 
       - name: Run demo smoke test
         env:
+          NETCLAW_RUN_DEMO_SMOKE: '1'
           NETCLAW_DEMO_TEST_REPLY_TIMEOUT_SECONDS: ${{ inputs.reply_timeout_seconds }}
         run: |
           dotnet test samples/Netclaw.Demo.AppHost.IntegrationTests/Netclaw.Demo.AppHost.IntegrationTests.csproj \
