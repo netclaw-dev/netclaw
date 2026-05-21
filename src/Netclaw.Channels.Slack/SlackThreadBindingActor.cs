@@ -37,10 +37,14 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private PostResult? _lastFailedPost;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    // Distinguishes "cold-spawned binding that never observed a ToolInteractionRequest"
-    // from "binding that observed at least one, then cleared its list on TurnCompleted."
-    // The former blind-forwards approval responses to the session (#979); the latter
-    // treats unknown callIds as stale and drops them.
+    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
+    // A binding that has never observed any ToolInteractionRequest treats an
+    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
+    // restarted out from under it. Once we've observed at least one prompt,
+    // subsequent ambiguous text from the user is ordinary conversation, not an
+    // approval reply, so the cold path stays off. This does NOT gate button
+    // clicks — those always route to the session, which is the authority on
+    // CallId staleness.
     private bool _hasObservedApprovalRequest;
 
     private readonly SessionPipelineHandle _handle;
@@ -298,9 +302,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             var currentTs = new SlackEventId(message.EventId.Value).TryGetEventTs();
 
             if (!string.IsNullOrWhiteSpace(message.Text)
-                && ToolInteractionResponseParser.TryParseApprovalResponse(message.Text, out var selectedKey)
-                && selectedKey is not null
-                && await TryHandleApprovalResponseAsync(message, selectedKey))
+                && await TryHandleTextApprovalResponseAsync(message))
             {
                 return;
             }
@@ -1223,10 +1225,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
     }
 
-    private async Task<bool> TryHandleApprovalResponseAsync(SlackThreadInbound message, string selectedKey)
+    private async Task<bool> TryHandleTextApprovalResponseAsync(SlackThreadInbound message)
     {
         if (_pendingApprovalRequests.Count == 0)
-            return false;
+        {
+            return !_hasObservedApprovalRequest
+                && await TryHandleColdTextApprovalResponseAsync(message);
+        }
 
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
             ApprovalButtonValueCodec.CanApprove(request.Request.RequesterPrincipal, request.Request.RequesterSenderId?.Value, message.SenderId.Value));
@@ -1238,6 +1243,15 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
 
         var pending = _pendingApprovalRequests[pendingIndex];
+
+        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
+                message.Text ?? string.Empty,
+                pending.Request.Options,
+                out var selectedKey)
+            || selectedKey is null)
+        {
+            return false;
+        }
 
         try
         {
@@ -1267,23 +1281,43 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         return true;
     }
 
+    private async Task<bool> TryHandleColdTextApprovalResponseAsync(SlackThreadInbound message)
+    {
+        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
+            return false;
+
+        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+        try
+        {
+            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
+            {
+                SessionId = _sessionId,
+                Text = message.Text ?? string.Empty,
+                SenderId = message.SenderId
+            }, feedbackCts.Token);
+
+            if (reply is CommandAck)
+            {
+                _log.Info(
+                    "Forwarded cold Slack text approval response from sender={SenderId} without local pending prompt state",
+                    message.SenderId);
+                return true;
+            }
+
+            return reply is CommandNack;
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to route cold Slack text approval response from sender {SenderId}", message.SenderId);
+            return false;
+        }
+    }
+
     private async Task HandleApprovalResponseAsync(SlackApprovalResponse message)
     {
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
             request.Request.CallId == message.CallId);
         var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
-
-        // Stale path: this binding has previously observed an approval request and
-        // cleared its list (e.g., on TurnCompleted). Subsequent responses for unknown
-        // callIds are stale — drop them at the binding rather than forwarding to the
-        // session. This preserves Approvals_cleared_on_turn_completed semantics.
-        if (pending is null && _hasObservedApprovalRequest)
-        {
-            _log.Info(
-                "Dropping stale Slack button approval response for call {CallId}; no local pending entry after turn-cleared list",
-                message.CallId);
-            return;
-        }
 
         // CanApprove fast-path: if the binding still holds the original request we can
         // post the wrong-requester warning locally without round-tripping through the

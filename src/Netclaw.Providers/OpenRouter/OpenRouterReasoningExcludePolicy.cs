@@ -1,11 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="OpenRouterReasoningExcludePolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.ClientModel;
 using System.ClientModel.Primitives;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Netclaw.Providers.OpenRouter;
@@ -21,37 +19,17 @@ internal sealed class OpenRouterReasoningExcludePolicy : PipelinePolicy
     public override void Process(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
-        InjectReasoningExclude(message);
+        PipelineRequestBodyEditor.EditJsonBody(message, InjectReasoningExclude);
         ProcessNext(message, pipeline, currentIndex);
     }
 
     public override async ValueTask ProcessAsync(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
-        InjectReasoningExclude(message);
+        PipelineRequestBodyEditor.EditJsonBody(message, InjectReasoningExclude);
         await ProcessNextAsync(message, pipeline, currentIndex);
     }
 
-    private static void InjectReasoningExclude(PipelineMessage message)
-    {
-        var request = message.Request;
-        if (request.Content is null)
-            return;
-
-        using var stream = new MemoryStream();
-        request.Content.WriteTo(stream, default);
-        var bytes = stream.ToArray();
-
-        var node = JsonNode.Parse(bytes);
-        if (node is not JsonObject obj)
-            return;
-
-        obj["reasoning"] = new JsonObject
-        {
-            ["exclude"] = true
-        };
-
-        var modified = JsonSerializer.SerializeToUtf8Bytes(obj);
-        request.Content = BinaryContent.Create(BinaryData.FromBytes(modified));
-    }
+    private static void InjectReasoningExclude(JsonObject body)
+        => body["reasoning"] = new JsonObject { ["exclude"] = true };
 }

@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.Memory;
+using ApprovalOptionKeys = Netclaw.Actors.Protocol.ApprovalOptionKeys;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -163,6 +164,97 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task Tool_execution_inherits_parent_resolved_cwd_snapshot()
+    {
+        var fakeTool = new FakeNetclawTool("inspect_context", "ok");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-cwd", "inspect_context")]
+        };
+
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Inspect inherited cwd.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentSessionDirectory = "/tmp/netclaw/sessions/parent",
+                ParentProjectDirectory = "/home/user/repos/foo",
+                ParentCwd = "/home/user/repos/foo",
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeTool.LastContext);
+        Assert.Equal("/home/user/repos/foo", fakeTool.LastContext!.InheritedCwd);
+        // ProjectDirectory wins the resolve when set; this asserts that the
+        // inherited snapshot doesn't shadow it.
+        Assert.Equal("/home/user/repos/foo", fakeTool.LastContext.ResolveShellCwd(null));
+    }
+
+    [Fact]
+    public async Task Tool_execution_with_null_parent_cwd_resolves_to_session_dir_or_null()
+    {
+        var fakeTool = new FakeNetclawTool("inspect_context", "ok");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-null-cwd", "inspect_context")]
+        };
+
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Inspect null cwd.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentCwd = null,
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeTool.LastContext);
+        Assert.Null(fakeTool.LastContext!.InheritedCwd);
+        Assert.Null(fakeTool.LastContext.ResolveShellCwd(null));
+    }
+
+    [Fact]
+    public async Task Tool_execution_inherits_parent_cwd_when_child_has_no_project_or_session_dir()
+    {
+        // The original bug shape: a sub-agent whose parent had a resolved cwd
+        // but no ProjectDirectory/SessionDirectory propagating to the child.
+        // InheritedCwd is the only path that surfaces the parent's effective
+        // working directory to the approval gate; without it, the prompt
+        // header reads "(no working directory)".
+        var fakeTool = new FakeNetclawTool("inspect_context", "ok");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-inherit-only", "inspect_context")]
+        };
+
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Inspect inherited cwd with no other sources.",
+                Timeout = TimeSpan.FromSeconds(5),
+                ParentSessionDirectory = null,
+                ParentProjectDirectory = null,
+                ParentCwd = "/home/user/repos/foo",
+                Audience = TrustAudience.Personal,
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeTool.LastContext);
+        Assert.Equal("/home/user/repos/foo", fakeTool.LastContext!.ResolveShellCwd(null));
+    }
+
+    [Fact]
     public async Task Each_spawn_snapshots_its_own_parent_project_directory()
     {
         // Mirrors D6: parent project changes between two activations show up
@@ -281,6 +373,68 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success);
         Assert.False(fakeTool.WasCalled);
         Assert.Contains("Response #2", result.Output);
+    }
+
+    [Fact]
+    public async Task Subagent_approval_request_carries_cwd_candidates_and_full_button_set()
+    {
+        // Regression: the parent approval bridge previously hardcoded a
+        // 4-button list and dropped Cwd/Candidates entirely, so sub-agent
+        // approval prompts showed "(no working directory)" and were missing
+        // the Always-anywhere button regardless of what the sub-agent's
+        // resolved cwd was.
+        var fakeTool = new FakeNetclawTool("shell_execute", "ok");
+        var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+        var policy = new ToolAccessPolicy(
+            toolConfig,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy());
+
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-cwd-prompt", "shell_execute",
+                    new Dictionary<string, object?> { ["Command"] = "git push origin main" })
+            ]
+        };
+
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Push to origin",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentSessionDirectory = "/tmp/netclaw/sessions/parent",
+                ParentProjectDirectory = "/home/user/repos/foo",
+                ParentCwd = "/home/user/repos/foo",
+                ApprovalBridge = approvalBridge,
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(1, approvalBridge.RequestCount);
+        Assert.Equal("/home/user/repos/foo", approvalBridge.RequestedCwd);
+        Assert.Single(approvalBridge.RequestedCandidates);
+        Assert.Equal("git push origin main", approvalBridge.RequestedCandidates[0].Verb);
+        Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveEverywhere);
+        Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveAlways);
+        Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveSession);
     }
 
     [Fact]
@@ -691,6 +845,9 @@ internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decis
 {
     public int RequestCount { get; private set; }
     public List<string> RequestedPatterns { get; } = [];
+    public string? RequestedCwd { get; private set; }
+    public IReadOnlyList<ParentApprovalCandidate> RequestedCandidates { get; private set; } = [];
+    public IReadOnlyList<ParentApprovalOption> RequestedOptions { get; private set; } = [];
 
     public Task<ParentApprovalDecision> RequestApprovalAsync(
         ToolCallId callId,
@@ -698,11 +855,17 @@ internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decis
         string displayText,
         IReadOnlyList<string> patterns,
         IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
         bool isMessy,
         CancellationToken ct)
     {
         RequestCount++;
         RequestedPatterns.AddRange(patterns);
+        RequestedCwd = cwd;
+        RequestedCandidates = candidates;
+        RequestedOptions = options;
         return Task.FromResult(decisionToReturn);
     }
 }

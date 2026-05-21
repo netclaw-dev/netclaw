@@ -133,6 +133,7 @@ public sealed class SubAgentSpawner
                     ChannelType = context.ChannelType,
                     ParentSessionDirectory = context.SessionDirectory,
                     ParentProjectDirectory = context.ProjectDirectory,
+                    ParentCwd = context.ResolveShellCwd(null),
                     Cancellation = ct,
                     ApprovalBridge = context.ApprovalBridge,
                     // Null for non-streaming callers such as routed skills and

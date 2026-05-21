@@ -480,24 +480,106 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
+    // Regression for the silent-drop class of bugs: the binding observes a
+    // ToolInteractionRequest then a TurnCompleted (which clears its local
+    // _pendingApprovalRequests). A button click arriving afterwards must still
+    // be routed to the session — the session is the authority on whether the
+    // CallId is genuinely stale, and the session emits a user-visible "expired"
+    // notice when it cannot find the CallId. Dropping at the binding leaves the
+    // user staring at a dead button with no feedback. See the LlmSessionActor
+    // pending-interactions invariants (LlmSessionActor.cs:381) — a parked
+    // approval keeps the dictionary populated across idle periods, so a click
+    // that reaches the session is reliably handled.
     [Fact]
-    public async Task Approvals_cleared_on_turn_completed()
+    public async Task Cold_text_approval_response_forwards_to_session_when_binding_cold_spawned()
     {
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-approval-clear");
+        var sid = new SessionId("session-cold-text-approve");
+
+        // Empty output stream: the binding never sees the original approval prompt,
+        // so any text reply must be forwarded through the cold-path fallback.
+        var pipeline = new RecordingSessionPipeline(_ => []);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionTextResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal(sid, feedback[0].SessionId);
+            Assert.Equal("A", feedback[0].Text);
+            Assert.Equal("user-1", feedback[0].SenderId.Value);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Text_approval_response_uses_visible_option_order_when_option_set_is_pruned()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-text-approve-pruned");
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new ToolInteractionRequest
             {
                 SessionId = sid,
                 Kind = "approval",
-                CallId = new Netclaw.Tools.ToolCallId("call-stale"),
-                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
-                DisplayText = "some command",
+                CallId = new Netclaw.Tools.ToolCallId("call-3b"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+                DisplayText = "git push origin main",
+                RequesterSenderId = new SenderId("user-1"),
                 Options =
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel)
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveEverywhereLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("shell_execute"));
+        }, cancellationToken: ct);
+
+        actor.Tell(CreateInboundMessage("C", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-3b", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveEverywhere, feedback[0].SelectedKey.Value);
+        }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Approval_response_after_turn_completed_forwards_to_session()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-approval-post-turn");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-post-turn"),
+                ToolName = new Netclaw.Tools.ToolName("execute_shell"),
+                DisplayText = "some command",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
                 ]
             },
             new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
@@ -505,27 +587,28 @@ public abstract class SessionBindingContractTests : TestKit
 
         var actor = CreateBindingActor(sid, pipeline, detector);
 
-        // Wait for turn to complete (fallback posted because approval doesn't count as delivered text for empty turn check)
+        // Wait for the approval prompt + turn completion to flush through —
+        // an empty-turn fallback is posted because the approval prompt does not
+        // count as delivered text for the fallback heuristic. Two posts proves
+        // both the prompt and the TurnCompleted have been processed by the
+        // binding, leaving its local pending list cleared.
         await AwaitAssertAsync(() =>
         {
             var texts = GetPostedTexts();
             Assert.True(texts.Count >= 2, $"Expected at least 2 posts, got {texts.Count}");
         }, cancellationToken: ct);
 
-        // Stale approval should NOT produce feedback. Send the approval, then
-        // a PoisonPill to stop the actor. FIFO mailbox ordering guarantees the
-        // actor processes the approval before stopping, so ExpectTerminatedAsync
-        // is a deterministic sync barrier — no time-based waits needed.
-        var probe = CreateTestProbe();
-        probe.Watch(actor);
-        actor.Tell(CreateApprovalResponse("call-stale", ApprovalOptionKeys.ApproveOnce, "user-1"), TestActor);
-        actor.Tell(PoisonPill.Instance, TestActor);
-        await probe.ExpectTerminatedAsync(actor, cancellationToken: ct);
+        actor.Tell(CreateApprovalResponse("call-post-turn", ApprovalOptionKeys.ApproveOnce, "user-1"), TestActor);
 
-        var staleResponses = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()
-            .Where(f => f.CallId.Value == "call-stale")
-            .ToList();
-        Assert.Empty(staleResponses);
+        await AwaitAssertAsync(() =>
+        {
+            var forwarded = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()
+                .Where(f => f.CallId.Value == "call-post-turn")
+                .ToList();
+            Assert.Single(forwarded);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, forwarded[0].SelectedKey.Value);
+            Assert.Equal("user-1", forwarded[0].SenderId.Value);
+        }, cancellationToken: ct);
     }
 
     // --- Failure Notification ---

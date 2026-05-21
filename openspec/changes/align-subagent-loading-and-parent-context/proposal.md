@@ -43,6 +43,12 @@ creates avoidable drift between main-session and subagent behavior.
 - Align explicit `spawn_agent` delegation and declarative `metadata.subagent`
   routing so both paths use the same live-loaded registry and inherited parent
   context contract.
+- Define inherited shell cwd snapshot for subagent executions so the child's
+  `ToolExecutionContext.InheritedCwd` captures the parent's resolved working
+  directory at spawn time, and pin down approval-gate behavior for subagent
+  invocations under both inherited and null cwd (folder-scoped grants match
+  under the parent's cwd; global grants match regardless of cwd, including
+  null).
 
 ## Capabilities
 
@@ -61,6 +67,9 @@ creates avoidable drift between main-session and subagent behavior.
   subagent system prompts using the same file precedence as the parent session.
 - `skill-execution-routing`: align `metadata.subagent` routing with the same
   reloadable registry and parent-context inheritance behavior as `spawn_agent`.
+- `tool-approval-gates`: pin down how the approval gate evaluates subagent
+  shell invocations under inherited and null cwd so persisted folder-scoped
+  and global grants match consistently with the parent session.
 
 ## Impact
 

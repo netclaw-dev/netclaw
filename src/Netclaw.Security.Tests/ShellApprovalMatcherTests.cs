@@ -338,6 +338,41 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     [Fact]
+    public void Null_directory_entry_matches_subagent_with_null_cwd_for_netclaw_stats()
+    {
+        // Regression: a sub-agent that inherits no cwd (parent had none either)
+        // invokes `netclaw stats`. The persisted global grant in
+        // tool-approvals.json must still auto-approve. Bound to a real verb
+        // from the original bug report so a future refactor that re-orders the
+        // matcher loop trips this test specifically.
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            candidateVerb: "netclaw stats",
+            candidateDirectory: null,
+            cwd: null,
+            approvedEntries: [new ApprovalEntry("netclaw stats") { Directory = null }]));
+    }
+
+    [Fact]
+    public void Null_directory_entry_wins_over_folder_scoped_entry_with_null_cwd()
+    {
+        // Spec scenario "Global grant precedence over folder-scoped grants":
+        // when both grants exist for the same verb and the candidate has no
+        // cwd, the global grant must still win even though the folder-scoped
+        // grant gets skipped.
+        ApprovalEntry[] entries =
+        [
+            new ApprovalEntry("dotnet") { Directory = "/home/user/repos/foo/" },
+            new ApprovalEntry("dotnet") { Directory = null },
+        ];
+
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            candidateVerb: "dotnet",
+            candidateDirectory: null,
+            cwd: null,
+            approvedEntries: entries));
+    }
+
+    [Fact]
     public void IsPureSideEffect_skips_echo_without_redirect()
     {
         Assert.True(ApprovalPatternMatching.IsPureSideEffect(
