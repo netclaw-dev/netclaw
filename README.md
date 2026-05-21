@@ -63,6 +63,17 @@ over Tailscale or Cloudflare Tunnel.
 
 ## Quick Start
 
+### Just want to kick the tires?
+
+`samples/Netclaw.Demo.AppHost` is a self-contained .NET Aspire demo that
+brings up NetClaw + Mattermost + Ollama with seeded credentials in a
+single command — no Slack workspace, no API keys, no external accounts.
+See [`samples/Netclaw.Demo.AppHost/README.md`](samples/Netclaw.Demo.AppHost/README.md).
+
+```bash
+dotnet run --project samples/Netclaw.Demo.AppHost
+```
+
 ### Prerequisites
 
 - An LLM provider — [Ollama](https://ollama.com/) (local, default),

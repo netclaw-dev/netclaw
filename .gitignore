@@ -439,3 +439,7 @@ smoke-logs/
 
 # Demo AppHost runtime state (NETCLAW_HOME sandbox)
 samples/Netclaw.Demo.AppHost/.demo-home/
+
+# Playwright MCP working cache + ad-hoc session screenshots
+.playwright-mcp/
+phase*-mattermost-*.png
