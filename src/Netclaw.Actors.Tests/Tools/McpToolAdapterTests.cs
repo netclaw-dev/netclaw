@@ -32,6 +32,37 @@ public class McpToolAdapterTests
     }
 
     [Fact]
+    public void SanitizedName_uses_double_underscore_separator()
+    {
+        // MCP tool names commonly include single underscores
+        // (e.g. find_completed_tasks); double underscore between server and
+        // tool keeps the boundary unambiguous when parsing the alias back.
+        var fakeTool = AIFunctionFactory.Create(() => "result", "find_completed_tasks");
+        var adapter = new McpToolAdapter(fakeTool, "todoist", "find_completed_tasks");
+
+        Assert.Equal("todoist/find_completed_tasks", adapter.Name);
+        Assert.Equal("todoist__find_completed_tasks", adapter.SanitizedName);
+    }
+
+    [Theory]
+    [InlineData("memorizer", "store")]
+    [InlineData("todoist", "find-tasks")]
+    [InlineData("browser_chrome_devtools", "navigate_page")]
+    [InlineData("bamboohr", "get_employee_details")]
+    public void SanitizedName_matches_Anthropic_tool_name_regex(string server, string tool)
+    {
+        // Anthropic's documented tool-name constraint is
+        // ^[a-zA-Z0-9_-]{1,64}$ (see Define tools docs). The whole point of
+        // the alias is to satisfy this — pin the contract so future name
+        // formats can't silently regress.
+        var fakeTool = AIFunctionFactory.Create(() => "result", tool);
+        var adapter = new McpToolAdapter(fakeTool, server, tool);
+
+        Assert.Matches("^[a-zA-Z0-9_-]{1,64}$", adapter.SanitizedName);
+        Assert.Matches("^[a-zA-Z0-9_-]{1,64}$", ((AIFunction)adapter.ToAITool()).Name);
+    }
+
+    [Fact]
     public void ToAITool_ReturnsSanitizedWrapper()
     {
         var fakeTool = AIFunctionFactory.Create(() => "result", "store");
@@ -41,7 +72,12 @@ public class McpToolAdapterTests
         // Should return a sanitized wrapper, not the raw tool
         Assert.IsAssignableFrom<AIFunction>(aiTool);
         var func = (AIFunction)aiTool;
-        Assert.Equal("memorizer/store", func.Name);
+        // The LLM-facing AIFunction exposes the Anthropic-safe alias so the
+        // tool name passes ^[a-zA-Z0-9_-]{1,64}$. The canonical Name on the
+        // adapter itself still uses the '/' separator for skill text and
+        // registry keys.
+        Assert.Equal("memorizer__store", func.Name);
+        Assert.Equal("memorizer/store", adapter.Name);
     }
 
     [Fact]

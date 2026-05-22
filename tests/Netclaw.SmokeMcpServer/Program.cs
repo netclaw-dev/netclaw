@@ -98,6 +98,22 @@ internal sealed class Program
     [Description("Returns the Authorization header attached to the most recent incoming request, or '(none)' if no such header has been seen.")]
     public static string LastAuthHeader() => HttpAuthCapture.LastAuthHeader ?? "(none)";
 
+    /// <summary>
+    /// HTTP-mode-only tool: returns the User-Agent of the most recent request,
+    /// or '(none)'. Lets tests verify Netclaw advertises a stable agent string.
+    /// </summary>
+    [McpServerTool(Name = "last_user_agent")]
+    [Description("Returns the User-Agent attached to the most recent incoming request, or '(none)' if no such header has been seen.")]
+    public static string LastUserAgent() => HttpAuthCapture.LastUserAgent ?? "(none)";
+
+    /// <summary>
+    /// HTTP-mode-only tool: returns the X-Netclaw-Component header value of the
+    /// most recent request, or '(none)'.
+    /// </summary>
+    [McpServerTool(Name = "last_netclaw_component")]
+    [Description("Returns the X-Netclaw-Component header attached to the most recent incoming request, or '(none)'.")]
+    public static string LastNetclawComponent() => HttpAuthCapture.LastNetclawComponent ?? "(none)";
+
     private static async Task<int> Main(string[] args)
     {
         try
@@ -182,6 +198,12 @@ internal sealed class Program
                 HttpAuthCapture.LastAuthHeader = ctx.Request.Headers.TryGetValue("Authorization", out var v)
                     ? v.ToString()
                     : null;
+                HttpAuthCapture.LastUserAgent = ctx.Request.Headers.TryGetValue("User-Agent", out var ua)
+                    ? ua.ToString()
+                    : null;
+                HttpAuthCapture.LastNetclawComponent = ctx.Request.Headers.TryGetValue("X-Netclaw-Component", out var comp)
+                    ? comp.ToString()
+                    : null;
                 await next();
             });
         }
@@ -242,4 +264,6 @@ internal sealed class Program
 internal static class HttpAuthCapture
 {
     public static string? LastAuthHeader { get; set; }
+    public static string? LastUserAgent { get; set; }
+    public static string? LastNetclawComponent { get; set; }
 }

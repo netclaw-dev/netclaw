@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OpenAi;
@@ -28,8 +29,8 @@ public static class ProviderDescriptorServiceExtensions
     /// </summary>
     public static IServiceCollection AddProviderDescriptors(this IServiceCollection services)
     {
-        services.AddHttpClient(HttpClientName);
-        services.AddHttpClient(CopilotTokenClientName);
+        services.AddHttpClient(HttpClientName).AddNetclawHeaders("provider-probe");
+        services.AddHttpClient(CopilotTokenClientName).AddNetclawHeaders("copilot-token");
 
         // CopilotTokenExchanger is shared between CLI (for probe) and daemon
         // (for chat). The in-memory cache is per-process, which is what we want.

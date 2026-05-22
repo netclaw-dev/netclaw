@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Configuration.Http;
 using Netclaw.Providers.Anthropic;
 using Netclaw.Providers.GitHubCopilot;
 using Netclaw.Providers.OAuth;
@@ -28,7 +29,7 @@ public static class LlmProviderServiceExtensions
         services.AddProviderDescriptors();
 
         // OAuth device flow services (for future auto-refresh)
-        services.AddHttpClient("OAuthDeviceFlow");
+        services.AddHttpClient("OAuthDeviceFlow").AddNetclawHeaders("provider-oauth");
         services.AddSingleton(sp =>
             new OAuthDeviceFlowService(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),

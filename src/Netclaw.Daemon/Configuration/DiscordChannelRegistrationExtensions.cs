@@ -11,6 +11,7 @@ using Netclaw.Channels.Discord;
 using Netclaw.Channels.Discord.Tools;
 using Netclaw.Channels.Discord.Transport;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -42,7 +43,7 @@ public static class DiscordChannelRegistrationExtensions
             MessageCacheSize = 100
         }));
 
-        services.AddHttpClient("discord-files");
+        services.AddHttpClient("discord-files").AddNetclawHeaders("discord-files");
         services.AddSingleton<IDiscordGatewayClient, DiscordNetGatewayClient>();
         services.AddSingleton<IDiscordReplyClient, DiscordNetReplyClient>();
         services.AddSingleton<IDiscordOutboundClient, DiscordNetOutboundClient>();

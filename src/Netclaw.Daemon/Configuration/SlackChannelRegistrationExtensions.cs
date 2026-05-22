@@ -8,6 +8,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Channels.Slack.Tools;
 using Netclaw.Tools;
 using SlackNet.Events;
@@ -32,7 +33,7 @@ public static class SlackChannelRegistrationExtensions
         // registration path aborts host construction and crashes the daemon.
         // A missing/invalid token is handled as a contained channel failure in
         // SlackChannel.StartAsync instead (see issue #1033).
-        services.AddHttpClient("slack-files");
+        services.AddHttpClient("slack-files").AddNetclawHeaders("slack-files");
         services.AddSingleton<ISlackReplyClient, SlackReplyClient>();
         services.AddSingleton<IThreadHistoryFetcher>(sp =>
         {
