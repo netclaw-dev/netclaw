@@ -17,6 +17,16 @@ var builder = DistributedApplication.CreateBuilder(args);
 var demoHome = Path.GetFullPath(
     Path.Combine(builder.AppHostDirectory, ".demo-home", ".netclaw"));
 
+// Resolve the Aspire dashboard's OTLP endpoint up-front. Reading from
+// ctx.EnvironmentVariables in the daemon's env-var callback doesn't
+// work: Aspire stores OTEL_EXPORTER_OTLP_ENDPOINT as an IValueProvider
+// reference that's resolved after our callback runs, so an `is string`
+// check silently misses. Process env (set in launchSettings.json) IS a
+// real string at this point — read it here and inject statically.
+var aspireOtlpEndpoint =
+    builder.Configuration["DOTNET_DASHBOARD_OTLP_ENDPOINT_URL"]
+    ?? builder.Configuration["ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL"];
+
 // Opt-in to a host-running Ollama so warm-cache operators don't re-pull
 // the model into a fresh container volume on every demo run.
 var useHostOllama = string.Equals(
@@ -89,7 +99,21 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
     // prefill on a tool-armed system prompt can blow through 10 min.
     .WithEnvironment("NETCLAW_Session__TurnLlmTimeoutSeconds", "1800")
     .WithEnvironment("NETCLAW_Session__FirstTokenTimeoutSeconds", "1800")
-    .WithEnvironment("NETCLAW_Session__PrefillTimeoutSeconds", "1800")
+    .WithEnvironment("NETCLAW_Session__PrefillTimeoutSeconds", "1800");
+
+// Opt the daemon into OTLP export against the Aspire dashboard's OTLP
+// receiver. NetClaw's telemetry is opt-in by design (Enabled defaults
+// false), so the AppHost has to explicitly turn it on AND point at the
+// right endpoint — otherwise logs/metrics never reach the dashboard's
+// Structured Logs / Metrics views.
+if (!string.IsNullOrWhiteSpace(aspireOtlpEndpoint))
+{
+    daemon = daemon
+        .WithEnvironment("NETCLAW_Telemetry__Enabled", "true")
+        .WithEnvironment("NETCLAW_Telemetry__Otlp__Endpoint", aspireOtlpEndpoint);
+}
+
+daemon = daemon
     .WithEnvironment(async ctx =>
     {
         var result = await bootstrapResult.Task.WaitAsync(ctx.CancellationToken);
@@ -117,17 +141,6 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
         ctx.EnvironmentVariables["NETCLAW_Providers__ollama__AuthMethod"] = "None";
         ctx.EnvironmentVariables["NETCLAW_Models__Main__Provider"] = "ollama";
         ctx.EnvironmentVariables["NETCLAW_Models__Main__ModelId"] = modelId;
-
-        // NETCLAW_Telemetry__Enabled defaults false, so without this
-        // bridge the daemon drops the OTLP exporter even though Aspire
-        // injected OTEL_EXPORTER_OTLP_ENDPOINT for it.
-        if (ctx.EnvironmentVariables.TryGetValue("OTEL_EXPORTER_OTLP_ENDPOINT", out var otlpEndpointObj)
-            && otlpEndpointObj is string otlpEndpoint
-            && !string.IsNullOrEmpty(otlpEndpoint))
-        {
-            ctx.EnvironmentVariables["NETCLAW_Telemetry__Enabled"] = "true";
-            ctx.EnvironmentVariables["NETCLAW_Telemetry__Otlp__Endpoint"] = otlpEndpoint;
-        }
     })
     .WaitFor(mattermost);
 
