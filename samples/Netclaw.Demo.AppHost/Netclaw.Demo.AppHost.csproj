@@ -21,6 +21,9 @@
     <!-- Bootstrap is a library consumed in-AppHost (lifecycle hook calls SeedAsync); not an Aspire resource. -->
     <ProjectReference Include="..\..\src\Netclaw.Channels.Mattermost.Bootstrap\Netclaw.Channels.Mattermost.Bootstrap.csproj"
                       IsAspireProjectResource="false" />
+    <!-- For TrustAudience.Personal.ToWireValue() — keeps audience wiring out of stringly-typed env vars. -->
+    <ProjectReference Include="..\..\src\Netclaw.Configuration\Netclaw.Configuration.csproj"
+                      IsAspireProjectResource="false" />
   </ItemGroup>
 
 </Project>

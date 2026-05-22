@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Aspire.Hosting.ApplicationModel;
 using Netclaw.Channels.Mattermost.Bootstrap;
+using Netclaw.Configuration;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
@@ -16,14 +17,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 var demoHome = Path.GetFullPath(
     Path.Combine(builder.AppHostDirectory, ".demo-home", ".netclaw"));
 
-// LLM provider knobs. Defaults pull and run qwen3:4b inside an
-// Aspire-managed Ollama container -- zero-setup for first-run demos.
-// Operators with an existing Ollama instance (or a faster model already
-// pulled) can opt out via NETCLAW_DEMO_USE_HOST_OLLAMA=1, in which case
-// the daemon talks directly to NETCLAW_DEMO_OLLAMA_URL (default
-// http://127.0.0.1:11434) using NETCLAW_DEMO_MODEL_ID (default
-// qwen3:4b). This is the difference between "kick the tires from a
-// cold cache" and "I already have Ollama running, let's go."
+// Opt-in to a host-running Ollama so warm-cache operators don't re-pull
+// the model into a fresh container volume on every demo run.
 var useHostOllama = string.Equals(
     Environment.GetEnvironmentVariable("NETCLAW_DEMO_USE_HOST_OLLAMA"),
     "1",
@@ -90,11 +85,8 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
     .WithEnvironment("NETCLAW_Daemon__Host", "127.0.0.1")
     .WithEnvironment("NETCLAW_Daemon__Port", "5299")
     .WithEnvironment("NETCLAW_Daemon__ExposureMode", "local")
-    // Generous LLM timeouts. NetClaw's defaults (10 min first-token,
-    // 30 min prefill) assume a hosted/GPU provider. Local CPU
-    // inference on a small machine can blow through 10 min on prefill
-    // alone for a tool-armed system prompt. Bump everything to 30 min
-    // so a slow local run can still complete a round trip.
+    // Framework timeout defaults assume hosted/GPU inference; CPU
+    // prefill on a tool-armed system prompt can blow through 10 min.
     .WithEnvironment("NETCLAW_Session__TurnLlmTimeoutSeconds", "1800")
     .WithEnvironment("NETCLAW_Session__FirstTokenTimeoutSeconds", "1800")
     .WithEnvironment("NETCLAW_Session__PrefillTimeoutSeconds", "1800")
@@ -105,13 +97,10 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
         ctx.EnvironmentVariables["NETCLAW_Mattermost__ServerUrl"] = result.ServerUrl.ToString();
         ctx.EnvironmentVariables["NETCLAW_Mattermost__BotToken"] = result.Bot.Token;
         ctx.EnvironmentVariables["NETCLAW_Mattermost__DefaultChannelId"] = result.ChannelId;
-        // Mark the seeded channel as "personal" audience. The default
-        // public audience blocks list_reminders / set_reminder / most
-        // memory and file tools — which makes the bot exhaust its
-        // tool-call budget on policy denials before it ever produces
-        // a chat reply. For a single-operator local demo, "personal"
-        // is the right trust posture: the operator IS the only user.
-        ctx.EnvironmentVariables[$"NETCLAW_Mattermost__ChannelAudiences__{result.ChannelId}"] = "personal";
+        // Default public audience blocks list_reminders / set_reminder
+        // / most memory + file tools, so the bot would burn its tool
+        // budget on policy denials before ever producing a chat reply.
+        ctx.EnvironmentVariables[$"NETCLAW_Mattermost__ChannelAudiences__{result.ChannelId}"] = TrustAudience.Personal.ToWireValue();
         // CallbackUrl deliberately unset — the host-process daemon
         // can't be reached from the Mattermost container without
         // poking holes in ExposureMode.Local, so approvals fall back
@@ -129,11 +118,9 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
         ctx.EnvironmentVariables["NETCLAW_Models__Main__Provider"] = "ollama";
         ctx.EnvironmentVariables["NETCLAW_Models__Main__ModelId"] = modelId;
 
-        // Bridge Aspire's standard OTLP env vars into the daemon's
-        // NetClaw-specific Telemetry config so the daemon actually
-        // exports logs/metrics back to the Aspire dashboard. Without
-        // this, NETCLAW_Telemetry__Enabled defaults to false and the
-        // daemon's OTel pipeline drops the OTLP exporter entirely.
+        // NETCLAW_Telemetry__Enabled defaults false, so without this
+        // bridge the daemon drops the OTLP exporter even though Aspire
+        // injected OTEL_EXPORTER_OTLP_ENDPOINT for it.
         if (ctx.EnvironmentVariables.TryGetValue("OTEL_EXPORTER_OTLP_ENDPOINT", out var otlpEndpointObj)
             && otlpEndpointObj is string otlpEndpoint
             && !string.IsNullOrEmpty(otlpEndpoint))
