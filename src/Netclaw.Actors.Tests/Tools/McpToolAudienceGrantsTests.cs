@@ -240,7 +240,9 @@ public sealed class McpToolAudienceGrantsTests
         var filtered = policy.FilterExposedTools(aiTools, registry, trustContext);
 
         Assert.Single(filtered);
-        Assert.Equal("memorizer/search_memories", ((AIFunction)filtered[0]).Name);
+        // FilterExposedTools surfaces the AIFunction wrapper that goes to the LLM,
+        // which uses the Anthropic-safe sanitized alias (server__tool).
+        Assert.Equal("memorizer__search_memories", ((AIFunction)filtered[0]).Name);
     }
 
     // ── load_tool denial ──

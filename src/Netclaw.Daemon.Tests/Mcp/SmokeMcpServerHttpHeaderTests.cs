@@ -71,6 +71,54 @@ public sealed class SmokeMcpServerHttpHeaderTests
     }
 
     [Fact]
+    public async Task Netclaw_user_agent_and_component_headers_are_attached_to_mcp_requests()
+    {
+        // Identity smoke test: every outbound MCP HTTP request must advertise
+        // a Netclaw/-prefixed User-Agent and the X-Netclaw-Component=mcp marker
+        // so server operators (e.g. TextForge) can see who is calling.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var ct = cts.Token;
+
+        await using var server = await SmokeHttpMcpServer.StartAsync(ct);
+
+        var entry = new McpServerEntry
+        {
+            Transport = "http",
+            Url = server.Url,
+            Enabled = true,
+        };
+
+        var registry = new ToolRegistry();
+        await using var harness = McpSmokeHarness.Create(
+            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry);
+
+        await harness.Manager.StartAsync(ct);
+
+        var lastUserAgent = registry.GetAllRegistrations()
+            .Select(r => r.Tool)
+            .OfType<McpToolAdapter>()
+            .SingleOrDefault(t => t.Name == "smoke-http/last_user_agent");
+        Assert.NotNull(lastUserAgent);
+        var observedUa = await lastUserAgent!.ExecuteAsync(
+            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+        // Pin the exact UA we expect on the wire so a regression that ships
+        // "Netclaw/0.0.0 (...; sha=unknown)" against testhost still fails.
+        Assert.Contains(NetclawUserAgent.Value, observedUa, StringComparison.Ordinal);
+
+        var lastComponent = registry.GetAllRegistrations()
+            .Select(r => r.Tool)
+            .OfType<McpToolAdapter>()
+            .SingleOrDefault(t => t.Name == "smoke-http/last_netclaw_component");
+        Assert.NotNull(lastComponent);
+        var observedComponent = await lastComponent!.ExecuteAsync(
+            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+        // Daemon path advertises "mcp" exactly; the CLI probe path uses
+        // "mcp-probe". Substring "mcp" alone would not catch a swap.
+        Assert.Contains("mcp", observedComponent, StringComparison.Ordinal);
+        Assert.DoesNotContain("probe", observedComponent, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task NoConfiguredHeader_ResultsInNoAuthorizationHeaderOnTheWire()
     {
         // Counterpart to the test above: if the operator did not configure

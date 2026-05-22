@@ -11,6 +11,7 @@ using Netclaw.Channels.Mattermost;
 using Netclaw.Channels.Mattermost.Tools;
 using Netclaw.Channels.Mattermost.Transport;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -51,7 +52,7 @@ public static class MattermostChannelRegistrationExtensions
             if (!string.IsNullOrEmpty(botToken))
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", botToken);
-        });
+        }).AddNetclawHeaders("mattermost-files");
         services.AddHttpClient("mattermost-api", client =>
         {
             if (parsedServerUri is not null)
@@ -59,7 +60,7 @@ public static class MattermostChannelRegistrationExtensions
             if (!string.IsNullOrEmpty(botToken))
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", botToken);
-        });
+        }).AddNetclawHeaders("mattermost-api");
         if (!string.IsNullOrEmpty(mattermostOptions.CallbackUrl))
             services.AddSingleton(new MattermostCallbackActionStore(TimeProvider.System));
 

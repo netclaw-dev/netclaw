@@ -816,10 +816,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
         Assert.True(_fakeChatClient.ReceivedToolNames.Count >= 6);
 
-        Assert.Contains("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[2]);
-        Assert.Contains("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[3]);
-        Assert.Contains("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[4]);
-        Assert.DoesNotContain("browser_chrome_devtools/navigate_page", _fakeChatClient.ReceivedToolNames[5]);
+        // ReceivedToolNames records the AIFunction.Name surfaced to the LLM,
+        // which for MCP tools is the Anthropic-safe sanitized alias
+        // (server__tool), not the canonical server/tool form.
+        Assert.Contains("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[2]);
+        Assert.Contains("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[3]);
+        Assert.Contains("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[4]);
+        Assert.DoesNotContain("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[5]);
     }
 
     [Fact]

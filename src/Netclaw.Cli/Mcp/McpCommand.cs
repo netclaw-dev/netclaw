@@ -805,11 +805,18 @@ internal static class McpCommand
         }
         else
         {
+            var headers = entry.Headers.ToRawValues(StringComparer.OrdinalIgnoreCase)
+                ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            if (!headers.ContainsKey("User-Agent"))
+                headers["User-Agent"] = NetclawUserAgent.Value;
+            if (!headers.ContainsKey(NetclawUserAgent.ComponentHeader))
+                headers[NetclawUserAgent.ComponentHeader] = "mcp-probe";
+
             transport = new HttpClientTransport(new HttpClientTransportOptions
             {
                 Endpoint = new Uri(entry.Url!),
                 Name = serverName.Value,
-                AdditionalHeaders = entry.Headers.ToRawValues(StringComparer.OrdinalIgnoreCase),
+                AdditionalHeaders = headers,
                 TransportMode = entry.Transport is "sse"
                     ? HttpTransportMode.Sse : HttpTransportMode.AutoDetect,
             });
@@ -817,7 +824,14 @@ internal static class McpCommand
 
         return await McpClient.CreateAsync(transport, new McpClientOptions
         {
-            ClientInfo = new() { Name = "netclaw", Version = "0.1.0" },
+            ClientInfo = new()
+            {
+                Name = "netclaw",
+                Title = "Netclaw",
+                Version = BuildInfo.Version,
+                WebsiteUrl = "https://netclaw.dev",
+                Description = "Open-source autonomous operations agent built on Akka.NET",
+            },
         });
     }
 

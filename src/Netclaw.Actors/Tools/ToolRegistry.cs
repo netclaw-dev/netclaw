@@ -59,12 +59,24 @@ public sealed class ToolRegistry
             .Select(t => t.Tool.ToAITool())
             .ToList();
 
-    /// <summary>Find a tool by name for dispatch.</summary>
+    /// <summary>Find a tool by name for dispatch. Accepts either the
+    /// canonical name (<c>server/tool</c> for MCP) or the LLM-facing
+    /// sanitized alias (<c>server__tool</c>).</summary>
     public INetclawTool? GetByName(string name) =>
-        _tools.FirstOrDefault(t => t.Tool.Name == name)?.Tool;
+        FindRegistration(name)?.Tool;
 
     public ToolRegistration? GetRegistrationByToolName(string name) =>
-        _tools.FirstOrDefault(t => t.Tool.Name == name);
+        FindRegistration(name);
+
+    private ToolRegistration? FindRegistration(string name)
+    {
+        var direct = _tools.FirstOrDefault(t => t.Tool.Name == name);
+        if (direct is not null)
+            return direct;
+        return _tools.FirstOrDefault(t =>
+            t.Tool is McpToolAdapter mcp
+            && string.Equals(mcp.SanitizedName, name, StringComparison.Ordinal));
+    }
 
     /// <summary>
     /// Returns tools that should always be loaded into the LLM context.

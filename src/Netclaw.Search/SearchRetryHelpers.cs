@@ -39,9 +39,9 @@ internal static class SearchRetryHelpers
     }
 
     /// <summary>
-    /// User-Agent value sent by every outbound search request. Format:
-    /// <c>Netclaw/{version} (+https://netclaw.dev)</c>. Cached at type initialization.
+    /// User-Agent value sent by every outbound search request. Delegates to
+    /// <see cref="NetclawUserAgent.Value"/> so all subsystems present the same
+    /// identity to remote services.
     /// </summary>
-    internal static string UserAgent { get; } =
-        $"Netclaw/{BuildInfo.GetVersion(typeof(SearchRetryHelpers).Assembly)} (+https://netclaw.dev)";
+    internal static string UserAgent => NetclawUserAgent.Value;
 }

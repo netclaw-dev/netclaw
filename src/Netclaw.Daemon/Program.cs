@@ -25,6 +25,7 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Providers;
 using ShellSyntaxTree;
 using Netclaw.Providers.OAuth;
@@ -622,7 +623,7 @@ static void ConfigureDaemonServices(
 
     if (notificationsConfig.Webhooks.Count > 0)
     {
-        services.AddHttpClient("Notifications");
+        services.AddHttpClient("Notifications").AddNetclawHeaders("webhook");
         services.AddSingleton<WebhookNotificationService>();
         services.AddSingleton<IOperationalNotificationSink>(sp =>
             sp.GetRequiredService<WebhookNotificationService>());
@@ -641,14 +642,14 @@ static void ConfigureDaemonServices(
     var mcpServers = configuration.GetSection("McpServers")
         .Get<Dictionary<string, McpServerEntry>>() ?? [];
     services.AddSingleton(mcpServers);
-    services.AddHttpClient("ProviderOAuth");
+    services.AddHttpClient("ProviderOAuth").AddNetclawHeaders("provider-oauth");
     services.AddSingleton(sp =>
     {
         var httpClient = sp.GetRequiredService<IHttpClientFactory>().CreateClient("ProviderOAuth");
         return new OAuthPkceService(httpClient);
     });
     services.AddSingleton<IProviderOAuthCallbackListener, ProviderOAuthCallbackListener>();
-    services.AddHttpClient(nameof(McpOAuthService));
+    services.AddHttpClient(nameof(McpOAuthService)).AddNetclawHeaders("mcp-oauth");
     services.AddSingleton(sp => new McpOAuthService(
         sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(McpOAuthService)),
         paths,
@@ -729,7 +730,7 @@ static void ConfigureDaemonServices(
     if (skillSyncConfig.Enabled)
     {
         services.AddHttpClient<SystemSkillSyncService>(client =>
-            client.Timeout = FeedConstants.FeedHttpTimeout);
+            client.Timeout = FeedConstants.FeedHttpTimeout).AddNetclawHeaders("skill-sync");
         services.AddHostedService<SystemSkillSyncService>();
     }
 
@@ -751,7 +752,7 @@ static void ConfigureDaemonServices(
     // Result is cached in UpdateCheckService for 1 hour; DaemonRuntimeStatusService
     // reads it via the static cache when building the status API response.
     services.AddHttpClient<BinaryUpdateCheckService>(client =>
-        client.Timeout = FeedConstants.BinaryFeedHttpTimeout);
+        client.Timeout = FeedConstants.BinaryFeedHttpTimeout).AddNetclawHeaders("update-check");
     services.AddHostedService<BinaryUpdateCheckService>();
 
     // System prompt (file-based, with first-run seed)
@@ -773,11 +774,11 @@ static void ConfigureDaemonServices(
     // When the main provider is Ollama, query it next — it knows the true context window
     // for locally hosted models that may not be indexed by external oracles.
     services.AddSingleton<OpenAiCodexCapabilityResolver>();
-    services.AddHttpClient<OpenRouterOracleResolver>();
-    services.AddHttpClient<HuggingFaceCapabilityResolver>();
+    services.AddHttpClient<OpenRouterOracleResolver>().AddNetclawHeaders("capability-probe");
+    services.AddHttpClient<HuggingFaceCapabilityResolver>().AddNetclawHeaders("capability-probe");
     if (ollamaEndpoint is not null)
     {
-        services.AddHttpClient(nameof(OllamaCapabilityResolver));
+        services.AddHttpClient(nameof(OllamaCapabilityResolver)).AddNetclawHeaders("capability-probe");
         services.AddSingleton(sp =>
             new OllamaCapabilityResolver(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OllamaCapabilityResolver)),
@@ -786,7 +787,7 @@ static void ConfigureDaemonServices(
     }
     if (openAiCompatibleEndpoint is not null)
     {
-        services.AddHttpClient(nameof(OpenAiCompatibleCapabilityResolver));
+        services.AddHttpClient(nameof(OpenAiCompatibleCapabilityResolver)).AddNetclawHeaders("capability-probe");
         services.AddSingleton(sp =>
             new OpenAiCompatibleCapabilityResolver(
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(OpenAiCompatibleCapabilityResolver)),
