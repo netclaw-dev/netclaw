@@ -195,10 +195,19 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 }
                 else
                 {
+                    // Use tool.Name (canonical) — not toolCall.Name — so the
+                    // lookup key matches what PersistApprovalCandidatesAsync
+                    // stored. For MCP tools the LLM-facing name is the
+                    // sanitized alias (`server__tool`), while the policy
+                    // builds the approval context — and the session actor
+                    // records the grant — under the canonical `server/tool`.
+                    // Looking up by the sanitized alias here would miss every
+                    // grant and re-throw ToolApprovalRequiredException on
+                    // approved retries.
                     var approvalCheck = await _approvalService.CheckApprovalAsync(
                         ToApprovalSessionId(context?.SessionId),
                         audience,
-                        new ToolName(toolCall.Name),
+                        new ToolName(tool.Name),
                         candidatesForCheck,
                         context?.Cwd,
                         ct);

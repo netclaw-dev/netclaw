@@ -842,6 +842,120 @@ public class DispatchingToolExecutorTests
         }
     }
 
+    // Regression for #1133: PR #1134 introduced an Anthropic-safe sanitized
+    // alias (`server__tool`) for MCP tool names. The LLM emits tool_use with
+    // the sanitized form, but the policy/session actor record approval under
+    // the canonical `server/tool`. Looking up by the sanitized form on retry
+    // miscounted every approved grant as unapproved and threw
+    // ToolApprovalRequiredException on every post-approval call — surfaced
+    // in production as "I encountered an error executing a tool" loops on
+    // Notion writes.
+    [Fact]
+    public async Task Mcp_session_approval_recorded_under_canonical_name_authorizes_sanitized_alias_retry()
+    {
+        const string serverName = "notion";
+        const string bareToolName = "notion-create-pages";
+        const string canonicalName = $"{serverName}/{bareToolName}";
+        const string sanitizedAlias = $"{serverName}__{bareToolName}";
+
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            // Override keyed on the canonical name — same form the policy
+            // uses when it builds the approval gate for MCP tools.
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [canonicalName] = ToolApprovalMode.Approval
+            }
+        };
+
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            AIFunctionFactory.Create(() => "ok", bareToolName),
+            serverName,
+            bareToolName,
+            invoker: new RecordingMcpToolInvoker("ok")));
+
+        // Sanity check: the adapter exposes the sanitized alias to the LLM
+        // while keeping the canonical name as its primary identity. If this
+        // ever changes, the rest of the test loses its meaning.
+        var adapter = (McpToolAdapter)registry.GetByName(canonicalName)!;
+        Assert.Equal(canonicalName, adapter.Name);
+        Assert.Equal(sanitizedAlias, adapter.SanitizedName);
+
+        var system = ActorSystem.Create($"tool-approval-mcp-{Guid.NewGuid():N}");
+        try
+        {
+            var approvalActor = system.ActorOf(ToolApprovalActor.CreateProps(), "tool-approval");
+            var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
+            var executor = new DispatchingToolExecutor(
+                registry,
+                new ToolAccessPolicy(
+                    config,
+                    new EffectivePolicyDefaults(
+                        DeploymentPosture.Personal,
+                        TrustAudience.Personal,
+                        ShellExecutionMode.HostAllowed,
+                        UsedStrictFallback: false)),
+                approvalService);
+
+            // The LLM emits tool_use with the sanitized alias — mirror that
+            // here. The registry's two-form lookup (introduced in PR #1134)
+            // resolves it back to the same adapter.
+            var toolCall = new FunctionCallContent(
+                "call-mcp-approve-session",
+                sanitizedAlias,
+                ToolInput.Empty());
+
+            var context = new Netclaw.Tools.ToolExecutionContext("slack/D0/1779", null)
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = TrustBoundary.TrustedInstance,
+                ChannelType = "slack",
+                SupportsInteractiveApproval = true
+            };
+
+            var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
+                executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+
+            // The approval context — and the slack prompt the user sees —
+            // carry the canonical name, not the sanitized alias.
+            Assert.Equal(canonicalName, firstAttempt.ApprovalContext.ToolName);
+
+            // Simulate LlmSessionActor.PersistApprovalCandidatesAsync on an
+            // ApprovedSession click: the grant is recorded under the
+            // canonical name (pending.ToolName), with the canonical
+            // candidate verb extracted by DefaultApprovalMatcher.
+            await approvalService.RecordApprovalAsync(
+                "slack/D0/1779",
+                TrustAudience.Personal,
+                new ToolName(canonicalName),
+                firstAttempt.ApprovalContext.CandidateVerbs,
+                persistent: false,
+                cwd: null,
+                TestContext.Current.CancellationToken);
+
+            // Retry — still under the sanitized alias the LLM uses. Pre-fix
+            // this re-threw ToolApprovalRequiredException because the
+            // executor looked up the grant by toolCall.Name (sanitized)
+            // while it had been stored under tool.Name (canonical).
+            _ = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+
+            // Same call dispatched by the canonical name must also resolve
+            // — the registry accepts both forms, so the gate should
+            // authorize either way.
+            var canonicalToolCall = new FunctionCallContent(
+                "call-mcp-approve-session-canonical",
+                canonicalName,
+                ToolInput.Empty());
+            _ = await executor.ExecuteAsync(canonicalToolCall, context, TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await system.Terminate();
+        }
+    }
+
     private sealed class StubRequiredActor : IRequiredActor<ToolApprovalActorKey>
     {
         private readonly IActorRef _actor;

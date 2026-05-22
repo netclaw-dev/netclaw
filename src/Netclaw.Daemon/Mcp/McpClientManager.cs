@@ -531,7 +531,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         return await McpClient.CreateAsync(transport, new McpClientOptions
         {
-            ClientInfo = new() { Name = "netclaw", Version = "0.1.0" },
+            ClientInfo = new()
+            {
+                Name = "netclaw",
+                Title = "Netclaw",
+                Version = BuildInfo.Version,
+                WebsiteUrl = "https://netclaw.dev",
+                Description = "Open-source autonomous operations agent built on Akka.NET",
+            },
         }, cancellationToken: ct);
     }
 
@@ -554,7 +561,18 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         // Unwrap SensitiveString here at the transport boundary so the SDK
         // sees the actual credential, not SensitiveString.ToString()'s
         // redacted sentinel.
-        var headers = entry.Headers.ToRawValues(StringComparer.OrdinalIgnoreCase);
+        var headers = entry.Headers.ToRawValues(StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Identify Netclaw to the remote MCP server. The SDK's HttpClientTransport
+        // builds its own HttpClient internally, so this header dictionary is the
+        // only seam — DelegatingHandlers can't reach it. User-configured headers
+        // win: if an operator already sets User-Agent or X-Netclaw-Component,
+        // we leave them alone.
+        if (!headers.ContainsKey("User-Agent"))
+            headers["User-Agent"] = NetclawUserAgent.Value;
+        if (!headers.ContainsKey(NetclawUserAgent.ComponentHeader))
+            headers[NetclawUserAgent.ComponentHeader] = "mcp";
 
         return new HttpClientTransport(new HttpClientTransportOptions
         {

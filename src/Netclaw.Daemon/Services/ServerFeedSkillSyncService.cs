@@ -275,6 +275,9 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
     private static HttpClient CreateHttpClientForFeed(SkillFeedSource feed)
     {
         var client = new HttpClient();
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", NetclawUserAgent.Value);
+        client.DefaultRequestHeaders.TryAddWithoutValidation(
+            NetclawUserAgent.ComponentHeader, "skill-feed");
         if (feed.ApiKey is { Value: { } apiKey } && !string.IsNullOrWhiteSpace(apiKey))
         {
             client.DefaultRequestHeaders.Authorization =
