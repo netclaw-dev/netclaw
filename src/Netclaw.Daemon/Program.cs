@@ -206,7 +206,12 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.UseAuthorization();
     app.UseRateLimiter();
 
-    app.MapOpenApi();
+    // Require authorization for the OpenAPI document so the full API surface is not
+    // exposed to unauthenticated callers when the daemon binds to a non-loopback
+    // address (e.g. ExposureMode.ReverseProxy). Loopback callers are still served:
+    // the AuthSelector routes them to LoopbackAuthenticationHandler, which issues an
+    // authenticated Operator ticket that satisfies the default policy.
+    app.MapOpenApi().RequireAuthorization();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
