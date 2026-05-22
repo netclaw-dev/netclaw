@@ -135,6 +135,9 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddNetclawAuthSchemes(daemonConfig);
     builder.Services.AddAuthorization();
 
+    // Add OpenAPI
+    builder.Services.AddOpenApi();
+
     // Rate limiting for the unauthenticated pairing exchange endpoint.
     // 5 attempts per minute per IP — brute-force defense for the 8-char code space.
     builder.Services.AddRateLimiter(options =>
@@ -202,6 +205,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
+
+    app.MapOpenApi();
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
