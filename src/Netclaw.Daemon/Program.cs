@@ -8,6 +8,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
@@ -204,15 +205,15 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
-    app.MapGet("/api/health/ready", () => Results.Ok("healthy"));
-    app.MapGet("/api/health/status", async (DaemonRuntimeStatusService statusService, CancellationToken cancellationToken) =>
-        Results.Ok(await statusService.GetStatusAsync(cancellationToken))).RequireAuthorization();
+    app.MapGet("/api/health/ready", () => TypedResults.Ok("healthy"));
+    app.MapGet("/api/health/status", async ValueTask<Ok<DaemonRuntimeStatus.Response>> (DaemonRuntimeStatusService statusService, CancellationToken cancellationToken) =>
+        TypedResults.Ok(await statusService.GetStatusAsync(cancellationToken))).RequireAuthorization();
     app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
-        Results.Ok(catalog.ListRecent(limit: 50))).RequireAuthorization();
-    app.MapGet("/api/stats", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
-        Results.Ok(await statsService.GetStatsAsync(days, ct))).RequireAuthorization();
-    app.MapGet("/api/stats/skills", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
-        Results.Ok(await statsService.GetSkillUsageStatsAsync(days, ct))).RequireAuthorization();
+        TypedResults.Ok(catalog.ListRecent(limit: 50))).RequireAuthorization();
+    app.MapGet("/api/stats", async ValueTask<Ok<DaemonStats.Response>> (DaemonStatsService statsService, int? days, CancellationToken ct) =>
+        TypedResults.Ok(await statsService.GetStatsAsync(days, ct))).RequireAuthorization();
+    app.MapGet("/api/stats/skills", async ValueTask<Ok<SkillUsageStats.Response>> (DaemonStatsService statsService, int? days, CancellationToken ct) =>
+        TypedResults.Ok(await statsService.GetSkillUsageStatsAsync(days, ct))).RequireAuthorization();
     app.MapWebhookEndpoints();
     app.MapMattermostActionEndpoint();
 
