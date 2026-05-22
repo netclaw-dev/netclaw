@@ -210,15 +210,34 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
-    app.MapGet("/api/health/ready", () => TypedResults.Ok("healthy"));
+    app.MapGet("/api/health/ready", () => TypedResults.Ok("healthy"))
+        .WithName("HealthReady")
+        .WithSummary("Liveness probe reporting the daemon is accepting requests.")
+        .WithTags("Health");
     app.MapGet("/api/health/status", async ValueTask<Ok<DaemonRuntimeStatus.Response>> (DaemonRuntimeStatusService statusService, CancellationToken cancellationToken) =>
-        TypedResults.Ok(await statusService.GetStatusAsync(cancellationToken))).RequireAuthorization();
+        TypedResults.Ok(await statusService.GetStatusAsync(cancellationToken)))
+        .WithName("GetHealthStatus")
+        .WithSummary("Get the daemon's runtime status, including connector health.")
+        .WithTags("Health")
+        .RequireAuthorization();
     app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
-        TypedResults.Ok(catalog.ListRecent(limit: 50))).RequireAuthorization();
+        TypedResults.Ok(catalog.ListRecent(limit: 50)))
+        .WithName("ListSessions")
+        .WithSummary("List the most recent sessions.")
+        .WithTags("Sessions")
+        .RequireAuthorization();
     app.MapGet("/api/stats", async ValueTask<Ok<DaemonStats.Response>> (DaemonStatsService statsService, int? days, CancellationToken ct) =>
-        TypedResults.Ok(await statsService.GetStatsAsync(days, ct))).RequireAuthorization();
+        TypedResults.Ok(await statsService.GetStatsAsync(days, ct)))
+        .WithName("GetStats")
+        .WithSummary("Get daemon usage statistics over the requested window.")
+        .WithTags("Stats")
+        .RequireAuthorization();
     app.MapGet("/api/stats/skills", async ValueTask<Ok<SkillUsageStats.Response>> (DaemonStatsService statsService, int? days, CancellationToken ct) =>
-        TypedResults.Ok(await statsService.GetSkillUsageStatsAsync(days, ct))).RequireAuthorization();
+        TypedResults.Ok(await statsService.GetSkillUsageStatsAsync(days, ct)))
+        .WithName("GetSkillUsageStats")
+        .WithSummary("Get per-skill usage statistics over the requested window.")
+        .WithTags("Stats")
+        .RequireAuthorization();
     app.MapWebhookEndpoints();
     app.MapMattermostActionEndpoint();
 

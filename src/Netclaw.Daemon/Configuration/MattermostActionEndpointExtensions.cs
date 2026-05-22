@@ -166,7 +166,11 @@ public static class MattermostActionEndpointExtensions
                 return TypedResults.StatusCode(500);
             }
 
-        }).RequireRateLimiting(CallbackRateLimitPolicy).AllowAnonymous();
+        })
+        .WithName("MattermostActionCallback")
+        .WithSummary("Handle a Mattermost interactive approval button callback.")
+        .WithTags("Mattermost")
+        .RequireRateLimiting(CallbackRateLimitPolicy).AllowAnonymous();
     }
 
     private sealed class ActionCallbackPayload

@@ -66,7 +66,11 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
             callbackListener.StartListening(oauth.RedirectUri.AbsoluteUri, state);
 
             return TypedResults.Ok(new ProviderOAuthStartResponse(authUrl, state));
-        }).RequireAuthorization();
+        })
+        .WithName("StartProviderOAuth")
+        .WithSummary("Start a browser OAuth authorization flow for a model provider.")
+        .WithTags("Provider OAuth")
+        .RequireAuthorization();
 
         app.MapGet("/api/provider/oauth/callback", async ValueTask<ContentHttpResult> (
             [AsParameters] ProviderOAuthCallbackQuery query,
@@ -95,7 +99,11 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
                     contentEncoding: null,
                     statusCode: StatusCodes.Status500InternalServerError);
             }
-        }).AllowAnonymous();
+        })
+        .WithName("ProviderOAuthCallback")
+        .WithSummary("Browser redirect callback that completes a provider OAuth flow.")
+        .WithTags("Provider OAuth")
+        .AllowAnonymous();
 
         app.MapGet("/api/provider/oauth/status/{state}", (
             string state,
@@ -116,7 +124,11 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
                 AccessToken: isLoopback ? result?.AccessToken.Value : null,
                 RefreshToken: isLoopback ? result?.RefreshToken?.Value : null,
                 ExpiresAt: result?.ExpiresAt?.ToString("o")));
-        }).RequireAuthorization();
+        })
+        .WithName("GetProviderOAuthStatus")
+        .WithSummary("Get the status (and, over loopback, tokens) of a provider OAuth flow.")
+        .WithTags("Provider OAuth")
+        .RequireAuthorization();
 
         return app;
     }

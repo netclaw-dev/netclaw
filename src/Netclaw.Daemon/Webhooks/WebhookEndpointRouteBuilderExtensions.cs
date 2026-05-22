@@ -161,7 +161,11 @@ public static class WebhookEndpointRouteBuilderExtensions
                     DeliveryId: verification.DeliveryId,
                     SessionId: sessionId.Value),
                 statusCode: StatusCodes.Status202Accepted);
-        }).AllowAnonymous();
+        })
+        .WithName("ReceiveWebhook")
+        .WithSummary("Receive, verify, and dispatch an inbound webhook delivery.")
+        .WithTags("Webhooks")
+        .AllowAnonymous();
 
         return app;
     }

@@ -81,7 +81,11 @@ public static class PairingEndpointRouteBuilderExtensions
             }
 
             return TypedResults.Ok(new PairingTokenResponse(rawToken));
-        }).RequireRateLimiting("pairing-exchange").AllowAnonymous();
+        })
+        .WithName("ExchangePairingCode")
+        .WithSummary("Exchange a pairing code for a device bearer token.")
+        .WithTags("Pairing")
+        .RequireRateLimiting("pairing-exchange").AllowAnonymous();
 
         // Device registry management — authenticated (loopback or valid bearer token required).
         // Returns a sanitized view of paired devices (no TokenHash/Salt).
@@ -90,7 +94,11 @@ public static class PairingEndpointRouteBuilderExtensions
             var devices = await deviceRegistry.ListAsync(ct);
             var sanitized = devices.Select(d => new PairedDeviceInfoDto(d.Name, d.CreatedAt, d.LastUsedAt));
             return TypedResults.Ok(sanitized);
-        }).RequireAuthorization();
+        })
+        .WithName("ListPairedDevices")
+        .WithSummary("List paired devices (token material excluded).")
+        .WithTags("Pairing")
+        .RequireAuthorization();
 
         app.MapDelete("/api/pair/devices/{name}", async ValueTask<Results<NoContent, NotFound<PairingErrorResponse>>> (string name, DeviceRegistry deviceRegistry, CancellationToken ct) =>
         {
@@ -98,7 +106,11 @@ public static class PairingEndpointRouteBuilderExtensions
             return removed
                 ? TypedResults.NoContent()
                 : TypedResults.NotFound(new PairingErrorResponse($"Device '{name}' not found."));
-        }).RequireAuthorization();
+        })
+        .WithName("RemovePairedDevice")
+        .WithSummary("Remove a paired device by name.")
+        .WithTags("Pairing")
+        .RequireAuthorization();
 
         return app;
     }

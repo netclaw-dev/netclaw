@@ -49,7 +49,11 @@ public static class McpEndpointRouteBuilderExtensions
 
             var (authUrl, state) = await oauthService.StartAuthorizationFlowAsync(new McpServerName(name), entry, ct);
             return TypedResults.Ok(new McpOAuthStartResponse(authUrl, state));
-        }).RequireAuthorization();
+        })
+        .WithName("StartMcpOAuth")
+        .WithSummary("Start an OAuth 2.1 authorization flow for an MCP server.")
+        .WithTags("MCP")
+        .RequireAuthorization();
 
         app.MapGet("/api/mcp/oauth/callback", async ValueTask<ContentHttpResult> (
             [AsParameters] McpOAuthCallbackQuery query,
@@ -94,7 +98,11 @@ public static class McpEndpointRouteBuilderExtensions
                     contentEncoding: null,
                     statusCode: StatusCodes.Status500InternalServerError);
             }
-        }).AllowAnonymous();
+        })
+        .WithName("McpOAuthCallback")
+        .WithSummary("Browser redirect callback that completes an MCP OAuth flow.")
+        .WithTags("MCP")
+        .AllowAnonymous();
 
         app.MapGet("/api/mcp/statuses", (McpClientManager mcpManager) =>
         {
@@ -106,26 +114,42 @@ public static class McpEndpointRouteBuilderExtensions
                     kvp.Value.ToolCount,
                     kvp.Value.ErrorMessage));
             return TypedResults.Ok(result);
-        }).RequireAuthorization();
+        })
+        .WithName("GetMcpServerStatuses")
+        .WithSummary("Get the connection status of all configured MCP servers.")
+        .WithTags("MCP")
+        .RequireAuthorization();
 
         app.MapGet("/api/mcp/tools/{name}", (string name, McpClientManager mcpManager) =>
         {
             var tools = mcpManager.GetToolNames(new McpServerName(name));
             return TypedResults.Ok(tools);
-        }).RequireAuthorization();
+        })
+        .WithName("GetMcpServerTools")
+        .WithSummary("List the tool names exposed by a single MCP server.")
+        .WithTags("MCP")
+        .RequireAuthorization();
 
         app.MapGet("/api/mcp/oauth/status/{name}", (string name, McpOAuthService oauthService) =>
         {
             var status = oauthService.GetFlowStatus(new McpServerName(name));
             return TypedResults.Ok(new McpOAuthStatusResponse(status.ToString()));
-        }).RequireAuthorization();
+        })
+        .WithName("GetMcpOAuthStatus")
+        .WithSummary("Get the OAuth flow status for an MCP server by name.")
+        .WithTags("MCP")
+        .RequireAuthorization();
 
         app.MapGet("/api/mcp/oauth/status-by-state/{state}", (string state, McpOAuthService oauthService) =>
         {
             var status = oauthService.GetFlowStatusByState(state);
             // Tokens are persisted daemon-side — never expose them over HTTP.
             return TypedResults.Ok(new McpOAuthStatusResponse(status.ToString()));
-        }).RequireAuthorization();
+        })
+        .WithName("GetMcpOAuthStatusByState")
+        .WithSummary("Get the OAuth flow status for an MCP server by state token.")
+        .WithTags("MCP")
+        .RequireAuthorization();
 
         return app;
     }

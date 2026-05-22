@@ -33,7 +33,11 @@ public static class LifecycleEndpointRouteBuilderExtensions
 
             notifier.NotifyShutdown(request.Reason);
             return TypedResults.Ok(new ShutdownDaemonResponse(request.Reason, Environment.ProcessId));
-        }).RequireAuthorization();
+        })
+        .WithName("ShutdownDaemon")
+        .WithSummary("Request a graceful daemon shutdown ahead of SIGTERM.")
+        .WithTags("Lifecycle")
+        .RequireAuthorization();
 
         return app;
     }

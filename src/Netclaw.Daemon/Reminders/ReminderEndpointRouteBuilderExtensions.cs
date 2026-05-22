@@ -23,6 +23,7 @@ public static class ReminderEndpointRouteBuilderExtensions
     public static IEndpointRouteBuilder MapReminderEndpoints(this IEndpointRouteBuilder app)
     {
         var reminders = app.MapGroup("/api/reminders")
+            .WithTags("Reminders")
             .RequireAuthorization();
 
         reminders.MapGet("", async ValueTask<Ok<IEnumerable<ReminderSummaryDto>>> (
@@ -43,7 +44,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                     : SetReminderTool.FormatTimestamp(r.ExpiresAt),
                 Audience: r.Audience?.ToWireValue()));
             return TypedResults.Ok(projected);
-        });
+        })
+        .WithName("ListReminders")
+        .WithSummary("List all active reminders.");
 
         reminders.MapPost("", async ValueTask<Results<Ok<ReminderMessageResponse>, BadRequest<ReminderErrorResponse>, ProblemHttpResult>> (
             CreateReminderRequest request,
@@ -103,7 +106,9 @@ public static class ReminderEndpointRouteBuilderExtensions
             return result.StartsWith("Error", StringComparison.Ordinal)
                 ? TypedResults.BadRequest(new ReminderErrorResponse(result))
                 : TypedResults.Ok(new ReminderMessageResponse(result));
-        });
+        })
+        .WithName("CreateReminder")
+        .WithSummary("Create a reminder (requires Operator authority).");
 
         reminders.MapPost("/validate", Results<Ok<ReminderValidationSuccessResponse>, BadRequest<ReminderValidationErrorResponse>> (
             CreateReminderRequest request,
@@ -121,7 +126,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                 Valid: true,
                 ScheduleType: schedule.Type.ToString(),
                 NextFire: schedule.FireAt));
-        });
+        })
+        .WithName("ValidateReminderSchedule")
+        .WithSummary("Validate a reminder schedule without persisting it.");
 
         reminders.MapPost("/import", async ValueTask<Results<Ok<ReminderImportResponse>, BadRequest<ReminderErrorResponse>, JsonHttpResult<ReminderImportErrorResponse>>> (
             ImportReminderRequest request,
@@ -173,7 +180,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                 Title: response.Title,
                 NextFire: response.NextFire,
                 Message: $"Imported reminder '{response.Id.Value}'."));
-        });
+        })
+        .WithName("ImportReminder")
+        .WithSummary("Import a reminder definition with the requested write mode.");
 
         reminders.MapDelete("/{id}", async ValueTask<Results<Ok<ReminderMessageResponse>, NotFound<ReminderErrorResponse>>> (
             string id,
@@ -202,7 +211,9 @@ public static class ReminderEndpointRouteBuilderExtensions
             return response.Found
                 ? TypedResults.Ok(new ReminderMessageResponse($"Reminder '{id}' cancelled (disabled)."))
                 : TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
-        });
+        })
+        .WithName("DeleteReminder")
+        .WithSummary("Cancel a reminder, or permanently delete it with ?permanent=true.");
 
         reminders.MapPost("/{id}/disable", async ValueTask<Results<Ok<ReminderDisableResponse>, NotFound<ReminderErrorResponse>>> (
             string id,
@@ -218,7 +229,9 @@ public static class ReminderEndpointRouteBuilderExtensions
             return !response.Found
                 ? TypedResults.NotFound(new ReminderErrorResponse(response.ErrorMessage ?? $"Reminder '{id}' not found."))
                 : TypedResults.Ok(new ReminderDisableResponse(id, response.Enabled, $"Reminder '{id}' disabled."));
-        });
+        })
+        .WithName("DisableReminder")
+        .WithSummary("Disable a reminder without deleting it.");
 
         reminders.MapPost("/{id}/enable", async ValueTask<Results<Ok<ReminderEnableResponse>, NotFound<ReminderErrorResponse>, BadRequest<ReminderEnableErrorResponse>>> (
             string id,
@@ -237,7 +250,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                 return TypedResults.BadRequest(new ReminderEnableErrorResponse(response.ErrorMessage, id, Enabled: false));
 
             return TypedResults.Ok(new ReminderEnableResponse(id, response.Enabled, response.NextFire, $"Reminder '{id}' enabled."));
-        });
+        })
+        .WithName("EnableReminder")
+        .WithSummary("Re-enable a previously disabled reminder.");
 
         reminders.MapGet("/{id}", async ValueTask<Results<Ok<ReminderDetailDto>, NotFound<ReminderErrorResponse>>> (
             string id,
@@ -269,7 +284,9 @@ public static class ReminderEndpointRouteBuilderExtensions
                 DeliveryRequired: r.DeliveryRequired,
                 DeliveryInstructions: r.DeliveryInstructions,
                 Audience: r.Audience?.ToWireValue()));
-        });
+        })
+        .WithName("GetReminder")
+        .WithSummary("Get a single reminder's full definition.");
 
         reminders.MapGet("/{id}/history", async ValueTask<Results<Ok<IReadOnlyList<HistoryRecord>>, NotFound<ReminderErrorResponse>>> (
             string id,
@@ -285,7 +302,9 @@ public static class ReminderEndpointRouteBuilderExtensions
             var maxRecords = Math.Clamp(last ?? 20, 1, 500);
             var records = await historyStore.ReadAsync(rid, maxRecords);
             return TypedResults.Ok(records);
-        });
+        })
+        .WithName("GetReminderHistory")
+        .WithSummary("Get recent fire history for a reminder.");
 
         return app;
     }
