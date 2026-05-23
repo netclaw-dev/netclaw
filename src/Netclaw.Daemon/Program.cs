@@ -329,9 +329,8 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     var providers = configuration.GetSection("Providers")
         .Get<Dictionary<string, ProviderEntry>>()
         ?? new() { ["local-ollama"] = new ProviderEntry() };
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
-    models.ApplyCatalogOverlays();
+    var models = ModelSelection.LoadFromConfiguration(
+        configuration.GetSection("Models"), paths.NetclawConfigPath);
 
     services.AddDaemonLlmProviders(providers, models);
 
@@ -360,10 +359,17 @@ static void ConfigureDaemonServices(
     services
         .AddOptions<ModelSelection>()
         .Bind(configuration.GetSection("Models"))
-        // Fold catalog overlays into role records before validation runs, so
-        // a ContextWindow set only via Catalog still gets checked by
-        // ModelSelectionValidator's MinContextWindow gate.
-        .PostConfigure(models => models.ApplyCatalogOverlays())
+        // Re-load Catalog directly from the config file (bypassing
+        // Microsoft.Extensions.Configuration's path-splitting binder, which
+        // mangles keys containing ':' such as the default Ollama
+        // `qwen3:30b`) and fold overlays into role records so a ContextWindow
+        // set only via Catalog still gets checked by ModelSelectionValidator.
+        .PostConfigure(models =>
+        {
+            models.Catalog = ModelSelection.LoadCatalogFromFile(paths.NetclawConfigPath)
+                ?? models.Catalog;
+            models.ApplyCatalogOverlays();
+        })
         .ValidateOnStart();
     services.AddSingleton<IValidateOptions<ModelSelection>, ModelSelectionValidator>();
     services
@@ -381,9 +387,8 @@ static void ConfigureDaemonServices(
     });
 
     // Resolve models for session config
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
-    models.ApplyCatalogOverlays();
+    var models = ModelSelection.LoadFromConfiguration(
+        configuration.GetSection("Models"), paths.NetclawConfigPath);
     services.AddSingleton(models);
 
     // Auto-detect model capabilities via the runtime IModelCapabilityResolver

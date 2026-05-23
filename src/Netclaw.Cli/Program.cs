@@ -185,9 +185,8 @@ static async Task RunAsync(string[] args)
                     .AddEnvironmentVariables("NETCLAW_");
                 var initConfig = configBuilder.Build();
 
-                var models = initConfig.GetSection("Models")
-                    .Get<ModelSelection>() ?? new ModelSelection();
-                models.ApplyCatalogOverlays();
+                var models = ModelSelection.LoadFromConfiguration(
+                    initConfig.GetSection("Models"), initPaths.NetclawConfigPath);
 
                 var contextWindow = ContextWindowResolution.ResolveAsync(
                     models.Main.ContextWindow,
@@ -982,7 +981,7 @@ static async Task RunAsync(string[] args)
     webBuilder.WebHost.UseUrls("http://127.0.0.1:0");
 
     var sharedPaths = ConfigureConfigServices(webBuilder.Services, webBuilder.Configuration);
-    ConfigureCliChatServices(webBuilder.Services, webBuilder.Configuration);
+    ConfigureCliChatServices(webBuilder.Services, webBuilder.Configuration, sharedPaths);
 
     // Shared navigation state for passing resume session ID to ChatViewModel
     var navState = new ChatNavigationState { ResumeSessionId = resumeSessionId };
@@ -1798,12 +1797,11 @@ static IConfigurationRoot BuildCliConfig()
 // Daemon-backed CLI services (SignalR thin client)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureCliChatServices(IServiceCollection services, IConfigurationManager configuration)
+static void ConfigureCliChatServices(IServiceCollection services, IConfigurationManager configuration, NetclawPaths paths)
 {
     // Resolve models for session config
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
-    models.ApplyCatalogOverlays();
+    var models = ModelSelection.LoadFromConfiguration(
+        configuration.GetSection("Models"), paths.NetclawConfigPath);
 
     // Session config: bind operator-facing settings
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));

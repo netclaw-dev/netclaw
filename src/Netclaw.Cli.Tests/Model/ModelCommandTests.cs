@@ -92,7 +92,19 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
         Assert.Equal("qwen3:30b", main.GetProperty("ModelId").GetString());
         Assert.Equal("Manual", main.GetProperty("Provenance").GetString());
-        Assert.Equal(32768, main.GetProperty("ContextWindow").GetInt32());
+
+        // Role records are identity-only; --context-window writes to Catalog
+        // keyed by "{provider}/{modelId}" so the override survives later role
+        // swaps. Catalog key contains ':' (Ollama's `qwen3:30b`) — this
+        // assertion also pins down the IConfiguration colon-split fix, since
+        // LoadModelSelection reads back via JsonSerializer.
+        Assert.False(main.TryGetProperty("ContextWindow", out _));
+        var catalog = models.GetProperty("Catalog");
+        var entry = catalog.GetProperty("my-ollama/qwen3:30b");
+        Assert.Equal(32768, entry.GetProperty("ContextWindow").GetInt32());
+
+        var selection = ModelCommand.LoadModelSelection(_paths)!;
+        Assert.Equal(32768, selection.Main.ContextWindow);
     }
 
     [Fact]

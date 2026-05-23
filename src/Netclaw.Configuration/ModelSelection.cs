@@ -3,6 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Microsoft.Extensions.Configuration;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -82,4 +86,57 @@ public sealed class ModelSelection
         }
         return null;
     }
+
+    /// <summary>
+    /// Bind a <see cref="ModelSelection"/> from configuration, then re-load
+    /// <see cref="Catalog"/> directly from the raw config file so dictionary
+    /// keys containing <c>:</c> survive intact, and apply overlays. Use this
+    /// instead of calling <c>Get&lt;ModelSelection&gt;()</c> directly.
+    /// <para>
+    /// Microsoft.Extensions.Configuration uses <c>:</c> as its hierarchical
+    /// path separator and applies that splitting to dictionary keys too, so
+    /// the binder turns <c>Catalog["local-ollama/qwen3:30b"]</c> into
+    /// <c>Catalog["local-ollama/qwen3"]</c> with a stray <c>30b</c>
+    /// sub-property — silently dropping the operator's override. Ollama's
+    /// default ModelId is <c>qwen3:30b</c>, so the broken path is the most
+    /// common one. Re-parsing the raw JSON via System.Text.Json (which
+    /// treats keys as opaque strings) is the cleanest fix that preserves
+    /// the rest of the M.E.Configuration pipeline for everything else.
+    /// </para>
+    /// </summary>
+    public static ModelSelection LoadFromConfiguration(
+        IConfiguration modelsSection, string netclawConfigPath)
+    {
+        var selection = modelsSection.Get<ModelSelection>() ?? new ModelSelection();
+        selection.Catalog = LoadCatalogFromFile(netclawConfigPath) ?? selection.Catalog;
+        selection.ApplyCatalogOverlays();
+        return selection;
+    }
+
+    /// <summary>
+    /// Parse <c>Models.Catalog</c> from <paramref name="netclawConfigPath"/>
+    /// directly via System.Text.Json (bypassing
+    /// Microsoft.Extensions.Configuration's path-splitting binder). Returns
+    /// null when the file is absent, has no Models section, has no Catalog
+    /// property, or Catalog is not a JSON object — callers can keep
+    /// whatever binder-produced value they already have in that case.
+    /// </summary>
+    public static Dictionary<string, ModelOverride>? LoadCatalogFromFile(string netclawConfigPath)
+    {
+        if (!File.Exists(netclawConfigPath)) return null;
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(netclawConfigPath));
+        if (!doc.RootElement.TryGetProperty("Models", out var models)) return null;
+        if (!models.TryGetProperty("Catalog", out var catalog)) return null;
+        if (catalog.ValueKind != JsonValueKind.Object) return null;
+
+        return JsonSerializer.Deserialize<Dictionary<string, ModelOverride>>(
+            catalog.GetRawText(),
+            CatalogJsonOptions);
+    }
+
+    private static readonly JsonSerializerOptions CatalogJsonOptions = new()
+    {
+        Converters = { new JsonStringEnumConverter() },
+    };
 }

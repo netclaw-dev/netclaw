@@ -108,4 +108,58 @@ public sealed class ModelSelectionCatalogOverlayTests
         Assert.Null(selection.Main.ContextWindow);
         Assert.Null(selection.Main.InputModalities);
     }
+
+    [Fact]
+    public void LoadFromConfiguration_PreservesColonInCatalogKey_ForOllamaStyleModelIds()
+    {
+        // Microsoft.Extensions.Configuration treats ':' as a path separator
+        // and applies that splitting to dictionary keys, so a Catalog key
+        // like "local-ollama/qwen3:30b" gets bound as
+        // Catalog["local-ollama/qwen3"] with the "30b" suffix dropped as a
+        // stray sub-property. Default ModelId in ModelReference is qwen3:30b
+        // so this is the most common path. LoadFromConfiguration re-parses
+        // Catalog directly from the raw JSON via System.Text.Json (which
+        // treats keys as opaque strings) to side-step the binder.
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, """
+                {
+                  "Models": {
+                    "Main": { "Provider": "local-ollama", "ModelId": "qwen3:30b" },
+                    "Catalog": {
+                      "local-ollama/qwen3:30b": { "ContextWindow": 200000 }
+                    }
+                  }
+                }
+                """);
+
+            // Use InMemoryCollection for the Main pointer side (avoids
+            // depending on Microsoft.Extensions.Configuration.Json in the
+            // test project); LoadFromConfiguration reads Catalog directly
+            // from the file regardless of the IConfiguration source.
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["Models:Main:Provider"] = "local-ollama",
+                    ["Models:Main:ModelId"] = "qwen3:30b",
+                })
+                .Build();
+
+            var selection = ModelSelection.LoadFromConfiguration(
+                config.GetSection("Models"), tempFile);
+
+            // Catalog round-trips the colon-laden key intact.
+            Assert.NotNull(selection.Catalog);
+            Assert.True(selection.Catalog!.ContainsKey("local-ollama/qwen3:30b"));
+            Assert.Equal(200_000, selection.Catalog["local-ollama/qwen3:30b"].ContextWindow);
+
+            // Overlay applies to Main, so the daemon sees the pinned value.
+            Assert.Equal(200_000, selection.Main.ContextWindow);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
 }
