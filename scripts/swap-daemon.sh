@@ -37,7 +37,10 @@ start_daemon() {
         echo "Starting netclaw.service via systemd..."
         systemctl --user start netclaw.service
     else
-        netclaw daemon start
+        # Detach stdio. The CLI's Process.Start inherits the parent's stdio
+        # handles into the daemon child, so without this redirect the script
+        # hangs forever waiting for the daemon to close the inherited pipes.
+        netclaw daemon start </dev/null >/dev/null 2>&1
     fi
 }
 
