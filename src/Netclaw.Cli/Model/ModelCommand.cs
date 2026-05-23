@@ -142,6 +142,10 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
+        // Preserve any operator overrides on the role being overwritten so
+        // switching back to the displaced (provider, modelId) re-applies them.
+        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
+
         var modelEntry = new Dictionary<string, object>
         {
             ["Provider"] = providerName,
@@ -149,8 +153,18 @@ internal static class ModelCommand
             ["Provenance"] = ModelDiscoverySource.Manual.ToString()
         };
 
+        // --context-window is an explicit operator override — persist it to
+        // the catalog (keyed by the new selection's identity) so it survives
+        // a subsequent picker swap. Inline on the role is also written so the
+        // shape stays consistent with hand-edited configs.
         if (contextWindow.HasValue)
+        {
             modelEntry["ContextWindow"] = contextWindow.Value;
+            var catalog = ConfigFileHelper.GetOrCreateSection(modelsSection, "Catalog");
+            var entry = ConfigFileHelper.GetOrCreateSection(
+                catalog, ModelSelection.CatalogKey(providerName, modelId));
+            entry["ContextWindow"] = contextWindow.Value;
+        }
 
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
@@ -267,7 +281,8 @@ internal static class ModelCommand
     }
 
     /// <summary>
-    /// Load model selection from config file.
+    /// Load model selection from config file. Applies catalog overlays so
+    /// callers see the effective per-role view, not the raw on-disk shape.
     /// </summary>
     internal static ModelSelection? LoadModelSelection(NetclawPaths paths)
     {
@@ -278,7 +293,9 @@ internal static class ModelCommand
         if (!doc.RootElement.TryGetProperty("Models", out var modelsElement))
             return null;
 
-        return JsonSerializer.Deserialize<ModelSelection>(modelsElement.GetRawText(), JsonDefaults.EnumAware);
+        var models = JsonSerializer.Deserialize<ModelSelection>(modelsElement.GetRawText(), JsonDefaults.EnumAware);
+        models?.ApplyCatalogOverlays();
+        return models;
     }
 
     private static int WriteHelp(TextWriter writer)

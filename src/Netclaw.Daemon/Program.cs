@@ -331,6 +331,7 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
         ?? new() { ["local-ollama"] = new ProviderEntry() };
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
+    models.ApplyCatalogOverlays();
 
     services.AddDaemonLlmProviders(providers, models);
 
@@ -359,6 +360,10 @@ static void ConfigureDaemonServices(
     services
         .AddOptions<ModelSelection>()
         .Bind(configuration.GetSection("Models"))
+        // Fold catalog overlays into role records before validation runs, so
+        // a ContextWindow set only via Catalog still gets checked by
+        // ModelSelectionValidator's MinContextWindow gate.
+        .PostConfigure(models => models.ApplyCatalogOverlays())
         .ValidateOnStart();
     services.AddSingleton<IValidateOptions<ModelSelection>, ModelSelectionValidator>();
     services
@@ -378,6 +383,7 @@ static void ConfigureDaemonServices(
     // Resolve models for session config
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
+    models.ApplyCatalogOverlays();
     services.AddSingleton(models);
 
     // Auto-detect model capabilities via the runtime IModelCapabilityResolver

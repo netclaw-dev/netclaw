@@ -335,7 +335,12 @@
       "properties": {
         "Main": { "$ref": "#/$defs/ModelReference" },
         "Fallback": { "$ref": "#/$defs/ModelReference" },
-        "Compaction": { "$ref": "#/$defs/ModelReference" }
+        "Compaction": { "$ref": "#/$defs/ModelReference" },
+        "Catalog": {
+          "type": "object",
+          "description": "Optional operator overrides keyed by \"{provider}/{modelId}\". Merged into matching role records at read time; inline values on a role win. Typically empty — present only when an operator has hand-set a value (e.g. a context-window cap) they want to survive model-picker swaps.",
+          "additionalProperties": { "$ref": "#/$defs/ModelOverride" }
+        }
       },
       "additionalProperties": false
     },
@@ -849,6 +854,24 @@
         "OutputModalities": {
           "type": "string",
           "description": "Manual override for output modalities. Comma-separated ModelModality flags (e.g. \"Text\"). Bypasses automated detection.",
+          "pattern": "^(Text|Image|Audio|Video)(\\s*,\\s*(Text|Image|Audio|Video))*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ModelOverride": {
+      "type": "object",
+      "description": "Persisted operator override for a single (provider, modelId). Subset of ModelReference fields: identity is encoded in the catalog key.",
+      "properties": {
+        "ContextWindow": { "type": "integer", "description": "Effective runtime context window in tokens. When set, clamps the detected provider value." },
+        "InputModalities": {
+          "type": "string",
+          "description": "Manual override for input modalities. Comma-separated ModelModality flags.",
+          "pattern": "^(Text|Image|Audio|Video)(\\s*,\\s*(Text|Image|Audio|Video))*$"
+        },
+        "OutputModalities": {
+          "type": "string",
+          "description": "Manual override for output modalities. Comma-separated ModelModality flags.",
           "pattern": "^(Text|Image|Audio|Video)(\\s*,\\s*(Text|Image|Audio|Video))*$"
         }
       },

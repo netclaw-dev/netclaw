@@ -171,6 +171,11 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
+        // Preserve any operator overrides (ContextWindow / modality forcing)
+        // on the role being overwritten — they survive in the catalog so
+        // switching back to the same (provider, modelId) re-applies them.
+        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
+
         var modelEntry = new Dictionary<string, object>
         {
             ["Provider"] = SelectedProvider,

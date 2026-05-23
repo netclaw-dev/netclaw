@@ -187,6 +187,7 @@ static async Task RunAsync(string[] args)
 
                 var models = initConfig.GetSection("Models")
                     .Get<ModelSelection>() ?? new ModelSelection();
+                models.ApplyCatalogOverlays();
 
                 var contextWindow = ContextWindowResolution.ResolveAsync(
                     models.Main.ContextWindow,
@@ -1802,6 +1803,7 @@ static void ConfigureCliChatServices(IServiceCollection services, IConfiguration
     // Resolve models for session config
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
+    models.ApplyCatalogOverlays();
 
     // Session config: bind operator-facing settings
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));

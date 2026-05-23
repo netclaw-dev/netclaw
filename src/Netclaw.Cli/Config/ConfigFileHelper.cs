@@ -121,4 +121,80 @@ internal static class ConfigFileHelper
         var protector = SecretsProtection.CreateProtector(paths);
         return protector.Unprotect(value);
     }
+
+    /// <summary>
+    /// Override fields that survive a model swap: when the operator changes a
+    /// role's (Provider, ModelId), any of these fields present on the old role
+    /// record are moved into <c>Models.Catalog["{provider}/{modelId}"]</c> so
+    /// they re-apply if the operator switches back. Provider/ModelId/Provenance
+    /// are NOT overrides — they identify which model is selected, not how it
+    /// behaves.
+    /// </summary>
+    private static readonly string[] OverrideFieldNames =
+        ["ContextWindow", "InputModalities", "OutputModalities"];
+
+    /// <summary>
+    /// Before overwriting <c>Models[roleKey]</c> with a new selection, move
+    /// any override fields on the OLD role record into
+    /// <c>Models.Catalog["{oldProvider}/{oldModelId}"]</c>. Inline values from
+    /// the old role win over any existing catalog entry, because they
+    /// represent the most recent operator intent. No-op when the old role
+    /// record carries no override fields (the common case — most operators
+    /// rely on auto-detection).
+    /// </summary>
+    internal static void PromoteRoleOverridesToCatalog(
+        Dictionary<string, object> modelsSection, string roleKey)
+    {
+        var oldRole = GetSectionOrNull(modelsSection, roleKey);
+        if (oldRole is null)
+            return;
+
+        var oldProvider = TryGetString(oldRole, "Provider");
+        var oldModelId = TryGetString(oldRole, "ModelId");
+        if (string.IsNullOrEmpty(oldProvider) || string.IsNullOrEmpty(oldModelId))
+            return;
+
+        Dictionary<string, object>? overrides = null;
+        foreach (var name in OverrideFieldNames)
+        {
+            if (!oldRole.TryGetValue(name, out var value) || value is null)
+                continue;
+            overrides ??= new Dictionary<string, object>();
+            overrides[name] = UnwrapJsonElement(value);
+        }
+
+        if (overrides is null)
+            return;
+
+        var catalog = GetOrCreateSection(modelsSection, "Catalog");
+        var key = Configuration.ModelSelection.CatalogKey(oldProvider, oldModelId);
+        var entry = GetOrCreateSection(catalog, key);
+        foreach (var kvp in overrides)
+            entry[kvp.Key] = kvp.Value;
+    }
+
+    private static string? TryGetString(Dictionary<string, object> dict, string key)
+    {
+        if (!dict.TryGetValue(key, out var raw) || raw is null)
+            return null;
+        return raw switch
+        {
+            string s => s,
+            JsonElement je when je.ValueKind == JsonValueKind.String => je.GetString(),
+            _ => null,
+        };
+    }
+
+    private static object UnwrapJsonElement(object value) => value switch
+    {
+        JsonElement je => je.ValueKind switch
+        {
+            JsonValueKind.String => (object)(je.GetString() ?? string.Empty),
+            JsonValueKind.Number => je.TryGetInt64(out var l) ? l : je.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => je.GetRawText(),
+        },
+        _ => value,
+    };
 }
