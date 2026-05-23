@@ -1051,10 +1051,15 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
 }
 
 /// <summary>
-/// One-time capability detection at startup. Creates temporary HTTP resources
-/// to query the hosting provider (Ollama) or OpenRouter public catalog before
-/// the DI container is built.
-/// Returns null if detection fails (caller falls back to text-only).
+/// One-time capability detection at startup. Builds a resolver chain
+/// (provider-specific resolver + oracles) and merges partial results
+/// across them via <see cref="CompositeCapabilityResolver"/> — first
+/// non-null per field wins. This is what lets a vLLM probe supply the
+/// context window while HuggingFace fills in the modality flags it
+/// intentionally left null. Runs before the DI container is built, so
+/// resolvers are instantiated by hand with a shared transient
+/// <see cref="HttpClient"/>. Returns null if every resolver in the chain
+/// produced nothing (caller falls back to text-only).
 /// </summary>
 static ResolvedModelCapabilities? ResolveStartupCapabilities(
     string modelId, LogLevel logLevel, string? providerType, string? ollamaEndpoint, string? openAiCompatibleEndpoint, string? openAiCompatibleApiKey)
@@ -1065,57 +1070,46 @@ static ResolvedModelCapabilities? ResolveStartupCapabilities(
         using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(logLevel));
         var logger = loggerFactory.CreateLogger("Netclaw.Startup");
 
-        // Provider-first: try Ollama /api/show when running against an Ollama backend
+        var resolvers = new List<IModelCapabilityResolver>();
+
+        // Provider-specific resolver — narrow but authoritative for the
+        // active backend's local quirks (Ollama's /api/show, vLLM's
+        // max_model_len, llama.cpp's /props). Each typically supplies only
+        // a subset of fields — modalities or context window, rarely both.
         if (providerType?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true
             && ollamaEndpoint is not null)
         {
-            var ollamaResolver = new OllamaCapabilityResolver(
-                httpClient, loggerFactory.CreateLogger<OllamaCapabilityResolver>(), ollamaEndpoint);
-            var ollamaResult = ollamaResolver.ResolveAsync(modelId, CancellationToken.None)
-                .GetAwaiter().GetResult();
-
-            if (ollamaResult is not null)
-            {
-                logger.LogInformation(
-                    "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                    modelId,
-                    ollamaResult.InputModalities?.ToString() ?? "unknown",
-                    ollamaResult.OutputModalities?.ToString() ?? "unknown",
-                    ollamaResult.ContextWindowTokens?.ToString() ?? "unknown");
-                return ollamaResult;
-            }
+            resolvers.Add(new OllamaCapabilityResolver(
+                httpClient, loggerFactory.CreateLogger<OllamaCapabilityResolver>(), ollamaEndpoint));
         }
-
-        if (providerType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
+        else if (providerType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
             && openAiCompatibleEndpoint is not null)
         {
-            var openAiCompatibleResolver = new OpenAiCompatibleCapabilityResolver(
+            resolvers.Add(new OpenAiCompatibleCapabilityResolver(
                 httpClient,
                 loggerFactory.CreateLogger<OpenAiCompatibleCapabilityResolver>(),
                 openAiCompatibleEndpoint,
-                openAiCompatibleApiKey);
-            var openAiCompatibleResult = openAiCompatibleResolver.ResolveAsync(modelId, CancellationToken.None)
-                .GetAwaiter().GetResult();
-
-            if (openAiCompatibleResult is not null)
-            {
-                logger.LogInformation(
-                    "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                    modelId,
-                    openAiCompatibleResult.InputModalities?.ToString() ?? "unknown",
-                    openAiCompatibleResult.OutputModalities?.ToString() ?? "unknown",
-                    openAiCompatibleResult.ContextWindowTokens?.ToString() ?? "unknown");
-                return openAiCompatibleResult;
-            }
+                openAiCompatibleApiKey));
         }
 
-        // Fallback: OpenRouter public catalog (works for models from any provider)
+        // Oracles — always queried regardless of provider type. The
+        // composite's merge picks up modality / context-window fields the
+        // provider-specific resolver left null. OpenRouter covers
+        // commercial models; HuggingFace covers open-source weights that
+        // self-hosted backends (vLLM, llama.cpp) serve under HF-shaped ids.
         var openRouterDescriptor = new OpenRouterDescriptor(httpClient);
         var registry = new ProviderDescriptorRegistry([openRouterDescriptor]);
-        var resolver = new OpenRouterOracleResolver(
-            httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>(), registry);
+        resolvers.Add(new OpenRouterOracleResolver(
+            httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>(), registry));
+        resolvers.Add(new HuggingFaceCapabilityResolver(
+            httpClient, loggerFactory.CreateLogger<HuggingFaceCapabilityResolver>()));
 
-        var result = resolver.ResolveAsync(modelId, CancellationToken.None)
+        var composite = new CompositeCapabilityResolver(
+            resolvers,
+            loggerFactory.CreateLogger<CompositeCapabilityResolver>(),
+            activeProviderForModel: _ => providerType);
+
+        var result = composite.ResolveAsync(modelId, CancellationToken.None)
             .GetAwaiter().GetResult();
 
         if (result is not null)
