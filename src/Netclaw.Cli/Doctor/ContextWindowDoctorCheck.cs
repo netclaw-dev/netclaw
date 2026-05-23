@@ -55,27 +55,27 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
 
         // Effective ContextWindow follows ModelSelection.ApplyCatalogOverlays:
         // inline on the role wins; otherwise fall back to the catalog
-        // overlay keyed by "{provider}/{modelId}". The runtime daemon uses
-        // exactly this precedence, so the doctor must match it or it will
-        // report "no explicit setting" while the daemon honors an override.
-        var contextWindow = main["ContextWindow"];
-        if (contextWindow is null && models is not null)
-            contextWindow = TryReadCatalogContextWindow(models, providerName, modelId);
+        // overlay keyed by "{provider}/{modelId}" (case-insensitive). The
+        // runtime daemon uses exactly this precedence, so the doctor must
+        // match it or it will report "no explicit setting" while the
+        // daemon honors an override.
+        var contextWindow = main["ContextWindow"]
+            ?? TryReadCatalogContextWindow(models!, providerName, modelId);
 
         if (contextWindow is null)
             return await ResolveEffectiveContextWindowAsync(modelId, providerName, cancellationToken);
 
-        if (contextWindow.GetValue<int>() is var cw and > 0)
+        if (!TryReadPositiveInt(contextWindow, out var cw))
         {
-            return DoctorCheckResult.Pass(
+            return DoctorCheckResult.Error(
                 "Context Window",
-                $"Context window explicitly set to {cw:N0} tokens.");
+                $"ContextWindow for {providerName}/{modelId} is not a positive integer (got {DescribeJsonValue(contextWindow)}).",
+                "Edit netclaw.json so the ContextWindow value is a positive integer literal (no quotes, no decimals).");
         }
 
-        return DoctorCheckResult.Error(
+        return DoctorCheckResult.Pass(
             "Context Window",
-            "Models.Main.ContextWindow must be a positive integer.",
-            "Set Models.Main.ContextWindow to the effective runtime context window size in tokens.");
+            $"Context window explicitly set to {cw:N0} tokens.");
     }
 
     private static JsonNode? TryReadCatalogContextWindow(
@@ -83,8 +83,44 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
     {
         var catalog = models["Catalog"] as JsonObject;
         if (catalog is null) return null;
-        var entry = catalog[ModelSelection.CatalogKey(providerName, modelId)] as JsonObject;
-        return entry?["ContextWindow"];
+        var key = ModelSelection.CatalogKey(providerName, modelId);
+        // Case-insensitive scan: ApplyCatalogOverlays does the same when the
+        // exact-case lookup misses, so the doctor must agree.
+        if (catalog[key] is JsonObject direct) return direct["ContextWindow"];
+        foreach (var kvp in catalog)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase)
+                && kvp.Value is JsonObject entry)
+                return entry["ContextWindow"];
+        }
+        return null;
+    }
+
+    private static bool TryReadPositiveInt(JsonNode node, out int value)
+    {
+        value = 0;
+        try
+        {
+            // JsonValue.TryGetValue<T> avoids the InvalidOperationException
+            // GetValue<int>() throws on strings, doubles, etc. — exactly the
+            // shapes a hand-edited Catalog override is prone to.
+            if (node is JsonValue jv && jv.TryGetValue<int>(out var parsed) && parsed > 0)
+            {
+                value = parsed;
+                return true;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            // fall through to false
+        }
+        return false;
+    }
+
+    private static string DescribeJsonValue(JsonNode node)
+    {
+        var raw = node.ToJsonString();
+        return raw.Length > 40 ? raw[..37] + "..." : raw;
     }
 
     private async Task<DoctorCheckResult> ResolveEffectiveContextWindowAsync(

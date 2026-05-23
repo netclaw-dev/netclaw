@@ -171,11 +171,9 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Preserve any operator overrides (ContextWindow / modality forcing)
-        // on the role being overwritten — they survive in the catalog so
-        // switching back to the same (provider, modelId) re-applies them.
-        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
-
+        // Role records are pure identity pointers; operator overrides live
+        // in Models.Catalog keyed by "{provider}/{modelId}" and survive
+        // picker swaps because they are decoupled from the role record.
         var modelEntry = new Dictionary<string, object>
         {
             ["Provider"] = SelectedProvider,
@@ -214,16 +212,11 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
-        if (modelsSection is null || !modelsSection.ContainsKey(roleKey))
-            return;
-
-        // Preserve any operator overrides on the role being cleared so that
-        // re-setting it to the same (provider, modelId) later restores them
-        // via the catalog overlay — same contract as ConfirmAssignment.
-        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
-
-        if (modelsSection.Remove(roleKey))
+        if (modelsSection?.Remove(roleKey) == true)
         {
+            // Clearing a role removes the identity pointer only. Any saved
+            // overrides in Models.Catalog stay in place and re-apply if the
+            // role is later re-bound to the same (provider, modelId).
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();
             StatusMessage.Value = $"Cleared {role} role. Restart daemon for changes to take effect.";

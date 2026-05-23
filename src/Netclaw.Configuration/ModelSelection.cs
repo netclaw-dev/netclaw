@@ -57,11 +57,29 @@ public sealed class ModelSelection
 
     private void Merge(ModelReference role)
     {
-        if (!Catalog!.TryGetValue(CatalogKey(role.Provider, role.ModelId), out var overlay))
-            return;
+        var key = CatalogKey(role.Provider, role.ModelId);
+        var overlay = FindOverlay(key);
+        if (overlay is null) return;
 
         role.ContextWindow ??= overlay.ContextWindow;
         role.InputModalities ??= overlay.InputModalities;
         role.OutputModalities ??= overlay.OutputModalities;
+    }
+
+    private ModelOverride? FindOverlay(string key)
+    {
+        // Fast path: exact-case match against the operator-written key.
+        if (Catalog!.TryGetValue(key, out var direct)) return direct;
+        // Tolerate provider-name casing drift between role.Provider and the
+        // catalog key (operator hand-edits, picker re-writes, the Providers
+        // dictionary which is case-sensitive vs. ProviderRenamer which is
+        // not). Catalog is typically empty or single-digit entries so the
+        // O(n) scan is negligible.
+        foreach (var kvp in Catalog)
+        {
+            if (string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
+                return kvp.Value;
+        }
+        return null;
     }
 }

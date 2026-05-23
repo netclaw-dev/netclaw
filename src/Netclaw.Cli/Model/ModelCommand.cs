@@ -138,34 +138,14 @@ internal static class ModelCommand
             }
         }
 
-        // Write to config
+        // Write to config. Role records are pure identity pointers
+        // (Provider, ModelId, Provenance). Operator-set overrides live
+        // independently in Models.Catalog, keyed by "{provider}/{modelId}",
+        // and survive every role-pointer change (this set, future sets,
+        // picker swaps, clears) because the catalog is decoupled from
+        // which role currently references the model.
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
-
-        // CLI write semantics differ from the TUI picker:
-        //
-        //   identity changed  → Promote the displaced role's overrides into
-        //                       the catalog so a later switch back restores
-        //                       them. Cross-model survival.
-        //
-        //   identity unchanged → DO NOT Promote. The operator running
-        //                        `model set ROLE P M` (without --context-window)
-        //                        is signaling "start fresh for this model";
-        //                        promoting the inline override into the catalog
-        //                        would have ApplyCatalogOverlays silently
-        //                        restore it on the next read, leaving the
-        //                        operator no CLI affordance to clear it.
-        //
-        // Cross-model survival for explicit --context-window writes still
-        // works: the value lives inline on the role and the next identity
-        // change promotes it to the catalog automatically.
-        var existingIdentity = ConfigFileHelper.TryReadRoleIdentity(modelsSection, roleKey);
-        var identityChanged = existingIdentity is null
-            || existingIdentity.Value.Provider != providerName
-            || existingIdentity.Value.ModelId != modelId;
-
-        if (identityChanged)
-            ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
 
         var modelEntry = new Dictionary<string, object>
         {
@@ -173,11 +153,18 @@ internal static class ModelCommand
             ["ModelId"] = modelId,
             ["Provenance"] = ModelDiscoverySource.Manual.ToString()
         };
-
-        if (contextWindow.HasValue)
-            modelEntry["ContextWindow"] = contextWindow.Value;
-
         modelsSection[roleKey] = modelEntry;
+
+        // --context-window is explicit override intent → persist to catalog
+        // so it applies regardless of which role currently points at this
+        // (provider, modelId). To remove a previously-set override, the
+        // operator hand-edits Models.Catalog["{provider}/{modelId}"].
+        if (contextWindow.HasValue)
+        {
+            ConfigFileHelper.SetCatalogOverride(
+                modelsSection, providerName, modelId, "ContextWindow", contextWindow.Value);
+        }
+
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");
@@ -284,11 +271,10 @@ internal static class ModelCommand
             return 0;
         }
 
-        // Preserve any operator overrides before the role record disappears,
-        // so re-setting this role to the same (provider, modelId) later
-        // restores them via the catalog overlay.
-        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
-
+        // Clearing a role removes the identity pointer only. Any override
+        // entries in Models.Catalog stay in place, so re-binding this role
+        // to the same (provider, modelId) later still picks up the saved
+        // overrides via ApplyCatalogOverlays.
         modelsSection.Remove(roleKey);
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 

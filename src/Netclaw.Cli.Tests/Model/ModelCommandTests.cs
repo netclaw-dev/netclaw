@@ -279,12 +279,11 @@ public sealed class ModelCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Set_SameIdentity_WithoutContextWindowFlag_DropsOverride()
+    public async Task Set_ContextWindowFlag_WritesToCatalog_NotInlineRole()
     {
-        // C1 regression: pre-fix, re-running `model set` for the same
-        // (provider, modelId) without --context-window silently restored
-        // the previously-set ContextWindow via the catalog overlay. The
-        // operator had no CLI affordance to drop the override.
+        // The role record stays a pure identity pointer; explicit override
+        // intent (--context-window) lands in Models.Catalog so it survives
+        // role-pointer changes (the #1127 contract).
         WriteConfig(new Dictionary<string, object>
         {
             ["configVersion"] = 1,
@@ -298,20 +297,26 @@ public sealed class ModelCommandTests : IDisposable
             ["model", "set", "main", "p", "m", "--context-window", "200000"],
             _paths, output: _output);
 
-        await ModelCommand.RunAsync(
-            ["model", "set", "main", "p", "m"],
-            _paths, output: _output);
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var models = config.RootElement.GetProperty("Models");
+        var main = models.GetProperty("Main");
+        Assert.False(main.TryGetProperty("ContextWindow", out _),
+            "Role record should not carry inline ContextWindow — overrides live in Catalog.");
 
+        var entry = models.GetProperty("Catalog").GetProperty("p/m");
+        Assert.Equal(200_000, entry.GetProperty("ContextWindow").GetInt32());
+
+        // Effective via overlay merge: the role sees ContextWindow=200000.
         var selection = ModelCommand.LoadModelSelection(_paths)!;
-        Assert.Null(selection.Main.ContextWindow);
+        Assert.Equal(200_000, selection.Main.ContextWindow);
     }
 
     [Fact]
-    public async Task Set_IdentityChange_PromotesPriorOverrideToCatalog()
+    public async Task Set_SwitchingRole_PointerDoesNotTouchCatalog()
     {
-        // C1 sibling: changing the model preserves the displaced role's
-        // overrides — switching back later re-applies them via the catalog
-        // overlay. This is the cross-model survival contract.
+        // #1127 core invariant: changing Main from p/m1 to p/m2 does NOT
+        // disturb Models.Catalog. The hand-set override on p/m1 stays in
+        // place and re-applies the next time Main points back at p/m1.
         WriteConfig(new Dictionary<string, object>
         {
             ["configVersion"] = 1,
@@ -321,27 +326,39 @@ public sealed class ModelCommandTests : IDisposable
             }
         });
 
+        // Operator pins ContextWindow=200000 on p/m1.
         await ModelCommand.RunAsync(
             ["model", "set", "main", "p", "m1", "--context-window", "200000"],
             _paths, output: _output);
+
+        // Operator switches Main to p/m2 (no override on m2).
         await ModelCommand.RunAsync(
             ["model", "set", "main", "p", "m2"],
             _paths, output: _output);
+
+        var afterSwitch = ModelCommand.LoadModelSelection(_paths)!;
+        Assert.Equal("m2", afterSwitch.Main.ModelId);
+        Assert.Null(afterSwitch.Main.ContextWindow); // no override for m2
+
+        // Catalog still holds the m1 override untouched.
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var entry = config.RootElement
+            .GetProperty("Models").GetProperty("Catalog").GetProperty("p/m1");
+        Assert.Equal(200_000, entry.GetProperty("ContextWindow").GetInt32());
+
+        // Switching Main back to p/m1 re-applies the saved override.
         await ModelCommand.RunAsync(
             ["model", "set", "main", "p", "m1"],
             _paths, output: _output);
 
-        var selection = ModelCommand.LoadModelSelection(_paths)!;
-        Assert.Equal(200_000, selection.Main.ContextWindow);
+        var afterReturn = ModelCommand.LoadModelSelection(_paths)!;
+        Assert.Equal(200_000, afterReturn.Main.ContextWindow);
     }
 
     [Fact]
-    public async Task Clear_PreservesOverridesToCatalog()
+    public async Task Clear_LeavesCatalogIntact()
     {
-        // C4 regression (CLI side): clearing a role previously deleted any
-        // inline ContextWindow / modality overrides without preserving
-        // them. Re-setting the same (provider, modelId) later must restore
-        // them via the catalog overlay.
+        // Clearing a role removes the pointer; saved overrides survive.
         WriteConfig(new Dictionary<string, object>
         {
             ["configVersion"] = 1,
@@ -359,19 +376,21 @@ public sealed class ModelCommandTests : IDisposable
                 ["Fallback"] = new Dictionary<string, object>
                 {
                     ["Provider"] = "p",
-                    ["ModelId"] = "fallback-model",
-                    ["ContextWindow"] = 65536L
+                    ["ModelId"] = "fallback-model"
+                },
+                ["Catalog"] = new Dictionary<string, object>
+                {
+                    ["p/fallback-model"] = new Dictionary<string, object>
+                    {
+                        ["ContextWindow"] = 65536L
+                    }
                 }
             }
         });
 
+        await ModelCommand.RunAsync(["model", "clear", "fallback"], _paths, output: _output);
         await ModelCommand.RunAsync(
-            ["model", "clear", "fallback"],
-            _paths, output: _output);
-
-        await ModelCommand.RunAsync(
-            ["model", "set", "fallback", "p", "fallback-model"],
-            _paths, output: _output);
+            ["model", "set", "fallback", "p", "fallback-model"], _paths, output: _output);
 
         var selection = ModelCommand.LoadModelSelection(_paths)!;
         Assert.Equal(65_536, selection.Fallback!.ContextWindow);
