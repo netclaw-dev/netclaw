@@ -7,8 +7,12 @@ The CLI SHALL define a `ISectionEditor` contract in
 section. Each implementation SHALL declare a stable `SectionId` whose value
 matches a schema key in `netclaw-config.v1.schema.json` (dotted-path form is
 permitted for nested sections such as `Daemon.ExposureMode` and
-`Tools.AudienceProfiles`), a user-facing `DisplayName`, an optional
-`Category` grouping label, a `GetStatus` method returning
+`Tools.AudienceProfiles`; a synthetic-identifier form is permitted ONLY for
+editors whose data spans multiple schema sections, in which case the editor
+MUST appear in the documented exemption list), a user-facing `DisplayName`,
+an optional `Category` grouping label, a `bool ShowInMenu` flag (default
+`true`; editors that participate in init but are not exposed in the
+`netclaw config` menu SHALL return `false`), a `GetStatus` method returning
 `SectionStatus.{Default, Configured, Warning, Error, Missing}` from current
 on-disk config, a secret-redacting `Summary` for dashboard display, a
 non-empty `RelevantDoctorChecks` collection (or an explicit
@@ -50,6 +54,18 @@ factory that returns an `IWizardStepViewModel`.
 - **AND** it is also runnable in single-step orchestrator mode (see
   "Single-step orchestrator")
 
+#### Scenario: Editor opts out of the netclaw config menu
+
+- **GIVEN** an `ISectionEditor` whose section is owned by the init
+  wizard or a CLI subcommand and is not exposed for ad-hoc editing
+  via `netclaw config`
+- **WHEN** the editor declares `ShowInMenu => false`
+- **THEN** the dashboard SHALL NOT render the editor as a menu entry
+- **AND** the menu registry audit's smoke-tape existence check
+  SHALL NOT require a `config-<sectionid>.tape` for that editor
+- **AND** the round-trip test contract SHALL still apply (the editor
+  must have a `SectionEditorTestBase<TEditor>` subclass)
+
 ### Requirement: Section editor registry
 
 The CLI SHALL provide a DI-discovered `SectionEditorRegistry` holding every
@@ -79,11 +95,17 @@ within the registry.
 
 The CLI SHALL maintain a documented exemption list at
 `Netclaw.Cli.Tui.Sections.SectionEditorExemptions` enumerating schema
-sections that intentionally have no TUI editor. Each entry SHALL carry a
-machine-readable category (e.g. "internal-only", "set-once-at-install",
-"covered by CLI subcommand", "covered by another editor", "out of MVP
-scope"). The exemption list SHALL be the only mechanism by which an
-unregistered schema section avoids audit failure.
+sections that intentionally have no top-level TUI editor. Each entry
+SHALL carry a machine-readable category (e.g. "internal-only",
+"set-once-at-install", "covered by CLI subcommand", "covered by
+another editor's dotted-path SectionId", "synthetic-spans-multiple-sections",
+"out of MVP scope"). The exemption list SHALL be the only mechanism
+by which an unregistered schema section avoids audit failure. The
+audit SHALL consider a top-level schema section "covered" when ANY
+registered editor's `SectionId` starts with `<section>.` (dotted-path
+ownership); such top-level sections still require an exemption-list
+entry naming the covering editor to make the relationship explicit
+and reviewable.
 
 #### Scenario: Schema section absent from registry and absent from exemptions
 
@@ -101,6 +123,19 @@ unregistered schema section avoids audit failure.
   category `"set-once-at-install"`
 - **WHEN** the audit runs
 - **THEN** the audit does not fail for `Persistence`
+
+#### Scenario: Top-level schema section covered by a dotted-path editor
+
+- **GIVEN** the schema declares a top-level section `Security`
+- **AND** an editor with `SectionId = "Security.Posture"` is
+  registered
+- **AND** `"Security"` is present in `SectionEditorExemptions` with
+  category `"covered by another editor's dotted-path SectionId"`
+  naming `Security.Posture`
+- **WHEN** the audit runs
+- **THEN** the audit does not fail for `Security`
+- **AND** the audit's failure-message vocabulary treats the
+  exemption's "covering editor" reference as the canonical owner
 
 ### Requirement: Single-step orchestrator mode
 
@@ -293,13 +328,15 @@ every registered `ISectionEditor`.
 
 The test project SHALL include `MenuRegistryAuditTests` that walks
 `SectionEditorRegistry` and asserts, for every registered editor: a
-matching concrete `SectionEditorTestBase<TEditor>` subclass exists, the
+matching concrete `SectionEditorTestBase<TEditor>` subclass exists; the
 editor's `RelevantDoctorChecks` is non-empty (or the class is annotated
-with `[NoDoctorChecks]`), and — once smoke tapes ship for the editor in
-the next change — a matching tape file exists at
-`tests/smoke/tapes/config-<section-lowercase>.tape`. The audit SHALL
-report all failures in one assertion message naming each missing
-artifact.
+with `[NoDoctorChecks]`); and, for editors with `ShowInMenu == true`,
+once smoke tapes ship for the editor in the next change, a matching
+tape file exists at `tests/smoke/tapes/config-<section-lowercase>.tape`.
+Editors with `ShowInMenu == false` are exempt from the tape-existence
+check (they participate in init or in CLI subcommands; init-side
+coverage is provided by `init-wizard.tape`). The audit SHALL report
+all failures in one assertion message naming each missing artifact.
 
 #### Scenario: Missing round-trip test class fails the audit
 
@@ -322,5 +359,20 @@ artifact.
   (Provider, Identity, Posture)
 - **AND** each has a matching round-trip test class and non-empty
   `RelevantDoctorChecks`
+- **AND** Provider and Identity declare `ShowInMenu == false` while
+  Posture declares `ShowInMenu == true`
 - **WHEN** `MenuRegistryAuditTests` runs
 - **THEN** the audit passes
+- **AND** the audit does not require a `config-providers.tape`,
+  `config-identity.tape`, or `config-security.posture.tape` for the
+  `ShowInMenu == false` editors
+
+#### Scenario: ShowInMenu editor missing its smoke tape fails the audit
+
+- **GIVEN** a registered editor with `ShowInMenu == true`
+- **AND** no file at
+  `tests/smoke/tapes/config-<sectionid-lower>.tape`
+- **AND** the `netclaw config` command exists (tape requirement is
+  active per the change that introduces the dashboard)
+- **WHEN** `MenuRegistryAuditTests` runs
+- **THEN** the audit fails with a message naming the missing tape

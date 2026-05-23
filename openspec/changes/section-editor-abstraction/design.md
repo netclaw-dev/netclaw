@@ -1,5 +1,12 @@
 ## Context
 
+**UI wireframes:** SecurityPosture's appearance inside `netclaw config`
+is in `docs/ui/TUI-002-netclaw-config-wireframes.md` (§ Config.6).
+Provider and Identity remain init-only and their wireframes are in
+`docs/ui/TUI-003-simplified-init-wireframes.md` (§ Init.1, Init.2)
+once Change C lands; for this change they continue to use the prior
+init wizard wireframes documented in `docs/ui/TUI-001-command-wireframes.md`.
+
 The `netclaw init` wizard composed of `WizardOrchestrator` + a fixed list of
 `IWizardStepViewModel`s produces a runnable Netclaw configuration but treats
 the on-disk state as a write-once target. There is no shared abstraction for
@@ -114,6 +121,31 @@ in the exemption list. The audit's purpose is to enforce contracts on
 editors we ship, not to demand editors for every schema knob; the
 exemption list is the explicit "we know about this section and choose
 not to expose it" record.
+
+The audit distinguishes three kinds of editor:
+
+- **`ShowInMenu == true` editors with a top-level `SectionId`** (e.g.
+  `Search`, `Slack`). Require: round-trip test class, non-empty
+  `RelevantDoctorChecks` (or `[NoDoctorChecks]`), AND a smoke tape at
+  `tests/smoke/tapes/config-<sectionid-lower>.tape` (once the
+  `netclaw config` dashboard exists from the next change).
+- **`ShowInMenu == true` editors with a dotted-path `SectionId`** (e.g.
+  `Security.Posture`, `Daemon.ExposureMode`, `Tools.AudienceProfiles`).
+  Same requirements as above. The top-level parent section (e.g.
+  `Security`) must appear in `SectionEditorExemptions` with a
+  "covered by another editor" entry naming the dotted-path editor as
+  the canonical owner.
+- **`ShowInMenu == false` editors** (e.g. `Providers`, `Identity`).
+  Require: round-trip test class and `RelevantDoctorChecks`. Smoke-tape
+  existence is NOT required — these editors run inside the init wizard
+  (covered by `init-wizard.tape`) or via dedicated CLI subcommands
+  (covered by their respective tapes).
+
+The synthetic-identifier case (e.g. `Identity`, which spans several
+schema sections rather than owning one) is treated as `ShowInMenu ==
+false` and must appear in the exemption list with category
+`"synthetic-spans-multiple-sections"` so reviewers can see it's not a
+real schema key.
 
 Alternative considered: walk the schema and require every top-level
 section to either have an editor or an exemption. Rejected per planning

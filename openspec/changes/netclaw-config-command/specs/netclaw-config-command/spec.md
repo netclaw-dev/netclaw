@@ -195,8 +195,14 @@ dashboard with no config write performed.
 `netclaw config` SHALL print a stderr nudge at exit instructing the
 operator to restart the daemon for changes to take effect, when (a) at
 least one config or secrets write occurred during the session AND (b)
-the daemon is currently running. If either condition is false, the
-nudge SHALL be omitted.
+the daemon is currently running. Daemon-running detection SHALL reuse
+the same probe used by `netclaw daemon status` (PID-file check at the
+documented daemon path, falling back to a TCP-open check on the
+configured daemon port). The probe SHALL be bounded by a 250 ms
+timeout; on timeout the nudge SHALL be omitted (conservative — missing
+a true-positive nudge is preferable to a false-positive nudge after a
+network hiccup). If either condition is false, the nudge SHALL be
+omitted.
 
 #### Scenario: Daemon running plus config change emits nudge
 
@@ -221,6 +227,16 @@ nudge SHALL be omitted.
   saved nothing
 - **WHEN** the operator quits
 - **THEN** no nudge is printed regardless of daemon state
+
+#### Scenario: Daemon-detection probe timeout suppresses nudge
+
+- **GIVEN** the operator saved at least one section during the session
+- **AND** the PID-file lookup fails (file absent or unreadable)
+- **AND** the TCP-open check on the daemon port exceeds the 250 ms
+  bound
+- **WHEN** the operator quits the dashboard
+- **THEN** no nudge is printed
+- **AND** the command exits with status 0
 
 ### Requirement: Generic list editor component
 
@@ -264,12 +280,21 @@ in-place renames (rather than delete + add) round-trip correctly.
 
 - **GIVEN** a webhook list with an entry whose `KeyOf` returns
   `"critical-pager"`
+- **AND** the entry's auth header is stored under that key in
+  `secrets.json` (e.g. `Notifications.Webhooks.critical-pager.AuthHeader`)
 - **WHEN** the operator edits the entry and changes its name to
   `pagerduty-prod`
-- **THEN** the list save records a single update (not a delete + add)
-- **AND** the underlying `Notifications.Webhooks` array contains exactly
-  one entry with the new name and the preserved auth header
-  (per the secret-handling contract)
+- **THEN** the list editor tracks the rename via the `(originalKey,
+  newKey)` pair across the edit lifecycle
+- **AND** the merge writer locates the underlying schema-array entry
+  by `originalKey` (not by array index), replaces the name and other
+  fields, and writes the updated entry at the same array position
+- **AND** the corresponding secrets-store key is renamed from
+  `originalKey` to `newKey` atomically; the stored encrypted value
+  for `originalKey` is unchanged in encrypted form and re-keyed
+- **AND** the resulting `Notifications.Webhooks` array contains
+  exactly one entry, named `pagerduty-prod`, with the previously
+  stored auth header still configured
 
 ### Requirement: Search Provider editor
 
@@ -540,6 +565,30 @@ installing. `RelevantDoctorChecks` SHALL include
 - **WHEN** the operator saves
 - **THEN** `BrowserAutomationDoctorCheck` returns ERROR
 - **AND** the save is blocked with remediation guidance
+
+#### Scenario: Existing config without BrowserAutomation section opens cleanly
+
+- **GIVEN** an existing `netclaw.json` written prior to this change
+  that lacks a top-level `BrowserAutomation` section
+- **WHEN** the operator opens the Browser Automation editor
+- **THEN** the editor renders with the toggle reflecting
+  `Enabled = false` (schema default)
+- **AND** no schema-validation error is surfaced for the missing
+  section
+- **AND** the merge writer treats a no-op exit as a true no-op (no
+  speculative `BrowserAutomation` section is written until the
+  operator explicitly saves a non-default state)
+
+#### Scenario: SchemaFixResolver auto-insert tolerates missing section on doctor --fix
+
+- **GIVEN** an existing `netclaw.json` written prior to this change
+  that lacks the `BrowserAutomation` section
+- **WHEN** the operator runs `netclaw doctor --fix`
+- **THEN** `SchemaFixResolver` inserts
+  `BrowserAutomation: { Enabled: false }` using the schema's default
+  value
+- **AND** subsequent `ConfigSchemaDoctorCheck` runs pass without
+  warning
 
 ### Requirement: Smoke tape per editor and the no-init refusal
 

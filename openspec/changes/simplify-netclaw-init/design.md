@@ -1,5 +1,13 @@
 ## Context
 
+**UI wireframes:** every page introduced by this change — the three
+init steps, the post-flight screen, the existing-config refusal
+(Init.E1), and the force-reset backup confirm (Init.E2) — is mocked
+in `docs/ui/TUI-003-simplified-init-wireframes.md`. Implementors SHALL
+treat TUI-003 as the visual contract for this change. The companion
+TUI-002 mocks `netclaw config`, which is the destination operators are
+nudged toward at post-flight.
+
 The `section-editor-abstraction` change (Change A) refactored Provider,
 Identity, and Posture step viewmodels into reentrant `ISectionEditor`s
 and switched the wizard's terminal write to merge-on-save. The

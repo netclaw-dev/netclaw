@@ -34,9 +34,11 @@
   button is enabled only when the operator types `reset` into the
   confirm input.
 - [ ] 3.3 On confirm, rename `netclaw.json` →
-  `netclaw.json.bak.<unix-ts>` and `secrets.json` →
-  `secrets.json.bak.<unix-ts>` atomically. Generate timestamp once
-  per invocation so the two files share a suffix.
+  `netclaw.json.bak.<unix-millis>` and `secrets.json` →
+  `secrets.json.bak.<unix-millis>` atomically. Generate the
+  millisecond timestamp once per invocation so the two files share a
+  suffix. If a file already exists at the chosen suffix, append a
+  dash-counter (`-1`, `-2`, …) until a free name is found.
 - [ ] 3.4 After backup, proceed into the three-step wizard as a fresh
   first-run (`WizardContext.ExistingConfig = null`).
 - [ ] 3.5 On successful post-flight, list the .bak file paths in the
@@ -44,6 +46,9 @@
   went.
 - [ ] 3.6 `--force` with no existing config silently behaves as plain
   `netclaw init` (no backup screen).
+- [ ] 3.7 `--force` in a non-TTY context (stdin or stdout not a
+  terminal) SHALL refuse with the documented stderr message and
+  exit non-zero before any file mutation.
 
 ## 4. Wizard step list trim
 

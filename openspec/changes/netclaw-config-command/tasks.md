@@ -71,55 +71,75 @@
 
 ## 6. Section editors — single-value
 
-- [ ] 6.1 `SearchSectionEditor` (`SectionId = "Search"`): backend
-  selector + conditional API key / SearXng URL fields. Honor
+These editors REUSE existing step viewmodels where possible. Each
+existing step viewmodel is REFACTORED to implement `ISectionEditor`
+(per Change A's contract) and is moved into the new folder structure
+under `src/Netclaw.Cli/Tui/Sections/<Section>/`. No new duplicate
+classes are created for sections that today have an init step
+viewmodel; the same class serves both init (when in the trimmed step
+list, post Change C) and `netclaw config` (single-step mode).
+
+- [ ] 6.1 `SearchSectionEditor` (`SectionId = "Search"`,
+  `ShowInMenu = true`): refactor of existing `SearchStepViewModel`.
+  Backend selector + conditional API key / SearXng URL fields. Honor
   `ExistingConfig`. `RelevantDoctorChecks`:
   `{ConfigSchemaDoctorCheck, SearchBackendDoctorCheck}`.
 - [ ] 6.2 `SecurityPostureSectionEditor`
-  (`SectionId = "Security.Posture"`): three-choice posture list with
-  cascade dialog (Cancel | Overwrite | Keep custom) when changing
-  posture over customized `Tools.AudienceProfiles`.
+  (`SectionId = "Security.Posture"`, `ShowInMenu = true`): refactored
+  to `ISectionEditor` in Change A; this change adds the cascade dialog
+  (Cancel | Overwrite | Keep custom) when changing posture over
+  customized `Tools.AudienceProfiles`.
 - [ ] 6.3 `AudienceProfilesSectionEditor`
-  (`SectionId = "Tools.AudienceProfiles"`): audience picker
-  (Personal | Team | Public) opening per-audience editor with
-  toggleable feature rows, shell-mode selector, approval policy
-  selector, and "Reset to posture default" affordance. MUST exercise
-  arrow nav + Space toggle (#1150 contract).
-- [ ] 6.4 `InboundWebhooksSectionEditor` (`SectionId = "Webhooks"`):
-  feature-flag toggle + request timeout integer.
+  (`SectionId = "Tools.AudienceProfiles"`, `ShowInMenu = true`): NEW
+  editor (no init-step equivalent — the buggy `FeatureSelectionStepViewModel`
+  is replaced by this editor). Audience picker (Personal | Team | Public)
+  opening per-audience editor with toggleable feature rows,
+  shell-mode selector, approval policy selector, and "Reset to
+  posture default" affordance. MUST exercise arrow nav + Space toggle
+  (#1150 contract).
+- [ ] 6.4 `InboundWebhooksSectionEditor` (`SectionId = "Webhooks"`,
+  `ShowInMenu = true`): NEW editor. Feature-flag toggle + request
+  timeout integer.
 - [ ] 6.5 `BrowserAutomationSectionEditor`
-  (`SectionId = "BrowserAutomation"`): feature-flag toggle with
-  Playwright detection at entry; install-instructions sub-page when
-  Playwright absent.
+  (`SectionId = "BrowserAutomation"`, `ShowInMenu = true`): refactor
+  of existing `BrowserAutomationStepViewModel`. Feature-flag toggle
+  with Playwright detection at entry; install-instructions sub-page
+  when Playwright absent.
 
 ## 7. Section editors — multi-value (compose ListEditor)
 
 - [ ] 7.1 `OutboundWebhooksSectionEditor`
-  (`SectionId = "Notifications.Webhooks"`) using
-  `WebhookItemEditor`.
+  (`SectionId = "Notifications.Webhooks"`, `ShowInMenu = true`): NEW
+  editor. Uses `WebhookItemEditor`.
 - [ ] 7.2 `ExternalSkillsSectionEditor`
-  (`SectionId = "ExternalSkills"`) using `PathItemEditor`.
-- [ ] 7.3 `SkillFeedsSectionEditor` (`SectionId = "SkillFeeds"`) using
-  `SkillFeedItemEditor`.
+  (`SectionId = "ExternalSkills"`, `ShowInMenu = true`): refactor of
+  existing `ExternalSkillsStepViewModel`. Uses `PathItemEditor`.
+- [ ] 7.3 `SkillFeedsSectionEditor` (`SectionId = "SkillFeeds"`,
+  `ShowInMenu = true`): refactor of existing `SkillFeedsStepViewModel`.
+  Uses `SkillFeedItemEditor`.
 
 ## 8. Section editors — chat channels (composite)
 
 - [ ] 8.1 `SlackSectionEditor` (`SectionId = "Slack"`,
-  `Category = "Chat Channels"`): bot token + app token, allowed
+  `Category = "Chat Channels"`, `ShowInMenu = true`): refactor of
+  existing `SlackStepViewModel`. Bot token + app token, allowed
   channels list, allowed users list, DMs toggle, audience profile
-  selector, Test Connection. Reuses
-  `channel-audience-tui` cycling component for the channel list.
+  selector, Test Connection. Reuses `channel-audience-tui` cycling
+  component for the channel list.
 - [ ] 8.2 `DiscordSectionEditor` (`SectionId = "Discord"`,
-  `Category = "Chat Channels"`): single bot token, same affordances
+  `Category = "Chat Channels"`, `ShowInMenu = true`): refactor of
+  existing `DiscordStepViewModel`. Single bot token, same affordances
   otherwise.
 - [ ] 8.3 `MattermostSectionEditor` (`SectionId = "Mattermost"`,
-  `Category = "Chat Channels"`): server URL + bot token, same
+  `Category = "Chat Channels"`, `ShowInMenu = true`): refactor of
+  existing `MattermostStepViewModel`. Server URL + bot token, same
   affordances otherwise.
 
 ## 9. Section editor — exposure mode (composite)
 
 - [ ] 9.1 `ExposureModeSectionEditor`
-  (`SectionId = "Daemon.ExposureMode"`): mode selector (Local |
+  (`SectionId = "Daemon.ExposureMode"`, `ShowInMenu = true`): refactor
+  of existing `ExposureModeStepViewModel`. Mode selector (Local |
   Reverse Proxy | Tailscale | Cloudflare Tunnel), daemon host/port
   fields, mode-conditional sub-forms.
 - [ ] 9.2 Reverse Proxy sub-form: external base URL + trusted
@@ -127,6 +147,17 @@
 - [ ] 9.3 Tailscale sub-form: auth key (secret) + hostname.
 - [ ] 9.4 Cloudflare Tunnel sub-form: tunnel token (secret) +
   optional access-policy email domain.
+- [ ] 9.5 Add `Daemon` to `SectionEditorExemptions` with category
+  `"covered by another editor's dotted-path SectionId"` naming
+  `Daemon.ExposureMode` as the owner. The non-exposure parts of
+  `Daemon` (host, port, trusted proxies) are part of the
+  ExposureModeSectionEditor's surface.
+- [ ] 9.6 Add `Security` to `SectionEditorExemptions` with category
+  `"covered by another editor's dotted-path SectionId"` naming
+  `Security.Posture`.
+- [ ] 9.7 Add `Tools` to `SectionEditorExemptions` with category
+  `"covered by another editor's dotted-path SectionId"` naming
+  `Tools.AudienceProfiles`.
 
 ## 10. New doctor checks
 

@@ -6,10 +6,11 @@ The CLI SHALL expose `netclaw config` as a top-level command. The
 command SHALL be offline (no daemon connection), SHALL operate on
 local config files only, and SHALL behave per the
 `netclaw-config-command` capability. `netclaw config --help` SHALL
-print a one-paragraph description and exit zero. Invocations with any
-positional argument SHALL print usage and exit non-zero in this change
-(subcommands such as `netclaw config show|validate` remain reserved
-for future work and SHALL NOT execute as a side effect).
+print a one-paragraph description and exit zero. `netclaw config show`
+and `netclaw config validate` are RESERVED subcommands (PRD-004) and
+SHALL print a not-yet-implemented notice and exit non-zero in this
+change, preserving the documented future surface. Unknown subcommands
+SHALL print usage and exit non-zero.
 
 #### Scenario: Help text describes the command
 
@@ -18,12 +19,33 @@ for future work and SHALL NOT execute as a side effect).
 - **AND** stdout contains a one-paragraph description naming
   "interactive configuration editor"
 - **AND** stdout references the `netclaw init` companion command
+- **AND** stdout lists the reserved `show` and `validate` subcommands
+  with a "not yet implemented; see PRD-004" note
 
-#### Scenario: Unknown subcommand rejected
+#### Scenario: Reserved subcommand show exits non-zero with reservation notice
+
+- **WHEN** the operator runs `netclaw config show`
+- **THEN** stderr contains
+  `\`netclaw config show\` is reserved for future use (PRD-004) and is
+   not yet implemented.`
+- **AND** the command exits with non-zero status
+- **AND** no `netclaw.json` write occurs
+
+#### Scenario: Reserved subcommand validate exits non-zero with reservation notice
+
+- **WHEN** the operator runs `netclaw config validate`
+- **THEN** stderr contains
+  `\`netclaw config validate\` is reserved for future use (PRD-004)
+   and is not yet implemented.`
+- **AND** the command exits with non-zero status
+- **AND** no `netclaw.json` write occurs
+
+#### Scenario: Unknown subcommand rejected with usage
 
 - **WHEN** the operator runs `netclaw config foo`
 - **THEN** the command exits with non-zero status
-- **AND** stderr contains usage text
+- **AND** stderr contains usage text naming the dashboard launch
+  (`netclaw config` with no args) and the reserved subcommands
 
 #### Scenario: No-args invocation launches dashboard
 

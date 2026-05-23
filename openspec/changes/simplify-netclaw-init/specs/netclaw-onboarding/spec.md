@@ -139,12 +139,20 @@ status so CI catches the surprise.
 `netclaw init --force` SHALL detect existing config and require an
 explicit type-to-confirm before proceeding. On confirm, the command
 SHALL rename `~/.netclaw/config/netclaw.json` to
-`netclaw.json.bak.<unix-timestamp>` and
-`~/.netclaw/config/secrets.json` to `secrets.json.bak.<unix-timestamp>`.
-The wizard SHALL then proceed as a fresh first-run. The .bak files
-SHALL be preserved on disk so operators retain a manual recovery
-path. The command SHALL print the .bak file paths to the post-flight
-screen so operators know where the prior config went.
+`netclaw.json.bak.<unix-millis>` and
+`~/.netclaw/config/secrets.json` to `secrets.json.bak.<unix-millis>`.
+A single timestamp SHALL be generated per invocation so both files
+share a suffix. On the extremely unlikely event of a collision (an
+existing file at the chosen suffix), an auto-incrementing dash
+suffix SHALL be appended (`.bak.<unix-millis>-1`, `-2`, ...) until a
+free filename is found. The wizard SHALL then proceed as a fresh
+first-run. The .bak files SHALL be preserved on disk so operators
+retain a manual recovery path. The command SHALL print the .bak file
+paths to the post-flight screen so operators know where the prior
+config went. `netclaw init --force` SHALL refuse to run in non-TTY
+contexts (no stdin or no terminal-controlled stdout) because the
+type-to-confirm prompt cannot be rendered safely; the command SHALL
+print a non-TTY refusal message to stderr and exit non-zero.
 
 #### Scenario: Force without confirm leaves config unchanged
 
@@ -175,3 +183,29 @@ screen so operators know where the prior config went.
 - **WHEN** the command starts
 - **THEN** no backup screen is shown (nothing to back up)
 - **AND** the wizard proceeds to Step 1 (Provider) normally
+
+#### Scenario: Force in non-TTY context refuses
+
+- **GIVEN** `netclaw.json` exists on disk
+- **AND** `netclaw init --force` is run with stdout or stdin not a TTY
+  (e.g. piped, redirected, or in CI)
+- **WHEN** the command starts
+- **THEN** stderr contains
+  `\`netclaw init --force\` requires an interactive terminal for the
+   reset confirmation. Run it from a TTY.`
+- **AND** the command exits with non-zero status
+- **AND** the existing `netclaw.json` and `secrets.json` are
+  unchanged
+- **AND** no .bak files are created
+
+#### Scenario: Force handles existing .bak filename collision
+
+- **GIVEN** `netclaw.json` exists on disk
+- **AND** a previously-created backup at
+  `~/.netclaw/config/netclaw.json.bak.<expected-millis>` already
+  exists (e.g. from a prior force run within the same millisecond)
+- **WHEN** the operator types "reset" and confirms
+- **THEN** the backup uses
+  `netclaw.json.bak.<expected-millis>-1` (and the corresponding
+  `secrets.json.bak.<expected-millis>-1`)
+- **AND** the existing backup file is not overwritten

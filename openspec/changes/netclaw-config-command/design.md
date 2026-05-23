@@ -1,5 +1,11 @@
 ## Context
 
+**UI wireframes:** every page introduced by this change is mocked in
+`docs/ui/TUI-002-netclaw-config-wireframes.md` (dashboard, all 12 section
+editors, list editor templates T1–T8, doctor results page, daemon
+restart nudge). Implementors SHALL treat TUI-002 as the visual contract;
+this design document explains decisions and trade-offs around it.
+
 The `section-editor-abstraction` change (predecessor) introduced the
 `ISectionEditor` contract, the `SectionEditorRegistry`, the merge-on-save
 plumbing, and the single-step `WizardOrchestrator` mode. It refactored
@@ -227,6 +233,24 @@ while keeping the registry flat.
   delta document the relocation. The new Audience Profiles editor
   is reachable from one menu entry away. Migration text in the PR
   description points operators at the new path.
+
+- [Multi-instance editing] Two concurrent `netclaw config` processes
+  on the same install would both load → merge → write to the same
+  `netclaw.json` and `secrets.json`. → Mitigation: out of MVP scope;
+  semantics are last-write-wins per the file's atomic tmp-rename
+  write. Documented as a known limitation. File locks are deferred
+  until there is concrete evidence of operators running multiple
+  TUI editors simultaneously.
+
+- [Test Connection partial failure shape] Slack/Discord/Mattermost
+  Test Connection actions probe several capabilities (auth, channel
+  access, DM access). Some sub-probes may succeed while others
+  fail. → Mitigation: the result banner SHALL render one line per
+  sub-probe with its own status glyph (`✓ Bot token valid`,
+  `✗ Channel C01ABCDE not in workspace`). Network timeouts SHALL
+  render as `⚠ probe timed out` rather than a fatal failure, since
+  the operator may have a transient network issue. Test Connection
+  is advisory only; it never blocks the editor's Save.
 
 ## Migration Plan
 

@@ -79,18 +79,26 @@
 
 ## 7. Refactor three existing init step viewmodels
 
-- [ ] 7.1 `ProviderStepViewModel`: implement `ISectionEditor` (SectionId
-  `Providers`). Honor `ExistingConfig` in `OnEnter(direction)` for
-  provider type, endpoint, auth method, model selection, and OAuth
-  token expiry. API key field renders empty with "configured — leave
-  blank to keep" hint when `SecretPresent` returns true.
-- [ ] 7.2 `IdentityStepViewModel`: implement `ISectionEditor` (SectionId
-  `Identity`). Honor `ExistingConfig` for agent name, user name,
-  timezone, comm style, workspaces directory, webhook URL. (Step is
-  trimmed in the third change; this change keeps existing fields.)
+- [ ] 7.1 `ProviderStepViewModel`: implement `ISectionEditor`
+  (SectionId `Providers`, `ShowInMenu = false` — covered by the
+  existing `netclaw provider` CLI per D3 of the planning doc). Honor
+  `ExistingConfig` in `OnEnter(direction)` for provider type, endpoint,
+  auth method, model selection, and OAuth token expiry. API key field
+  renders empty with "configured — leave blank to keep" hint when
+  `SecretPresent` returns true.
+- [ ] 7.2 `IdentityStepViewModel`: implement `ISectionEditor`
+  (SectionId `Identity` as a synthetic identifier — Identity is NOT a
+  top-level schema key; identity data spans `Workspaces`,
+  `Notifications`, and identity files like `SOUL.md`. Add the
+  synthetic ID `Identity` to `SectionEditorExemptions` with category
+  `"synthetic-spans-multiple-sections"`. `ShowInMenu = false` — set
+  once at init in MVP). Honor `ExistingConfig` for agent name, user
+  name, timezone, comm style, workspaces directory, webhook URL. (Step
+  is trimmed in the third change; this change keeps existing fields.)
 - [ ] 7.3 `SecurityPostureStepViewModel`: implement `ISectionEditor`
-  (SectionId `Security.Posture`, dotted path). Honor `ExistingConfig`
-  for the posture selection and posture-default cascade.
+  (SectionId `Security.Posture`, dotted path; `ShowInMenu = true` —
+  surfaces in the dashboard in Change B). Honor `ExistingConfig` for
+  the posture selection and posture-default cascade.
 - [ ] 7.4 Each refactored editor declares non-empty
   `RelevantDoctorChecks` referencing the existing checks that scope to
   the editor's section.
