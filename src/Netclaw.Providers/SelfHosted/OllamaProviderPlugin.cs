@@ -29,13 +29,14 @@ public sealed class OllamaProviderPlugin : ProviderPluginBase<OllamaDescriptor>
 
     public override IVendorOptionsSource? CreateVendorOptionsSource(ProviderEntry entry)
     {
-        var disableThinking = string.Equals(
-            Environment.GetEnvironmentVariable("NETCLAW_OLLAMA_DISABLE_THINKING"),
-            "1",
-            StringComparison.Ordinal);
-
-        return disableThinking ? new OllamaVendorOptionsSource() : null;
+        var vendorOptions = entry.GetVendorOptions<OllamaVendorOptions>() ?? new OllamaVendorOptions();
+        return vendorOptions.DisableThinking ? new OllamaVendorOptionsSource() : null;
     }
+}
+
+internal sealed class OllamaVendorOptions : IVendorOptions
+{
+    public bool DisableThinking { get; set; }
 }
 
 internal sealed class OllamaVendorOptionsSource : IVendorOptionsSource

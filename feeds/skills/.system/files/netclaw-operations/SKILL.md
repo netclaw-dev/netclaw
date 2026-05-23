@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.7.1"
+  version: "2.7.2"
 ---
 
 # Netclaw Operations
@@ -642,6 +642,11 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 | `openrouter` | API key | `sk-or-...` |
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
 
+Provider-specific behavior toggles belong under
+`Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core
+config layer; each provider plugin deserializes and validates its own typed
+options instead of adding provider-specific properties to `ProviderEntry`.
+
 ### Adding GitHub Copilot
 
 GitHub Copilot uses the OAuth device flow only — no API key. The operator
@@ -870,9 +875,9 @@ Key facts to share with the operator:
   `testuser` / `TestUser1234!`. Admin is `admin` / `Admin1234!`.
 - The demo launches the `fast` profile by default. It keeps the seeded
   Mattermost channel on the `public` audience, caps tool loops
-  aggressively, disables the demo channel's callable tools, disables
-  Ollama thinking mode, tunes Ollama for single-user local inference,
-  and prewarms the model before the daemon starts.
+  aggressively, disables Ollama thinking mode, tunes Ollama for
+  single-user local inference, and prewarms the model before the
+  daemon starts.
 - For the heavier tool-rich path, opt into
   `NETCLAW_DEMO_PROFILE=full dotnet run --project samples/Netclaw.Demo.AppHost`.
 - Daemon binds `127.0.0.1:5299` (not the production default 5199, so

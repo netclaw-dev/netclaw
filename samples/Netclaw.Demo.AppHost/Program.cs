@@ -119,8 +119,7 @@ if (demoProfile == DemoProfile.Fast)
 {
     daemon = daemon
         .WithEnvironment("NETCLAW_Session__MaxToolIterationsPerTurn", "3")
-        .WithEnvironment("NETCLAW_Tools__AudienceProfiles__Public__AllowedTools__0", "__demo_no_tools__")
-        .WithEnvironment("NETCLAW_OLLAMA_DISABLE_THINKING", "1");
+        .WithEnvironment("NETCLAW_Providers__ollama__VendorOptions__DisableThinking", "true");
 }
 
 // Opt the daemon into OTLP export against the Aspire dashboard's OTLP

@@ -44,10 +44,10 @@ dotnet run --project samples/Netclaw.Demo.AppHost
 
 That launches the `fast` profile by default. It keeps the seeded Mattermost
 channel on the `public` audience, caps tool loops aggressively, tunes Ollama
-for single-user local inference, disables the public demo channel's tool
-surface, disables Ollama thinking mode, and prewarms the model before the
-daemon starts. The goal is the fastest possible first reply on a fresh clone
-while still exercising the full Aspire-orchestrated stack.
+for single-user local inference, disables Ollama thinking mode, and prewarms
+the model before the daemon starts. The goal is the fastest possible first
+reply on a fresh clone while still exercising the full Aspire-orchestrated
+stack.
 
 If you want the heavier tool-rich demo path instead, opt into the `full`
 profile:
@@ -90,10 +90,9 @@ allocated dynamically). Open it, log in as `testuser`, navigate to the
 mentioning `@testbot`. The bot will reply.
 
 On the default `fast` profile, the seeded channel stays on the `public`
-audience and exposes no callable tools in that channel. That keeps the prompt
-lean and pushes the bot toward plain-text answers instead of exploratory tool
-use. If you want to demo the richer personal-audience behavior, rerun with
-`NETCLAW_DEMO_PROFILE=full`.
+audience. That keeps the prompt lean and the visible tool surface much smaller
+than the personal-audience path. If you want to demo the richer
+personal-audience behavior, rerun with `NETCLAW_DEMO_PROFILE=full`.
 
 For a quicker test from a shell:
 
@@ -247,8 +246,8 @@ ACL, no custom grants, no `netclaw.json` of its own. That means:
 - `Daemon.ExposureMode=local`, daemon bound to `127.0.0.1:5299` (non-default
   port to avoid colliding with any host-installed daemon on 5199).
 - The default `fast` profile pins the seeded Mattermost channel to the
-  `public` audience and strips the demo channel's callable tools so the first
-  turn carries the smallest safe prompt and tool surface. `NETCLAW_DEMO_PROFILE=full` restores the heavier
+  `public` audience so the first turn carries the smallest safe prompt and
+  tool surface. `NETCLAW_DEMO_PROFILE=full` restores the heavier
   `personal`-audience behavior.
 - `LoopbackAuthenticationHandler` grants `Operator` identity only to
   loopback callers, which the AppHost-launched daemon process honors.
