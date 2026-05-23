@@ -1304,6 +1304,17 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 return true;
             }
 
+            // approval_no_history means the session has no evidence this was
+            // ever an approval response — the user just sent ordinary chat
+            // that happened to match the over-eager cold-path heuristic.
+            // Fall through so the inbound reaches normal LLM ingress instead
+            // of being swallowed as a "consumed" approval reply.
+            if (reply is CommandNack nack
+                && string.Equals(nack.Reason, "approval_no_history", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
             return reply is CommandNack;
         }
         catch (Exception ex)

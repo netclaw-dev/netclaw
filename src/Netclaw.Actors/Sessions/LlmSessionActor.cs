@@ -3378,6 +3378,29 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             if (_pendingToolInteractions.Count == 0)
             {
+                // The cold-text-approval path (binding-side LooksLikeApprovalResponse)
+                // matches any short reply that looks vaguely approval-like — "yes",
+                // "no", "a", "3" — even when the user is just answering a normal
+                // multiple-choice question in chat. If this session has never had any
+                // approval activity (no resolved approvals, no orphan tool batch
+                // awaiting completion) then this text cannot be an approval reply
+                // for anything. Silent-nack with a distinct reason so the binding
+                // can fall through to normal LLM ingress instead of swallowing the
+                // message and stamping a misleading "approval prompt expired"
+                // notice on innocent chat.
+                var hasResolved = _resolvedToolApprovals.Count > 0;
+                var hasOrphan = ParkedToolBatchHistory
+                    .FindRedrivableAssistantMessage(_state.History, callId: null) is not null;
+
+                if (!hasResolved && !hasOrphan)
+                {
+                    _log.Debug(
+                        "Ignoring text tool interaction response with no approval history for sender {SenderId}",
+                        msg.SenderId);
+                    nackReason = "approval_no_history";
+                    return false;
+                }
+
                 _log.Warning("Ignoring text tool interaction response with no pending approvals for sender {SenderId}", msg.SenderId);
                 EmitExpiredPromptNotice();
                 nackReason = "approval_prompt_expired";

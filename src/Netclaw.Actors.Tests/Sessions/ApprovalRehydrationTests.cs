@@ -667,6 +667,46 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Cold_text_response_with_no_approval_history_silent_nacks_without_notice()
+    {
+        // Regression for #DAOC6CKBK5K: the binding-side cold-text-approval path
+        // (LooksLikeApprovalResponse) treats short replies like "3" / "yes" / "a"
+        // as possible cold approvals even when the user is just answering a
+        // multiple-choice question in chat. When the session has zero pending
+        // interactions AND zero approval history (no resolved approvals, no
+        // orphan tool batch awaiting completion) the session must silent-nack
+        // with approval_no_history so the binding can fall through to normal
+        // LLM ingress — not emit a misleading "approval prompt expired" notice.
+        var sessionId = new SessionId("test-channel/cold-text-no-history");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("cold-text-no-history-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        // Session is freshly created — no turns run, no tool calls, no approvals.
+        var reply = await sessionManager.Ask<ICommandReply>(new ToolInteractionTextResponse
+        {
+            SessionId = sessionId,
+            Text = "3",
+            SenderId = new SenderId("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var nack = Assert.IsType<CommandNack>(reply);
+        Assert.Equal("approval_no_history", nack.Reason);
+
+        // Critical: NO TextOutput notice was emitted. Innocent chat must not
+        // produce a user-visible "approval prompt expired" message.
+        await subscriber.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(500), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+    }
+
+    [Fact]
     public async Task Non_requester_response_is_rejected_after_recovery()
     {
         const string callId = "call-shell-auth";
