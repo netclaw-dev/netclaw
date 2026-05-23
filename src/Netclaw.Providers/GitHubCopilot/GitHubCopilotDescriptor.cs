@@ -30,7 +30,16 @@ public sealed class GitHubCopilotDescriptor(
         TokenEndpoint = new Uri("https://github.com/login/oauth/access_token"),
         DeviceEndpoint = new Uri("https://github.com/login/device/code"),
 
-        ClientId = "Iv23lipIurKdMkbqy6nH",
+        // OAuth App client_id borrowed from the Neovim Copilot plugin. The
+        // /copilot_internal/v2/token exchange endpoint is gated to a small
+        // allowlist of editor-integration OAuth Apps (VS Code, Neovim,
+        // JetBrains, gh CLI); a Netclaw-owned GitHub App was rejected with
+        // HTTP 403 "Resource not accessible by integration" regardless of
+        // configured permissions. Every community Copilot client (avante.nvim,
+        // copilot.lua, CodeAlta) takes the same posture. Replace if/when
+        // Netclaw gets its own OAuth App allowlisted by GitHub, or when we
+        // migrate to the documented Copilot SDK pathway.
+        ClientId = "Iv1.b507a08c87ecfe98",
         Scope = "read:user",
         UseProprietaryDeviceFlow = false,
     };
@@ -111,7 +120,7 @@ public sealed class GitHubCopilotDescriptor(
         {
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", copilotToken);
             request.Headers.TryAddWithoutValidation("copilot-integration-id", "vscode-chat");
-            request.Headers.TryAddWithoutValidation("editor-version", "Netclaw/1.0");
+            request.Headers.TryAddWithoutValidation("editor-version", $"Netclaw/{BuildInfo.Version}");
             request.Headers.TryAddWithoutValidation("openai-intent", "conversation-agent");
         };
 

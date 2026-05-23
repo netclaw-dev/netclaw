@@ -88,13 +88,25 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, TokenEndpoint);
 
-        // GitHub's /copilot_internal/v2/token expects the OAuth token under
-        // the "token" auth scheme (its personal-access-token convention),
-        // NOT "Bearer". The Copilot chat endpoint then uses "Bearer" with
-        // the short-lived token returned here.
-        request.Headers.TryAddWithoutValidation("Authorization", $"token {oauthToken}");
+        // The exchange endpoint requires the full editor-integration header
+        // contract — Copilot-Integration-Id is what tells GitHub's gateway
+        // "route through the Copilot permission model, not the generic
+        // GitHub App permission model." Without it, even an allowlisted
+        // OAuth App's user-to-server token gets evaluated against generic
+        // App scopes and rejected with HTTP 403 "Resource not accessible by
+        // integration." Cross-checked against CodeAlta's CopilotDirectAuth
+        // and the Neovim Copilot plugin source; both send the same set.
+        //
+        // User-Agent is intentionally NOT set here — the named HttpClient
+        // ("CopilotTokenExchange") runs through NetclawHeadersHandler, which
+        // stamps the canonical UA + X-Netclaw-Component. Setting it here
+        // would win over the handler and clobber the shared identity.
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", oauthToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        request.Headers.UserAgent.ParseAdd("netclaw/1.0");
+        request.Headers.TryAddWithoutValidation("Editor-Version", $"Netclaw/{BuildInfo.Version}");
+        request.Headers.TryAddWithoutValidation("Editor-Plugin-Version", $"netclaw/{BuildInfo.Version}");
+        request.Headers.TryAddWithoutValidation("Copilot-Integration-Id", "vscode-chat");
+        request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
 
         using var response = await httpClient.SendAsync(request, ct);
         var body = await response.Content.ReadAsStringAsync(ct);

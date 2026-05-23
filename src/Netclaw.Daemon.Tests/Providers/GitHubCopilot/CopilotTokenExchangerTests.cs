@@ -121,8 +121,8 @@ public sealed class CopilotTokenExchangerTests
         await exchanger.GetTokenAsync(EntryWithOAuth("oauth-A"),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(1, requestsByToken["token oauth-A"]);
-        Assert.Equal(1, requestsByToken["token oauth-B"]);
+        Assert.Equal(1, requestsByToken["Bearer oauth-A"]);
+        Assert.Equal(1, requestsByToken["Bearer oauth-B"]);
     }
 
     [Fact]
@@ -173,8 +173,14 @@ public sealed class CopilotTokenExchangerTests
     }
 
     [Fact]
-    public async Task GetToken_TokenRequest_UsesTokenSchemeAndJsonAccept()
+    public async Task GetToken_TokenRequest_SendsEditorIntegrationContract()
     {
+        // The exchange endpoint gates on the editor-integration header set —
+        // Copilot-Integration-Id in particular is what makes GitHub's gateway
+        // route through the Copilot permission model. Missing any of these
+        // headers returns HTTP 403 "Resource not accessible by integration"
+        // even with a valid OAuth-App user-to-server token. Lock this set in
+        // so a future cleanup pass doesn't silently regress the integration.
         HttpRequestMessage? captured = null;
         var handler = new FakeHttpMessageHandler(request =>
         {
@@ -190,8 +196,22 @@ public sealed class CopilotTokenExchangerTests
         Assert.NotNull(captured);
         Assert.Equal("https://api.github.com/copilot_internal/v2/token",
             captured!.RequestUri!.ToString());
-        Assert.Equal("token ghu_oauth",
+        Assert.Equal("Bearer ghu_oauth",
             captured.Headers.GetValues("Authorization").Single());
         Assert.Contains(captured.Headers.Accept, h => h.MediaType == "application/json");
+
+        // User-Agent is deliberately not asserted here — it's stamped by
+        // NetclawHeadersHandler on the named HttpClient, which this unit
+        // test bypasses with a raw FakeHttpMessageHandler. The handler
+        // contract is covered in NetclawHeadersHandlerTests.
+        Assert.False(captured.Headers.Contains("User-Agent"),
+            "exchanger must defer User-Agent to NetclawHeadersHandler");
+
+        Assert.Equal($"Netclaw/{BuildInfo.Version}",
+            captured.Headers.GetValues("Editor-Version").Single());
+        Assert.Equal($"netclaw/{BuildInfo.Version}",
+            captured.Headers.GetValues("Editor-Plugin-Version").Single());
+        Assert.Equal("vscode-chat", captured.Headers.GetValues("Copilot-Integration-Id").Single());
+        Assert.Equal("2022-11-28", captured.Headers.GetValues("X-GitHub-Api-Version").Single());
     }
 }
