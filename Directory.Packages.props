@@ -61,7 +61,7 @@
     <PackageVersion Include="Cronos" Version="0.12.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.3.0" />
     <PackageVersion Include="ShellSyntaxTree" Version="0.1.5" />
-    <PackageVersion Include="Termina" Version="0.9.0" />
+    <PackageVersion Include="Termina" Version="0.10.0" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
