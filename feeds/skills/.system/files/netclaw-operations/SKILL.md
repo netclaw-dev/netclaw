@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.7.0"
+  version: "2.7.1"
 ---
 
 # Netclaw Operations
@@ -868,9 +868,17 @@ Key facts to share with the operator:
   (port allocated dynamically).
 - Default Mattermost login for the demo's non-admin test user:
   `testuser` / `TestUser1234!`. Admin is `admin` / `Admin1234!`.
+- The demo launches the `fast` profile by default. It keeps the seeded
+  Mattermost channel on the `public` audience, caps tool loops
+  aggressively, disables the demo channel's callable tools, disables
+  Ollama thinking mode, tunes Ollama for single-user local inference,
+  and prewarms the model before the daemon starts.
+- For the heavier tool-rich path, opt into
+  `NETCLAW_DEMO_PROFILE=full dotnet run --project samples/Netclaw.Demo.AppHost`.
 - Daemon binds `127.0.0.1:5299` (not the production default 5199, so
   it never collides with a host-installed daemon).
-- First-message latency on CPU is multi-minute; the README documents the
+- `fast` is materially quicker on CPU than the old demo path, but GPU is
+  still the best experience; the README documents the
   `WithGPUSupport(OllamaGpuVendor.Nvidia)` opt-in for snappy demos.
 - Clean reset: `rm -rf samples/Netclaw.Demo.AppHost/.demo-home/` plus
   `docker volume rm` for the Ollama volume.

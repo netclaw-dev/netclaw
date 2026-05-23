@@ -73,6 +73,7 @@ public sealed class DemoEndToEndSmokeTests
         }
 
         var testCt = TestContext.Current.CancellationToken;
+        using var demoProfileScope = new TemporaryEnvironmentVariable("NETCLAW_DEMO_PROFILE", "fast");
 
         var builder = await DistributedApplicationTestingBuilder
             .CreateAsync<Projects.Netclaw_Demo_AppHost>(testCt);
@@ -103,7 +104,7 @@ public sealed class DemoEndToEndSmokeTests
         var rootPostId = await PostMessageAsync(
             http,
             channelId,
-            "hello @testbot, please reply with exactly: pong",
+            "hello @testbot, please reply with exactly: pong and do not call any tools",
             startCts.Token);
 
         Assert.False(string.IsNullOrWhiteSpace(rootPostId), "Mattermost should have returned a post id.");
@@ -231,4 +232,20 @@ internal sealed class SlopwatchSuppressAttribute : Attribute
 
     public string RuleId { get; }
     public string Reason { get; }
+}
+
+internal sealed class TemporaryEnvironmentVariable : IDisposable
+{
+    private readonly string _name;
+    private readonly string? _previousValue;
+
+    public TemporaryEnvironmentVariable(string name, string value)
+    {
+        _name = name;
+        _previousValue = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, value);
+    }
+
+    public void Dispose()
+        => Environment.SetEnvironmentVariable(_name, _previousValue);
 }

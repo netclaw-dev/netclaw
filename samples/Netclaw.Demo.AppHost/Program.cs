@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net.Http.Json;
 using Aspire.Hosting.ApplicationModel;
 using Netclaw.Channels.Mattermost.Bootstrap;
 using Netclaw.Configuration;
@@ -27,6 +28,9 @@ var aspireOtlpEndpoint =
     builder.Configuration["DOTNET_DASHBOARD_OTLP_ENDPOINT_URL"]
     ?? builder.Configuration["ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL"];
 
+var demoProfile = ResolveDemoProfile(
+    Environment.GetEnvironmentVariable("NETCLAW_DEMO_PROFILE"));
+
 // Opt-in to a host-running Ollama so warm-cache operators don't re-pull
 // the model into a fresh container volume on every demo run.
 var useHostOllama = string.Equals(
@@ -48,6 +52,16 @@ if (useHostOllama)
 else
 {
     var ollama = builder.AddOllama("ollama").WithDataVolume();
+    if (demoProfile == DemoProfile.Fast)
+    {
+        ollama = ollama
+            .WithEnvironment("OLLAMA_NUM_PARALLEL", "1")
+            .WithEnvironment("OLLAMA_MAX_LOADED_MODELS", "1")
+            .WithEnvironment("OLLAMA_FLASH_ATTENTION", "1")
+            .WithEnvironment("OLLAMA_KV_CACHE_TYPE", "q8_0")
+            .WithEnvironment("OLLAMA_KEEP_ALIVE", "-1");
+    }
+
     aspireOllamaModel = ollama.AddModel(modelId);
     resolveOllamaUrl = async ct =>
     {
@@ -101,6 +115,14 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
     .WithEnvironment("NETCLAW_Session__FirstTokenTimeoutSeconds", "1800")
     .WithEnvironment("NETCLAW_Session__PrefillTimeoutSeconds", "1800");
 
+if (demoProfile == DemoProfile.Fast)
+{
+    daemon = daemon
+        .WithEnvironment("NETCLAW_Session__MaxToolIterationsPerTurn", "3")
+        .WithEnvironment("NETCLAW_Tools__AudienceProfiles__Public__AllowedTools__0", "__demo_no_tools__")
+        .WithEnvironment("NETCLAW_OLLAMA_DISABLE_THINKING", "1");
+}
+
 // Opt the daemon into OTLP export against the Aspire dashboard's OTLP
 // receiver. NetClaw's telemetry is opt-in by design (Enabled defaults
 // false), so the AppHost has to explicitly turn it on AND point at the
@@ -121,10 +143,12 @@ daemon = daemon
         ctx.EnvironmentVariables["NETCLAW_Mattermost__ServerUrl"] = result.ServerUrl.ToString();
         ctx.EnvironmentVariables["NETCLAW_Mattermost__BotToken"] = result.Bot.Token;
         ctx.EnvironmentVariables["NETCLAW_Mattermost__DefaultChannelId"] = result.ChannelId;
-        // Default public audience blocks list_reminders / set_reminder
-        // / most memory + file tools, so the bot would burn its tool
-        // budget on policy denials before ever producing a chat reply.
-        ctx.EnvironmentVariables[$"NETCLAW_Mattermost__ChannelAudiences__{result.ChannelId}"] = TrustAudience.Personal.ToWireValue();
+        // The fast demo keeps the seeded channel on Public so the first
+        // turn stays lean: no full personal prompt overlay, no memory/
+        // skill/subagent catalogs, and a much smaller visible tool surface.
+        // The full profile restores the heavier personal-audience demo.
+        ctx.EnvironmentVariables[$"NETCLAW_Mattermost__ChannelAudiences__{result.ChannelId}"] =
+            (demoProfile == DemoProfile.Fast ? TrustAudience.Public : TrustAudience.Personal).ToWireValue();
         // CallbackUrl deliberately unset — the host-process daemon
         // can't be reached from the Mattermost container without
         // poking holes in ExposureMode.Local, so approvals fall back
@@ -136,6 +160,9 @@ daemon = daemon
         // provider name — Models__Main__Provider has to match the key
         // segment used here (lowercase "ollama").
         var ollamaUrl = await resolveOllamaUrl(ctx.CancellationToken);
+        if (demoProfile == DemoProfile.Fast)
+            await PrewarmOllamaAsync(ollamaUrl, modelId, ctx.CancellationToken);
+
         ctx.EnvironmentVariables["NETCLAW_Providers__ollama__Type"] = "ollama";
         ctx.EnvironmentVariables["NETCLAW_Providers__ollama__Endpoint"] = ollamaUrl;
         ctx.EnvironmentVariables["NETCLAW_Providers__ollama__AuthMethod"] = "None";
@@ -148,3 +175,44 @@ if (aspireOllamaModel is not null)
     daemon.WaitFor(aspireOllamaModel);
 
 builder.Build().Run();
+
+static DemoProfile ResolveDemoProfile(string? raw)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+        return DemoProfile.Fast;
+
+    return raw.Trim().ToLowerInvariant() switch
+    {
+        "fast" => DemoProfile.Fast,
+        "full" => DemoProfile.Full,
+        _ => throw new InvalidOperationException(
+            "NETCLAW_DEMO_PROFILE must be 'fast' or 'full'.")
+    };
+}
+
+static async Task PrewarmOllamaAsync(string ollamaUrl, string modelId, CancellationToken cancellationToken)
+{
+    using var http = new HttpClient
+    {
+        Timeout = TimeSpan.FromMinutes(5)
+    };
+
+    using var response = await http.PostAsJsonAsync(
+        $"{ollamaUrl.TrimEnd('/')}/api/chat",
+        new
+        {
+            model = modelId,
+            messages = Array.Empty<object>(),
+            stream = false,
+            keep_alive = -1
+        },
+        cancellationToken);
+
+    response.EnsureSuccessStatusCode();
+}
+
+enum DemoProfile
+{
+    Fast,
+    Full
+}

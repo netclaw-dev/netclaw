@@ -42,6 +42,20 @@ From the repo root:
 dotnet run --project samples/Netclaw.Demo.AppHost
 ```
 
+That launches the `fast` profile by default. It keeps the seeded Mattermost
+channel on the `public` audience, caps tool loops aggressively, tunes Ollama
+for single-user local inference, disables the public demo channel's tool
+surface, disables Ollama thinking mode, and prewarms the model before the
+daemon starts. The goal is the fastest possible first reply on a fresh clone
+while still exercising the full Aspire-orchestrated stack.
+
+If you want the heavier tool-rich demo path instead, opt into the `full`
+profile:
+
+```bash
+NETCLAW_DEMO_PROFILE=full dotnet run --project samples/Netclaw.Demo.AppHost
+```
+
 On first run you'll see:
 
 1. Mattermost image pull (~1GB, one time).
@@ -49,7 +63,7 @@ On first run you'll see:
 3. `qwen3:4b` model pull (~3GB, one time — persisted in a Docker volume).
 4. Mattermost startup + bootstrap REST sequence (admin, team, bot, token,
    channel, test user).
-5. Daemon process startup and Mattermost WebSocket connect.
+5. Daemon process startup, Ollama prewarm, and Mattermost WebSocket connect.
 
 Subsequent runs skip 1-3 and reach "all resources healthy" in ~25-30
 seconds (measured: 26s on a Linux VM, warm Docker + Ollama volume cache,
@@ -75,6 +89,12 @@ allocated dynamically). Open it, log in as `testuser`, navigate to the
 `test-team` team and the `test-channel` channel, and post a message
 mentioning `@testbot`. The bot will reply.
 
+On the default `fast` profile, the seeded channel stays on the `public`
+audience and exposes no callable tools in that channel. That keeps the prompt
+lean and pushes the bot toward plain-text answers instead of exploratory tool
+use. If you want to demo the richer personal-audience behavior, rerun with
+`NETCLAW_DEMO_PROFILE=full`.
+
 For a quicker test from a shell:
 
 ```bash
@@ -91,9 +111,16 @@ curl -s -X POST "$SERVER/api/v4/posts" \
 
 ## Latency expectations
 
-`qwen3:4b` at Q4_K_M quantization with NetClaw's tool-armed system prompt
-is the smallest model in the qwen3 generation we trust to do tool calls
-reliably. On hardware:
+`qwen3:4b` at Q4_K_M quantization is still the slowest part of this sample on
+CPU-only hosts, but the default `fast` profile trims the prompt and tool
+surface enough to make first replies meaningfully less painful. Roughly:
+
+| Profile | Intended use | CPU-only behavior |
+|---|---|---|
+| `fast` (default) | Kick the tires, quick first reply | Usually much faster than the old demo path; still hardware-bound |
+| `full` | Heavier tool-rich demo | Can still drift into multi-minute turns on CPU |
+
+On hardware:
 
 | Hardware | First reply latency |
 |---|---|
@@ -219,6 +246,10 @@ ACL, no custom grants, no `netclaw.json` of its own. That means:
 - `Security.StrictDefaults=true` (the conservative default).
 - `Daemon.ExposureMode=local`, daemon bound to `127.0.0.1:5299` (non-default
   port to avoid colliding with any host-installed daemon on 5199).
+- The default `fast` profile pins the seeded Mattermost channel to the
+  `public` audience and strips the demo channel's callable tools so the first
+  turn carries the smallest safe prompt and tool surface. `NETCLAW_DEMO_PROFILE=full` restores the heavier
+  `personal`-audience behavior.
 - `LoopbackAuthenticationHandler` grants `Operator` identity only to
   loopback callers, which the AppHost-launched daemon process honors.
 - `Tools.WebFetch.RequireHttps=true` (plain HTTP only allowed for
@@ -272,6 +303,8 @@ production deployments. That's deferred — see
   ~1GB. One time only; subsequent runs reuse the image.
 - **Model pull is slow or interrupted** — Aspire retries automatically.
   Once `qwen3:4b` is in the named volume, subsequent runs skip the pull.
+- **You want the old richer demo even if it's slower** — run with
+  `NETCLAW_DEMO_PROFILE=full`.
 - **Bot reply is taking forever on CPU** — see
   [latency expectations](#latency-expectations) above; opt into GPU
   support if you have hardware available.
