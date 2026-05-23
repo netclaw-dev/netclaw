@@ -159,6 +159,60 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
         Assert.Contains("provider returned no context window", result.Message);
     }
 
+    [Fact]
+    public async Task CatalogOverlay_ContextWindow_Passes()
+    {
+        // C2 regression: pre-fix the doctor only read Models.Main.ContextWindow
+        // directly from JSON, ignoring the catalog overlay that the daemon
+        // honors. An operator with Catalog['p/m'].ContextWindow set (and no
+        // inline value) saw the doctor fall through to auto-detection and
+        // print a misleading "set Models.Main.ContextWindow to pin a
+        // specific value" tip — for a value they had already pinned.
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new
+            {
+                Main = new { Provider = "p", ModelId = "m" },
+                Catalog = new Dictionary<string, object>
+                {
+                    ["p/m"] = new { ContextWindow = 200000 }
+                }
+            }
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("200,000", result.Message);
+    }
+
+    [Fact]
+    public async Task InlineContextWindow_WinsOver_CatalogOverlay_InDoctor()
+    {
+        // Mirrors ApplyCatalogOverlays' inline-wins semantics so the doctor's
+        // diagnostic always matches what the daemon will actually use.
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new
+            {
+                Main = new { Provider = "p", ModelId = "m", ContextWindow = 100000 },
+                Catalog = new Dictionary<string, object>
+                {
+                    ["p/m"] = new { ContextWindow = 200000 }
+                }
+            }
+        });
+        var check = CreateCheck(CreateOfflineDaemonApi());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("100,000", result.Message);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private ContextWindowDoctorCheck CreateCheck(

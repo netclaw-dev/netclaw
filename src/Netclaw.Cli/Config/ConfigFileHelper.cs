@@ -149,8 +149,8 @@ internal static class ConfigFileHelper
         if (oldRole is null)
             return;
 
-        var oldProvider = TryGetString(oldRole, "Provider");
-        var oldModelId = TryGetString(oldRole, "ModelId");
+        var oldProvider = TryReadString(oldRole, "Provider");
+        var oldModelId = TryReadString(oldRole, "ModelId");
         if (string.IsNullOrEmpty(oldProvider) || string.IsNullOrEmpty(oldModelId))
             return;
 
@@ -173,7 +173,30 @@ internal static class ConfigFileHelper
             entry[kvp.Key] = kvp.Value;
     }
 
-    private static string? TryGetString(Dictionary<string, object> dict, string key)
+    /// <summary>
+    /// Returns the (Provider, ModelId) currently recorded at
+    /// <c>modelsSection[roleKey]</c>, or null when the role is absent or
+    /// missing either identity field. Used by writers to detect identity
+    /// changes vs same-identity re-runs.
+    /// </summary>
+    internal static (string Provider, string ModelId)? TryReadRoleIdentity(
+        Dictionary<string, object> modelsSection, string roleKey)
+    {
+        var role = GetSectionOrNull(modelsSection, roleKey);
+        if (role is null) return null;
+        var provider = TryReadString(role, "Provider");
+        var modelId = TryReadString(role, "ModelId");
+        return string.IsNullOrEmpty(provider) || string.IsNullOrEmpty(modelId)
+            ? null
+            : (provider, modelId);
+    }
+
+    /// <summary>
+    /// Best-effort string read from a dictionary that may carry raw strings
+    /// (re-materialized values) or <see cref="JsonElement"/>s (freshly loaded
+    /// from disk). Returns null for missing, null, or non-string values.
+    /// </summary>
+    internal static string? TryReadString(Dictionary<string, object> dict, string key)
     {
         if (!dict.TryGetValue(key, out var raw) || raw is null)
             return null;

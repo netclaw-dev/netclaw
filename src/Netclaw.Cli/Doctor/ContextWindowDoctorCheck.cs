@@ -50,13 +50,20 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
                 "Add a Models.Main section with ContextWindow to netclaw.json.");
         }
 
+        var modelId = main["ModelId"]?.GetValue<string>() ?? "unknown";
+        var providerName = main["Provider"]?.GetValue<string>() ?? "local-ollama";
+
+        // Effective ContextWindow follows ModelSelection.ApplyCatalogOverlays:
+        // inline on the role wins; otherwise fall back to the catalog
+        // overlay keyed by "{provider}/{modelId}". The runtime daemon uses
+        // exactly this precedence, so the doctor must match it or it will
+        // report "no explicit setting" while the daemon honors an override.
         var contextWindow = main["ContextWindow"];
+        if (contextWindow is null && models is not null)
+            contextWindow = TryReadCatalogContextWindow(models, providerName, modelId);
+
         if (contextWindow is null)
-        {
-            var modelId = main["ModelId"]?.GetValue<string>() ?? "unknown";
-            var providerName = main["Provider"]?.GetValue<string>() ?? "local-ollama";
             return await ResolveEffectiveContextWindowAsync(modelId, providerName, cancellationToken);
-        }
 
         if (contextWindow.GetValue<int>() is var cw and > 0)
         {
@@ -69,6 +76,15 @@ public sealed class ContextWindowDoctorCheck : IDoctorCheck
             "Context Window",
             "Models.Main.ContextWindow must be a positive integer.",
             "Set Models.Main.ContextWindow to the effective runtime context window size in tokens.");
+    }
+
+    private static JsonNode? TryReadCatalogContextWindow(
+        JsonObject models, string providerName, string modelId)
+    {
+        var catalog = models["Catalog"] as JsonObject;
+        if (catalog is null) return null;
+        var entry = catalog[ModelSelection.CatalogKey(providerName, modelId)] as JsonObject;
+        return entry?["ContextWindow"];
     }
 
     private async Task<DoctorCheckResult> ResolveEffectiveContextWindowAsync(

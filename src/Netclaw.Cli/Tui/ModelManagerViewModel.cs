@@ -214,7 +214,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetSectionOrNull(config, "Models");
-        if (modelsSection?.Remove(roleKey) == true)
+        if (modelsSection is null || !modelsSection.ContainsKey(roleKey))
+            return;
+
+        // Preserve any operator overrides on the role being cleared so that
+        // re-setting it to the same (provider, modelId) later restores them
+        // via the catalog overlay — same contract as ConfirmAssignment.
+        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
+
+        if (modelsSection.Remove(roleKey))
         {
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
             Refresh();

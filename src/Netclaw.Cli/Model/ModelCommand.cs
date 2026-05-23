@@ -142,9 +142,30 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        // Preserve any operator overrides on the role being overwritten so
-        // switching back to the displaced (provider, modelId) re-applies them.
-        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
+        // CLI write semantics differ from the TUI picker:
+        //
+        //   identity changed  → Promote the displaced role's overrides into
+        //                       the catalog so a later switch back restores
+        //                       them. Cross-model survival.
+        //
+        //   identity unchanged → DO NOT Promote. The operator running
+        //                        `model set ROLE P M` (without --context-window)
+        //                        is signaling "start fresh for this model";
+        //                        promoting the inline override into the catalog
+        //                        would have ApplyCatalogOverlays silently
+        //                        restore it on the next read, leaving the
+        //                        operator no CLI affordance to clear it.
+        //
+        // Cross-model survival for explicit --context-window writes still
+        // works: the value lives inline on the role and the next identity
+        // change promotes it to the catalog automatically.
+        var existingIdentity = ConfigFileHelper.TryReadRoleIdentity(modelsSection, roleKey);
+        var identityChanged = existingIdentity is null
+            || existingIdentity.Value.Provider != providerName
+            || existingIdentity.Value.ModelId != modelId;
+
+        if (identityChanged)
+            ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
 
         var modelEntry = new Dictionary<string, object>
         {
@@ -153,18 +174,8 @@ internal static class ModelCommand
             ["Provenance"] = ModelDiscoverySource.Manual.ToString()
         };
 
-        // --context-window is an explicit operator override — persist it to
-        // the catalog (keyed by the new selection's identity) so it survives
-        // a subsequent picker swap. Inline on the role is also written so the
-        // shape stays consistent with hand-edited configs.
         if (contextWindow.HasValue)
-        {
             modelEntry["ContextWindow"] = contextWindow.Value;
-            var catalog = ConfigFileHelper.GetOrCreateSection(modelsSection, "Catalog");
-            var entry = ConfigFileHelper.GetOrCreateSection(
-                catalog, ModelSelection.CatalogKey(providerName, modelId));
-            entry["ContextWindow"] = contextWindow.Value;
-        }
 
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
@@ -272,6 +283,11 @@ internal static class ModelCommand
             writer.WriteLine($"Role '{role}' is not configured.");
             return 0;
         }
+
+        // Preserve any operator overrides before the role record disappears,
+        // so re-setting this role to the same (provider, modelId) later
+        // restores them via the catalog overlay.
+        ConfigFileHelper.PromoteRoleOverridesToCatalog(modelsSection, roleKey);
 
         modelsSection.Remove(roleKey);
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);

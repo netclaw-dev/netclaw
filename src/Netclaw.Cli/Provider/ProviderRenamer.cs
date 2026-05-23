@@ -120,7 +120,50 @@ internal static class ProviderRenamer
             }
         }
 
+        // Catalog keys embed the provider name as the first segment of
+        // "{provider}/{modelId}". Rewrite any key whose provider segment
+        // matches oldName (case-insensitive, mirroring the role cascade) so
+        // the override remains reachable from the renamed Provider field.
+        RenameCatalogProviderSegment(models, oldName, newName);
+
         return reassigned;
+    }
+
+    private static void RenameCatalogProviderSegment(
+        Dictionary<string, object> models, string oldName, string newName)
+    {
+        var catalog = ConfigFileHelper.GetSectionOrNull(models, "Catalog");
+        if (catalog is null || catalog.Count == 0) return;
+
+        // Two-pass: collect rewrites first, then mutate. Iterating and
+        // mutating a Dictionary's keys simultaneously throws.
+        List<(string OldKey, string NewKey)>? rewrites = null;
+        foreach (var key in catalog.Keys)
+        {
+            var slash = key.IndexOf('/');
+            if (slash <= 0) continue;
+            var providerSegment = key.AsSpan(0, slash);
+            if (!providerSegment.Equals(oldName, StringComparison.OrdinalIgnoreCase))
+                continue;
+            var modelIdSegment = key.Substring(slash + 1);
+            var newKey = Configuration.ModelSelection.CatalogKey(newName, modelIdSegment);
+            rewrites ??= new List<(string, string)>();
+            rewrites.Add((key, newKey));
+        }
+
+        if (rewrites is null) return;
+
+        foreach (var (oldKey, newKey) in rewrites)
+        {
+            var entry = catalog[oldKey];
+            catalog.Remove(oldKey);
+            // If a same-spelled rename collides with an unrelated catalog
+            // entry under newKey (rare — would require a pre-existing
+            // duplicate), keep the freshly-renamed one — that's the entry
+            // the active role just rebound to, so it represents the
+            // operator's live intent.
+            catalog[newKey] = entry;
+        }
     }
 
     private static bool HasCollision(

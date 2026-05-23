@@ -295,6 +295,50 @@ public sealed class ProviderRenamerTests : IDisposable
         Assert.True(providers.TryGetProperty("lab-a100", out _));
     }
 
+    [Fact]
+    public void Rename_RewritesCatalogKeys_KeyedByOldProvider()
+    {
+        // C3 regression: pre-fix, Models.Catalog kept its keys keyed by the
+        // OLD provider name after a rename. The renamed role's
+        // ApplyCatalogOverlays lookup misses, and the operator's saved
+        // override silently disappears.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["old-p"] = new Dictionary<string, object> { ["Type"] = "openai-compatible" }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "old-p",
+                    ["ModelId"] = "m"
+                },
+                ["Catalog"] = new Dictionary<string, object>
+                {
+                    ["old-p/m"] = new Dictionary<string, object> { ["ContextWindow"] = 200000L },
+                    ["unrelated/k"] = new Dictionary<string, object> { ["ContextWindow"] = 50000L }
+                }
+            }
+        });
+
+        var result = ProviderRenamer.Rename(_paths, "old-p", "new-p");
+
+        Assert.True(result.Success);
+
+        using var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var catalog = config.RootElement.GetProperty("Models").GetProperty("Catalog");
+        Assert.False(catalog.TryGetProperty("old-p/m", out _),
+            "old key should have been rewritten");
+        Assert.True(catalog.TryGetProperty("new-p/m", out var renamedEntry),
+            "renamed key should be present");
+        Assert.Equal(200_000, renamedEntry.GetProperty("ContextWindow").GetInt32());
+        Assert.True(catalog.TryGetProperty("unrelated/k", out _),
+            "catalog entries for other providers should be untouched");
+    }
+
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,

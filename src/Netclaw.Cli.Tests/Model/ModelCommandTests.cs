@@ -278,6 +278,105 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Equal("qwen3:8b", fallback.GetProperty("ModelId").GetString());
     }
 
+    [Fact]
+    public async Task Set_SameIdentity_WithoutContextWindowFlag_DropsOverride()
+    {
+        // C1 regression: pre-fix, re-running `model set` for the same
+        // (provider, modelId) without --context-window silently restored
+        // the previously-set ContextWindow via the catalog overlay. The
+        // operator had no CLI affordance to drop the override.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["p"] = new Dictionary<string, object> { ["Type"] = "ollama" }
+            }
+        });
+
+        await ModelCommand.RunAsync(
+            ["model", "set", "main", "p", "m", "--context-window", "200000"],
+            _paths, output: _output);
+
+        await ModelCommand.RunAsync(
+            ["model", "set", "main", "p", "m"],
+            _paths, output: _output);
+
+        var selection = ModelCommand.LoadModelSelection(_paths)!;
+        Assert.Null(selection.Main.ContextWindow);
+    }
+
+    [Fact]
+    public async Task Set_IdentityChange_PromotesPriorOverrideToCatalog()
+    {
+        // C1 sibling: changing the model preserves the displaced role's
+        // overrides — switching back later re-applies them via the catalog
+        // overlay. This is the cross-model survival contract.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["p"] = new Dictionary<string, object> { ["Type"] = "ollama" }
+            }
+        });
+
+        await ModelCommand.RunAsync(
+            ["model", "set", "main", "p", "m1", "--context-window", "200000"],
+            _paths, output: _output);
+        await ModelCommand.RunAsync(
+            ["model", "set", "main", "p", "m2"],
+            _paths, output: _output);
+        await ModelCommand.RunAsync(
+            ["model", "set", "main", "p", "m1"],
+            _paths, output: _output);
+
+        var selection = ModelCommand.LoadModelSelection(_paths)!;
+        Assert.Equal(200_000, selection.Main.ContextWindow);
+    }
+
+    [Fact]
+    public async Task Clear_PreservesOverridesToCatalog()
+    {
+        // C4 regression (CLI side): clearing a role previously deleted any
+        // inline ContextWindow / modality overrides without preserving
+        // them. Re-setting the same (provider, modelId) later must restore
+        // them via the catalog overlay.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["p"] = new Dictionary<string, object> { ["Type"] = "ollama" }
+            },
+            ["Models"] = new Dictionary<string, object>
+            {
+                ["Main"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "p",
+                    ["ModelId"] = "main-model"
+                },
+                ["Fallback"] = new Dictionary<string, object>
+                {
+                    ["Provider"] = "p",
+                    ["ModelId"] = "fallback-model",
+                    ["ContextWindow"] = 65536L
+                }
+            }
+        });
+
+        await ModelCommand.RunAsync(
+            ["model", "clear", "fallback"],
+            _paths, output: _output);
+
+        await ModelCommand.RunAsync(
+            ["model", "set", "fallback", "p", "fallback-model"],
+            _paths, output: _output);
+
+        var selection = ModelCommand.LoadModelSelection(_paths)!;
+        Assert.Equal(65_536, selection.Fallback!.ContextWindow);
+    }
+
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,
