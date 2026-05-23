@@ -34,8 +34,16 @@ namespace Netclaw.Demo.AppHost.IntegrationTests;
 [Trait("Category", "SlowSmoke")]
 public sealed class DemoEndToEndSmokeTests
 {
-    // Generous total budget to absorb cold-cache image pulls.
-    private static readonly TimeSpan StartupTimeout = TimeSpan.FromMinutes(15);
+    // Overridable via env var so cold-cache and CPU-only machines can
+    // extend the window without editing source; default 20 minutes
+    // covers cold image pulls + model download (the 2B model is ~2GB),
+    // and gives warm-GPU runs plenty of headroom.
+    private static TimeSpan StartupTimeout =>
+        int.TryParse(
+            Environment.GetEnvironmentVariable("NETCLAW_DEMO_TEST_STARTUP_TIMEOUT_SECONDS"),
+            out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : TimeSpan.FromMinutes(20);
 
     // Overridable via env var so CPU-only machines can extend the
     // window; default 5 minutes covers warm-GPU and gives CPU machines

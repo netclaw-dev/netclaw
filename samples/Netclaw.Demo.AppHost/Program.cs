@@ -118,7 +118,7 @@ var daemon = builder.AddProject<Projects.Netclaw_Daemon>("daemon")
 if (demoProfile == DemoProfile.Fast)
 {
     daemon = daemon
-        .WithEnvironment("NETCLAW_Session__MaxToolIterationsPerTurn", "3")
+        .WithEnvironment("NETCLAW_Session__MaxToolIterationsPerTurn", "1")
         .WithEnvironment("NETCLAW_Providers__ollama__VendorOptions__DisableThinking", "true");
 }
 
