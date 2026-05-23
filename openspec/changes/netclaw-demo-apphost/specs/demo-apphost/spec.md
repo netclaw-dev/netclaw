@@ -9,12 +9,12 @@ The system SHALL bring up Mattermost, Ollama, and the NetClaw daemon as a unifie
 - **GIVEN** an empty `.demo-home/` directory and no pre-cached Ollama Docker volume
 - **WHEN** the operator runs `dotnet run --project samples/Netclaw.Demo.AppHost`
 - **THEN** the Aspire dashboard becomes reachable on its local URL
-- **AND** the `mattermost`, `ollama`, `mattermost-bootstrap`, and `daemon` resources each transition to a healthy state within their documented timeouts
+- **AND** the `mattermost`, `ollama`, `ollama-model`, and `daemon` resources each transition to a healthy state within their documented timeouts
 - **AND** the seeded Mattermost admin and test-user credentials are printed to console (not committed to the repo)
 
 #### Scenario: Warm launch is fast
 
-- **GIVEN** Ollama's model volume already contains `qwen3:4b` and `.demo-home/` already contains the daemon's SQLite database from a previous run
+- **GIVEN** Ollama's model volume already contains `qwen3.5:2b-q4_K_M` and `.demo-home/` already contains the daemon's SQLite database from a previous run
 - **WHEN** the operator runs the AppHost
 - **THEN** all resources reach healthy in materially less time than the cold launch
 - **AND** no model pull occurs
@@ -51,39 +51,38 @@ The AppHost SHALL set `NETCLAW_Daemon__Port=5299`, `NETCLAW_Daemon__Host=127.0.0
 
 ### Requirement: Mattermost credentials seeded before daemon starts
 
-The AppHost SHALL ensure that an admin user, team, bot user, bot access token, and default channel exist in the Mattermost container before the daemon resource is allowed to start. The daemon resource SHALL receive `NETCLAW_Mattermost__Enabled`, `__ServerUrl`, `__BotToken`, and `__DefaultChannelId` as environment variables sourced from the bootstrap resource's outputs.
+The AppHost SHALL ensure that an admin user, team, bot user, bot access token, and default channel exist in the Mattermost container before the daemon resource is allowed to start. The daemon resource SHALL receive `NETCLAW_Mattermost__Enabled`, `__ServerUrl`, `__BotToken`, and `__DefaultChannelId` as environment variables sourced from the AppHost's bootstrap sequence.
 
 #### Scenario: Bootstrap orders correctly on cold start
 
 - **WHEN** the AppHost starts cold
 - **THEN** Mattermost reaches HTTP-ready (responds 200 to `/api/v4/system/ping` and 401 to `/api/v4/users/me` while unauthenticated)
-- **AND** the bootstrap resource creates admin via `POST /api/v4/users`, logs in, creates the team, creates the bot via `POST /api/v4/bots`, generates the bot access token via `POST /api/v4/users/{botUserId}/tokens`, creates the default channel, and adds the bot to the team and channel
-- **AND** the daemon resource transitions to "starting" only after the bootstrap resource transitions to "complete"
+- **AND** the AppHost bootstrap sequence creates admin via `POST /api/v4/users`, logs in, creates the team, creates the bot via `POST /api/v4/bots`, generates the bot access token via `POST /api/v4/users/{botUserId}/tokens`, creates the default channel, and adds the bot to the team and channel
+- **AND** the daemon resource transitions to "starting" only after the bootstrap sequence completes
 - **AND** the daemon process observes a non-empty `NETCLAW_Mattermost__BotToken` env var before its first attempt to connect to Mattermost
 
 #### Scenario: Bootstrap failure is surfaced
 
-- **WHEN** the bootstrap resource cannot create the bot (e.g., signup disabled, network unreachable)
-- **THEN** the bootstrap resource exits non-zero
-- **AND** the daemon resource does NOT start
-- **AND** the Aspire dashboard surfaces the bootstrap failure with the underlying error
+- **WHEN** the bootstrap sequence cannot create the bot (e.g., signup disabled, network unreachable)
+- **THEN** the daemon resource does NOT start
+- **AND** the AppHost surfaces the bootstrap failure with the underlying error
 
 ### Requirement: Ollama model pulled and reachable before daemon starts
 
-The AppHost SHALL pull `qwen3:4b` into the Ollama container and SHALL NOT allow the daemon resource to start until the model is queryable via Ollama's `GET /api/tags`. The daemon resource SHALL receive `NETCLAW_Providers__0__*` environment variables identifying Ollama as the default LLM provider.
+The AppHost SHALL pull `qwen3.5:2b-q4_K_M` into the Ollama container and SHALL NOT allow the daemon resource to start until the model is queryable via Ollama's `GET /api/tags`. The daemon resource SHALL receive `NETCLAW_Providers__ollama__*` and `NETCLAW_Models__Main__*` environment variables identifying Ollama as the default LLM provider.
 
 #### Scenario: Cold start pulls and waits
 
 - **GIVEN** no cached Ollama Docker volume
 - **WHEN** the AppHost starts
-- **THEN** the Ollama container pulls `qwen3:4b`
+- **THEN** the Ollama container pulls `qwen3.5:2b-q4_K_M`
 - **AND** `GET /api/tags` from inside the AppHost's view returns the model
 - **AND** the daemon resource starts only after this completes
-- **AND** the daemon's effective configuration shows the default provider id as `ollama` and the configured model id as `qwen3:4b`
+- **AND** the daemon's effective configuration shows the default provider id as `ollama` and the configured model id as `qwen3.5:2b-q4_K_M`
 
 #### Scenario: Warm start skips pull
 
-- **GIVEN** a cached Ollama volume already contains `qwen3:4b`
+- **GIVEN** a cached Ollama volume already contains `qwen3.5:2b-q4_K_M`
 - **WHEN** the AppHost starts
 - **THEN** no model pull occurs
 - **AND** the daemon starts as soon as Ollama is HTTP-ready
@@ -97,7 +96,7 @@ When the demo is healthy, posting a message in the seeded default Mattermost cha
 - **GIVEN** the demo AppHost reports all resources healthy
 - **WHEN** a message is posted in the seeded default channel (either via the Mattermost web UI as the seeded admin, or via Mattermost's REST `POST /api/v4/posts` as the seeded test user)
 - **THEN** the daemon emits a session-message log event for the post
-- **AND** within 90 seconds a non-empty reply is visible in the same channel from the seeded bot user
+- **AND** a non-empty reply is visible in the same channel from the seeded bot user within the documented timeout for the selected profile and hardware class
 
 ### Requirement: Mattermost interactive button approvals are disabled
 
@@ -105,19 +104,19 @@ The demo SHALL leave `NETCLAW_Mattermost__CallbackUrl` unset so that Mattermost 
 
 #### Scenario: Approval prompt renders as text
 
-- **GIVEN** the seeded `netclaw.json` requires approval for a particular tool category per `Netclaw.Security` defaults
+- **GIVEN** the demo's active approval policy requires approval for a particular tool category per `Netclaw.Security` defaults
 - **WHEN** the daemon emits an approval request to Mattermost
 - **THEN** the prompt arrives in the channel as plain text (no interactive buttons)
 - **AND** the demo README documents the text-reply approval syntax the operator must use
 
 ### Requirement: Seeded demo configuration preserves default-deny ACL
 
-The `netclaw.json` configuration shipped with the demo SHALL pass `ConfigSchemaDoctorCheck` validation at runtime and SHALL NOT bypass NetClaw's default-deny ACL/grants policy. Any tool grants enabled for the demo SHALL be explicitly named (no wildcards bypassing policy) and documented in the demo README.
+The configuration shipped with the demo — whether provided via env vars or future config files — SHALL preserve NetClaw's default-deny ACL/grants policy at runtime. Any tool grants enabled for the demo SHALL be explicitly named (no wildcards bypassing policy) and documented in the demo README.
 
 #### Scenario: Demo config validates cleanly
 
-- **WHEN** the daemon loads the seeded `netclaw.json` from the path the AppHost provides
-- **THEN** schema validation succeeds with no `Doctor` violations
+- **WHEN** the daemon starts under the AppHost-provided demo configuration
+- **THEN** startup validation succeeds with no `Doctor` violations
 - **AND** the daemon starts without disabling any security gate
 - **AND** the set of granted tool categories is documented in `samples/Netclaw.Demo.AppHost/README.md`
 
@@ -130,13 +129,13 @@ The repo SHALL register an MCP server (Aspire dashboard MCP) such that a Claude 
 - **GIVEN** the demo AppHost is running
 - **AND** an MCP-aware agent is connected to the Aspire MCP server registered at the repo root
 - **WHEN** the agent invokes the MCP tools to list resources, fetch logs, and check health
-- **THEN** the agent observes the `daemon`, `mattermost`, `ollama`, and `mattermost-bootstrap` resources
+- **THEN** the agent observes the `daemon`, `mattermost`, `ollama`, and `ollama-model` resources
 - **AND** the agent can retrieve recent log lines from each
 - **AND** the agent can query the daemon's `/api/health/ready` and receive HTTP 200
 
 ### Requirement: Integration test gates the demo at PR time on demand
 
-The repo SHALL include an Aspire integration test (`samples/Netclaw.Demo.AppHost.IntegrationTests`) that boots the demo AppHost via `DistributedApplicationTestingBuilder`, waits for all resources healthy, posts a Mattermost message via REST, and asserts the bot replies within a documented timeout. The test SHALL be categorized so it does not run on every push but can be invoked locally and via a manual CI workflow_dispatch job.
+The repo SHALL include an Aspire integration test (`samples/Netclaw.Demo.AppHost.IntegrationTests`) that boots the demo AppHost via `DistributedApplicationTestingBuilder`, waits for all resources healthy, posts a Mattermost message via REST, and best-effort waits for the bot reply within a documented timeout. The test SHALL be categorized so it does not run on every push but can be invoked locally and via a manual CI workflow_dispatch job.
 
 #### Scenario: Slow smoke test green locally
 
@@ -144,7 +143,7 @@ The repo SHALL include an Aspire integration test (`samples/Netclaw.Demo.AppHost
 - **THEN** the test boots the AppHost via `DistributedApplicationTestingBuilder.CreateAsync<Projects.Netclaw_Demo_AppHost>()`
 - **AND** waits for all resources to be reported healthy
 - **AND** posts a message via the Mattermost REST API as the seeded test user
-- **AND** polls the channel and finds a non-empty bot reply within 90 seconds
+- **AND** polls the channel for a non-empty bot reply within the configured timeout and emits the documented latency marker if CPU-only inference does not finish in that window
 - **AND** tears the AppHost down cleanly with no leaked containers or volumes (volumes are removed if the test created them; reused volumes persist)
 
 #### Scenario: Test does not run by default

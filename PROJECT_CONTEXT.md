@@ -74,9 +74,9 @@ irrelevant — the differentiator is the instructions attached to the context.
 ## Try it locally
 
 `samples/Netclaw.Demo.AppHost` is a self-contained .NET Aspire demo
-that boots NetClaw + a seeded Mattermost + Ollama (`qwen3:4b`) in a
-single `dotnet run`. The goal is "kick the tires without setting up
-external accounts." See
+that boots NetClaw + a seeded Mattermost + Ollama
+(`qwen3.5:2b-q4_K_M`) in a single `dotnet run`. The goal is "kick the
+tires without setting up external accounts." See
 [`samples/Netclaw.Demo.AppHost/README.md`](samples/Netclaw.Demo.AppHost/README.md)
 for the launch command, default credentials, and CPU-vs-GPU latency
 expectations.

@@ -2,12 +2,12 @@ name: demo-smoke
 
 # End-to-end smoke test for the samples/Netclaw.Demo.AppHost Aspire
 # demo. Boots the AppHost via DistributedApplicationTestingBuilder,
-# waits for Mattermost + Ollama + qwen3:4b + the daemon to reach
+# waits for Mattermost + Ollama + qwen3.5:2b-q4_K_M + the daemon to reach
 # healthy, posts a message via Mattermost REST, and best-effort waits
 # for a bot reply.
 #
-# Manual-only by design — pulls ~5GB on a cold cache (Mattermost
-# preview image + Ollama image + qwen3:4b model), and the LLM round
+# Manual-only by design — pulls ~4GB on a cold cache (Mattermost
+# preview image + Ollama image + qwen3.5:2b-q4_K_M model), and the LLM round
 # trip on a CPU-only runner is multi-minute. Reviewers can trigger
 # this via `gh workflow run demo_smoke.yml` when they want a real
 # end-to-end signal on a PR.

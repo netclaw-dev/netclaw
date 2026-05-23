@@ -12,10 +12,10 @@ One `dotnet run` brings up four resources:
 - **mattermost** — `mattermost/mattermost-preview` container with admin
   user, team, bot user with personal access token, default channel, and
   a non-admin test user all created automatically.
-- **ollama** — Ollama container with `qwen3:4b` pulled on first run
-  (~3GB; cached in a named Docker volume thereafter).
-- **ollama-qwen3** — the `qwen3:4b` model resource; the daemon waits for
-  it before starting its first inference.
+- **ollama** — Ollama container with `qwen3.5:2b-q4_K_M` pulled on first
+  run (~2GB; cached in a named Docker volume thereafter).
+- **ollama-model** — the `qwen3.5:2b-q4_K_M` model resource; the daemon
+  waits for it before starting its first inference.
 - **daemon** — the NetClaw daemon as an Aspire project resource, running
   on the host (not containerized — see the
   [security model section](#why-the-daemon-isnt-containerized) below),
@@ -28,8 +28,8 @@ One `dotnet run` brings up four resources:
 - Docker. Linux is the smoothest experience; Docker Desktop on macOS and
   Windows works but Aspire's container-network model is rougher on those
   platforms.
-- ~5GB of disk for the Mattermost preview image + Ollama image + qwen3:4b
-  weights.
+- ~4GB of disk for the Mattermost preview image + Ollama image +
+  `qwen3.5:2b-q4_K_M` weights.
 - Ideally a GPU (NVIDIA or AMD via ROCm) — see
   [latency expectations](#latency-expectations) below. The demo runs on
   CPU-only too; it's just slow.
@@ -56,11 +56,17 @@ profile:
 NETCLAW_DEMO_PROFILE=full dotnet run --project samples/Netclaw.Demo.AppHost
 ```
 
+To experiment with a different Ollama tag without editing code:
+
+```bash
+NETCLAW_DEMO_MODEL_ID=qwen3.5:4b-q4_K_M dotnet run --project samples/Netclaw.Demo.AppHost
+```
+
 On first run you'll see:
 
 1. Mattermost image pull (~1GB, one time).
 2. Ollama image pull (~1GB, one time).
-3. `qwen3:4b` model pull (~3GB, one time — persisted in a Docker volume).
+3. `qwen3.5:2b-q4_K_M` model pull (~2GB, one time — persisted in a Docker volume).
 4. Mattermost startup + bootstrap REST sequence (admin, team, bot, token,
    channel, test user).
 5. Daemon process startup, Ollama prewarm, and Mattermost WebSocket connect.
@@ -110,9 +116,10 @@ curl -s -X POST "$SERVER/api/v4/posts" \
 
 ## Latency expectations
 
-`qwen3:4b` at Q4_K_M quantization is still the slowest part of this sample on
-CPU-only hosts, but the default `fast` profile trims the prompt and tool
-surface enough to make first replies meaningfully less painful. Roughly:
+`qwen3.5:2b-q4_K_M` is the default because it is the smallest Qwen 3.5 Ollama
+tag that still looks like a reasonable bet for tool-calling demos without
+pulling the much heavier 4B and 9B variants. It is materially smaller than the
+old `qwen3:4b`, but CPU-only hosts are still hardware-bound. Roughly:
 
 | Profile | Intended use | CPU-only behavior |
 |---|---|---|
@@ -134,7 +141,7 @@ To opt into GPU acceleration, edit `Program.cs` and add `.WithGPUSupport(...)`:
 var ollama = builder.AddOllama("ollama")
     .WithDataVolume()
     .WithGPUSupport(OllamaGpuVendor.Nvidia); // or .Amd
-var qwen = ollama.AddModel("qwen3:4b");
+var qwen = ollama.AddModel("ollama-model", "qwen3.5:2b-q4_K_M");
 ```
 
 This requires the NVIDIA Container Toolkit (Linux) or equivalent ROCm
@@ -204,7 +211,7 @@ A typical agent verification flow:
 ```text
 list_apphosts          # discover the demo
 select_apphost         # focus on it
-list_resources         # confirm mattermost + ollama + ollama-qwen3 + daemon all Running
+list_resources         # confirm mattermost + ollama + ollama-model + daemon all Running
 list_console_logs      # check resource launch logs
 # then drive Mattermost via REST (post a message, poll the channel for the bot reply)
 ```
@@ -301,7 +308,7 @@ production deployments. That's deferred — see
 - **Mattermost image pull is slow** — `mattermost/mattermost-preview` is
   ~1GB. One time only; subsequent runs reuse the image.
 - **Model pull is slow or interrupted** — Aspire retries automatically.
-  Once `qwen3:4b` is in the named volume, subsequent runs skip the pull.
+  Once `qwen3.5:2b-q4_K_M` is in the named volume, subsequent runs skip the pull.
 - **You want the old richer demo even if it's slower** — run with
   `NETCLAW_DEMO_PROFILE=full`.
 - **Bot reply is taking forever on CPU** — see

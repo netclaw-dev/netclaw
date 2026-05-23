@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.7.2"
+  version: "2.7.3"
 ---
 
 # Netclaw Operations
@@ -861,10 +861,11 @@ dotnet run --project samples/Netclaw.Demo.AppHost
 
 One command brings up a containerized Mattermost (seeded with admin,
 team, bot, access token, default channel, and a test user), a
-containerized Ollama with `qwen3:4b` pulled and cached, and the Netclaw
-daemon as an Aspire project resource sandboxed via `NETCLAW_HOME` so
-nothing touches a host-installed `~/.netclaw/`. Default credentials and
-the seeded channel name are printed to the Aspire dashboard.
+containerized Ollama with `qwen3.5:2b-q4_K_M` pulled and cached, and the
+Netclaw daemon as an Aspire project resource sandboxed via
+`NETCLAW_HOME` so nothing touches a host-installed `~/.netclaw/`.
+Default credentials and the seeded channel name are printed to the
+Aspire dashboard.
 
 Key facts to share with the operator:
 

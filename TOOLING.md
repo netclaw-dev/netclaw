@@ -66,7 +66,7 @@ relevant `--json` output.
 `samples/Netclaw.Demo.AppHost.IntegrationTests` is an Aspire-driven
 end-to-end test that boots the demo AppHost (`samples/Netclaw.Demo.AppHost`),
 waits for every resource — Mattermost container, Ollama container,
-`qwen3:4b` model, NetClaw daemon project — to reach healthy, posts a
+`qwen3.5:2b-q4_K_M` model, NetClaw daemon project — to reach healthy, posts a
 Mattermost message via REST as the seeded test user, and asserts the
 wiring routes the message through.
 
@@ -82,8 +82,8 @@ NETCLAW_RUN_DEMO_SMOKE=1 \
     --filter Category=SlowSmoke
 ```
 
-Prerequisites: Docker daemon reachable, ~5GB of disk free on a cold
-cache (Mattermost preview + Ollama image + `qwen3:4b` weights). Warm
+Prerequisites: Docker daemon reachable, ~4GB of disk free on a cold
+cache (Mattermost preview + Ollama image + `qwen3.5:2b-q4_K_M` weights). Warm
 runs reuse cached images and the model volume.
 
 The test's bot-reply wait is best-effort and configurable. On a

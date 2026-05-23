@@ -38,7 +38,7 @@ var useHostOllama = string.Equals(
     "1",
     StringComparison.Ordinal);
 var modelId = Environment.GetEnvironmentVariable("NETCLAW_DEMO_MODEL_ID")
-    ?? "qwen3:4b";
+    ?? "qwen3.5:2b-q4_K_M";
 var hostOllamaUrl = Environment.GetEnvironmentVariable("NETCLAW_DEMO_OLLAMA_URL")
     ?? "http://127.0.0.1:11434";
 
@@ -62,7 +62,7 @@ else
             .WithEnvironment("OLLAMA_KEEP_ALIVE", "-1");
     }
 
-    aspireOllamaModel = ollama.AddModel(modelId);
+    aspireOllamaModel = ollama.AddModel("ollama-model", modelId);
     resolveOllamaUrl = async ct =>
     {
         var url = await ollama.Resource.PrimaryEndpoint.GetValueAsync(ct);

@@ -57,17 +57,17 @@ Two facts shape every decision below:
 
 **Rationale:** Avoids colliding with any host-running daemon on the default `5199` — both at the port level and at the daemon lock file (`DaemonManager.cs:249,315`). Explicit `Host` and `ExposureMode` document intent even when they equal defaults; future readers don't have to know the defaults to reason about security posture.
 
-### Decision 4: Ollama via `CommunityToolkit.Aspire.Hosting.Ollama`, default model `qwen3:4b`
+### Decision 4: Ollama via `CommunityToolkit.Aspire.Hosting.Ollama`, default model `qwen3.5:2b-q4_K_M`
 
-**Choice:** `builder.AddOllama("ollama").AddModel("qwen3:4b").WithDataVolume();`
+**Choice:** `builder.AddOllama("ollama").AddModel("ollama-model", "qwen3.5:2b-q4_K_M").WithDataVolume();`
 
 **Alternatives considered:**
 
 - *Custom container resource with a sidecar init step running `ollama pull`.* Rejected for v1 — more code, no advantage over the community package which already supports model pull + cache volumes.
 - *Manual `ollama pull` prerequisite documented in the README.* Rejected. Defeats the "zero friction" goal.
-- *Different default model.* `qwen3:30b` and `qwen3:14b` (NetClaw's primary/fallback for production) are too large for CPU. `qwen2.5:7b` is heavier but more reliable; `llama3.2:3b` is faster but weaker on tools. `qwen3:4b` is the smallest model in `qwen3` generation with reliable tool-calling.
+- *Different default model.* `qwen3:30b` and `qwen3:14b` (NetClaw's primary/fallback for production) are too large for CPU. `qwen3.5:0.8b` is lighter but has weak public evidence for reliable tool calling; `qwen3.5:4b` and `qwen3.5:9b` are materially heavier on Ollama and erode the CPU-latency goal.
 
-**Rationale:** Community package is purpose-built for this use case. `qwen3:4b` is the smallest tool-calling-capable model that runs on CPU in tens of seconds per response — acceptable for kick-the-tires latency on a developer laptop. If Phase 5 smoke testing reveals reliability issues, the model is a one-line change in AppHost.
+**Rationale:** Community package is purpose-built for this use case. `qwen3.5:2b-q4_K_M` is the least-risk compromise between local CPU latency and tool-calling usefulness we found after comparing the Ollama tag sizes and Qwen's function-calling guidance: smaller than the previous `qwen3:4b`, still within the Qwen 3.5 family, and materially lighter than the 4B/9B Ollama variants. If Phase 5 smoke testing still shows unacceptable tool behavior, the next fallback is not "bigger model first" — it's a tighter fast-profile tool surface.
 
 ### Decision 5: Mattermost preview image, not Team Edition + Postgres
 
@@ -75,16 +75,16 @@ Two facts shape every decision below:
 
 **Rationale:** Self-contained (no separate Postgres), zero licensing friction, no admin setup wizard. Preview image is deprecated upstream — documented in the README as a future migration. Acceptable trade for a demo.
 
-### Decision 6: Mattermost bootstrap via executable project resource
+### Decision 6: Mattermost bootstrap via in-AppHost readiness hook
 
-**Choice:** New `samples/Netclaw.Demo.Bootstrap/` console project consumed by Aspire as a project resource that runs once after Mattermost is healthy and writes `BotToken`, `DefaultChannelId`, and `ServerUrl` as outputs. Daemon resource depends on this output chain via `.WithEnvironment(...)` + `.WaitFor(bootstrap)`.
+**Choice:** Subscribe to Mattermost `ResourceReadyEvent` directly inside the AppHost, run `MattermostBootstrapper.SeedAsync(...)` once, cache the `BootstrapResult` in a `TaskCompletionSource`, and have the daemon's async `WithEnvironment(...)` callback await that result before process launch.
 
 **Alternatives considered:**
 
-- *Single `IDistributedApplicationLifecycleHook` registered directly in AppHost.* Lighter weight but harder to test in isolation; lifecycle-hook ordering quirks in Aspire are documented. Acceptable fallback if the project-resource path turns out to be fragile.
-- *Inline seeding inside the AppHost Program.cs.* Couples seeding to AppHost startup, no isolation, no reuse. Rejected.
+- *Separate executable project resource.* Rejected — cross-process output plumbing bought us complexity without meaningful value because the seed sequence is already encapsulated in `MattermostBootstrapper` and only needs to run once per AppHost session.
+- *Inline seeding without a dedicated ready-event gate.* Rejected — loses explicit ordering against Mattermost readiness and makes retries/idempotency harder to reason about.
 
-**Rationale:** A separate executable can be unit-tested against a real Mattermost container without the rest of Aspire involved, mirroring how the `MattermostFixture` integration test exercises the underlying logic today. The `MattermostBootstrapper` library shared between the integration test and the demo means seeding logic lives in exactly one place.
+**Rationale:** The shared `MattermostBootstrapper` library already gives us the reuse and testability we wanted. Keeping the bootstrap in-process avoids extra resource churn, avoids JSON/stdout marshaling, and still preserves correct startup ordering because the daemon's env-var callback cannot complete until seeding succeeds.
 
 ### Decision 7: Extract `MattermostBootstrapper` from `MattermostFixture`
 
@@ -119,12 +119,12 @@ Two facts shape every decision below:
 
 | Risk | Mitigation |
 |------|------------|
-| `qwen3:4b` mis-routes tool calls in some prompts (small-model reliability). | README seeds tested "first prompts" that play to the model's strengths. If Phase 5 smoke reveals frequent failures, the default flips to `qwen2.5:7b` with a documented latency note. |
+| `qwen3.5:2b-q4_K_M` still mis-routes tool calls in some prompts (small-model reliability). | README documents the fast-profile steering, disables thinking mode, and keeps tool-loop caps low. If Phase 5 smoke reveals frequent failures, tighten the fast-profile tool surface before moving to a larger default model. |
 | Aspire 9.x packages may not target `.NET 10`. | Phase 1 verifies compatibility. If only `net9.0` is supported, AppHost project sets `<TargetFramework>net9.0</TargetFramework>` while the rest of the repo stays `net10.0`; `global.json` `rollForward: major` already covers SDK pinning. |
 | `mattermost-preview` is deprecated upstream. | Pinned in the README as a future migration. Functionally stable; the Mattermost org hasn't removed the image. |
 | Bootstrap-resource design (project vs lifecycle hook) is novel in Aspire. | Phase 2 prototypes the hook approach first as a complexity check; escalates to executable project resource if ordering or testability becomes painful. |
 | Cold first run pulls ~3.6GB of images + models. | Documented expected timing in README. Cached on subsequent runs via Docker volumes and `WithDataVolume()`. |
-| Demo `netclaw.json` ACL/grants too restrictive → boring demo; too loose → bad security default. | Phase 4 explicitly designs the grant set against `Netclaw.Security` defaults. Tracked as an Open Question below. |
+| Public-audience fast profile still exposes enough tools for a small model to pick bad branches. | Keep the public prompt lean, cap tool loops, disable thinking mode, and prefer a lighter default model. If failures persist, tighten the fast-profile tool surface before increasing model size. |
 | Port `5299` already in use locally. | Daemon fails fast at startup; AppHost dashboard surfaces the bind error. README troubleshooting section calls this out. |
 | `.demo-home/` accidentally committed by an operator. | Added to `.gitignore` in Phase 1. |
 
@@ -136,27 +136,27 @@ Phasing within the change:
 
 1. **Phase 1 — Foundations.** ServiceDefaults + AppHost skeleton + daemon resource with `NETCLAW_HOME`/port/Host/ExposureMode env vars + `.gitignore` + solution wiring. Verify `dotnet run` launches the dashboard with daemon healthy.
 2. **Phase 1.5 — Aspire MCP.** Register MCP server, confirm Claude Code can drive the running app.
-3. **Phase 2 — Mattermost orchestration.** Extract `MattermostBootstrapper`, add Mattermost container, add bootstrap resource, wire daemon env vars from bootstrap outputs.
+3. **Phase 2 — Mattermost orchestration.** Extract `MattermostBootstrapper`, add Mattermost container, run the bootstrap sequence from the AppHost ready hook, wire daemon env vars from the captured bootstrap result.
 4. **Phase 3 — Ollama.** Add Ollama container + model pull, wire provider config.
-5. **Phase 4 — Demo defaults + README.** Seed `netclaw.json`, write README, update operations skill.
+5. **Phase 4 — Demo defaults + README.** Finalize env-driven demo defaults, write README, update operations skill.
 6. **Phase 5 — Aspire integration test.** xUnit + `Aspire.Hosting.Testing` smoke gate.
 7. **Phase 6 — Repo-wide finishing.** Slopwatch, file-header verify, docs, optional CI workflow_dispatch.
 
 ## Open Questions
 
-1. **Exact ACL/grants in the seeded `netclaw.json`.** What's the smallest grant set that lets the agent demonstrate tool calling without compromising the "secure-by-default" rule from the constitution? Resolved in Phase 4 design before the file is committed.
+1. **Fast-profile tool surface vs latency.** How much of the default public audience should remain exposed for the demo before tool-calling drift outweighs the value of showing tools at all? Resolved incrementally during implementation by shrinking prompt weight, disabling thinking mode, and moving to a smaller default model.
 2. **Aspire dashboard MCP API surface.** The skill descriptions don't pin down whether it's `aspire mcp` CLI vs `builder.AddMcpServer()` API. Resolved by inspection in Phase 1.5; documented in the demo README.
 3. **`Aspire.Hosting.Testing` xUnit support on `net10.0`.** May require an attribute or `[ModuleInitializer]` adjustment per `dotnet-skills:aspire-integration-testing`. Resolved in Phase 5.
-4. **Whether the bootstrap resource should run on every AppHost start, or detect "already seeded" via a sentinel file in `.demo-home/`.** Idempotency would be friendlier across restarts. Resolved in Phase 2 design.
+4. **Whether the bootstrap sequence should run on every AppHost start, or detect "already seeded" via a sentinel file in `.demo-home/`.** Idempotency would be friendlier across restarts. Resolved in Phase 2 design.
 
 ## Actor / Persistence / Failure Notes
 
-- **Actor boundaries unchanged.** The demo daemon runs the same Akka.NET actor system as production; no new actors, no new messages. The bootstrap resource is *outside* the actor system — a separate executable that calls Mattermost REST and emits env vars.
+- **Actor boundaries unchanged.** The demo daemon runs the same Akka.NET actor system as production; no new actors, no new messages. The bootstrap sequence stays outside the actor system — AppHost orchestration calls Mattermost REST and injects env vars before the daemon starts.
 - **Persistence isolated.** Daemon SQLite at `<demoHome>/.netclaw/netclaw.db`; Mattermost preview uses its own ephemeral SQLite-via-image; Ollama caches in a named Docker volume. No shared persistence with any host-installed NetClaw.
 - **Failure modes:**
   - Mattermost container fails to start → Aspire reports unhealthy; bootstrap and daemon `WaitFor` block; AppHost surfaces in dashboard.
   - Bootstrap fails (Mattermost not ready, signup disabled, network) → bootstrap exits non-zero; daemon never starts; clear error in dashboard.
   - Ollama model pull fails → `CommunityToolkit.Aspire.Hosting.Ollama` retries with backoff; daemon `WaitFor` blocks.
   - Daemon port collision → daemon fails fast on `IPListener` bind; lock-file conflict surfaces as `DaemonManager` exception.
-  - `qwen3:4b` refuses a tool call → bot replies in plain text; demo continues functioning (degraded but useful).
+  - `qwen3.5:2b-q4_K_M` refuses or mis-routes a tool call → bot replies in plain text or burns part of its loop budget; demo continues functioning (degraded but useful).
 - **Recovery:** Demo is "stateless from the operator's perspective" — `Ctrl+C` the AppHost, optionally `docker volume rm` for full reset, then `dotnet run` again.

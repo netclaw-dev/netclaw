@@ -18,16 +18,18 @@ namespace Netclaw.Demo.AppHost.IntegrationTests;
 /// reach a healthy state, posts a message into the seeded Mattermost
 /// channel as the test user, and asserts the daemon picks the message
 /// up. Best-effort waits for an actual bot reply within a configurable
-/// timeout — that piece is hardware-bound (qwen3:4b on pure CPU can
+/// timeout — that piece is hardware-bound (the default
+/// qwen3.5:2b-q4_K_M on pure CPU can
 /// take minutes; a GPU brings it under 30s).
 ///
 /// Gated behind <c>[Trait("Category", "SlowSmoke")]</c> so it never
 /// runs on a bare <c>dotnet test</c>. Invoke with
 /// <c>dotnet test --filter Category=SlowSmoke</c>.
 ///
-/// Prerequisites: Docker daemon reachable; ~5GB of disk on a cold
-/// cache (Mattermost preview ~1GB + Ollama image ~1GB + qwen3:4b
-/// ~3GB). Subsequent runs reuse cached images and the model volume.
+/// Prerequisites: Docker daemon reachable; ~4GB of disk on a cold
+/// cache (Mattermost preview ~1GB + Ollama image ~1GB +
+/// qwen3.5:2b-q4_K_M ~2GB). Subsequent runs reuse cached images and
+/// the model volume.
 /// </summary>
 [Trait("Category", "SlowSmoke")]
 public sealed class DemoEndToEndSmokeTests
@@ -52,13 +54,13 @@ public sealed class DemoEndToEndSmokeTests
     private static readonly BootstrapOptions Seed = new();
 
     private static readonly string[] ExpectedResources =
-        ["mattermost", "ollama", "ollama-qwen3", "daemon"];
+        ["mattermost", "ollama", "ollama-model", "daemon"];
 
     [Fact]
     public async Task Demo_AppHost_boots_and_routes_a_mattermost_message_to_the_daemon()
     {
         // Opt-in by design: this test cold-boots a Mattermost
-        // container, an Ollama container, pulls a ~3GB model, and
+        // container, an Ollama container, pulls a ~2GB model, and
         // launches the daemon. A bare `dotnet test` on a CI runner
         // without Docker would fail noisily. Mirror the
         // MattermostFixture opt-in pattern -- run only when the
