@@ -20,8 +20,23 @@ public interface IChannelTool : INetclawTool;
 /// </summary>
 public interface INetclawTool
 {
-    /// <summary>Tool name as seen by the LLM.</summary>
+    /// <summary>
+    /// Canonical, operator-facing tool identity. Used by the registry,
+    /// approval store, audit log, configuration, and CLI. For MCP tools
+    /// this is <c>{server}/{tool}</c>. For first-party tools it equals
+    /// the <see cref="LlmFacingName"/> value because their names already
+    /// satisfy the Anthropic tool-name regex.
+    /// </summary>
     string Name { get; }
+
+    /// <summary>
+    /// LLM-facing alias for <see cref="Name"/>. Surfaced in tool
+    /// definitions sent to the model and echoed back on tool result
+    /// messages. Equal to <see cref="Name"/> for first-party tools;
+    /// for MCP tools the canonical <c>/</c> separator is replaced with
+    /// <c>__</c> so the name satisfies the Anthropic regex.
+    /// </summary>
+    LlmFacingToolName LlmFacingName { get; }
 
     /// <summary>Human-readable description included in the tool schema.</summary>
     string Description { get; }

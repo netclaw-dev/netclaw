@@ -16,11 +16,13 @@ internal sealed class FakeNetclawTool : INetclawTool
     public FakeNetclawTool(string name, string result, string grantCategory = "builtin")
     {
         Name = name;
+        LlmFacingName = LlmFacingToolName.FromCanonical(name);
         _result = result;
         GrantCategory = grantCategory;
     }
 
     public string Name { get; }
+    public LlmFacingToolName LlmFacingName { get; }
     public string Description => "Fake tool";
     public string GrantCategory { get; }
     public System.Text.Json.JsonElement ParameterSchema => default;

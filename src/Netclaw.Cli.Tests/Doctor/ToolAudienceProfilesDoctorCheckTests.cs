@@ -419,6 +419,45 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task McpServerWithPerToolOverrideUnderLlmFacingKey_DoesNotTriggerWarning()
+    {
+        // An operator who wrote the LLM-facing alias (`notion__create-pages`)
+        // into ToolOverrides — the form they saw in audit logs / transcripts
+        // — still credits the server with having per-tool approval coverage.
+        // Runtime now resolves both forms (see ToolApprovalConfig.TryGetExplicitMode),
+        // and the doctor matches the same shape.
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ToolsMode": "All",
+                    "McpServersMode": "All",
+                    "McpServerToolGrants": { "notion": ["create-pages"] },
+                    "ApprovalPolicy": {
+                      "ToolOverrides": { "notion__create-pages": "Approval" }
+                    },
+                    "ReadFiles": { "Mode": "All" },
+                    "WriteFiles": { "Mode": "All" },
+                    "AttachFiles": { "Mode": "All" }
+                  }
+                }
+              },
+              "McpServers": {
+                "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("approval default on Personal", result.Message);
+    }
+
+    [Fact]
     public async Task MissingApprovalWarning_DoesNotFireForServerNotInMcpServers()
     {
         // Server is in AllowedMcpServers but not in McpServers (stale allowlist).

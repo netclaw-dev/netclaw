@@ -93,7 +93,9 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
 
                 // NOTE: Keep suggestions in a distinct format so LlmSessionActor doesn't
                 // auto-load them as discovered tools. Auto-loading is only for exact matches.
-                suggestionBuilder.AppendLine($"  ? {tool.Name} :: {desc}{parameterHint}");
+                // Emit the LLM-facing alias so what the model reads here
+                // matches what it must emit in a tool_use call.
+                suggestionBuilder.AppendLine($"  ? {tool.LlmFacingName} :: {desc}{parameterHint}");
             }
 
             suggestionBuilder.AppendLine();
@@ -154,7 +156,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
                 ? tool.Description[..77] + "..."
                 : tool.Description;
             var parameterHint = GetParameterHint(tool);
-            sb.AppendLine($"  {tool.Name} — {desc}{parameterHint}");
+            sb.AppendLine($"  {tool.LlmFacingName} — {desc}{parameterHint}");
         }
 
         sb.AppendLine();

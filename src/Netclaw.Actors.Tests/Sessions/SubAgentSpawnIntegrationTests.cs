@@ -568,6 +568,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     private sealed class RecordingContextTool(string name, string result, string grantCategory = "builtin") : INetclawTool
     {
         public string Name { get; } = name;
+        public LlmFacingToolName LlmFacingName { get; } = LlmFacingToolName.FromCanonical(name);
         public string Description => "Recording fake tool";
         public string GrantCategory { get; } = grantCategory;
         public System.Text.Json.JsonElement ParameterSchema => default;

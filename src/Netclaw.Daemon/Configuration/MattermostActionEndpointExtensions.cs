@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using Akka.Actor;
 using Akka.Hosting;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.RateLimiting;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Channels;
@@ -46,7 +47,7 @@ public static class MattermostActionEndpointExtensions
             return;
         }
 
-        app.MapPost("/api/mattermost/actions", async (
+        app.MapPost("/api/mattermost/actions", async ValueTask<Results<BadRequest<string>, StatusCodeHttpResult, JsonHttpResult<ActionCallbackResponse>>> (
             HttpContext httpContext,
             IRequiredActor<MattermostGatewayActorKey> gatewayActor,
             TimeProvider timeProvider,
@@ -62,34 +63,34 @@ public static class MattermostActionEndpointExtensions
             }
             catch (JsonException)
             {
-                return Results.BadRequest("Invalid JSON payload.");
+                return TypedResults.BadRequest("Invalid JSON payload.");
             }
 
             if (payload is null)
-                return Results.BadRequest("Invalid JSON payload.");
+                return TypedResults.BadRequest("Invalid JSON payload.");
 
             if (payload.RawBodyLength > MaxCallbackBodyBytes)
-                return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                return TypedResults.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
             if (string.IsNullOrEmpty(payload.UserId)
                 || string.IsNullOrEmpty(payload.PostId)
                 || string.IsNullOrEmpty(payload.ChannelId))
             {
-                return Results.BadRequest("Missing required fields: user_id, post_id, channel_id.");
+                return TypedResults.BadRequest("Missing required fields: user_id, post_id, channel_id.");
             }
 
             if (payload.Context is null
                 || !payload.Context.TryGetValue("action_token", out var actionToken)
                 || string.IsNullOrWhiteSpace(actionToken))
             {
-                return Results.BadRequest("Missing required context field: action_token.");
+                return TypedResults.BadRequest("Missing required context field: action_token.");
             }
 
             if (!actionStore.TryConsume(actionToken, out var storedAction)
                 || storedAction is null)
             {
                 logger.LogWarning("Rejected Mattermost action callback with invalid, expired, or replayed action token");
-                return Results.Json(new ActionCallbackResponse
+                return TypedResults.Json(new ActionCallbackResponse
                 {
                     EphemeralText = "That approval button is no longer valid. Please re-issue the request and try again."
                 }, JsonOptions);
@@ -98,7 +99,7 @@ public static class MattermostActionEndpointExtensions
             if (!MattermostAclPolicy.IsAllowedUser(new MattermostUserId(payload.UserId), options))
             {
                 logger.LogWarning("Rejected Mattermost action callback from non-allowed user {UserId}", payload.UserId);
-                return Results.Json(new ActionCallbackResponse
+                return TypedResults.Json(new ActionCallbackResponse
                 {
                     EphemeralText = "You are not authorized to respond to tool approval prompts."
                 }, JsonOptions);
@@ -109,7 +110,7 @@ public static class MattermostActionEndpointExtensions
                 logger.LogWarning(
                     "Rejected Mattermost action callback with mismatched routing data channel={ChannelId}",
                     payload.ChannelId);
-                return Results.BadRequest("Callback routing data did not match the issued action.");
+                return TypedResults.BadRequest("Callback routing data did not match the issued action.");
             }
 
             // Bound the actor-resolution wait so a daemon still mid-startup
@@ -126,7 +127,7 @@ public static class MattermostActionEndpointExtensions
             catch (OperationCanceledException) when (!ct.IsCancellationRequested)
             {
                 logger.LogError("Mattermost callback received before the Mattermost gateway actor was registered.");
-                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+                return TypedResults.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
 
             var interaction = new MattermostGatewayInteraction(
@@ -148,24 +149,28 @@ public static class MattermostActionEndpointExtensions
 
                 return reply switch
                 {
-                    CommandAck => Results.Json(new ActionCallbackResponse
+                    CommandAck => TypedResults.Json(new ActionCallbackResponse
                     {
                         EphemeralText = $"You selected: **{ApprovalOptionKeys.LabelFor(storedAction.SelectedKey)}**"
                     }, JsonOptions),
-                    CommandNack nack => Results.Json(new ActionCallbackResponse
+                    CommandNack nack => TypedResults.Json(new ActionCallbackResponse
                     {
                         EphemeralText = MapRejectMessage(nack.Reason)
                     }, JsonOptions),
-                    _ => Results.StatusCode(StatusCodes.Status500InternalServerError)
+                    _ => TypedResults.StatusCode(StatusCodes.Status500InternalServerError)
                 };
             }
             catch (Exception ex)
             {
                 logger.LogError(ex, "Failed routing Mattermost action callback for call {CallId}", storedAction.CallId);
-                return Results.StatusCode(500);
+                return TypedResults.StatusCode(500);
             }
 
-        }).RequireRateLimiting(CallbackRateLimitPolicy).AllowAnonymous();
+        })
+        .WithName("MattermostActionCallback")
+        .WithSummary("Handle a Mattermost interactive approval button callback.")
+        .WithTags("Mattermost")
+        .RequireRateLimiting(CallbackRateLimitPolicy).AllowAnonymous();
     }
 
     private sealed class ActionCallbackPayload
@@ -179,9 +184,9 @@ public static class MattermostActionEndpointExtensions
         public int RawBodyLength { get; set; }
     }
 
-    private sealed class ActionCallbackResponse
+    private sealed record ActionCallbackResponse
     {
-        public string? EphemeralText { get; set; }
+        public string? EphemeralText { get; init; }
     }
 
     internal static void AddMattermostActionEndpointRateLimiting(this IServiceCollection services)

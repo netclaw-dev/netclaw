@@ -245,9 +245,11 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             if (approvalPolicy.McpServerDefaults.ContainsKey(serverName))
                 continue;
 
-            var serverPrefix = $"{serverName}/";
+            var canonicalPrefix = $"{serverName}/";
+            var aliasPrefix = $"{serverName}__";
             var hasPerToolOverride = approvalPolicy.ToolOverrides.Keys.Any(
-                k => k.StartsWith(serverPrefix, StringComparison.Ordinal));
+                k => k.StartsWith(canonicalPrefix, StringComparison.Ordinal)
+                  || k.StartsWith(aliasPrefix, StringComparison.Ordinal));
             if (hasPerToolOverride)
                 continue;
 

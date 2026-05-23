@@ -27,7 +27,14 @@ public sealed record ContextAssemblyInput(
     bool FileReadGranted,
     AutomaticRecallResult? ActiveRecall,
     TrustAudience Audience = TrustAudience.Personal,
-    string? SkillHint = null);
+    string? SkillHint = null,
+    // Maps canonical tool names (the form persisted in history) back
+    // to the LLM-facing alias the model expects on the wire. Anthropic
+    // rejects `/` in tool names; if this is null and history contains
+    // MCP tool calls, the LLM provider will return 400. Production
+    // callers should pass `toolRegistry.ToLlmFacingName`; unit tests
+    // that don't exercise MCP can leave it null.
+    Func<string, string>? ToolNameToLlmFacing = null);
 
 /// <summary>
 /// Pure-function assembly of the <see cref="AiChatMessage"/> list sent to
@@ -94,7 +101,10 @@ public static class SessionMessageAssembler
     public static List<AiChatMessage> Assemble(ContextAssemblyInput input)
     {
         var sessionDir = SessionDirectoryHelper.GetSessionDirectory(input.SessionId, input.SessionsBasePath);
-        var messages = ChatMessageConverter.ToAiMessages(input.State.History, sessionDir);
+        var messages = ChatMessageConverter.ToAiMessages(
+            input.State.History,
+            sessionDir,
+            toolNameResolver: input.ToolNameToLlmFacing);
 
         var staticBlock = BuildStaticContextBlock(input, sessionDir);
         if (!string.IsNullOrEmpty(staticBlock))

@@ -881,7 +881,7 @@ public class DispatchingToolExecutorTests
         // ever changes, the rest of the test loses its meaning.
         var adapter = (McpToolAdapter)registry.GetByName(canonicalName)!;
         Assert.Equal(canonicalName, adapter.Name);
-        Assert.Equal(sanitizedAlias, adapter.SanitizedName);
+        Assert.Equal(sanitizedAlias, adapter.LlmFacingName.Value);
 
         var system = ActorSystem.Create($"tool-approval-mcp-{Guid.NewGuid():N}");
         try

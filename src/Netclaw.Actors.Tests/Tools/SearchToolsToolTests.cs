@@ -23,7 +23,7 @@ public class SearchToolsToolTests
             ToolInput.Create("Query", "store"),
             CancellationToken.None);
 
-        Assert.Contains("memorizer/store", result);
+        Assert.Contains("memorizer__store", result);
     }
 
     [Fact]
@@ -40,7 +40,7 @@ public class SearchToolsToolTests
             ToolInput.Create("Query", "memories"),
             CancellationToken.None);
 
-        Assert.Contains("memorizer/search_memories", result);
+        Assert.Contains("memorizer__search_memories", result);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public class SearchToolsToolTests
             ToolInput.Create("Query", "store", "Server", "default"),
             CancellationToken.None);
 
-        Assert.Contains("memorizer/store", result);
+        Assert.Contains("memorizer__store", result);
     }
 
     [Fact]
@@ -143,9 +143,9 @@ public class SearchToolsToolTests
 
         Assert.Contains("No exact tools found", result);
         Assert.Contains("Did you mean", result);
-        Assert.Contains("browser_chrome_devtools/navigate_page", result);
+        Assert.Contains("browser_chrome_devtools__navigate_page", result);
         Assert.Contains("Suggestions are not loaded yet", result);
-        Assert.DoesNotContain("browser_chrome_devtools/navigate_page —", result);
+        Assert.DoesNotContain("browser_chrome_devtools__navigate_page —", result);
     }
 
     [Fact]
@@ -174,8 +174,8 @@ public class SearchToolsToolTests
             CancellationToken.None);
 
         Assert.Contains("Found 2 tool(s) in server 'memorizer'", result);
-        Assert.Contains("memorizer/store", result);
-        Assert.Contains("memorizer/search", result);
+        Assert.Contains("memorizer__store", result);
+        Assert.Contains("memorizer__search", result);
     }
 
     [Fact]
@@ -223,7 +223,7 @@ public class SearchToolsToolTests
             context,
             CancellationToken.None);
 
-        Assert.Contains("memorizer/search_memories", result);
+        Assert.Contains("memorizer__search_memories", result);
     }
 
     [Fact]

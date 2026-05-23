@@ -19,7 +19,25 @@ namespace Netclaw.Actors.Protocol;
 /// </summary>
 public static class ChatMessageConverter
 {
-    public static AiChatMessage ToAiMessage(SerializableChatMessage msg, string? sessionDir = null, ILogger? logger = null)
+    /// <summary>
+    /// Convert a persisted message to a MEAI <see cref="AiChatMessage"/>.
+    /// </summary>
+    /// <param name="toolNameResolver">
+    /// Optional canonical→LLM-facing tool-name resolver. Persisted tool
+    /// call names are stored in canonical form (post-PR follow-up);
+    /// when building a request that goes to an LLM provider (Anthropic,
+    /// OpenAI) the names on <see cref="FunctionCallContent"/> must be
+    /// the LLM-facing alias the model originally emitted. Pass
+    /// <c>toolRegistry.ToLlmFacingName</c>. Null (default) leaves names
+    /// untouched — appropriate for internal re-drive paths where we
+    /// re-dispatch by canonical name through the registry's two-form
+    /// lookup.
+    /// </param>
+    public static AiChatMessage ToAiMessage(
+        SerializableChatMessage msg,
+        string? sessionDir = null,
+        ILogger? logger = null,
+        Func<string, string>? toolNameResolver = null)
     {
         var role = msg.Role switch
         {
@@ -54,7 +72,8 @@ public static class ChatMessageConverter
                     args = JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                 }
 
-                contents.Add(new FunctionCallContent(tc.CallId.Value, tc.Name.Value, args));
+                var wireName = toolNameResolver?.Invoke(tc.Name.Value) ?? tc.Name.Value;
+                contents.Add(new FunctionCallContent(tc.CallId.Value, wireName, args));
             }
 
             return new AiChatMessage(role, contents);
@@ -90,9 +109,10 @@ public static class ChatMessageConverter
     public static List<AiChatMessage> ToAiMessages(
         IEnumerable<SerializableChatMessage> messages,
         string? sessionDir = null,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        Func<string, string>? toolNameResolver = null)
     {
-        return [.. messages.Select(m => ToAiMessage(m, sessionDir, logger))];
+        return [.. messages.Select(m => ToAiMessage(m, sessionDir, logger, toolNameResolver))];
     }
 
     public static SerializableChatMessage FromAiMessage(AiChatMessage msg, string? sessionDir = null)

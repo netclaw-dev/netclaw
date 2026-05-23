@@ -258,6 +258,49 @@ public class ToolRegistryTests
         Assert.Same(byCanonical, bySanitized);
     }
 
+    [Fact]
+    public void ToCanonicalName_maps_sanitized_alias_to_canonical_for_McpTool()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("create-pages"), "notion", "create-pages"));
+
+        Assert.Equal("notion/create-pages", registry.ToCanonicalName("notion__create-pages"));
+        // Already canonical → idempotent
+        Assert.Equal("notion/create-pages", registry.ToCanonicalName("notion/create-pages"));
+        // Unknown tool — pass-through, no throw
+        Assert.Equal("unregistered__tool", registry.ToCanonicalName("unregistered__tool"));
+    }
+
+    [Fact]
+    public void ToLlmFacingName_maps_canonical_to_sanitized_alias_for_McpTool()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("create-pages"), "notion", "create-pages"));
+
+        Assert.Equal("notion__create-pages", registry.ToLlmFacingName("notion/create-pages"));
+        // Already LLM-facing — pass-through (no registered tool by that
+        // exact name; falls through to identity)
+        Assert.Equal("notion__create-pages", registry.ToLlmFacingName("notion__create-pages"));
+    }
+
+    [Fact]
+    public void Canonical_and_LlmFacing_round_trip_for_first_party_tools_is_identity()
+    {
+        // First-party tool names already satisfy the Anthropic regex —
+        // canonical and LLM-facing are the same string. Round-tripping
+        // must not mangle them in either direction.
+        var config = new ToolConfig();
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(config);
+
+        Assert.Equal("shell_execute", registry.ToCanonicalName("shell_execute"));
+        Assert.Equal("shell_execute", registry.ToLlmFacingName("shell_execute"));
+        Assert.Equal("file_read", registry.ToCanonicalName("file_read"));
+        Assert.Equal("file_read", registry.ToLlmFacingName("file_read"));
+    }
+
     private static AIFunction CreateFakeTool(string name)
     {
         return AIFunctionFactory.Create(() => "result", name);

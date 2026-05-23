@@ -423,6 +423,59 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Contains("Unknown audience 'bogus'", _output.ToString());
     }
 
+    // ── MCP name-form acceptance ──
+
+    [Fact]
+    public async Task Revoke_all_resolves_LlmFacing_alias_to_canonical_stored_key()
+    {
+        // Operator pastes the LLM-facing alias they saw in a transcript
+        // — the grant is stored under canonical `notion/create-pages`,
+        // and the revoke must still find and remove it.
+        _store.AddApproval(TrustAudience.Personal, "notion/create-pages",
+            new ApprovalEntry("notion/create-pages") { Directory = null });
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", "--tool", "notion__create-pages", "--all", "--audience", "personal"],
+            _paths, _output);
+
+        Assert.Equal(0, exit);
+        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "notion/create-pages"));
+        Assert.Contains("Removed 1 approval(s)", _output.ToString());
+    }
+
+    [Fact]
+    public async Task List_filter_by_LlmFacing_alias_matches_canonical_stored_key()
+    {
+        _store.AddApproval(TrustAudience.Personal, "notion/create-pages",
+            new ApprovalEntry("notion/create-pages") { Directory = null });
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "list", "--tool", "notion__create-pages"],
+            _paths, _output);
+
+        Assert.Equal(0, exit);
+        var text = _output.ToString();
+        Assert.Contains("notion/create-pages", text);
+        Assert.DoesNotContain("git push", text);
+    }
+
+    [Fact]
+    public async Task TrustVerb_persists_under_canonical_name_when_passed_LlmFacing_alias()
+    {
+        // If the operator passes the LLM-facing alias to trust-verb, the
+        // grant should land under the canonical key so the runtime
+        // approval gate — which queries canonical — finds it.
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "freshdesk", "--tool", "notion__create-pages"],
+            _paths, _output);
+
+        Assert.Equal(0, exit);
+        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "notion__create-pages"));
+        Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "notion/create-pages"));
+        Assert.Contains("notion/create-pages", _output.ToString());
+    }
+
     // ── help mentions trust-verb ──
 
     [Fact]

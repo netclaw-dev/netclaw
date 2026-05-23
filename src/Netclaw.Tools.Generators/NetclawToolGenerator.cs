@@ -217,6 +217,14 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
 
         // -- INetclawTool properties --
         sb.AppendLine($"    public override string Name => \"{EscapeJson(model.ToolName)}\";");
+        // LlmFacingName goes through LlmFacingToolName.FromCanonical at type
+        // init so any future attribute name containing '/' (or other
+        // disallowed chars) fails loudly the first time the tool is
+        // referenced, rather than at the Anthropic API boundary on the
+        // user's first call. First-party tool names today have no '/'
+        // so this round-trips unchanged.
+        sb.AppendLine($"    private static readonly Netclaw.Tools.LlmFacingToolName _generatedLlmFacingName = Netclaw.Tools.LlmFacingToolName.FromCanonical(\"{EscapeJson(model.ToolName)}\");");
+        sb.AppendLine("    public override Netclaw.Tools.LlmFacingToolName LlmFacingName => _generatedLlmFacingName;");
         sb.AppendLine($"    public override string Description => \"{EscapeJson(model.ToolDescription)}\";");
         sb.AppendLine($"    public override string GrantCategory => \"{EscapeJson(model.Grant)}\";");
         sb.AppendLine("    public override JsonElement ParameterSchema => _generatedSchema;");

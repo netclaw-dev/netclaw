@@ -75,9 +75,23 @@ public sealed class ToolApprovalConfig
             return true;
         }
 
+        // PR follow-up: accept either canonical (server/tool) or
+        // LLM-facing (server__tool) keys in ToolOverrides. The runtime
+        // queries with canonical, but operators may have written the
+        // LLM-facing form they saw in audit logs / transcripts before
+        // the operator/LLM-audience split was tightened. Convention:
+        // first-party tool names never contain '__', so a '__' in the
+        // queried canonical name unambiguously maps to an MCP alias
+        // and vice versa.
         var slashIndex = toolName.IndexOf('/', StringComparison.Ordinal);
         if (slashIndex > 0)
         {
+            var aliasKey = toolName.Replace("/", "__", StringComparison.Ordinal);
+            if (ToolOverrides.TryGetValue(aliasKey, out mode))
+            {
+                return true;
+            }
+
             var serverName = toolName[..slashIndex];
             if (McpServerDefaults.TryGetValue(serverName, out mode))
             {

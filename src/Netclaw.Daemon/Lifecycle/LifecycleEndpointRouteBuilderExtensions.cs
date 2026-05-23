@@ -3,11 +3,20 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.Mvc;
 using Netclaw.Daemon.Services;
 
 namespace Netclaw.Daemon.Lifecycle;
+
+/// <summary>Request to shut down the daemon, sourced from query string.</summary>
+public sealed record ShutdownDaemonRequest([FromQuery(Name = "reason")] string? Reason);
+
+/// <summary>Successful shutdown acknowledgement: echoes the reason and reports the daemon PID.</summary>
+public sealed record ShutdownDaemonResponse(string Reason, int Pid);
+
+/// <summary>Error payload returned when a lifecycle request is malformed.</summary>
+public sealed record LifecycleErrorResponse(string Error);
 
 public static class LifecycleEndpointRouteBuilderExtensions
 {
@@ -15,17 +24,20 @@ public static class LifecycleEndpointRouteBuilderExtensions
     {
         // Daemon lifecycle endpoint — CLI calls this before sending SIGTERM.
         // Config-triggered restart coordination happens inside DaemonRestartCoordinator.
-        app.MapPost("/api/lifecycle/shutdown", (
-            DaemonLifecycleNotifier notifier,
-            HttpRequest request) =>
+        app.MapPost("/api/lifecycle/shutdown", Results<Ok<ShutdownDaemonResponse>, BadRequest<LifecycleErrorResponse>> (
+            [AsParameters] ShutdownDaemonRequest request,
+            DaemonLifecycleNotifier notifier) =>
         {
-            var reason = request.Query["reason"].ToString();
-            if (string.IsNullOrEmpty(reason))
-                return Results.BadRequest(new { error = "reason query parameter is required" });
+            if (string.IsNullOrEmpty(request.Reason))
+                return TypedResults.BadRequest(new LifecycleErrorResponse("reason query parameter is required"));
 
-            notifier.NotifyShutdown(reason);
-            return Results.Ok(new { reason, pid = Environment.ProcessId });
-        }).RequireAuthorization();
+            notifier.NotifyShutdown(request.Reason);
+            return TypedResults.Ok(new ShutdownDaemonResponse(request.Reason, Environment.ProcessId));
+        })
+        .WithName("ShutdownDaemon")
+        .WithSummary("Request a graceful daemon shutdown ahead of SIGTERM.")
+        .WithTags("Lifecycle")
+        .RequireAuthorization();
 
         return app;
     }

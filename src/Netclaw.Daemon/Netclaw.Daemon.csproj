@@ -1,55 +1,65 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <AssemblyName>netclawd</AssemblyName>
-    <OutputType>Exe</OutputType>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <InvariantGlobalization>false</InvariantGlobalization>
-    <!-- OpenAI Responses API (ResponsesClient) is still marked experimental -->
-    <NoWarn>$(NoWarn);OPENAI001</NoWarn>
-  </PropertyGroup>
+    <PropertyGroup>
+        <TargetFramework>net10.0</TargetFramework>
+        <AssemblyName>netclawd</AssemblyName>
+        <OutputType>Exe</OutputType>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+        <InvariantGlobalization>false</InvariantGlobalization>
+        <!-- OpenAI Responses API (ResponsesClient) is still marked experimental -->
+        <NoWarn>$(NoWarn);OPENAI001</NoWarn>
 
-  <ItemGroup>
-    <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
-    <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
-  </ItemGroup>
+        <!-- Generate XML documentation file for public API (feeds OpenAPI metadata).
+             Doc-comment completeness/cref warnings are not enforced here: CS1591 (missing
+             doc on public member), CS1573 (missing param tag), CS1574/CS0419 (unresolved/
+             ambiguous cref), CS1587 (comment on a non-documentable element, e.g. top-level
+             local functions). -->
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <!-- slopwatch-ignore: SW005 GenerateDocumentationFile is on to feed OpenAPI metadata, not to enforce doc-comment completeness. These are non-functional doc-comment diagnostics (unresolved/ambiguous crefs, missing param tags, comments on top-level local functions); we intentionally do not gate the build on them. -->
+        <NoWarn>$(NoWarn);CS1573;CS1574;CS1587;CS0419</NoWarn>
+    </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="Akka.Hosting" />
-    <PackageReference Include="Akka.Persistence.Hosting" />
-    <PackageReference Include="Akka.Persistence.Sql.Hosting" />
-    <PackageReference Include="Microsoft.Data.Sqlite" />
-    <PackageReference Include="ModelContextProtocol.Core" />
-    <PackageReference Include="Netclaw.SkillClient" />
-    <PackageReference Include="OpenTelemetry" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
-    <PackageReference Include="SlackNet.Extensions.DependencyInjection" />
-  </ItemGroup>
+    <ItemGroup>
+        <InternalsVisibleTo Include="Netclaw.Daemon.Tests"/>
+        <InternalsVisibleTo Include="Netclaw.Cli.Tests"/>
+    </ItemGroup>
 
-  <ItemGroup>
-    <None Update="migrations\sqlite\**\*.sql">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <EmbeddedResource Include="migrations\sqlite\**\*.sql" />
-    <Content Include="..\..\feeds\skills\.system\files\**\*" Exclude="..\..\feeds\skills\.system\files\**\*.*.*\**" Link="BuiltInSkills\%(RecursiveDir)%(Filename)%(Extension)">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
+    <ItemGroup>
+        <PackageReference Include="Akka.Hosting"/>
+        <PackageReference Include="Akka.Persistence.Hosting"/>
+        <PackageReference Include="Akka.Persistence.Sql.Hosting"/>
+        <PackageReference Include="Microsoft.AspNetCore.OpenApi"/>
+        <PackageReference Include="Microsoft.Data.Sqlite"/>
+        <PackageReference Include="ModelContextProtocol.Core"/>
+        <PackageReference Include="Netclaw.SkillClient"/>
+        <PackageReference Include="OpenTelemetry"/>
+        <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol"/>
+        <PackageReference Include="OpenTelemetry.Extensions.Hosting"/>
+        <PackageReference Include="SlackNet.Extensions.DependencyInjection"/>
+    </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
-    <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
-    <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj" />
-    <ProjectReference Include="..\Netclaw.Channels.Discord\Netclaw.Channels.Discord.csproj" />
-    <ProjectReference Include="..\Netclaw.Channels.Mattermost\Netclaw.Channels.Mattermost.csproj" />
-    <ProjectReference Include="..\Netclaw.Channels.Slack\Netclaw.Channels.Slack.csproj" />
-    <ProjectReference Include="..\Netclaw.Providers\Netclaw.Providers.csproj" />
-    <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj" />
-    <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj" />
-  </ItemGroup>
+    <ItemGroup>
+        <None Update="migrations\sqlite\**\*.sql">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </None>
+        <EmbeddedResource Include="migrations\sqlite\**\*.sql"/>
+        <Content Include="..\..\feeds\skills\.system\files\**\*" Exclude="..\..\feeds\skills\.system\files\**\*.*.*\**" Link="BuiltInSkills\%(RecursiveDir)%(Filename)%(Extension)">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </Content>
+    </ItemGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj"/>
+        <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj"/>
+        <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj"/>
+        <ProjectReference Include="..\Netclaw.Channels.Discord\Netclaw.Channels.Discord.csproj"/>
+        <ProjectReference Include="..\Netclaw.Channels.Mattermost\Netclaw.Channels.Mattermost.csproj"/>
+        <ProjectReference Include="..\Netclaw.Channels.Slack\Netclaw.Channels.Slack.csproj"/>
+        <ProjectReference Include="..\Netclaw.Providers\Netclaw.Providers.csproj"/>
+        <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj"/>
+        <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj"/>
+    </ItemGroup>
 
 </Project>

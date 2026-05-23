@@ -10,11 +10,21 @@ namespace Netclaw.Actors.Sessions;
 
 internal static class LlmFailureClassifier
 {
+    // Truncation cap on raw HTTP / exception messages we forward to the UI.
+    // The provider's HttpRequestException.Message is normally short ("Connection
+    // refused (host:port)") but SDK-wrapped exceptions can be much longer and
+    // sometimes embed echoed request fragments. Cap so a chat window never gets
+    // a 2KB error blob.
+    private const int MaxForwardedMessageLength = 200;
+
     public static string ExtractUserMessage(Exception? cause, ModelCapabilities model)
     {
         if (cause is null)
-            return "I encountered an error processing your message. Please try again.";
+            return GenericFailureMessage;
 
+        // ProviderException already carries a user-safe message — provider
+        // transport layers (OpenAiCompatibleChatClient etc.) curate this so
+        // we don't have to.
         var providerEx = FindException<ProviderException>(cause);
         if (providerEx is not null)
             return providerEx.UserMessage;
@@ -25,8 +35,41 @@ internal static class LlmFailureClassifier
         if (cause is TimeoutException)
             return "The LLM response stream timed out due to inactivity. The model may be overloaded or the context too large. Please try again.";
 
-        return "I encountered an error processing your message. Please try again.";
+        // Raw HTTP transport failure not wrapped in ProviderException — common
+        // when SDKs like OllamaSharp throw HttpRequestException directly, or
+        // when the request never reaches a provider (DNS / connection refused).
+        // The exception's StatusCode is null for pre-response failures and
+        // populated for response-derived ones.
+        var httpEx = FindException<HttpRequestException>(cause);
+        if (httpEx is not null)
+            return FormatHttpFailure(httpEx);
+
+        // Final catch-all. Surfacing the exception type + a truncated message
+        // beats the historical "please try again" wall — at minimum the
+        // operator sees what kind of failure it was.
+        return $"Unexpected LLM provider error ({cause.GetType().Name}): {Truncate(cause.Message)}";
     }
+
+    private const string GenericFailureMessage =
+        "I encountered an error processing your message. Please try again.";
+
+    private static string FormatHttpFailure(HttpRequestException ex)
+    {
+        var status = (int?)ex.StatusCode;
+        return status switch
+        {
+            401 or 403 => $"LLM provider rejected the request (HTTP {status}): authentication failed or revoked. Re-run 'netclaw provider add <name> ...' or check stored credentials.",
+            429        => "LLM provider rate-limited the request (HTTP 429). Wait a moment and try again.",
+            >= 500     => $"LLM provider returned a server error (HTTP {status}). The provider may be overloaded. Please try again.",
+            not null   => $"LLM provider returned HTTP {status}: {Truncate(ex.Message)}",
+            null       => $"LLM provider transport error: {Truncate(ex.Message)}. Check provider configuration and connectivity.",
+        };
+    }
+
+    private static string Truncate(string? s) =>
+        string.IsNullOrEmpty(s) ? string.Empty :
+        s.Length <= MaxForwardedMessageLength ? s :
+        s[..MaxForwardedMessageLength] + "…";
 
     public static bool IsContextOverflow(Exception? ex)
     {

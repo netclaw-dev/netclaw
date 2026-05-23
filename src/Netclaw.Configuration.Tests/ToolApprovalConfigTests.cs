@@ -125,4 +125,44 @@ public sealed class ToolApprovalConfigTests
         Assert.True(config.TryGetExplicitMode("notion/create-pages", out var mode));
         Assert.Equal(ToolApprovalMode.Approval, mode);
     }
+
+    [Fact]
+    public void TryGetExplicitMode_finds_override_written_with_LlmFacing_key()
+    {
+        // Operator who wrote `notion__create-pages` (the form they saw in
+        // audit logs / LLM transcripts before the PR-3 audience split) gets
+        // their override honored when the runtime queries with the canonical
+        // form. Avoids a silent security misconfiguration.
+        var config = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion__create-pages"] = ToolApprovalMode.Approval
+            }
+        };
+
+        Assert.True(config.TryGetExplicitMode("notion/create-pages", out var mode));
+        Assert.Equal(ToolApprovalMode.Approval, mode);
+    }
+
+    [Fact]
+    public void TryGetExplicitMode_canonical_override_still_wins_when_both_forms_present()
+    {
+        // Canonical is the documented form — when both shapes exist the
+        // exact match must take precedence, so an operator can use the
+        // alias as a 'shadow' entry without it shadowing a canonical one.
+        var config = new ToolApprovalConfig
+        {
+            DefaultMode = ToolApprovalMode.Auto,
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["notion/create-pages"] = ToolApprovalMode.Deny,
+                ["notion__create-pages"] = ToolApprovalMode.Approval
+            }
+        };
+
+        Assert.True(config.TryGetExplicitMode("notion/create-pages", out var mode));
+        Assert.Equal(ToolApprovalMode.Deny, mode);
+    }
 }

@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
@@ -22,31 +23,32 @@ public static class ReminderEndpointRouteBuilderExtensions
     public static IEndpointRouteBuilder MapReminderEndpoints(this IEndpointRouteBuilder app)
     {
         var reminders = app.MapGroup("/api/reminders")
+            .WithTags("Reminders")
             .RequireAuthorization();
 
-        reminders.MapGet("", async (
+        reminders.MapGet("", async ValueTask<Ok<IEnumerable<ReminderSummaryDto>>> (
             IRequiredActor<ReminderManagerActorKey> actor,
             CancellationToken ct) =>
         {
             var manager = await actor.GetAsync(ct);
             var response = await manager.Ask<ReminderListResponse>(
                 new ListRemindersCommand(IncludeDisabled: false), TimeSpan.FromSeconds(10), ct);
-            var projected = response.Reminders.Select(r => new
-            {
-                id = r.Id.Value,
-                title = r.Title,
-                enabled = r.Enabled,
-                schedule = ListRemindersTool.DescribeSchedule(r.Schedule),
-                nextFire = SetReminderTool.FormatTimestamp(r.NextFire),
-                expiresAt = r.ExpiresAt is null
+            var projected = response.Reminders.Select(r => new ReminderSummaryDto(
+                Id: r.Id.Value,
+                Title: r.Title,
+                Enabled: r.Enabled,
+                Schedule: ListRemindersTool.DescribeSchedule(r.Schedule),
+                NextFire: SetReminderTool.FormatTimestamp(r.NextFire),
+                ExpiresAt: r.ExpiresAt is null
                     ? null
                     : SetReminderTool.FormatTimestamp(r.ExpiresAt),
-                audience = r.Audience?.ToWireValue(),
-            });
-            return Results.Ok(projected);
-        });
+                Audience: r.Audience?.ToWireValue()));
+            return TypedResults.Ok(projected);
+        })
+        .WithName("ListReminders")
+        .WithSummary("List all active reminders.");
 
-        reminders.MapPost("", async (
+        reminders.MapPost("", async ValueTask<Results<Ok<ReminderMessageResponse>, BadRequest<ReminderErrorResponse>, ProblemHttpResult>> (
             CreateReminderRequest request,
             IRequiredActor<ReminderManagerActorKey> actor,
             IServiceProvider serviceProvider,
@@ -63,7 +65,7 @@ public static class ReminderEndpointRouteBuilderExtensions
             // audience is now required and non-nullable, so a null authorization would otherwise
             // be silently defaulted, smuggling the request past the actor's authority check.
             if (authorization?.SourceAudience is not { } reminderSourceAudience)
-                return Results.Problem(
+                return TypedResults.Problem(
                     detail: "Creating a reminder requires Operator authority.",
                     statusCode: StatusCodes.Status403Forbidden);
 
@@ -102,11 +104,13 @@ public static class ReminderEndpointRouteBuilderExtensions
                 }, toolContext, ct);
 
             return result.StartsWith("Error", StringComparison.Ordinal)
-                ? Results.BadRequest(new { error = result })
-                : Results.Ok(new { message = result });
-        });
+                ? TypedResults.BadRequest(new ReminderErrorResponse(result))
+                : TypedResults.Ok(new ReminderMessageResponse(result));
+        })
+        .WithName("CreateReminder")
+        .WithSummary("Create a reminder (requires Operator authority).");
 
-        reminders.MapPost("/validate", (
+        reminders.MapPost("/validate", Results<Ok<ReminderValidationSuccessResponse>, BadRequest<ReminderValidationErrorResponse>> (
             CreateReminderRequest request,
             TimeProvider timeProvider) =>
         {
@@ -116,12 +120,17 @@ public static class ReminderEndpointRouteBuilderExtensions
                 timeProvider);
 
             if (schedule is null)
-                return Results.BadRequest(new { valid = false, error });
+                return TypedResults.BadRequest(new ReminderValidationErrorResponse(Valid: false, Error: error));
 
-            return Results.Ok(new { valid = true, scheduleType = schedule.Type.ToString(), nextFire = schedule.FireAt });
-        });
+            return TypedResults.Ok(new ReminderValidationSuccessResponse(
+                Valid: true,
+                ScheduleType: schedule.Type.ToString(),
+                NextFire: schedule.FireAt));
+        })
+        .WithName("ValidateReminderSchedule")
+        .WithSummary("Validate a reminder schedule without persisting it.");
 
-        reminders.MapPost("/import", async (
+        reminders.MapPost("/import", async ValueTask<Results<Ok<ReminderImportResponse>, BadRequest<ReminderErrorResponse>, JsonHttpResult<ReminderImportErrorResponse>>> (
             ImportReminderRequest request,
             IRequiredActor<ReminderManagerActorKey> actor,
             ClaimsPrincipalMapper mapper,
@@ -129,7 +138,7 @@ public static class ReminderEndpointRouteBuilderExtensions
             CancellationToken ct) =>
         {
             if (request.Definition is null)
-                return Results.BadRequest(new { error = "Reminder definition is required." });
+                return TypedResults.BadRequest(new ReminderErrorResponse("Reminder definition is required."));
 
             var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
 
@@ -142,7 +151,7 @@ public static class ReminderEndpointRouteBuilderExtensions
             };
 
             if (mode is null)
-                return Results.BadRequest(new { error = "Invalid writeMode. Use create, replace, or upsert." });
+                return TypedResults.BadRequest(new ReminderErrorResponse("Invalid writeMode. Use create, replace, or upsert."));
 
             var manager = await actor.GetAsync(ct);
             var response = await manager.Ask<ReminderSavedResponse>(
@@ -158,24 +167,24 @@ public static class ReminderEndpointRouteBuilderExtensions
                         ? StatusCodes.Status404NotFound
                         : StatusCodes.Status400BadRequest;
 
-                return Results.Json(new
-                {
-                    error = response.ErrorMessage ?? "Import failed.",
-                    code = response.Error.ToString(),
-                    id = response.Id.Value
-                }, statusCode: status);
+                return TypedResults.Json(
+                    new ReminderImportErrorResponse(
+                        Error: response.ErrorMessage ?? "Import failed.",
+                        Code: response.Error.ToString(),
+                        Id: response.Id.Value),
+                    statusCode: status);
             }
 
-            return Results.Ok(new
-            {
-                id = response.Id.Value,
-                title = response.Title,
-                nextFire = response.NextFire,
-                message = $"Imported reminder '{response.Id.Value}'."
-            });
-        });
+            return TypedResults.Ok(new ReminderImportResponse(
+                Id: response.Id.Value,
+                Title: response.Title,
+                NextFire: response.NextFire,
+                Message: $"Imported reminder '{response.Id.Value}'."));
+        })
+        .WithName("ImportReminder")
+        .WithSummary("Import a reminder definition with the requested write mode.");
 
-        reminders.MapDelete("/{id}", async (
+        reminders.MapDelete("/{id}", async ValueTask<Results<Ok<ReminderMessageResponse>, NotFound<ReminderErrorResponse>>> (
             string id,
             bool? permanent,
             IRequiredActor<ReminderManagerActorKey> actor,
@@ -191,8 +200,8 @@ public static class ReminderEndpointRouteBuilderExtensions
                     TimeSpan.FromSeconds(10), ct);
 
                 return deleted.Found
-                    ? Results.Ok(new { message = $"Reminder '{id}' permanently deleted." })
-                    : Results.NotFound(new { error = $"Reminder '{id}' not found." });
+                    ? TypedResults.Ok(new ReminderMessageResponse($"Reminder '{id}' permanently deleted."))
+                    : TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
             }
 
             var response = await manager.Ask<ReminderCancelledResponse>(
@@ -200,11 +209,13 @@ public static class ReminderEndpointRouteBuilderExtensions
                 TimeSpan.FromSeconds(10), ct);
 
             return response.Found
-                ? Results.Ok(new { message = $"Reminder '{id}' cancelled (disabled)." })
-                : Results.NotFound(new { error = $"Reminder '{id}' not found." });
-        });
+                ? TypedResults.Ok(new ReminderMessageResponse($"Reminder '{id}' cancelled (disabled)."))
+                : TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
+        })
+        .WithName("DeleteReminder")
+        .WithSummary("Cancel a reminder, or permanently delete it with ?permanent=true.");
 
-        reminders.MapPost("/{id}/disable", async (
+        reminders.MapPost("/{id}/disable", async ValueTask<Results<Ok<ReminderDisableResponse>, NotFound<ReminderErrorResponse>>> (
             string id,
             IRequiredActor<ReminderManagerActorKey> actor,
             CancellationToken ct) =>
@@ -216,11 +227,13 @@ public static class ReminderEndpointRouteBuilderExtensions
                 ct);
 
             return !response.Found
-                ? Results.NotFound(new { error = response.ErrorMessage ?? $"Reminder '{id}' not found." })
-                : Results.Ok(new { id = id, enabled = response.Enabled, message = $"Reminder '{id}' disabled." });
-        });
+                ? TypedResults.NotFound(new ReminderErrorResponse(response.ErrorMessage ?? $"Reminder '{id}' not found."))
+                : TypedResults.Ok(new ReminderDisableResponse(id, response.Enabled, $"Reminder '{id}' disabled."));
+        })
+        .WithName("DisableReminder")
+        .WithSummary("Disable a reminder without deleting it.");
 
-        reminders.MapPost("/{id}/enable", async (
+        reminders.MapPost("/{id}/enable", async ValueTask<Results<Ok<ReminderEnableResponse>, NotFound<ReminderErrorResponse>, BadRequest<ReminderEnableErrorResponse>>> (
             string id,
             IRequiredActor<ReminderManagerActorKey> actor,
             CancellationToken ct) =>
@@ -232,14 +245,16 @@ public static class ReminderEndpointRouteBuilderExtensions
                 ct);
 
             if (!response.Found)
-                return Results.NotFound(new { error = response.ErrorMessage ?? $"Reminder '{id}' not found." });
+                return TypedResults.NotFound(new ReminderErrorResponse(response.ErrorMessage ?? $"Reminder '{id}' not found."));
             if (!response.Enabled && !string.IsNullOrWhiteSpace(response.ErrorMessage))
-                return Results.BadRequest(new { error = response.ErrorMessage, id, enabled = false });
+                return TypedResults.BadRequest(new ReminderEnableErrorResponse(response.ErrorMessage, id, Enabled: false));
 
-            return Results.Ok(new { id, enabled = response.Enabled, nextFire = response.NextFire, message = $"Reminder '{id}' enabled." });
-        });
+            return TypedResults.Ok(new ReminderEnableResponse(id, response.Enabled, response.NextFire, $"Reminder '{id}' enabled."));
+        })
+        .WithName("EnableReminder")
+        .WithSummary("Re-enable a previously disabled reminder.");
 
-        reminders.MapGet("/{id}", async (
+        reminders.MapGet("/{id}", async ValueTask<Results<Ok<ReminderDetailDto>, NotFound<ReminderErrorResponse>>> (
             string id,
             IRequiredActor<ReminderManagerActorKey> actor,
             CancellationToken ct) =>
@@ -250,30 +265,30 @@ public static class ReminderEndpointRouteBuilderExtensions
                 TimeSpan.FromSeconds(10), ct);
 
             if (response.Reminder is null)
-                return Results.NotFound(new { error = $"Reminder '{id}' not found." });
+                return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
 
             var r = response.Reminder;
-            return Results.Ok(new
-            {
-                id = r.Id.Value,
-                title = r.Title,
-                enabled = r.Enabled,
-                schedule = ListRemindersTool.DescribeSchedule(r.Schedule),
-                nextFire = SetReminderTool.FormatTimestamp(r.NextFire),
-                expiresAt = r.ExpiresAt is null
+            return TypedResults.Ok(new ReminderDetailDto(
+                Id: r.Id.Value,
+                Title: r.Title,
+                Enabled: r.Enabled,
+                Schedule: ListRemindersTool.DescribeSchedule(r.Schedule),
+                NextFire: SetReminderTool.FormatTimestamp(r.NextFire),
+                ExpiresAt: r.ExpiresAt is null
                     ? null
                     : SetReminderTool.FormatTimestamp(r.ExpiresAt),
-                instructions = r.Instructions,
-                deliveryKind = r.Delivery.Kind.ToString().ToLowerInvariant(),
-                deliveryTransport = r.Delivery.Transport,
-                deliveryAddress = r.Delivery.Address,
-                deliveryRequired = r.DeliveryRequired,
-                deliveryInstructions = r.DeliveryInstructions,
-                audience = r.Audience?.ToWireValue(),
-            });
-        });
+                Instructions: r.Instructions,
+                DeliveryKind: r.Delivery.Kind.ToString().ToLowerInvariant(),
+                DeliveryTransport: r.Delivery.Transport,
+                DeliveryAddress: r.Delivery.Address,
+                DeliveryRequired: r.DeliveryRequired,
+                DeliveryInstructions: r.DeliveryInstructions,
+                Audience: r.Audience?.ToWireValue()));
+        })
+        .WithName("GetReminder")
+        .WithSummary("Get a single reminder's full definition.");
 
-        reminders.MapGet("/{id}/history", async (
+        reminders.MapGet("/{id}/history", async ValueTask<Results<Ok<IReadOnlyList<HistoryRecord>>, NotFound<ReminderErrorResponse>>> (
             string id,
             int? last,
             ReminderDefinitionStore definitionStore,
@@ -282,12 +297,14 @@ public static class ReminderEndpointRouteBuilderExtensions
         {
             var rid = new ReminderId(id);
             if (!definitionStore.Exists(rid))
-                return Results.NotFound(new { error = $"Reminder '{id}' not found." });
+                return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
 
             var maxRecords = Math.Clamp(last ?? 20, 1, 500);
             var records = await historyStore.ReadAsync(rid, maxRecords);
-            return Results.Ok(records);
-        });
+            return TypedResults.Ok(records);
+        })
+        .WithName("GetReminderHistory")
+        .WithSummary("Get recent fire history for a reminder.");
 
         return app;
     }
@@ -336,3 +353,56 @@ internal sealed record ImportReminderRequest
     public required ReminderDefinition Definition { get; init; }
     public string? WriteMode { get; init; }
 }
+
+/// <summary>Summary projection of a reminder returned by the list endpoint.</summary>
+internal sealed record ReminderSummaryDto(
+    string Id,
+    string Title,
+    bool Enabled,
+    string Schedule,
+    string NextFire,
+    string? ExpiresAt,
+    string? Audience);
+
+/// <summary>Full reminder projection returned by <c>GET /api/reminders/{id}</c>.</summary>
+internal sealed record ReminderDetailDto(
+    string Id,
+    string Title,
+    bool Enabled,
+    string Schedule,
+    string NextFire,
+    string? ExpiresAt,
+    string Instructions,
+    string DeliveryKind,
+    string? DeliveryTransport,
+    string? DeliveryAddress,
+    bool DeliveryRequired,
+    string? DeliveryInstructions,
+    string? Audience);
+
+/// <summary>Acknowledgement carrying a human-readable message.</summary>
+internal sealed record ReminderMessageResponse(string Message);
+
+/// <summary>Error payload returned when a reminder request fails.</summary>
+internal sealed record ReminderErrorResponse(string Error);
+
+/// <summary>Successful schedule validation result.</summary>
+internal sealed record ReminderValidationSuccessResponse(bool Valid, string ScheduleType, DateTimeOffset? NextFire);
+
+/// <summary>Failed schedule validation result.</summary>
+internal sealed record ReminderValidationErrorResponse(bool Valid, string? Error);
+
+/// <summary>Successful reminder import acknowledgement.</summary>
+internal sealed record ReminderImportResponse(string Id, string Title, DateTimeOffset? NextFire, string Message);
+
+/// <summary>Failure detail for a rejected reminder import.</summary>
+internal sealed record ReminderImportErrorResponse(string Error, string Code, string Id);
+
+/// <summary>State of a reminder after a disable request.</summary>
+internal sealed record ReminderDisableResponse(string Id, bool Enabled, string Message);
+
+/// <summary>State of a reminder after an enable request.</summary>
+internal sealed record ReminderEnableResponse(string Id, bool Enabled, DateTimeOffset? NextFire, string Message);
+
+/// <summary>Failure detail for a rejected enable request.</summary>
+internal sealed record ReminderEnableErrorResponse(string? Error, string Id, bool Enabled);

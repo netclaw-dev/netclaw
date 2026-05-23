@@ -55,11 +55,13 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
         if (_policy is not null && !_policy.IsToolExposed(registration.Tool, context))
             return Task.FromResult($"Tool '{name}' is not available in the current trust context.");
 
-        // Return the canonical tool name. The session actor intercepts load_tool
-        // results and attempts a registry lookup on the content to activate the tool.
-        // Error messages above will not match any registry entry, so only successful
-        // loads trigger activation — no string parsing required.
-        return Task.FromResult(registration.Tool.Name);
+        // Return the LLM-facing alias so the model sees the same form
+        // it must emit in a subsequent tool_use call. The session actor
+        // intercepts load_tool results and runs the content back through
+        // the registry's two-form lookup to activate the tool. Error
+        // messages above will not match any registry entry, so only
+        // successful loads trigger activation — no string parsing required.
+        return Task.FromResult(registration.Tool.LlmFacingName.Value);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)

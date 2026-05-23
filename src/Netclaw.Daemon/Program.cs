@@ -8,6 +8,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
@@ -135,6 +136,9 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     builder.Services.AddNetclawAuthSchemes(daemonConfig);
     builder.Services.AddAuthorization();
 
+    // Add OpenAPI
+    builder.Services.AddOpenApi();
+
     // Rate limiting for the unauthenticated pairing exchange endpoint.
     // 5 attempts per minute per IP — brute-force defense for the 8-char code space.
     builder.Services.AddRateLimiter(options =>
@@ -199,21 +203,53 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
     // Eagerly resolve so StartedAt reflects daemon startup, not first request.
     app.Services.GetRequiredService<DaemonStartClock>();
 
+    // Eagerly resolve so capability auto-detection (HF / OpenRouter / provider
+    // probes) runs at startup, not on first session creation — preserving the
+    // timing of the previous eager-resolution path while letting detection use
+    // the host's IModelCapabilityResolver chain and ILoggerFactory.
+    app.Services.GetRequiredService<ModelCapabilities>();
+
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
 
+    // Require authorization for the OpenAPI document so the full API surface is not
+    // exposed to unauthenticated callers when the daemon binds to a non-loopback
+    // address (e.g. ExposureMode.ReverseProxy). Loopback callers are still served:
+    // the AuthSelector routes them to LoopbackAuthenticationHandler, which issues an
+    // authenticated Operator ticket that satisfies the default policy.
+    app.MapOpenApi().RequireAuthorization();
+
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
-    app.MapGet("/api/health/ready", () => Results.Ok("healthy"));
-    app.MapGet("/api/health/status", async (DaemonRuntimeStatusService statusService, CancellationToken cancellationToken) =>
-        Results.Ok(await statusService.GetStatusAsync(cancellationToken))).RequireAuthorization();
+    app.MapGet("/api/health/ready", () => TypedResults.Ok("healthy"))
+        .WithName("HealthReady")
+        .WithSummary("Liveness probe reporting the daemon is accepting requests.")
+        .WithTags("Health");
+    app.MapGet("/api/health/status", async ValueTask<Ok<DaemonRuntimeStatus.Response>> (DaemonRuntimeStatusService statusService, CancellationToken cancellationToken) =>
+        TypedResults.Ok(await statusService.GetStatusAsync(cancellationToken)))
+        .WithName("GetHealthStatus")
+        .WithSummary("Get the daemon's runtime status, including connector health.")
+        .WithTags("Health")
+        .RequireAuthorization();
     app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
-        Results.Ok(catalog.ListRecent(limit: 50))).RequireAuthorization();
-    app.MapGet("/api/stats", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
-        Results.Ok(await statsService.GetStatsAsync(days, ct))).RequireAuthorization();
-    app.MapGet("/api/stats/skills", async (DaemonStatsService statsService, int? days, CancellationToken ct) =>
-        Results.Ok(await statsService.GetSkillUsageStatsAsync(days, ct))).RequireAuthorization();
+        TypedResults.Ok(catalog.ListRecent(limit: 50)))
+        .WithName("ListSessions")
+        .WithSummary("List the most recent sessions.")
+        .WithTags("Sessions")
+        .RequireAuthorization();
+    app.MapGet("/api/stats", async ValueTask<Ok<DaemonStats.Response>> (DaemonStatsService statsService, int? days, CancellationToken ct) =>
+        TypedResults.Ok(await statsService.GetStatsAsync(days, ct)))
+        .WithName("GetStats")
+        .WithSummary("Get daemon usage statistics over the requested window.")
+        .WithTags("Stats")
+        .RequireAuthorization();
+    app.MapGet("/api/stats/skills", async ValueTask<Ok<SkillUsageStats.Response>> (DaemonStatsService statsService, int? days, CancellationToken ct) =>
+        TypedResults.Ok(await statsService.GetSkillUsageStatsAsync(days, ct)))
+        .WithName("GetSkillUsageStats")
+        .WithSummary("Get per-skill usage statistics over the requested window.")
+        .WithTags("Stats")
+        .RequireAuthorization();
     app.MapWebhookEndpoints();
     app.MapMattermostActionEndpoint();
 
@@ -344,12 +380,15 @@ static void ConfigureDaemonServices(
         .Get<ModelSelection>() ?? new ModelSelection();
     services.AddSingleton(models);
 
-    // Auto-detect model capabilities when not manually specified in config.
-    // Provider-first resolution: query the hosting provider (e.g. Ollama /api/show)
-    // before falling back to external oracles (OpenRouter, HuggingFace).
-    var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    if (providers.Count == 0)
-        providers = new() { ["local-ollama"] = new ProviderEntry() };
+    // Auto-detect model capabilities via the runtime IModelCapabilityResolver
+    // chain (registered further down). Lazy factory so detection runs against
+    // the real DI-wired resolvers with the host's logger — no temp HttpClient
+    // / LoggerFactory needed, and per-resolver Debug output is visible. The
+    // factory is invoked eagerly after Build() (see RunDaemonAsync) so timing
+    // matches a startup-bound resolution rather than first-session lazy hit.
+    var providers = configuration.GetSection("Providers")
+        .Get<Dictionary<string, ProviderEntry>>()
+        ?? new() { ["local-ollama"] = new ProviderEntry() };
     var mainProviderType = providers.TryGetValue(models.Main.Provider, out var mainProvider)
         ? mainProvider.Type
         : null;
@@ -367,11 +406,32 @@ static void ConfigureDaemonServices(
         ? mainProvider?.ApiKey?.Value
         : null;
 
-    var detected = ResolveStartupCapabilities(
-        models.Main.ModelId, daemonLogLevel, mainProviderType, ollamaEndpoint, openAiCompatibleEndpoint, openAiCompatibleApiKey);
+    services.AddSingleton<ModelCapabilities>(sp =>
+    {
+        var resolver = sp.GetRequiredService<IModelCapabilityResolver>();
+        var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Startup");
 
-    var modelCapabilities = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
-    services.AddSingleton(modelCapabilities);
+        var detected = resolver.ResolveAsync(models.Main.ModelId, CancellationToken.None)
+            .GetAwaiter().GetResult();
+
+        if (detected is not null)
+        {
+            logger.LogInformation(
+                "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
+                models.Main.ModelId,
+                detected.InputModalities?.ToString() ?? "unknown",
+                detected.OutputModalities?.ToString() ?? "unknown",
+                detected.ContextWindowTokens?.ToString() ?? "unknown");
+        }
+        else
+        {
+            logger.LogInformation(
+                "Model {ModelId} not found in capability oracles; defaulting to text-only",
+                models.Main.ModelId);
+        }
+
+        return ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+    });
 
     // Session config: bind operator-facing settings from config section
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
@@ -1017,99 +1077,6 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
         default:
             throw new ArgumentOutOfRangeException(nameof(config.Backend), config.Backend,
                 $"Unknown search backend: {config.Backend}");
-    }
-}
-
-/// <summary>
-/// One-time capability detection at startup. Creates temporary HTTP resources
-/// to query the hosting provider (Ollama) or OpenRouter public catalog before
-/// the DI container is built.
-/// Returns null if detection fails (caller falls back to text-only).
-/// </summary>
-static ResolvedModelCapabilities? ResolveStartupCapabilities(
-    string modelId, LogLevel logLevel, string? providerType, string? ollamaEndpoint, string? openAiCompatibleEndpoint, string? openAiCompatibleApiKey)
-{
-    try
-    {
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(logLevel));
-        var logger = loggerFactory.CreateLogger("Netclaw.Startup");
-
-        // Provider-first: try Ollama /api/show when running against an Ollama backend
-        if (providerType?.Equals("ollama", StringComparison.OrdinalIgnoreCase) == true
-            && ollamaEndpoint is not null)
-        {
-            var ollamaResolver = new OllamaCapabilityResolver(
-                httpClient, loggerFactory.CreateLogger<OllamaCapabilityResolver>(), ollamaEndpoint);
-            var ollamaResult = ollamaResolver.ResolveAsync(modelId, CancellationToken.None)
-                .GetAwaiter().GetResult();
-
-            if (ollamaResult is not null)
-            {
-                logger.LogInformation(
-                    "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                    modelId,
-                    ollamaResult.InputModalities?.ToString() ?? "unknown",
-                    ollamaResult.OutputModalities?.ToString() ?? "unknown",
-                    ollamaResult.ContextWindowTokens?.ToString() ?? "unknown");
-                return ollamaResult;
-            }
-        }
-
-        if (providerType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
-            && openAiCompatibleEndpoint is not null)
-        {
-            var openAiCompatibleResolver = new OpenAiCompatibleCapabilityResolver(
-                httpClient,
-                loggerFactory.CreateLogger<OpenAiCompatibleCapabilityResolver>(),
-                openAiCompatibleEndpoint,
-                openAiCompatibleApiKey);
-            var openAiCompatibleResult = openAiCompatibleResolver.ResolveAsync(modelId, CancellationToken.None)
-                .GetAwaiter().GetResult();
-
-            if (openAiCompatibleResult is not null)
-            {
-                logger.LogInformation(
-                    "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                    modelId,
-                    openAiCompatibleResult.InputModalities?.ToString() ?? "unknown",
-                    openAiCompatibleResult.OutputModalities?.ToString() ?? "unknown",
-                    openAiCompatibleResult.ContextWindowTokens?.ToString() ?? "unknown");
-                return openAiCompatibleResult;
-            }
-        }
-
-        // Fallback: OpenRouter public catalog (works for models from any provider)
-        var openRouterDescriptor = new OpenRouterDescriptor(httpClient);
-        var registry = new ProviderDescriptorRegistry([openRouterDescriptor]);
-        var resolver = new OpenRouterOracleResolver(
-            httpClient, loggerFactory.CreateLogger<OpenRouterOracleResolver>(), registry);
-
-        var result = resolver.ResolveAsync(modelId, CancellationToken.None)
-            .GetAwaiter().GetResult();
-
-        if (result is not null)
-        {
-            logger.LogInformation(
-                "Auto-detected model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
-                modelId,
-                result.InputModalities?.ToString() ?? "unknown",
-                result.OutputModalities?.ToString() ?? "unknown",
-                result.ContextWindowTokens?.ToString() ?? "unknown");
-        }
-        else
-        {
-            logger.LogInformation(
-                "Model {ModelId} not found in capability oracles; defaulting to text-only",
-                modelId);
-        }
-
-        return result;
-    }
-    catch
-    {
-        // Startup capability detection is best-effort — don't crash the daemon
-        return null;
     }
 }
 

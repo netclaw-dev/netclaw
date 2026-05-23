@@ -150,8 +150,22 @@ public sealed class ReminderDefinitionStore
 
     private string GetPath(ReminderId id)
     {
+        // Uri.EscapeDataString escapes path separators and absolute-path
+        // markers (/, \, :, control chars), so the encoded value cannot encode a
+        // traversal. The post-canonicalization containment check below is the
+        // belt-and-suspenders that CodeQL also recognizes as a path sanitizer.
+        // (cs/path-injection)
         var encoded = Uri.EscapeDataString(id.Value);
-        return Path.Combine(_directory, $"{encoded}.json");
+        var baseDir = Path.GetFullPath(_directory);
+        var candidate = Path.GetFullPath(Path.Combine(baseDir, $"{encoded}.json"));
+        var baseWithSep = baseDir.EndsWith(Path.DirectorySeparatorChar)
+            ? baseDir
+            : baseDir + Path.DirectorySeparatorChar;
+        if (!candidate.StartsWith(baseWithSep, StringComparison.Ordinal))
+            throw new ArgumentException(
+                $"Reminder id '{id.Value}' resolves outside the reminders directory.",
+                nameof(id));
+        return candidate;
     }
 
     private void PruneInvalidDefinitions()

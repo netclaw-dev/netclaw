@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -23,7 +24,7 @@ public static class WebhookEndpointRouteBuilderExtensions
             .GetRequiredService<ILoggerFactory>()
             .CreateLogger("Netclaw.Daemon.Webhooks.Endpoint");
 
-        app.MapPost("/api/webhooks/{route}", async (
+        app.MapPost("/api/webhooks/{route}", async ValueTask<Results<NotFound, StatusCodeHttpResult, BadRequest<WebhookErrorResponse>, UnauthorizedHttpResult, JsonHttpResult<WebhookIgnoredResponse>, JsonHttpResult<WebhookAcceptedResponse>>> (
             string route,
             HttpContext httpContext,
             WebhookRouteCatalog routeCatalog,
@@ -36,17 +37,23 @@ public static class WebhookEndpointRouteBuilderExtensions
             CancellationToken ct) =>
         {
             if (!webhooksConfig.Enabled)
-                return Results.NotFound();
+                return TypedResults.NotFound();
 
             var remoteIp = httpContext.Connection.RemoteIpAddress?.ToString();
 
             if (!routeCatalog.TryGetRoute(route, out var registeredRoute))
             {
-                WebhookTelemetry.RecordRouteNotFound(route);
+                // Route comes from the URL path and is URL-decoded by ASP.NET routing,
+                // so a caller can inject CR/LF and other control chars — both as a
+                // log-forging vector and as an unbounded metric-tag cardinality vector
+                // against the `route` dimension on WebhookTelemetry counters. Sanitize
+                // once and use the safe value for both surfaces. (cs/log-forging)
+                var safeRoute = SanitizeWebhookId(route);
+                WebhookTelemetry.RecordRouteNotFound(safeRoute);
                 logger.LogWarning(
                     "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
-                    route, "route_not_found", remoteIp, (string?)null, (string?)null);
-                return Results.NotFound();
+                    safeRoute, "route_not_found", remoteIp, (string?)null, (string?)null);
+                return TypedResults.NotFound();
             }
 
             var bodyRead = await ReadRequestBodyAsync(httpContext.Request, registeredRoute.Config.MaxBodyBytes, ct);
@@ -57,14 +64,14 @@ public static class WebhookEndpointRouteBuilderExtensions
                     logger.LogWarning(
                         "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                         registeredRoute.Name, "body_too_large", remoteIp, (string?)null, (string?)null);
-                    return Results.StatusCode(StatusCodes.Status413PayloadTooLarge);
+                    return TypedResults.StatusCode(StatusCodes.Status413PayloadTooLarge);
 
                 case WebhookBodyReadStatus.InvalidJson:
                     WebhookTelemetry.RecordInvalidJson(registeredRoute.Name);
                     logger.LogWarning(
                         "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                         registeredRoute.Name, "invalid_json", remoteIp, (string?)null, (string?)null);
-                    return Results.BadRequest(new { error = "Invalid JSON request body." });
+                    return TypedResults.BadRequest(new WebhookErrorResponse("Invalid JSON request body."));
             }
 
             var verification = verifier.Verify(registeredRoute, httpContext.Request.Headers, bodyRead.BodyBytes!);
@@ -74,7 +81,7 @@ public static class WebhookEndpointRouteBuilderExtensions
                 logger.LogWarning(
                     "Webhook rejected route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                     registeredRoute.Name, "verification_failed", remoteIp, verification.DeliveryId, verification.EventType);
-                return Results.Unauthorized();
+                return TypedResults.Unauthorized();
             }
 
             if (!registeredRoute.IsEventAllowed(verification.EventType))
@@ -83,8 +90,8 @@ public static class WebhookEndpointRouteBuilderExtensions
                 logger.LogDebug(
                     "Webhook filtered route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                     registeredRoute.Name, "event_filtered", remoteIp, verification.DeliveryId, verification.EventType);
-                return Results.Json(
-                    new { status = "ignored", reason = "event_filtered" },
+                return TypedResults.Json(
+                    new WebhookIgnoredResponse("ignored", "event_filtered"),
                     statusCode: StatusCodes.Status202Accepted);
             }
 
@@ -99,8 +106,8 @@ public static class WebhookEndpointRouteBuilderExtensions
                 logger.LogDebug(
                     "Webhook filtered route={Route} reason={Reason} remote_ip={RemoteIp} delivery_id={DeliveryId} event_type={EventType}",
                     registeredRoute.Name, "duplicate_delivery", remoteIp, verification.DeliveryId, verification.EventType);
-                return Results.Json(
-                    new { status = "ignored", reason = "duplicate_delivery" },
+                return TypedResults.Json(
+                    new WebhookIgnoredResponse("ignored", "duplicate_delivery"),
                     statusCode: StatusCodes.Status202Accepted);
             }
 
@@ -114,7 +121,7 @@ public static class WebhookEndpointRouteBuilderExtensions
                 if (guardDecision.RetryAfterSeconds is { } retryAfter)
                     httpContext.Response.Headers.RetryAfter = retryAfter.ToString();
 
-                return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+                return TypedResults.StatusCode(StatusCodes.Status429TooManyRequests);
             }
 
             var now = timeProvider.GetUtcNow();
@@ -152,17 +159,19 @@ public static class WebhookEndpointRouteBuilderExtensions
                 }));
 
             executionService.StartInvocation(invocation);
-            return Results.Json(
-                new
-                {
-                    status = "accepted",
-                    route = registeredRoute.Name,
-                    eventType = verification.EventType,
-                    deliveryId = verification.DeliveryId,
-                    sessionId = sessionId.Value,
-                },
+            return TypedResults.Json(
+                new WebhookAcceptedResponse(
+                    Status: "accepted",
+                    Route: registeredRoute.Name,
+                    EventType: verification.EventType,
+                    DeliveryId: verification.DeliveryId,
+                    SessionId: sessionId.Value),
                 statusCode: StatusCodes.Status202Accepted);
-        }).AllowAnonymous();
+        })
+        .WithName("ReceiveWebhook")
+        .WithSummary("Receive, verify, and dispatch an inbound webhook delivery.")
+        .WithTags("Webhooks")
+        .AllowAnonymous();
 
         return app;
     }
@@ -209,6 +218,20 @@ public static class WebhookEndpointRouteBuilderExtensions
             : sanitized;
     }
 }
+
+/// <summary>Error payload returned when a webhook request is malformed.</summary>
+internal sealed record WebhookErrorResponse(string Error);
+
+/// <summary>Acknowledgement that a webhook delivery was accepted but not acted on.</summary>
+internal sealed record WebhookIgnoredResponse(string Status, string Reason);
+
+/// <summary>Acknowledgement that a webhook delivery was accepted and dispatched.</summary>
+internal sealed record WebhookAcceptedResponse(
+    string Status,
+    string Route,
+    string? EventType,
+    string? DeliveryId,
+    string SessionId);
 
 internal enum WebhookBodyReadStatus
 {

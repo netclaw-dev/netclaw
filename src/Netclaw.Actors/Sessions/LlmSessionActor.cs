@@ -51,6 +51,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ISystemPromptProvider _promptProvider;
     private readonly IReadOnlyList<IContextLayerProvider> _contextLayers;
     private readonly IToolExecutor? _toolExecutor;
+    private readonly Tools.ToolRegistry? _toolRegistry;
     private readonly IToolAuditLogger? _auditLogger;
     private readonly IToolApprovalService? _approvalService;
     private readonly ApprovalChannel _approvalChannel = new();
@@ -210,6 +211,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _subAgentSpawner = tools?.SubAgentSpawner;
         _subAgentLoader = tools?.SubAgentLoader;
         _toolExecutor = tools?.ToolExecutor;
+        _toolRegistry = tools?.ToolRegistry;
         _auditLogger = tools?.AuditLogger;
         _toolAccessPolicy = tools?.AccessPolicy;
         _approvalService = tools?.ApprovalService;
@@ -1664,6 +1666,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // fire again if the model stalls later in the chain.
         _turnState.ResetEmptyResponseGuards();
 
+        // Normalize the LLM-facing alias back to the canonical name BEFORE
+        // anything reads tc.Name. The LLM sees and emits sanitized names
+        // for MCP tools (e.g. `notion__notion-search`); every internal
+        // consumer downstream — audit log, ToolCallOutput rendered to the
+        // user, duplicate-call fingerprint, persisted assistant message,
+        // approval gate — keys on canonical (e.g. `notion/notion-search`).
+        // Doing the conversion here keeps each consumer free of name-form
+        // awareness; the outbound boundary (SessionMessageAssembler) does
+        // the reverse mapping when re-serializing history to the wire.
+        if (_toolRegistry is not null)
+        {
+            CanonicalizeToolCallNames(lastMessage, toolCalls, _toolRegistry);
+        }
+
         var assistantMsg = ChatMessageConverter.FromAiMessage(lastMessage);
         var userMsg = _state.FindLastUserMessage() ?? new SerializableChatMessage
         {
@@ -1682,6 +1698,43 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ApplyToolBatchStarted(evt);
             EmitAndDispatchToolBatch(lastMessage, toolCalls, usage);
         });
+    }
+
+    /// <summary>
+    /// Rewrite every <see cref="FunctionCallContent"/> in
+    /// <paramref name="lastMessage"/> and <paramref name="toolCalls"/> to use
+    /// the canonical tool name. The original list is mutated in-place
+    /// because every other consumer in this turn reads from these
+    /// references — including the persisted assistant message that gets
+    /// reconstructed by <see cref="ChatMessageConverter.FromAiMessage"/>.
+    /// Tool calls whose names don't resolve to a registered tool pass
+    /// through unchanged (the executor will reject them downstream).
+    /// </summary>
+    private static void CanonicalizeToolCallNames(
+        AiChatMessage lastMessage,
+        List<FunctionCallContent> toolCalls,
+        Tools.ToolRegistry registry)
+    {
+        for (var i = 0; i < toolCalls.Count; i++)
+        {
+            var tc = toolCalls[i];
+            var canonical = registry.ToCanonicalName(tc.Name);
+            if (string.Equals(canonical, tc.Name, StringComparison.Ordinal))
+                continue;
+
+            toolCalls[i] = new FunctionCallContent(tc.CallId, canonical, tc.Arguments);
+        }
+
+        for (var i = 0; i < lastMessage.Contents.Count; i++)
+        {
+            if (lastMessage.Contents[i] is not FunctionCallContent fc)
+                continue;
+            var canonical = registry.ToCanonicalName(fc.Name);
+            if (string.Equals(canonical, fc.Name, StringComparison.Ordinal))
+                continue;
+
+            lastMessage.Contents[i] = new FunctionCallContent(fc.CallId, canonical, fc.Arguments);
+        }
     }
 
     private void EmitAndDispatchToolBatch(
@@ -2503,7 +2556,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FileReadGranted: HasFileReadGranted(),
             ActiveRecall: _activeRecall,
             Audience: CurrentTurnAudience(),
-            SkillHint: skillHint));
+            SkillHint: skillHint,
+            // Canonical names live in history (post-PR follow-up); the
+            // LLM provider wants the sanitized alias back on the wire.
+            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName));
         _startupContextInjected = true;
 
         var self = Self;
@@ -2955,10 +3011,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return false;
 
         var tool = registration.Tool;
-        _discoveredToolCache.Remember(toolName, tool,
+        // Cache and log under the canonical name regardless of which form
+        // the LLM sent (load_tool / search_tools now emit the LLM-facing
+        // alias for MCP, but legacy strings may still arrive). Cache key
+        // consistency makes per-tool lease accounting unambiguous.
+        var canonicalName = tool.Name;
+        _discoveredToolCache.Remember(canonicalName, tool,
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount);
-        AddAvailableToolIfMissing(toolName, tool.ToAITool());
+        AddAvailableToolIfMissing(canonicalName, tool.ToAITool());
         return true;
     }
 

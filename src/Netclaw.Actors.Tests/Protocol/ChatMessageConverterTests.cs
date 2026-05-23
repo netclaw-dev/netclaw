@@ -171,6 +171,63 @@ public class ChatMessageConverterTests
     }
 
     [Fact]
+    public void ToAiMessage_applies_tool_name_resolver_to_FunctionCallContent_for_LLM_wire()
+    {
+        // History persists canonical names; when we rebuild the
+        // FunctionCallContent for an LLM request, the resolver maps
+        // canonical -> LLM-facing so the model sees the alias it
+        // originally emitted. Without this hop Anthropic rejects the
+        // request body for `/` in the tool name.
+        var msg = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            [
+                new SerializableToolCall
+                {
+                    CallId = new Netclaw.Tools.ToolCallId("call-mcp"),
+                    Name = new Netclaw.Tools.ToolName("notion/notion-search"),
+                    ArgumentsJson = """{"query":"plan"}"""
+                }
+            ]
+        };
+
+        var ai = ChatMessageConverter.ToAiMessage(
+            msg,
+            toolNameResolver: n => n.Replace("/", "__", StringComparison.Ordinal));
+
+        var toolCall = Assert.Single(ai.Contents.OfType<FunctionCallContent>());
+        Assert.Equal("notion__notion-search", toolCall.Name);
+    }
+
+    [Fact]
+    public void ToAiMessage_leaves_name_unchanged_when_resolver_is_null()
+    {
+        // Internal re-drive paths (RedriveToolBatchForApproval) pass no
+        // resolver because they re-dispatch by name through the
+        // registry's two-form lookup; the canonical form persisted in
+        // history is the right key for that.
+        var msg = new SerializableChatMessage
+        {
+            Role = ChatRole.Assistant,
+            ToolCalls =
+            [
+                new SerializableToolCall
+                {
+                    CallId = new Netclaw.Tools.ToolCallId("call-mcp"),
+                    Name = new Netclaw.Tools.ToolName("notion/notion-search"),
+                    ArgumentsJson = "{}"
+                }
+            ]
+        };
+
+        var ai = ChatMessageConverter.ToAiMessage(msg);
+
+        var toolCall = Assert.Single(ai.Contents.OfType<FunctionCallContent>());
+        Assert.Equal("notion/notion-search", toolCall.Name);
+    }
+
+    [Fact]
     public void Tool_result_message_round_trips()
     {
         var original = new SerializableChatMessage

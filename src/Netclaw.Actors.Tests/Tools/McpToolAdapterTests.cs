@@ -32,7 +32,7 @@ public class McpToolAdapterTests
     }
 
     [Fact]
-    public void SanitizedName_uses_double_underscore_separator()
+    public void LlmFacingName_uses_double_underscore_separator()
     {
         // MCP tool names commonly include single underscores
         // (e.g. find_completed_tasks); double underscore between server and
@@ -41,7 +41,7 @@ public class McpToolAdapterTests
         var adapter = new McpToolAdapter(fakeTool, "todoist", "find_completed_tasks");
 
         Assert.Equal("todoist/find_completed_tasks", adapter.Name);
-        Assert.Equal("todoist__find_completed_tasks", adapter.SanitizedName);
+        Assert.Equal("todoist__find_completed_tasks", adapter.LlmFacingName.Value);
     }
 
     [Theory]
@@ -49,7 +49,7 @@ public class McpToolAdapterTests
     [InlineData("todoist", "find-tasks")]
     [InlineData("browser_chrome_devtools", "navigate_page")]
     [InlineData("bamboohr", "get_employee_details")]
-    public void SanitizedName_matches_Anthropic_tool_name_regex(string server, string tool)
+    public void LlmFacingName_matches_Anthropic_tool_name_regex(string server, string tool)
     {
         // Anthropic's documented tool-name constraint is
         // ^[a-zA-Z0-9_-]{1,64}$ (see Define tools docs). The whole point of
@@ -58,7 +58,7 @@ public class McpToolAdapterTests
         var fakeTool = AIFunctionFactory.Create(() => "result", tool);
         var adapter = new McpToolAdapter(fakeTool, server, tool);
 
-        Assert.Matches("^[a-zA-Z0-9_-]{1,64}$", adapter.SanitizedName);
+        Assert.Matches("^[a-zA-Z0-9_-]{1,64}$", adapter.LlmFacingName.Value);
         Assert.Matches("^[a-zA-Z0-9_-]{1,64}$", ((AIFunction)adapter.ToAITool()).Name);
     }
 

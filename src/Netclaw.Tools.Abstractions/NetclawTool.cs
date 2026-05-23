@@ -118,6 +118,7 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
 
     // Partial method — implemented by the source generator
     public abstract string Name { get; }
+    public abstract LlmFacingToolName LlmFacingName { get; }
     public abstract string Description { get; }
     public abstract string GrantCategory { get; }
     public abstract JsonElement ParameterSchema { get; }

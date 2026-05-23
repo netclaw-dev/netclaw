@@ -6,6 +6,7 @@
 using System.Buffers.Text;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
 using Netclaw.Configuration;
 
@@ -17,7 +18,7 @@ public static class PairingEndpointRouteBuilderExtensions
     {
         // Device pairing exchange — unauthenticated, rate-limited, with per-IP lockout guard.
         // Accepts a time-limited pairing code and a device name; returns a bearer token on success.
-        app.MapPost("/api/pair/exchange", async (
+        app.MapPost("/api/pair/exchange", async ValueTask<Results<Ok<PairingTokenResponse>, BadRequest<PairingErrorResponse>, NotFound, Conflict<PairingErrorResponse>, JsonHttpResult<PairingErrorResponse>>> (
             HttpContext httpContext,
             PairingCodeExchangeRequest request,
             PairingCodeService pairingCodeService,
@@ -33,23 +34,23 @@ public static class PairingEndpointRouteBuilderExtensions
             {
                 var retryAfter = exchangeGuard.GetRetryAfterSeconds(remoteIp);
                 httpContext.Response.Headers.RetryAfter = retryAfter?.ToString() ?? "900";
-                return Results.Json(
-                    new { error = "Too many failed attempts. Try again later." },
+                return TypedResults.Json(
+                    new PairingErrorResponse("Too many failed attempts. Try again later."),
                     statusCode: StatusCodes.Status429TooManyRequests);
             }
 
             // Layer 2: No-code-pending gate — if no code exists, hide the endpoint entirely.
             if (pairingCodeService.GetPendingExpiry() is null)
-                return Results.NotFound();
+                return TypedResults.NotFound();
 
             if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
-                return Results.BadRequest(new { error = "code and deviceName are required." });
+                return TypedResults.BadRequest(new PairingErrorResponse("code and deviceName are required."));
 
             if (!pairingCodeService.TryConsume(request.Code))
             {
                 exchangeGuard.RecordFailure(remoteIp);
-                return Results.Json(
-                    new { error = "Invalid, expired, or already-used pairing code." },
+                return TypedResults.Json(
+                    new PairingErrorResponse("Invalid, expired, or already-used pairing code."),
                     statusCode: StatusCodes.Status401Unauthorized);
             }
 
@@ -76,28 +77,40 @@ public static class PairingEndpointRouteBuilderExtensions
             }
             catch (InvalidOperationException ex)
             {
-                return Results.Conflict(new { error = ex.Message });
+                return TypedResults.Conflict(new PairingErrorResponse(ex.Message));
             }
 
-            return Results.Ok(new { token = rawToken });
-        }).RequireRateLimiting("pairing-exchange").AllowAnonymous();
+            return TypedResults.Ok(new PairingTokenResponse(rawToken));
+        })
+        .WithName("ExchangePairingCode")
+        .WithSummary("Exchange a pairing code for a device bearer token.")
+        .WithTags("Pairing")
+        .RequireRateLimiting("pairing-exchange").AllowAnonymous();
 
         // Device registry management — authenticated (loopback or valid bearer token required).
         // Returns a sanitized view of paired devices (no TokenHash/Salt).
-        app.MapGet("/api/pair/devices", async (DeviceRegistry deviceRegistry, CancellationToken ct) =>
+        app.MapGet("/api/pair/devices", async ValueTask<Ok<IEnumerable<PairedDeviceInfoDto>>> (DeviceRegistry deviceRegistry, CancellationToken ct) =>
         {
             var devices = await deviceRegistry.ListAsync(ct);
             var sanitized = devices.Select(d => new PairedDeviceInfoDto(d.Name, d.CreatedAt, d.LastUsedAt));
-            return Results.Ok(sanitized);
-        }).RequireAuthorization();
+            return TypedResults.Ok(sanitized);
+        })
+        .WithName("ListPairedDevices")
+        .WithSummary("List paired devices (token material excluded).")
+        .WithTags("Pairing")
+        .RequireAuthorization();
 
-        app.MapDelete("/api/pair/devices/{name}", async (string name, DeviceRegistry deviceRegistry, CancellationToken ct) =>
+        app.MapDelete("/api/pair/devices/{name}", async ValueTask<Results<NoContent, NotFound<PairingErrorResponse>>> (string name, DeviceRegistry deviceRegistry, CancellationToken ct) =>
         {
             var removed = await deviceRegistry.RemoveAsync(name, ct);
             return removed
-                ? Results.NoContent()
-                : Results.NotFound(new { error = $"Device '{name}' not found." });
-        }).RequireAuthorization();
+                ? TypedResults.NoContent()
+                : TypedResults.NotFound(new PairingErrorResponse($"Device '{name}' not found."));
+        })
+        .WithName("RemovePairedDevice")
+        .WithSummary("Remove a paired device by name.")
+        .WithTags("Pairing")
+        .RequireAuthorization();
 
         return app;
     }
@@ -107,3 +120,9 @@ public static class PairingEndpointRouteBuilderExtensions
 /// Request body for <c>POST /api/pair/exchange</c>.
 /// </summary>
 internal sealed record PairingCodeExchangeRequest(string Code, string DeviceName);
+
+/// <summary>Bearer token issued on a successful pairing exchange.</summary>
+internal sealed record PairingTokenResponse(string Token);
+
+/// <summary>Error payload returned when a pairing request fails.</summary>
+internal sealed record PairingErrorResponse(string Error);

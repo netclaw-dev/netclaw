@@ -12,6 +12,9 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   rebuild:
     runs-on: ubuntu-latest

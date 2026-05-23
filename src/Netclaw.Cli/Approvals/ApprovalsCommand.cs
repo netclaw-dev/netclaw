@@ -6,6 +6,7 @@
 using System.Text.Json;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 
 namespace Netclaw.Cli.Approvals;
 
@@ -135,7 +136,7 @@ internal static class ApprovalsCommand
 
             foreach (var (toolName, _) in tools)
             {
-                if (opts.Tool is not null && !string.Equals(toolName, opts.Tool, StringComparison.Ordinal))
+                if (opts.Tool is not null && !ToolFlagMatches(opts.Tool, toolName))
                     continue;
 
                 if (store.RemoveApproval(audience, toolName, lookup))
@@ -180,11 +181,15 @@ internal static class ApprovalsCommand
 
         var entry = new ApprovalEntry(opts.Verb) { Directory = null };
         var audienceWire = opts.Audience.ToWireValue();
+        // Persist under the canonical name so runtime lookups (which
+        // query canonical) find the grant. If the operator passed the
+        // LLM-facing alias, reverse-resolve it here.
+        var canonicalTool = LlmFacingToolName.TryReverseSanitizedToCanonical(opts.Tool) ?? opts.Tool;
 
-        if (store.AddApproval(opts.Audience, opts.Tool, entry))
-            writer.WriteLine($"Trusted '{entry.FormatScope()}' for {audienceWire} / {opts.Tool}.");
+        if (store.AddApproval(opts.Audience, canonicalTool, entry))
+            writer.WriteLine($"Trusted '{entry.FormatScope()}' for {audienceWire} / {canonicalTool}.");
         else
-            writer.WriteLine($"No changes: '{entry.FormatScope()}' is already trusted for {audienceWire} / {opts.Tool}.");
+            writer.WriteLine($"No changes: '{entry.FormatScope()}' is already trusted for {audienceWire} / {canonicalTool}.");
 
         return 0;
     }
@@ -233,12 +238,35 @@ internal static class ApprovalsCommand
             Tool: string.IsNullOrWhiteSpace(tool) ? DefaultTrustVerbTool : tool);
     }
 
+    /// <summary>
+    /// Whether the operator-supplied <c>--tool</c> flag value matches a
+    /// stored tool name. Stored names are canonical (server/tool for
+    /// MCP); the operator may pass either form (audit logs surface the
+    /// canonical name; LLM transcripts surface the LLM-facing alias).
+    /// First-party tools have identical canonical and LLM-facing names,
+    /// so the additional comparison is a no-op for them.
+    /// </summary>
+    private static bool ToolFlagMatches(string toolFlag, string storedToolName)
+    {
+        if (string.Equals(storedToolName, toolFlag, StringComparison.Ordinal))
+            return true;
+        var reversed = LlmFacingToolName.TryReverseSanitizedToCanonical(toolFlag);
+        return reversed is not null && string.Equals(storedToolName, reversed, StringComparison.Ordinal);
+    }
+
     private static int RunRevokeAll(RevokeOptions opts, ToolApprovalStore store, TextWriter writer)
     {
         IEnumerable<TrustAudience> audiences = opts.Audience is { } only ? [only] : TrustAudiences.All;
         var totalRemoved = 0;
+        // Approval grants are persisted under the canonical tool name
+        // (server/tool for MCP). If the operator passed the LLM-facing
+        // alias (server__tool) — the form audit logs and LLM transcripts
+        // surface — reverse-resolve it so `revoke --all` actually finds
+        // the entries. Names without a '__' separator (first-party
+        // tools) pass through unchanged.
+        var canonicalTool = LlmFacingToolName.TryReverseSanitizedToCanonical(opts.Tool!) ?? opts.Tool!;
         foreach (var audience in audiences)
-            totalRemoved += store.RemoveAllForTool(audience, opts.Tool!);
+            totalRemoved += store.RemoveAllForTool(audience, canonicalTool);
 
         if (totalRemoved == 0)
         {
@@ -408,7 +436,7 @@ internal static class ApprovalsCommand
             var filteredTools = new SortedDictionary<string, List<ApprovalEntry>>(StringComparer.Ordinal);
             foreach (var (toolName, entries) in tools)
             {
-                if (toolFilter is not null && !string.Equals(toolName, toolFilter, StringComparison.Ordinal))
+                if (toolFilter is not null && !ToolFlagMatches(toolFilter, toolName))
                     continue;
                 if (entries.Count == 0) continue;
                 filteredTools[toolName] =

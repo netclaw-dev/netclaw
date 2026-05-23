@@ -203,8 +203,8 @@ public sealed class McpToolAudienceGrantsTests
             CancellationToken.None);
 
         Assert.Contains("search_memories", result);
-        Assert.DoesNotContain("memorizer/store", result);
-        Assert.DoesNotContain("memorizer/delete", result);
+        Assert.DoesNotContain("memorizer__store", result);
+        Assert.DoesNotContain("memorizer__delete", result);
     }
 
     // ── FilterExposedTools (session hot path) ──
@@ -289,7 +289,10 @@ public sealed class McpToolAudienceGrantsTests
             CreateExecutionContext(TrustAudience.Team),
             CancellationToken.None);
 
-        Assert.Equal("memorizer/search_memories", result);
+        // load_tool now returns the LLM-facing alias so the model can
+        // call the tool back using the same form Anthropic surfaces in
+        // its tool definitions.
+        Assert.Equal("memorizer__search_memories", result);
     }
 
     // ── Public audience ──
