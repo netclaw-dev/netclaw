@@ -703,25 +703,44 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     [Fact]
     public async Task Text_approval_reply_routes_tool_interaction_response()
     {
-        var feedbackPipeline = new RecordingSessionPipeline([
-            new ToolInteractionRequest
+        var sessionId = new SessionId("D7/9050.1");
+        var request = new ToolInteractionRequest
+        {
+            SessionId = sessionId,
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = "git push origin main",
+            RequesterSenderId = new SenderId("U123"),
+            Patterns = ["git push"],
+            Options =
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+        var feedbackPipeline = new FeedbackDrivenSessionPipeline(
+            [request],
+            feedback => feedback switch
             {
-                SessionId = new SessionId("D7/9050.1"),
-                Kind = "approval",
-                CallId = new Netclaw.Tools.ToolCallId("call-1"),
-                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
-                DisplayText = "git push origin main",
-                RequesterSenderId = new SenderId("U123"),
-                Patterns = ["git push"],
-                Options =
+                ToolInteractionResponse response =>
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
-                ]
-            }
-        ]);
+                    new ApprovalPromptReconciliationOutput
+                    {
+                        SessionId = sessionId,
+                        CallId = request.CallId,
+                        ToolName = request.ToolName,
+                        DisplayText = request.DisplayText,
+                        Patterns = request.Patterns,
+                        TerminalState = ApprovalPromptTerminalState.Resolved,
+                        SelectedKey = response.SelectedKey.Value,
+                        ResponderSenderId = response.SenderId.Value
+                    }
+                ],
+                _ => []
+            });
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
@@ -771,8 +790,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            var feedback = Assert.Single(feedbackPipeline.Feedback);
-            var response = Assert.IsType<ToolInteractionResponse>(feedback);
+            var response = Assert.Single(feedbackPipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
             Assert.Equal("call-1", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, response.SelectedKey.Value);
             Assert.Equal("U123", response.SenderId.Value);
@@ -866,25 +884,44 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
     [Fact]
     public async Task Button_approval_reply_routes_tool_interaction_response()
     {
-        var feedbackPipeline = new RecordingSessionPipeline([
-            new ToolInteractionRequest
+        var sessionId = new SessionId("D7/9060.1");
+        var request = new ToolInteractionRequest
+        {
+            SessionId = sessionId,
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-button"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = "git push origin main",
+            RequesterSenderId = new SenderId("U123"),
+            Patterns = ["git push"],
+            Options =
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+        var feedbackPipeline = new FeedbackDrivenSessionPipeline(
+            [request],
+            feedback => feedback switch
             {
-                SessionId = new SessionId("D7/9060.1"),
-                Kind = "approval",
-                CallId = new Netclaw.Tools.ToolCallId("call-button"),
-                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
-                DisplayText = "git push origin main",
-                RequesterSenderId = new SenderId("U123"),
-                Patterns = ["git push"],
-                Options =
+                ToolInteractionResponse response =>
                 [
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
-                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
-                ]
-            }
-        ]);
+                    new ApprovalPromptReconciliationOutput
+                    {
+                        SessionId = sessionId,
+                        CallId = request.CallId,
+                        ToolName = request.ToolName,
+                        DisplayText = request.DisplayText,
+                        Patterns = request.Patterns,
+                        TerminalState = ApprovalPromptTerminalState.Resolved,
+                        SelectedKey = response.SelectedKey.Value,
+                        ResponderSenderId = response.SenderId.Value
+                    }
+                ],
+                _ => []
+            });
 
         var deps = new SlackGatewayDependencies(
             Pipeline: feedbackPipeline,
@@ -928,8 +965,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
 
         await AwaitAssertAsync(() =>
         {
-            var feedback = Assert.Single(feedbackPipeline.Feedback);
-            var response = Assert.IsType<ToolInteractionResponse>(feedback);
+            var response = Assert.Single(feedbackPipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
             Assert.Equal("call-button", response.CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveSession, response.SelectedKey.Value);
             Assert.Equal("U123", response.SenderId.Value);

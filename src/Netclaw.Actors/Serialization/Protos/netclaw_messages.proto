@@ -146,6 +146,16 @@ message ToolApprovalRequestedProto {
   optional bool supports_interactive_approval = 13;
   int64 requested_at_ms = 14;
   repeated string option_keys = 15;
+  string display_text = 16;
+  bool has_adopted_context = 17;
+  repeated string adopted_speaker_ids = 18;
+}
+
+message ApprovalPromptHandleRecordedProto {
+  SessionIdProto session_id = 1;
+  string call_id = 2;
+  string prompt_handle = 3;
+  int64 recorded_at_ms = 4;
 }
 
 message ToolApprovalResolvedProto {
@@ -153,6 +163,20 @@ message ToolApprovalResolvedProto {
   string call_id = 2;
   string decision = 3;
   int64 resolved_at_ms = 4;
+  string selected_key = 5;
+  optional string responder_sender_id = 6;
+}
+
+message ApprovalPromptExpiredProto {
+  SessionIdProto session_id = 1;
+  string call_id = 2;
+  int64 expired_at_ms = 3;
+}
+
+message ApprovalPromptReconciliationCompletedProto {
+  SessionIdProto session_id = 1;
+  string call_id = 2;
+  int64 completed_at_ms = 3;
 }
 
 message ToolBatchAbandonedProto {
@@ -197,6 +221,27 @@ message ActiveJobInfoProto {
 }
 
 message SessionSnapshotProto {
+  message ApprovalPromptSnapshotRecord {
+    message ApprovalCandidateSnapshotRecord {
+      string verb = 1;
+      optional string directory = 2;
+    }
+
+    string call_id = 1;
+    string tool_name = 2;
+    string display_text = 3;
+    repeated string patterns = 4;
+    repeated string candidate_verbs = 5;
+    repeated ApprovalCandidateSnapshotRecord candidates = 6;
+    optional string cwd = 7;
+    bool has_adopted_context = 8;
+    repeated string adopted_speaker_ids = 9;
+    optional string prompt_handle = 10;
+    optional string terminal_state = 11;
+    optional string selected_key = 12;
+    optional string responder_sender_id = 13;
+  }
+
   message AdoptedContextSnapshotRecord {
     message AdoptedContextSnapshotMessage {
       string message_id = 1;
@@ -226,6 +271,7 @@ message SessionSnapshotProto {
   repeated ActiveJobInfoProto active_background_jobs = 7;
   repeated AdoptedContextSnapshotRecord adopted_context_records = 8;
   reserved 9;
+  repeated ApprovalPromptSnapshotRecord approval_prompt_records = 10;
 }
 
 // ── Broadcasts ──

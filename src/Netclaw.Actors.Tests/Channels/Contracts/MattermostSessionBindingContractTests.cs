@@ -107,6 +107,12 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
+    protected override int GetPromptUpdateCount()
+        => _replyClient.Updates.Count;
+
+    protected override string GetDurablePromptHandle()
+        => "post-durable";
+
     protected override ChannelType ExpectedChannelType => ChannelType.Mattermost;
 
     protected override bool SupportsApprovalSenderReplies => true;

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 
@@ -40,3 +41,22 @@ internal sealed record ApprovalRedrivePlan(
 internal sealed record ResolvedToolApproval(
     PendingToolInteraction Pending,
     ApprovalDecision Decision);
+
+internal sealed record ApprovalPromptTerminal(
+    ApprovalPromptTerminalState State,
+    string? SelectedKey,
+    string? ResponderSenderId);
+
+internal sealed record ApprovalPromptProjection(
+    string CallId,
+    string ToolName,
+    string DisplayText,
+    IReadOnlyList<string> Patterns,
+    IReadOnlyList<string> CandidateVerbs,
+    IReadOnlyList<ApprovalCandidate> Candidates,
+    string? Cwd,
+    bool HasAdoptedContext,
+    IReadOnlyList<string> AdoptedSpeakerIds,
+    string? PromptHandle,
+    ApprovalPromptTerminal? Terminal)
+    : INoSerializationVerificationNeeded;

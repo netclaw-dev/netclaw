@@ -412,6 +412,67 @@ public sealed record ToolInteractionRequest : SessionOutput
     public bool PersistedAdoptedContext { get; init; }
 }
 
+public enum ApprovalPromptTerminalState
+{
+    Resolved = 0,
+    Expired = 1,
+    Abandoned = 2
+}
+
+/// <summary>
+/// Lifecycle output carrying the session-owned terminal state for an approval
+/// prompt so adapters can reconcile the original channel artifact after live or
+/// recovered approval handling.
+/// </summary>
+public sealed record ApprovalPromptReconciliationOutput : SessionOutput
+{
+    public required ToolCallId CallId { get; init; }
+
+    public required ToolName ToolName { get; init; }
+
+    public required string DisplayText { get; init; }
+
+    public IReadOnlyList<string> Patterns { get; init; } = [];
+
+    public IReadOnlyList<string> CandidateVerbs { get; init; } = [];
+
+    public IReadOnlyList<ApprovalCandidate> Candidates { get; init; } = [];
+
+    public string? Cwd { get; init; }
+
+    public bool HasAdoptedContext { get; init; }
+
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = [];
+
+    /// <summary>
+    /// Opaque adapter-owned prompt handle. May be null when live reconciliation
+    /// can still use adapter-local state but no durable handle was recorded.
+    /// </summary>
+    public string? PromptHandle { get; init; }
+
+    public ApprovalPromptTerminalState TerminalState { get; init; }
+
+    public string? SelectedKey { get; init; }
+
+    public string? ResponderSenderId { get; init; }
+
+    public ToolInteractionRequest ToInteractionRequest() => new()
+    {
+        SessionId = SessionId,
+        Kind = "approval",
+        CallId = CallId,
+        ToolName = ToolName,
+        DisplayText = DisplayText,
+        Patterns = Patterns,
+        CandidateVerbs = CandidateVerbs,
+        Candidates = Candidates,
+        Cwd = Cwd,
+        HasAdoptedContext = HasAdoptedContext,
+        AdoptedSpeakerIds = AdoptedSpeakerIds,
+        Options = []
+    };
+}
+
 /// <summary>
 /// An option presented to the user in a <see cref="ToolInteractionRequest"/>.
 /// </summary>

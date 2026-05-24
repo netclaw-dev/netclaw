@@ -42,7 +42,10 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string ToolBatchStartedManifest = "tbs-v1";
     private const string ToolCallRecordedManifest = "tcr-v1";
     private const string ToolApprovalRequestedManifest = "tar-v1";
+    private const string ApprovalPromptHandleRecordedManifest = "aphr-v1";
     private const string ToolApprovalResolvedManifest = "tares-v1";
+    private const string ApprovalPromptExpiredManifest = "ape-v1";
+    private const string ApprovalPromptReconciliationCompletedManifest = "aprc-v1";
     private const string ToolBatchAbandonedManifest = "tba-v1";
 
     private static readonly FrozenDictionary<Type, string> TypeToManifest = new Dictionary<Type, string>
@@ -69,7 +72,10 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(ToolBatchStarted)] = ToolBatchStartedManifest,
         [typeof(ToolCallRecorded)] = ToolCallRecordedManifest,
         [typeof(ToolApprovalRequested)] = ToolApprovalRequestedManifest,
+        [typeof(ApprovalPromptHandleRecorded)] = ApprovalPromptHandleRecordedManifest,
         [typeof(ToolApprovalResolved)] = ToolApprovalResolvedManifest,
+        [typeof(ApprovalPromptExpired)] = ApprovalPromptExpiredManifest,
+        [typeof(ApprovalPromptReconciliationCompleted)] = ApprovalPromptReconciliationCompletedManifest,
         [typeof(ToolBatchAbandoned)] = ToolBatchAbandonedManifest,
     }.ToFrozenDictionary();
 
@@ -141,8 +147,14 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.ToolCallRecordedProto.Parser.ParseFrom(bytes)),
             ToolApprovalRequestedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolApprovalRequestedProto.Parser.ParseFrom(bytes)),
+            ApprovalPromptHandleRecordedManifest => NetclawProtoMapper.FromProto(
+                Proto.ApprovalPromptHandleRecordedProto.Parser.ParseFrom(bytes)),
             ToolApprovalResolvedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolApprovalResolvedProto.Parser.ParseFrom(bytes)),
+            ApprovalPromptExpiredManifest => NetclawProtoMapper.FromProto(
+                Proto.ApprovalPromptExpiredProto.Parser.ParseFrom(bytes)),
+            ApprovalPromptReconciliationCompletedManifest => NetclawProtoMapper.FromProto(
+                Proto.ApprovalPromptReconciliationCompletedProto.Parser.ParseFrom(bytes)),
             ToolBatchAbandonedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolBatchAbandonedProto.Parser.ParseFrom(bytes)),
             _ => throw new ArgumentException(

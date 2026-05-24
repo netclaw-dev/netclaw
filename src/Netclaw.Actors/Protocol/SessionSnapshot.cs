@@ -15,6 +15,43 @@ namespace Netclaw.Actors.Protocol;
 /// </summary>
 public sealed record SessionSnapshot : INetclawSerializableMessage
 {
+    public sealed record ApprovalPromptSnapshotRecord
+    {
+        public sealed record ApprovalCandidateSnapshotRecord
+        {
+            public string Verb { get; init; } = string.Empty;
+
+            public string? Directory { get; init; }
+        }
+
+        public string CallId { get; init; } = string.Empty;
+
+        public string ToolName { get; init; } = string.Empty;
+
+        public string DisplayText { get; init; } = string.Empty;
+
+        public IReadOnlyList<string> Patterns { get; init; } = Array.Empty<string>();
+
+        public IReadOnlyList<string> CandidateVerbs { get; init; } = Array.Empty<string>();
+
+        public IReadOnlyList<ApprovalCandidateSnapshotRecord> Candidates { get; init; } =
+            Array.Empty<ApprovalCandidateSnapshotRecord>();
+
+        public string? Cwd { get; init; }
+
+        public bool HasAdoptedContext { get; init; }
+
+        public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = Array.Empty<string>();
+
+        public string? PromptHandle { get; init; }
+
+        public string? TerminalState { get; init; }
+
+        public string? SelectedKey { get; init; }
+
+        public string? ResponderSenderId { get; init; }
+    }
+
     public sealed record AdoptedContextSnapshotRecord
     {
         public sealed record AdoptedContextSnapshotMessage
@@ -80,4 +117,7 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<AdoptedContextSnapshotRecord> AdoptedContextRecords { get; init; } =
         Array.Empty<AdoptedContextSnapshotRecord>();
+
+    public IReadOnlyList<ApprovalPromptSnapshotRecord> ApprovalPromptRecords { get; init; } =
+        Array.Empty<ApprovalPromptSnapshotRecord>();
 }

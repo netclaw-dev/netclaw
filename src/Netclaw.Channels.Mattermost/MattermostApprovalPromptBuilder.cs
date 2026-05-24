@@ -109,6 +109,42 @@ internal static class MattermostApprovalPromptBuilder
             Text: resolvedText);
     }
 
+    public static string BuildExpiredPromptText(ToolInteractionRequest request)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(":warning: **Tool approval expired**");
+        AppendToolSummary(sb, request);
+        sb.Append("**Status:** This prompt is no longer active. Please re-issue the request if you still want me to run it.");
+        return sb.ToString();
+    }
+
+    public static MattermostAttachment BuildExpiredAttachment(ToolInteractionRequest request)
+    {
+        var text = BuildExpiredPromptText(request);
+        return new MattermostAttachment(
+            Fallback: text,
+            Color: "#C69026",
+            Text: text);
+    }
+
+    public static string BuildAbandonedPromptText(ToolInteractionRequest request)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(":warning: **Tool approval closed**");
+        AppendToolSummary(sb, request);
+        sb.Append("**Status:** Superseded by a newer message before the tool ran.");
+        return sb.ToString();
+    }
+
+    public static MattermostAttachment BuildAbandonedAttachment(ToolInteractionRequest request)
+    {
+        var text = BuildAbandonedPromptText(request);
+        return new MattermostAttachment(
+            Fallback: text,
+            Color: "#6A737D",
+            Text: text);
+    }
+
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");

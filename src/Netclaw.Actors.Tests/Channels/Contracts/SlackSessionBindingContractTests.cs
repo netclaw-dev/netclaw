@@ -85,6 +85,12 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
+    protected override int GetPromptUpdateCount()
+        => _replyClient.Updates.Count;
+
+    protected override string GetDurablePromptHandle()
+        => "999.100";
+
     protected override ChannelType ExpectedChannelType => ChannelType.Slack;
 
     protected override bool SupportsThreadHydration => true;
