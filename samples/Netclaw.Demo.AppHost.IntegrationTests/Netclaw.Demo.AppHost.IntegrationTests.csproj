@@ -9,17 +9,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Mattermost.NET" />
+    <PackageReference Include="Aspire.Hosting.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="Testcontainers" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />
-    <ProjectReference Include="../Netclaw.Channels.Mattermost.Bootstrap/Netclaw.Channels.Mattermost.Bootstrap.csproj" />
-    <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj" />
+    <ProjectReference Include="..\Netclaw.Demo.AppHost\Netclaw.Demo.AppHost.csproj" />
+    <!-- BootstrapOptions defaults are the single source of truth for the seeded
+         Mattermost credentials/channel name the test posts as. -->
+    <ProjectReference Include="..\..\src\Netclaw.Channels.Mattermost.Bootstrap\Netclaw.Channels.Mattermost.Bootstrap.csproj"
+                      IsAspireProjectResource="false" />
   </ItemGroup>
 
 </Project>

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
@@ -186,6 +187,47 @@ public sealed class ProviderPluginFactoryTests
             factory.Create(new ModelReference { Provider = "no-creds", ModelId = "gpt-4o" }));
 
         Assert.Contains("requires authentication", ex.Message);
+    }
+
+    [Fact]
+    public void OllamaVendorOptions_CanDisableThinking()
+    {
+        var plugin = new OllamaProviderPlugin(new OllamaDescriptor(SharedHttp));
+        var entry = new ProviderEntry
+        {
+            Type = "ollama",
+            VendorOptions = JsonNode.Parse("""
+                {
+                  "DisableThinking": true
+                }
+                """)!.AsObject()
+        };
+
+        var source = plugin.CreateVendorOptionsSource(entry);
+
+        Assert.NotNull(source);
+
+        var options = new ChatOptions();
+        source!.Apply(options);
+
+        Assert.Equal(false, options.AdditionalProperties?["think"]);
+    }
+
+    [Fact]
+    public void OpenRouterVendorOptions_CanDisableReasoningExclusion()
+    {
+        var plugin = new OpenRouterProviderPlugin(new OpenRouterDescriptor(SharedHttp));
+        var entry = new ProviderEntry
+        {
+            Type = "openrouter",
+            VendorOptions = JsonNode.Parse("""
+                {
+                  "ExcludeReasoning": false
+                }
+                """)!.AsObject()
+        };
+
+        Assert.Null(plugin.CreateVendorOptionsSource(entry));
     }
 
     private static ProviderPluginFactory CreateFactory(params (string name, ProviderEntry entry)[] providers)

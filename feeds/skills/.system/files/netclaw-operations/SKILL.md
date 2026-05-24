@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.7.0"
+  version: "2.7.3"
 ---
 
 # Netclaw Operations
@@ -28,6 +28,7 @@ problems, how to update preferences, or how to maintain itself.
 | Run long shell commands in background | [Background Jobs](#background-jobs) |
 | Manage inbound webhooks | [Webhook Management](#webhook-management) |
 | Add or switch LLM provider, OAuth login | [LLM Providers](#llm-providers) |
+| Show / kick the tires on Netclaw end-to-end locally | [Demo AppHost](#demo-apphost) |
 | Search backend errors, configure SearXNG | [Search Providers](#search-providers) |
 
 ## Project Directory
@@ -641,6 +642,11 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 | `openrouter` | API key | `sk-or-...` |
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
 
+Provider-specific behavior toggles belong under
+`Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core
+config layer; each provider plugin deserializes and validates its own typed
+options instead of adding provider-specific properties to `ProviderEntry`.
+
 ### Adding GitHub Copilot
 
 GitHub Copilot uses the OAuth device flow only — no API key. The operator
@@ -842,6 +848,53 @@ file. If it should be recalled when relevant → SQLite memory.
 | List past sessions | `netclaw sessions --once` |
 | Inspect reminder history | `netclaw reminder history <id> --last 5` |
 | Permanently delete a reminder | `netclaw reminder delete <id>` |
+
+## Demo AppHost
+
+For "show me Netclaw working end-to-end" or "I want to kick the tires
+without setting up Slack and provider accounts," point the user at the
+self-contained .NET Aspire demo under `samples/Netclaw.Demo.AppHost/`.
+
+```text
+dotnet run --project samples/Netclaw.Demo.AppHost
+```
+
+One command brings up a containerized Mattermost (seeded with admin,
+team, bot, access token, default channel, and a test user), a
+containerized Ollama with `qwen3.5:2b-q4_K_M` pulled and cached, and the
+Netclaw daemon as an Aspire project resource sandboxed via
+`NETCLAW_HOME` so nothing touches a host-installed `~/.netclaw/`.
+Default credentials and the seeded channel name are printed to the
+Aspire dashboard.
+
+Key facts to share with the operator:
+
+- Aspire dashboard at <http://localhost:15294>; Mattermost web UI URL is
+  visible there under the `mattermost` resource's `web` endpoint
+  (port allocated dynamically).
+- Default Mattermost login for the demo's non-admin test user:
+  `testuser` / `TestUser1234!`. Admin is `admin` / `Admin1234!`.
+- The demo launches the `fast` profile by default. It keeps the seeded
+  Mattermost channel on the `public` audience, caps tool loops
+  aggressively, disables Ollama thinking mode, tunes Ollama for
+  single-user local inference, and prewarms the model before the
+  daemon starts.
+- For the heavier tool-rich path, opt into
+  `NETCLAW_DEMO_PROFILE=full dotnet run --project samples/Netclaw.Demo.AppHost`.
+- Daemon binds `127.0.0.1:5299` (not the production default 5199, so
+  it never collides with a host-installed daemon).
+- `fast` is materially quicker on CPU than the old demo path, but GPU is
+  still the best experience; the README documents the
+  `WithGPUSupport(OllamaGpuVendor.Nvidia)` opt-in for snappy demos.
+- Clean reset: `rm -rf samples/Netclaw.Demo.AppHost/.demo-home/` plus
+  `docker volume rm` for the Ollama volume.
+
+The demo is for evaluation, not production. It uses `mattermost-preview`
+(deprecated upstream but self-contained), runs the daemon as a host
+process (containerizing collides with `ExposureMode.Local` + loopback
+auth — see the README's "Why the daemon isn't containerized" section),
+and ships with no custom `netclaw.json` so the default secure posture
+applies.
 
 ## Device Pairing
 

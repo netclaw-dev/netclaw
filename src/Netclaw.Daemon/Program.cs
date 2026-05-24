@@ -326,9 +326,9 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     services.AddSingleton(TimeProvider.System);
 
     // Providers and model resolution via plugin architecture
-    var providers = configuration.GetSection("Providers")
-        .Get<Dictionary<string, ProviderEntry>>()
-        ?? new() { ["local-ollama"] = new ProviderEntry() };
+    var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+    if (providers.Count == 0)
+        providers = new() { ["local-ollama"] = new ProviderEntry() };
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 

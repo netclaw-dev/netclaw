@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Providers;
 using Netclaw.Providers;
 using OllamaSharp;
 
@@ -24,5 +25,25 @@ public sealed class OllamaProviderPlugin : ProviderPluginBase<OllamaDescriptor>
             ? new Uri(DefaultEndpoint)
             : new Uri(entry.Endpoint);
         return new OllamaApiClient(CreateLlmHttpClient(endpoint), model.ModelId);
+    }
+
+    public override IVendorOptionsSource? CreateVendorOptionsSource(ProviderEntry entry)
+    {
+        var vendorOptions = entry.GetVendorOptions<OllamaVendorOptions>() ?? new OllamaVendorOptions();
+        return vendorOptions.DisableThinking ? new OllamaVendorOptionsSource() : null;
+    }
+}
+
+internal sealed class OllamaVendorOptions : IVendorOptions
+{
+    public bool DisableThinking { get; set; }
+}
+
+internal sealed class OllamaVendorOptionsSource : IVendorOptionsSource
+{
+    public void Apply(ChatOptions options)
+    {
+        options.AdditionalProperties ??= new AdditionalPropertiesDictionary();
+        options.AdditionalProperties["think"] = false;
     }
 }

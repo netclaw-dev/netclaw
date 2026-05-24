@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Configuration.Providers;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -41,6 +42,41 @@ public sealed class ProviderPluginFactory
                 $"Unknown provider type '{provider.Type}'. "
                 + $"Supported: {string.Join(", ", _plugins.Keys)}");
 
-        return plugin.CreateChatClient(provider, model);
+        var client = plugin.CreateChatClient(provider, model);
+        var vendorOptions = plugin.CreateVendorOptionsSource(provider);
+        return vendorOptions is null
+            ? client
+            : new VendorOptionsChatClient(client, vendorOptions);
+    }
+}
+
+internal sealed class VendorOptionsChatClient : DelegatingChatClient
+{
+    private readonly IVendorOptionsSource _vendorOptionsSource;
+
+    public VendorOptionsChatClient(IChatClient innerClient, IVendorOptionsSource vendorOptionsSource)
+        : base(innerClient)
+    {
+        _vendorOptionsSource = vendorOptionsSource;
+    }
+
+    public override Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new ChatOptions();
+        _vendorOptionsSource.Apply(options);
+        return base.GetResponseAsync(messages, options, cancellationToken);
+    }
+
+    public override IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        options ??= new ChatOptions();
+        _vendorOptionsSource.Apply(options);
+        return base.GetStreamingResponseAsync(messages, options, cancellationToken);
     }
 }

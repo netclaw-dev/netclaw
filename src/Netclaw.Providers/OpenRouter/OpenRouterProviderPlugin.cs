@@ -27,14 +27,20 @@ public sealed class OpenRouterProviderPlugin : ProviderPluginBase<OpenRouterDesc
         var endpoint = string.IsNullOrWhiteSpace(entry.Endpoint)
             ? new Uri(DefaultEndpoint)
             : new Uri(entry.Endpoint);
+        var vendorOptions = entry.GetVendorOptions<OpenRouterVendorOptions>() ?? new OpenRouterVendorOptions();
 
         var options = new OpenAIClientOptions { Endpoint = endpoint };
-        options.AddPolicy(new OpenRouterReasoningExcludePolicy(), PipelinePosition.PerCall);
+        if (vendorOptions.ExcludeReasoning)
+            options.AddPolicy(new OpenRouterReasoningExcludePolicy(), PipelinePosition.PerCall);
+
         var client = new OpenAIClient(new ApiKeyCredential(apiKey), options);
 
         return client.GetChatClient(model.ModelId).AsIChatClient();
     }
 
     public override IVendorOptionsSource? CreateVendorOptionsSource(ProviderEntry entry)
-        => new OpenRouterVendorOptionsSource();
+    {
+        var vendorOptions = entry.GetVendorOptions<OpenRouterVendorOptions>() ?? new OpenRouterVendorOptions();
+        return vendorOptions.ExcludeReasoning ? new OpenRouterVendorOptionsSource() : null;
+    }
 }

@@ -8,6 +8,11 @@ using Netclaw.Configuration.Providers;
 
 namespace Netclaw.Providers.OpenRouter;
 
+public sealed class OpenRouterVendorOptions : IVendorOptions
+{
+    public bool ExcludeReasoning { get; set; } = true;
+}
+
 /// <summary>
 /// Vendor options source for OpenRouter that clears reasoning options.
 /// This prevents OpenRouter from including reasoning/reasoning_details

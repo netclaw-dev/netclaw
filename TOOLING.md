@@ -61,6 +61,46 @@ non-trivial tape with an assertion script that re-validates `netclaw
 doctor` and the
 relevant `--json` output.
 
+## Demo AppHost Smoke Test (Slow)
+
+`samples/Netclaw.Demo.AppHost.IntegrationTests` is an Aspire-driven
+end-to-end test that boots the demo AppHost (`samples/Netclaw.Demo.AppHost`),
+waits for every resource — Mattermost container, Ollama container,
+`qwen3.5:2b-q4_K_M` model, NetClaw daemon project — to reach healthy, posts a
+Mattermost message via REST as the seeded test user, and asserts the
+wiring routes the message through.
+
+Opt-in by design: the test self-skips unless
+`NETCLAW_RUN_DEMO_SMOKE=1` is set (same pattern as the Mattermost
+integration tests). The `[Trait("Category", "SlowSmoke")]` trait is a
+secondary filter for local-dev runs. A bare `dotnet test` on any CI
+runner therefore reports the test as skipped, not failed. Invoke with:
+
+```bash
+NETCLAW_RUN_DEMO_SMOKE=1 \
+  dotnet test samples/Netclaw.Demo.AppHost.IntegrationTests \
+    --filter Category=SlowSmoke
+```
+
+Prerequisites: Docker daemon reachable, ~4GB of disk free on a cold
+cache (Mattermost preview + Ollama image + `qwen3.5:2b-q4_K_M` weights). Warm
+runs reuse cached images and the model volume.
+
+The test's bot-reply wait is best-effort and configurable. On a
+CPU-only host inference takes minutes; on GPU it's <30s. Override the
+default 5-minute reply window:
+
+```bash
+NETCLAW_RUN_DEMO_SMOKE=1 \
+NETCLAW_DEMO_TEST_REPLY_TIMEOUT_SECONDS=900 \
+  dotnet test samples/Netclaw.Demo.AppHost.IntegrationTests --filter Category=SlowSmoke
+```
+
+If the timeout elapses without a reply, the test still passes — the
+structural assertions (every resource healthy, message posted into
+Mattermost) prove the wiring. The latency is printed to stdout so a CI
+run can flag a slow-inference regression.
+
 ## Install Script Smoke Test
 
 `scripts/smoke/install-smoke.sh` and `scripts/smoke/install-smoke.ps1` are

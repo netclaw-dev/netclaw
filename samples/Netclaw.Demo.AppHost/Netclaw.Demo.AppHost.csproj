@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.3.5" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsAspireHost>true</IsAspireHost>
+    <UserSecretsId>netclaw-demo-apphost</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="CommunityToolkit.Aspire.Hosting.Ollama" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Netclaw.Daemon\Netclaw.Daemon.csproj" />
+    <!-- Bootstrap is a library consumed in-AppHost (lifecycle hook calls SeedAsync); not an Aspire resource. -->
+    <ProjectReference Include="..\..\src\Netclaw.Channels.Mattermost.Bootstrap\Netclaw.Channels.Mattermost.Bootstrap.csproj"
+                      IsAspireProjectResource="false" />
+    <!-- For TrustAudience.Personal.ToWireValue() — keeps audience wiring out of stringly-typed env vars. -->
+    <ProjectReference Include="..\..\src\Netclaw.Configuration\Netclaw.Configuration.csproj"
+                      IsAspireProjectResource="false" />
+  </ItemGroup>
+
+</Project>

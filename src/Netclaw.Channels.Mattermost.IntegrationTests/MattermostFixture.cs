@@ -8,8 +8,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using DotNet.Testcontainers.Builders;
-using DotNet.Testcontainers.Configurations;
 using DotNet.Testcontainers.Containers;
+using Netclaw.Channels.Mattermost.Bootstrap;
 using Xunit;
 
 namespace Netclaw.Channels.Mattermost.IntegrationTests;
@@ -20,15 +20,7 @@ namespace Netclaw.Channels.Mattermost.IntegrationTests;
 /// </summary>
 public sealed class MattermostFixture : IAsyncLifetime
 {
-    private const string AdminEmail = "admin@test.local";
-    private const string AdminUsername = "admin";
-    private const string AdminPassword = "Admin1234!";
-    private const string BotUsername = "testbot";
-    private const string TestUserEmail = "testuser@test.local";
-    private const string TestUserUsername = "testuser";
-    private const string TestUserPassword = "TestUser1234!";
-    private const string TeamName = "test-team";
-    private const string ChannelName = "test-channel";
+    private static readonly BootstrapOptions SeedOptions = new();
 
     private IContainer? _container;
     private string? _testUserToken;
@@ -67,20 +59,19 @@ public sealed class MattermostFixture : IAsyncLifetime
         {
             // Both the builder chain and StartAsync can surface a
             // Docker-unavailable error, so both run inside the try.
-            container = new ContainerBuilder()
+            var builder = new ContainerBuilder()
                 .WithImage("mattermost/mattermost-preview")
-                .WithPortBinding(8065, true)
-                .WithEnvironment("MM_SERVICESETTINGS_ENABLEOPENSERVER", "true")
-                .WithEnvironment("MM_SERVICESETTINGS_ENABLEBOTACCOUNTCREATION", "true")
-                .WithEnvironment("MM_SERVICESETTINGS_ENABLEUSERACCESSTOKENS", "true")
-                .WithEnvironment("MM_TEAMSETTINGS_ENABLEOPENSERVER", "true")
-                .WithEnvironment("MM_SERVICESETTINGS_ENABLETESTING", "true")
+                .WithPortBinding(8065, true);
+
+            foreach (var (name, value) in MattermostBootstrapper.DefaultEnvironmentVariables)
+                builder = builder.WithEnvironment(name, value);
+
+            container = builder
                 .WithWaitStrategy(Wait.ForUnixContainer()
                     .UntilHttpRequestIsSucceeded(r => r
                         .ForPort(8065)
                         .ForPath("/api/v4/system/ping")
-                        .ForStatusCode(HttpStatusCode.OK))
-                    .AddCustomWaitStrategy(new WaitUntilApiReady()))
+                        .ForStatusCode(HttpStatusCode.OK)))
                 .Build();
 
             await container.StartAsync();
@@ -100,35 +91,21 @@ public sealed class MattermostFixture : IAsyncLifetime
         var port = _container.GetMappedPublicPort(8065);
         ServerUrl = $"http://localhost:{port}";
 
-        using var http = CreateHttpClient();
+        // All REST seeding (admin/login/team/bot/token/channel/test user)
+        // lives in MattermostBootstrapper so the demo AppHost and this
+        // fixture share the same code path.
+        var result = await MattermostBootstrapper.SeedAsync(
+            new Uri(ServerUrl),
+            SeedOptions,
+            CancellationToken.None);
 
-        // Create admin user (first user gets admin privileges)
-        var adminUserId = await CreateUserAsync(http, AdminEmail, AdminUsername, AdminPassword);
-
-        // Login as admin
-        AdminToken = await LoginAsync(http, AdminUsername, AdminPassword);
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", AdminToken);
-
-        // Create team
-        TeamId = await CreateTeamAsync(http, TeamName);
-
-        // Create bot
-        (BotUserId, BotToken) = await CreateBotAsync(http, BotUsername);
-
-        // Add bot to team
-        await AddUserToTeamAsync(http, TeamId, BotUserId);
-
-        // Create test channel
-        ChannelId = await CreateChannelAsync(http, TeamId, ChannelName);
-
-        // Add bot to channel
-        await AddUserToChannelAsync(http, ChannelId, BotUserId);
-
-        // Create test user and cache their auth token
-        TestUserId = await CreateUserAsync(http, TestUserEmail, TestUserUsername, TestUserPassword);
-        await AddUserToTeamAsync(http, TeamId, TestUserId);
-        await AddUserToChannelAsync(http, ChannelId, TestUserId);
-        _testUserToken = await LoginAsync(http, TestUserUsername, TestUserPassword);
+        AdminToken = result.Admin.Token;
+        BotToken = result.Bot.Token;
+        BotUserId = result.Bot.UserId;
+        TeamId = result.TeamId;
+        ChannelId = result.ChannelId;
+        TestUserId = result.TestUser.UserId;
+        _testUserToken = result.TestUser.Token;
     }
 
     public async ValueTask DisposeAsync()
@@ -183,113 +160,16 @@ public sealed class MattermostFixture : IAsyncLifetime
     }
 
     /// <summary>
-    /// Creates an authenticated HttpClient that can act as the test user.
+    /// Creates an authenticated HttpClient that can act as the test
+    /// user. Reuses the access token captured at seed time —
+    /// Mattermost personal-session tokens are reusable, so there's no
+    /// reason to spend a round-trip re-logging in on every call.
     /// </summary>
-    public async Task<(HttpClient Client, string Token)> CreateTestUserClientAsync()
+    public Task<(HttpClient Client, string Token)> CreateTestUserClientAsync()
     {
         var http = CreateHttpClient();
-        var token = await LoginAsync(http, TestUserUsername, TestUserPassword);
-        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
-        return (http, token);
-    }
-
-    private static async Task<string> CreateUserAsync(HttpClient http, string email, string username, string password)
-    {
-        var response = await http.PostAsJsonAsync("/api/v4/users", new
-        {
-            email,
-            username,
-            password
-        });
-        response.EnsureSuccessStatusCode();
-        var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        return doc.RootElement.GetProperty("id").GetString()!;
-    }
-
-    private static async Task<string> LoginAsync(HttpClient http, string loginId, string password)
-    {
-        var response = await http.PostAsJsonAsync("/api/v4/users/login", new
-        {
-            login_id = loginId,
-            password
-        });
-        response.EnsureSuccessStatusCode();
-
-        // Token is returned in the response header
-        if (response.Headers.TryGetValues("Token", out var tokens))
-            return tokens.First();
-
-        throw new InvalidOperationException("Mattermost login did not return a Token header.");
-    }
-
-    private static async Task<string> CreateTeamAsync(HttpClient http, string name)
-    {
-        var response = await http.PostAsJsonAsync("/api/v4/teams", new
-        {
-            name,
-            display_name = name,
-            type = "O" // Open team
-        });
-        response.EnsureSuccessStatusCode();
-        var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        return doc.RootElement.GetProperty("id").GetString()!;
-    }
-
-    private static async Task<(string BotUserId, string Token)> CreateBotAsync(HttpClient http, string username)
-    {
-        // Create bot
-        var botResponse = await http.PostAsJsonAsync("/api/v4/bots", new
-        {
-            username,
-            display_name = "Test Bot"
-        });
-        botResponse.EnsureSuccessStatusCode();
-        var botDoc = await JsonDocument.ParseAsync(await botResponse.Content.ReadAsStreamAsync());
-        var botUserId = botDoc.RootElement.GetProperty("user_id").GetString()!;
-
-        // Create personal access token for bot
-        var tokenResponse = await http.PostAsJsonAsync($"/api/v4/users/{botUserId}/tokens", new
-        {
-            description = "integration-test-token"
-        });
-        tokenResponse.EnsureSuccessStatusCode();
-        var tokenDoc = await JsonDocument.ParseAsync(await tokenResponse.Content.ReadAsStreamAsync());
-        var token = tokenDoc.RootElement.GetProperty("token").GetString()!;
-
-        return (botUserId, token);
-    }
-
-    private static async Task<string> CreateChannelAsync(HttpClient http, string teamId, string name)
-    {
-        var response = await http.PostAsJsonAsync("/api/v4/channels", new
-        {
-            team_id = teamId,
-            name,
-            display_name = name,
-            type = "O" // Public channel
-        });
-        response.EnsureSuccessStatusCode();
-        var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
-        return doc.RootElement.GetProperty("id").GetString()!;
-    }
-
-    private static async Task AddUserToTeamAsync(HttpClient http, string teamId, string userId)
-    {
-        var response = await http.PostAsJsonAsync($"/api/v4/teams/{teamId}/members", new
-        {
-            team_id = teamId,
-            user_id = userId
-        });
-        response.EnsureSuccessStatusCode();
-    }
-
-    private static async Task AddUserToChannelAsync(HttpClient http, string channelId, string userId)
-    {
-        var response = await http.PostAsJsonAsync($"/api/v4/channels/{channelId}/members", new
-        {
-            user_id = userId
-        });
-        response.EnsureSuccessStatusCode();
+        http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _testUserToken!);
+        return Task.FromResult((http, _testUserToken!));
     }
 
     /// <summary>
@@ -312,33 +192,6 @@ public sealed class MattermostFixture : IAsyncLifetime
             response.EnsureSuccessStatusCode();
             var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
             return doc.RootElement.GetProperty("id").GetString()!;
-        }
-    }
-}
-
-/// <summary>
-/// Additional wait strategy that ensures the API is actually ready to accept user registration,
-/// not just returning 200 on /ping.
-/// </summary>
-internal sealed class WaitUntilApiReady : IWaitUntil
-{
-    public async Task<bool> UntilAsync(IContainer container)
-    {
-        try
-        {
-            var port = container.GetMappedPublicPort(8065);
-            using var http = new HttpClient { BaseAddress = new Uri($"http://localhost:{port}") };
-
-            // The /ping endpoint returns 200 early, but the API may not be ready
-            // for user creation yet. Try the users endpoint to confirm.
-            var response = await http.GetAsync("/api/v4/users/me");
-
-            // 401 means the API is up and rejecting unauthenticated requests — ready
-            return response.StatusCode == HttpStatusCode.Unauthorized;
-        }
-        catch
-        {
-            return false;
         }
     }
 }

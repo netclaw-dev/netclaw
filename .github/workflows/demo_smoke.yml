@@ -1,0 +1,62 @@
+name: demo-smoke
+
+# End-to-end smoke test for the samples/Netclaw.Demo.AppHost Aspire
+# demo. Boots the AppHost via DistributedApplicationTestingBuilder,
+# waits for Mattermost + Ollama + qwen3.5:2b-q4_K_M + the daemon to reach
+# healthy, posts a message via Mattermost REST, and best-effort waits
+# for a bot reply.
+#
+# Manual-only by design — pulls ~4GB on a cold cache (Mattermost
+# preview image + Ollama image + qwen3.5:2b-q4_K_M model), and the LLM round
+# trip on a CPU-only runner is multi-minute. Reviewers can trigger
+# this via `gh workflow run demo_smoke.yml` when they want a real
+# end-to-end signal on a PR.
+
+on:
+  workflow_dispatch:
+    inputs:
+      reply_timeout_seconds:
+        description: Override NETCLAW_DEMO_TEST_REPLY_TIMEOUT_SECONDS (default 300).
+        required: false
+        default: '300'
+      startup_timeout_seconds:
+        description: Override NETCLAW_DEMO_TEST_STARTUP_TIMEOUT_SECONDS (default 1200).
+        required: false
+        default: '1200'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: Demo AppHost smoke (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore + build
+        run: |
+          dotnet build samples/Netclaw.Demo.AppHost.IntegrationTests/Netclaw.Demo.AppHost.IntegrationTests.csproj --configuration Debug
+
+      - name: Run demo smoke test
+        env:
+          NETCLAW_RUN_DEMO_SMOKE: '1'
+          NETCLAW_DEMO_TEST_REPLY_TIMEOUT_SECONDS: ${{ inputs.reply_timeout_seconds }}
+          NETCLAW_DEMO_TEST_STARTUP_TIMEOUT_SECONDS: ${{ inputs.startup_timeout_seconds }}
+        run: |
+          dotnet test samples/Netclaw.Demo.AppHost.IntegrationTests/Netclaw.Demo.AppHost.IntegrationTests.csproj \
+            --no-build \
+            --configuration Debug \
+            --filter Category=SlowSmoke \
+            --logger 'console;verbosity=normal'

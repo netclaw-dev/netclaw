@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json.Nodes;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -22,4 +24,11 @@ public sealed class ProviderEntry
     public SensitiveString? OAuthAccessToken { get; set; }
     public SensitiveString? OAuthRefreshToken { get; set; }
     public DateTimeOffset? OAuthTokenExpiry { get; set; }
+
+    /// <summary>
+    /// Opaque provider-owned options bag bound from
+    /// <c>Providers:&lt;name&gt;:VendorOptions</c>. Plugins deserialize their own
+    /// typed view instead of adding provider-specific properties here.
+    /// </summary>
+    public JsonObject? VendorOptions { get; set; }
 }
