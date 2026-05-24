@@ -16,7 +16,7 @@ namespace Netclaw.Daemon.Tests.Configuration;
 public sealed class MattermostChannelRegistrationExtensionsTests
 {
     [Fact]
-    public void Invalid_server_url_does_not_throw_and_does_not_set_api_base_address()
+    public void Invalid_server_url_does_not_throw_during_registration()
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -37,10 +37,6 @@ public sealed class MattermostChannelRegistrationExtensionsTests
         Assert.Null(ex);
 
         using var provider = services.BuildServiceProvider();
-        var factory = provider.GetRequiredService<IHttpClientFactory>();
-        using var client = factory.CreateClient("mattermost-api");
-        Assert.Null(client.BaseAddress);
-
         var options = provider.GetRequiredService<MattermostChannelOptions>();
         Assert.Equal("://not-a-uri", options.ServerUrl);
         Assert.Equal("fake-token", options.BotToken!.Value);

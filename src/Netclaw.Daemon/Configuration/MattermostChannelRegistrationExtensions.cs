@@ -41,10 +41,6 @@ public static class MattermostChannelRegistrationExtensions
             : mattermostOptions.ServerUrl;
         var botToken = mattermostOptions.BotToken?.Value ?? string.Empty;
 
-        Uri? parsedServerUri = null;
-        if (Uri.TryCreate(serverUrl.TrimEnd('/'), UriKind.Absolute, out var candidate))
-            parsedServerUri = candidate;
-
         services.AddSingleton(_ => new MattermostClient(serverUrl, botToken));
 
         services.AddHttpClient("mattermost-files", client =>
@@ -53,25 +49,12 @@ public static class MattermostChannelRegistrationExtensions
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", botToken);
         }).AddNetclawHeaders("mattermost-files");
-        services.AddHttpClient("mattermost-api", client =>
-        {
-            if (parsedServerUri is not null)
-                client.BaseAddress = parsedServerUri;
-            if (!string.IsNullOrEmpty(botToken))
-                client.DefaultRequestHeaders.Authorization =
-                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", botToken);
-        }).AddNetclawHeaders("mattermost-api");
         if (!string.IsNullOrEmpty(mattermostOptions.CallbackUrl))
             services.AddSingleton(new MattermostCallbackActionStore(TimeProvider.System));
 
         services.AddSingleton<IMattermostGatewayClient, MattermostNetGatewayClient>();
         services.AddSingleton<IMattermostReplyClient>(sp =>
-        {
-            var client = sp.GetRequiredService<MattermostClient>();
-            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-            var httpClient = httpClientFactory.CreateClient("mattermost-api");
-            return new MattermostNetReplyClient(client, httpClient);
-        });
+            new MattermostNetReplyClient(sp.GetRequiredService<MattermostClient>()));
         services.AddSingleton<IThreadHistoryFetcher>(sp =>
         {
             var client = sp.GetRequiredService<MattermostClient>();

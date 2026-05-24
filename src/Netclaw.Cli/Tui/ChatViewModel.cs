@@ -43,6 +43,14 @@ public partial class ChatViewModel : ReactiveViewModel
     public ReactiveProperty<int> UiVersion { get; } = new(0);
 
     /// <summary>
+    /// When true, the approval prompt body renders in full inside the Input
+    /// panel. When false (default), the body is truncated to a single line so
+    /// the selection list and status controls remain visible (issue #1132).
+    /// Toggled by the page via <see cref="ToggleApprovalDetail"/>.
+    /// </summary>
+    public ReactiveProperty<bool> IsApprovalDetailVisible { get; } = new(false);
+
+    /// <summary>
     /// Observable stream of session output events. The page subscribes to this
     /// to render chat messages, tool activity, usage, etc.
     /// </summary>
@@ -80,7 +88,7 @@ public partial class ChatViewModel : ReactiveViewModel
         _ = InitializeSessionAsync();
     }
 
-    private Task InitializeSessionAsync()
+    protected virtual Task InitializeSessionAsync()
     {
         _daemonOutputSubscription = _daemonClient.SessionOutput
             .Subscribe(output =>
@@ -248,15 +256,52 @@ public partial class ChatViewModel : ReactiveViewModel
         return SubmitInteractionSelectionAsync(option.Key.Value);
     }
 
-    public string GetApprovalPrompt()
+    /// <summary>
+    /// Single-line headline of the current approval interaction, e.g.
+    /// <c>"Approval required for shell_execute."</c>. Always fits in the
+    /// Input panel regardless of how long the underlying command is.
+    /// </summary>
+    public string GetApprovalSummary()
     {
         if (CurrentInteraction is not { } interaction)
             return "Approval required";
 
+        return $"Approval required for {interaction.ToolName}.";
+    }
+
+    /// <summary>
+    /// Body of the current approval interaction (the command/path being
+    /// approved, plus any explicit patterns). When
+    /// <see cref="IsApprovalDetailVisible"/> is <c>false</c>, the body is
+    /// returned as a single line truncated to <paramref name="maxLineWidth"/>
+    /// with an ellipsis and a Ctrl+V hint. When <c>true</c>, the full
+    /// untruncated body is returned and the caller is expected to wrap it
+    /// inside a height-bounded layout node.
+    /// </summary>
+    public string GetApprovalBody(int maxLineWidth)
+    {
+        if (CurrentInteraction is not { } interaction)
+            return string.Empty;
+
         var patterns = interaction.Patterns.Count > 0
             ? $" Patterns: {string.Join(", ", interaction.Patterns)}"
             : string.Empty;
-        return $"Approval required for {interaction.ToolName}. {interaction.DisplayText}{patterns}";
+
+        var fullBody = $"{interaction.DisplayText}{patterns}";
+
+        if (IsApprovalDetailVisible.Value)
+            return fullBody;
+
+        // Collapse to one line: any embedded newlines would also push the
+        // selection list past the panel cap, not just length.
+        var singleLine = fullBody.ReplaceLineEndings(" ");
+
+        const string hint = " [Ctrl+V to view full]";
+        var budget = Math.Max(8, maxLineWidth - hint.Length);
+        if (singleLine.Length <= budget)
+            return singleLine + (singleLine.Length == fullBody.Length ? string.Empty : hint);
+
+        return string.Concat(singleLine.AsSpan(0, budget - 1), "…", hint);
     }
 
     public string? GetApprovalHint()
@@ -265,6 +310,35 @@ public partial class ChatViewModel : ReactiveViewModel
             return null;
 
         return "Select an option and press Enter.";
+    }
+
+    /// <summary>
+    /// Flips <see cref="IsApprovalDetailVisible"/> and forces a re-render.
+    /// Invoked by <c>ChatPage</c> on Ctrl+V when an approval is pending.
+    /// </summary>
+    public void ToggleApprovalDetail()
+    {
+        if (!HasPendingInteraction)
+            return;
+
+        IsApprovalDetailVisible.Value = !IsApprovalDetailVisible.Value;
+        UiVersion.Value++;
+    }
+
+    /// <summary>
+    /// Test seam: stage a pending approval interaction as if the daemon had
+    /// emitted it. Mirrors the production handler in
+    /// <see cref="InitializeSessionAsync"/>. Used by <c>ChatPageTests</c> to
+    /// exercise the Input-panel rendering without spinning up a daemon.
+    /// </summary>
+    internal void SeedPendingInteractionForTesting(ToolInteractionRequest interaction)
+    {
+        _outputSubject.OnNext(interaction);
+        _pendingInteractions.Enqueue(interaction);
+        RefreshApprovalOptions();
+        IsGenerating.Value = false;
+        StatusMessage.Value = "Approval required";
+        RequestRedraw();
     }
 
     public override void Dispose()
@@ -279,6 +353,7 @@ public partial class ChatViewModel : ReactiveViewModel
         SessionIdDisplay.Dispose();
         UsageDisplay.Dispose();
         UiVersion.Dispose();
+        IsApprovalDetailVisible.Dispose();
         base.Dispose();
     }
 
@@ -397,6 +472,10 @@ public partial class ChatViewModel : ReactiveViewModel
             foreach (var option in interaction.Options)
                 _approvalOptions.Add(option.Label);
         }
+
+        // Each new interaction opens collapsed so the user makes an explicit
+        // choice to expand a long body — keeps controls visible by default.
+        IsApprovalDetailVisible.Value = false;
 
         UiVersion.Value++;
     }

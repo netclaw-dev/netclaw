@@ -9,7 +9,7 @@
     <OpenTelemetryVersion>1.15.3</OpenTelemetryVersion>
     <SlackNetVersion>0.17.10</SlackNetVersion>
     <DiscordNetVersion>3.19.1</DiscordNetVersion>
-    <MattermostNetVersion>4.0.4</MattermostNetVersion>
+    <MattermostNetVersion>5.0.0</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.8</MicrosoftAspNetCoreVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its

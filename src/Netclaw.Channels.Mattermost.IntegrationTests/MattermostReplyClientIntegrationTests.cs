@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Mattermost;
+using Mattermost.Models.Posts;
 using Netclaw.Channels.Mattermost.Transport;
 using Xunit;
 
@@ -29,8 +30,7 @@ public sealed class MattermostReplyClientIntegrationTests
         _fixture.SkipIfUnavailable();
         var ct = TestContext.Current.CancellationToken;
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
-        using var apiClient = _fixture.CreateBotApiClient();
-        var replyClient = new MattermostNetReplyClient(botClient, apiClient);
+        var replyClient = new MattermostNetReplyClient(botClient);
 
         var result = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),
@@ -49,8 +49,7 @@ public sealed class MattermostReplyClientIntegrationTests
         _fixture.SkipIfUnavailable();
         var ct = TestContext.Current.CancellationToken;
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
-        using var apiClient = _fixture.CreateBotApiClient();
-        var replyClient = new MattermostNetReplyClient(botClient, apiClient);
+        var replyClient = new MattermostNetReplyClient(botClient);
 
         var root = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),
@@ -73,8 +72,7 @@ public sealed class MattermostReplyClientIntegrationTests
         _fixture.SkipIfUnavailable();
         var ct = TestContext.Current.CancellationToken;
         using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
-        using var apiClient = _fixture.CreateBotApiClient();
-        var replyClient = new MattermostNetReplyClient(botClient, apiClient);
+        var replyClient = new MattermostNetReplyClient(botClient);
 
         var result = await replyClient.PostReplyAsync(new MattermostPostMessage(
             ChannelId: new MattermostChannelId(_fixture.ChannelId),
@@ -85,6 +83,62 @@ public sealed class MattermostReplyClientIntegrationTests
 
         var updated = await botClient.GetPostAsync(result.PostId.Value.Value);
         Assert.Contains("Updated message text", updated.Text);
+    }
+
+    [Fact]
+    public async Task PostReplyAsync_round_trips_attachment_with_button_action()
+    {
+        _fixture.SkipIfUnavailable();
+        var ct = TestContext.Current.CancellationToken;
+        using var botClient = new MattermostClient(_fixture.ServerUrl, _fixture.BotToken);
+        var replyClient = new MattermostNetReplyClient(botClient);
+
+        var attachment = new MattermostAttachment(
+            Fallback: "Approve or deny — reply with A or B",
+            Color: "#3AA3E3",
+            Text: "Tool approval required",
+            Actions:
+            [
+                new MattermostAttachmentAction(
+                    Id: "tool_approval_approve_once",
+                    Name: "Approve once",
+                    IntegrationUrl: "https://example.invalid/callback",
+                    Context: new Dictionary<string, string> { ["action_token"] = "abc123" },
+                    Style: "primary"),
+                new MattermostAttachmentAction(
+                    Id: "tool_approval_deny",
+                    Name: "Deny",
+                    IntegrationUrl: "https://example.invalid/callback",
+                    Context: new Dictionary<string, string> { ["action_token"] = "def456" },
+                    Style: "danger")
+            ]);
+
+        var result = await replyClient.PostReplyAsync(new MattermostPostMessage(
+            ChannelId: new MattermostChannelId(_fixture.ChannelId),
+            Text: "Post with attachment + buttons",
+            Attachments: [attachment]), ct);
+        Assert.NotNull(result.PostId);
+
+        // Re-fetch via the SDK and assert the server echoes the attachment
+        // shape we sent, including the typed Type = Button payload that 5.0's
+        // PostPropsButtonAction produces. This is the round-trip that the
+        // 4.x-era HTTP-bypass shim used to validate by hand.
+        //
+        // Note: Mattermost server intentionally strips integration.url from
+        // posts on read-back — that URL is the bot's private callback endpoint
+        // and is server-side only. We assert on Id/Name/Type/Style which are
+        // what 5.0's typed model actually changed.
+        var post = await botClient.GetPostAsync(result.PostId!.Value.Value);
+        var serverAttachment = Assert.Single(post.Props.Attachments);
+        Assert.Equal(2, serverAttachment.Actions.Count);
+        Assert.All(serverAttachment.Actions, action =>
+            Assert.Equal(PostActionType.Button, action.Type));
+        Assert.Equal("tool_approval_approve_once", serverAttachment.Actions[0].Id);
+        Assert.Equal("Approve once", serverAttachment.Actions[0].Name);
+        Assert.Equal(ActionStyle.Primary, serverAttachment.Actions[0].Style);
+        Assert.Equal("tool_approval_deny", serverAttachment.Actions[1].Id);
+        Assert.Equal("Deny", serverAttachment.Actions[1].Name);
+        Assert.Equal(ActionStyle.Danger, serverAttachment.Actions[1].Style);
     }
 
     [Fact]

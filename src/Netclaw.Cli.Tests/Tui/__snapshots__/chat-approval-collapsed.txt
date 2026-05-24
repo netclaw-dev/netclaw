@@ -1,0 +1,40 @@
+╭─Netclaw Chat─────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│System: Approval required for shell_execute                                                                           │
+│cd /Users/kevin/code/compiler/Diagnostics.pn compiler/Symbol.pn compiler/Binder                                       │
+│/private/var/folders/pj/ncqg4f1s58l87j6n_9xvnz9m0000gn/T/tmp.aa                                                       │
+│/private/var/folders/pj/ncqg4f1s58l87j6n_9xvnz9m0000gn/T/tmp.bb                                                       │
+│/private/var/folders/pj/ncqg4f1s58l87j6n_9xvnz9m0000gn/T/tmp.cc                                                       │
+│/private/var/folders/pj/ncqg4f1s58l87j6n_9xvnz9m0000gn/T/tmp.dd                                                       │
+│/private/var/folders/pj/ncqg4f1s58l87j6n_9xvnz9m0000gn/T/tmp.ee SENTINEL_TAIL_MARKER                                  │
+│  Patterns: cd                                                                                                        │
+│  Options: Once, This chat, Deny                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─Input────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│Approval required for shell_execute.                                                                                  │
+│cd /Users/kevin/code/compiler/Diagnostics.pn compiler/Symbol.pn compiler/Binder /private/var/… [Ctrl+V to view full]  │
+│Select an option and press Enter.                                                                                     │
+│1. Once                                                                                                               │
+│2. This chat                                                                                                          │
+│3. Deny                                                                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+[Up/Down] Select [Enter] Confirm [Ctrl+V] View full [PgUp/PgDn] Scroll [Ctrl+Q] Quit | Approval required | test-model

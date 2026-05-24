@@ -22,11 +22,18 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ChatPage : ReactivePage<ChatViewModel>
 {
+    private readonly IAnsiTerminal _terminal;
+
     private StreamingTextNode _chatHistory = null!;
     private TextAreaNode _promptInput = null!;
     private SelectionListNode<string>? _approvalList;
     private DynamicLayoutNode? _inputContentNode;
     private readonly CompositeDisposable _inputSubs = [];
+
+    public ChatPage(IAnsiTerminal terminal)
+    {
+        _terminal = terminal;
+    }
 
     private int _nextSegmentId = 1;
 
@@ -90,6 +97,22 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         ViewModel.Input.OfType<IInputEvent, MouseScrollEvent>()
             .Subscribe(HandleMouseScroll)
             .DisposeWith(Subscriptions);
+
+        // Re-render on terminal resize. The outer Input panel's HeightAuto(max)
+        // constraint is baked into LayoutNode fields at BuildLayout-time and
+        // doesn't update on resize. InvalidateLayout() discards the cached tree
+        // and rebuilds via BuildLayout() with the updated _terminal.Height, so
+        // the panel cap follows the resize. The DynamicLayoutNode inside still
+        // re-evaluates body width and the internal expanded-body cap. The
+        // UiVersion bump is needed so the status bar CombineLatest triggers the
+        // key-hints re-pick for narrow widths.
+        ViewModel.Input.OfType<IInputEvent, ResizeEvent>()
+            .Subscribe(_ =>
+            {
+                InvalidateLayout();
+                ViewModel.UiVersion.Value++;
+            })
+            .DisposeWith(Subscriptions);
     }
 
     public override ILayoutNode BuildLayout()
@@ -103,14 +126,21 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                     .WithBorderColor(Color.Gray)
                     .WithContent(_chatHistory.Fill())
                     .Fill())
-            // Input panel (grows with content, 3–10 rows)
+            // Input panel (grows with content). The cap is generous — the
+            // actual cap that prevents the chat-history pane from being
+            // squeezed comes from the body-cap math inside BuildInputContent,
+            // which derives an upper bound from _terminal.Height. We give the
+            // panel itself a wide ceiling here so HeightAuto sizes to the
+            // content we deliberately build, not the other way around.
+            // The TextAreaNode in non-approval mode is independently capped
+            // via WithMaxHeight(8).
             .WithChild(
                 new PanelNode()
                     .WithTitle("Input")
                     .WithBorder(BorderStyle.Rounded)
                     .WithBorderColor(Color.Cyan)
                     .WithContent(BuildInputContent())
-                    .HeightAuto(min: 3, max: 10))
+                    .HeightAuto(min: 3, max: Math.Max(8, _terminal.Height - 4)))
             // Status bar
             .WithChild(
                 BuildStatusBar());
@@ -143,9 +173,40 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
 
             _approvalList.OnFocused();
 
+            // Read live terminal dimensions every render so the layout adapts
+            // to resize. Panel content width = terminal width minus the panel
+            // borders (2 cols) and a couple of safety cells.
+            var panelContentWidth = Math.Max(20, _terminal.Width - 4);
+
+            // How many rows can we afford for the body in expanded mode?
+            // Chrome cost per render: summary(1) + hint(1) + N options + borders(2).
+            // Cap the panel at half the terminal height so the chat history
+            // pane stays visible. Floor of 8 keeps the math sane on tiny
+            // terminals (the panel will still render best-effort).
+            var optionCount = Math.Max(1, ViewModel.ApprovalOptions.Count);
+            var panelMaxRows = Math.Max(8, _terminal.Height / 2);
+            var chromeRows = 4 + optionCount;
+            var expandedBodyMaxRows = Math.Max(1, panelMaxRows - chromeRows);
+
+            var summary = new TextNode(ViewModel.GetApprovalSummary())
+                .WithForeground(Color.Yellow);
+            var hint = new TextNode(ViewModel.GetApprovalHint() ?? string.Empty)
+                .WithForeground(Color.Gray);
+
+            LayoutNode body = new TextNode(ViewModel.GetApprovalBody(panelContentWidth))
+                .WithForeground(Color.White);
+
+            // Collapsed body is forced single-line; expanded body wraps up to
+            // the dynamic cap above. The full DisplayText is always available
+            // in the chat history pane regardless.
+            body = ViewModel.IsApprovalDetailVisible.Value
+                ? body.HeightAuto(min: 1, max: expandedBodyMaxRows)
+                : body.Height(1);
+
             return Layouts.Vertical()
-                .WithChild(new TextNode(ViewModel.GetApprovalPrompt()).WithForeground(Color.Yellow))
-                .WithChild(new TextNode(ViewModel.GetApprovalHint() ?? string.Empty).WithForeground(Color.Gray))
+                .WithChild(summary)
+                .WithChild(body)
+                .WithChild(hint)
                 .WithChild(_approvalList);
         });
 
@@ -163,16 +224,21 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 ViewModel.IsInputEnabled,
                 ViewModel.StatusMessage,
                 ViewModel.UsageDisplay,
-                (isGenerating, isInputEnabled, status, usage) =>
+                ViewModel.IsApprovalDetailVisible,
+                ViewModel.UiVersion,
+                (isGenerating, isInputEnabled, status, usage, isApprovalDetailVisible, _) =>
                 {
-                    var keys = ViewModel.HasPendingInteraction
-                        ? "[Up/Down] Select  [Enter] Confirm  [PgUp/PgDn/Wheel] Scroll  [Ctrl+Q] Quit"
-                        : isGenerating
-                        ? "[Ctrl+Q] Quit"
-                        : "[Enter] Send  [Ctrl+Enter] Newline  [PgUp/PgDn/Wheel] Scroll  [Ctrl+Q] Quit";
+                    // Read terminal width live so a resize re-shortens the
+                    // keys string. UiVersion is included above to make the
+                    // CombineLatest re-emit on resize (ChatPage.OnBound bumps
+                    // UiVersion when ResizeEvent fires).
+                    var width = Math.Max(40, _terminal.Width);
+
+                    var keys = BuildKeyHints(width, isGenerating, isApprovalDetailVisible);
 
                     var usagePart = usage is not null ? $"  |  {usage}" : "";
-                    var text = $" {keys}  |  {status}  |  {ViewModel.ModelId}{usagePart}";
+                    var modelPart = width >= 80 ? $"  |  {ViewModel.ModelId}" : "";
+                    var text = $" {keys}  |  {status}{modelPart}{usagePart}";
 
                     var barColor = status switch
                     {
@@ -191,6 +257,33 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 })
             .AsLayout()
             .Height(1);
+    }
+
+    /// <summary>
+    /// Builds the status-bar key hints, shortening on narrow terminals so
+    /// the bar stays on one line. The most critical action stays visible at
+    /// every width: Confirm/Cancel-equivalent for approval, Send for idle.
+    /// </summary>
+    private string BuildKeyHints(int width, bool isGenerating, bool isApprovalDetailVisible)
+    {
+        if (ViewModel.HasPendingInteraction)
+        {
+            var toggle = isApprovalDetailVisible ? "Collapse" : "View full";
+            return width >= 100
+                ? $"[Up/Down] Select  [Enter] Confirm  [Ctrl+V] {toggle}  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit"
+                : width >= 70
+                    ? $"[↑↓] Select  [Enter] Confirm  [Ctrl+V] {toggle}  [Ctrl+Q] Quit"
+                    : $"[↑↓] [Enter] OK  [^V] {toggle}  [^Q] Quit";
+        }
+
+        if (isGenerating)
+            return "[Ctrl+Q] Quit";
+
+        return width >= 100
+            ? "[Enter] Send  [Ctrl+Enter] Newline  [PgUp/PgDn/Wheel] Scroll  [Ctrl+Q] Quit"
+            : width >= 70
+                ? "[Enter] Send  [Ctrl+Enter] Newline  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit"
+                : "[Enter] Send  [^Enter] NL  [^Q] Quit";
     }
 
     private void HandleKeyPress(KeyPressed key)
@@ -216,6 +309,18 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 ViewModel.RequestAppShutdown();
             }
 
+            return;
+        }
+
+        // Ctrl+V toggles full-body view of a pending approval prompt.
+        // Routed BEFORE the selection list so the list's own Ctrl+V (paste-ish)
+        // never overrides it while an approval is pending. When no approval
+        // is pending, Ctrl+V falls through to the text area for normal paste.
+        if (ViewModel.HasPendingInteraction
+            && keyInfo.Key == ConsoleKey.V
+            && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.ToggleApprovalDetail();
             return;
         }
 
