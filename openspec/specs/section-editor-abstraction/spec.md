@@ -1,4 +1,12 @@
-## ADDED Requirements
+# section-editor-abstraction Specification
+
+## Purpose
+
+Define the reusable CLI leaf-editor contract shared by bootstrap-only init
+flows and future post-install config flows, including semantic persistence,
+secret-safe re-entry, and audit obligations.
+
+## Requirements
 
 ### Requirement: Leaf editor interface
 
@@ -55,11 +63,11 @@ the contract.
 - **AND** the resulting parsed config SHALL be semantically equivalent to
   the original
 
-### Requirement: Reentrancy contract for init-owned flows SHALL preserve existing state rules
+### Requirement: Reentrancy contract for init-owned flows
 
-Init-owned re-entrant flows SHALL prefill non-secret fields from
-`WizardContext.ExistingConfig` when init reuses a leaf editor against
-existing state. Secret-bearing fields SHALL remain empty and masked, using
+Init-owned re-entry flows SHALL prefill non-secret fields from
+`WizardContext.ExistingConfig` when they reuse a leaf editor against existing
+state. Secret-bearing fields SHALL remain empty and masked, using
 existence-only hint text.
 
 #### Scenario: Existing non-secret values prefill

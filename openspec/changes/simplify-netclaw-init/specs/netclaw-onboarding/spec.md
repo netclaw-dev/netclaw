@@ -2,210 +2,102 @@
 
 ### Requirement: Guided onboarding
 
-`netclaw init` SHALL provide a three-step guided setup collecting LLM
-provider configuration, identity (agent name, operator name, timezone),
-and security posture. On completion, the wizard SHALL apply the
-posture-default `Tools.AudienceProfiles` mapping in-memory, write the
-merged config and secrets via the merge-on-save writer, and run the
-existing health check to verify the baseline configuration is
-functional. If daemon startup fails because configuration validation
-rejects the resulting exposure-mode or remote-auth topology, the
-wizard SHALL surface that failure as a structured setup error with
-remediation guidance. The wizard SHALL NOT collect Slack credentials,
-ACL inputs, search backend, browser automation, memory provider,
-MCP server configuration, exposure mode, channels, audience-specific
-feature flags, external skill directories, skill feeds, or webhook
-URLs during this flow. Those sections SHALL be configured via
-`netclaw config` after first-run setup completes.
+`netclaw init` SHALL provide bootstrap-first guided setup. The flow SHALL
+collect provider configuration, identity, and security posture. Security
+Posture, Enabled Features, and Audience Profiles are distinct concepts.
 
-The wizard SHALL NOT write `AGENTS.md` to disk during identity file
-generation. AGENTS.md is binary-controlled firmware loaded from
-embedded resources at runtime. The wizard SHALL continue to write
-`SOUL.md` and `TOOLING.md` as operator-mutable identity files.
+If the operator selects `Personal`, the bootstrap flow SHALL skip Enabled
+Features.
 
-For non-Personal postures, the wizard SHALL apply the posture-default
-feature-flag mapping non-interactively (memory, search, skills,
-scheduling, sub-agents, webhooks) per the posture's documented
-defaults. The wizard SHALL NOT present a separate feature-selection
-step. Operators wanting to override these defaults per-audience SHALL
-use `netclaw config → Audience Profiles`.
+If the operator selects `Team` or `Public`, the bootstrap flow SHALL
+automatically continue into Enabled Features before final write.
 
-#### Scenario: First-time setup
+Audience Profiles editing SHALL NOT be part of init bootstrap; it belongs
+to `netclaw config`.
 
-- **WHEN** operator runs `netclaw init` on a fresh install
-- **THEN** the wizard collects provider, identity (agent name, user
-  name, timezone), and security posture inputs
-- **AND** writes a runnable baseline configuration via the merge-on-save
-  writer
-- **AND** writes SOUL.md and TOOLING.md to `~/.netclaw/identity/`
-- **AND** does NOT write AGENTS.md (or writes a reference-only stub)
-- **AND** does NOT prompt for Slack, ACL, search, browser automation,
-  exposure mode, channels, audience-feature flags, external skills,
-  skill feeds, or webhook URLs
+The wizard SHALL continue to write `SOUL.md` and `TOOLING.md`. Identity
+remains init-owned in this branch.
 
-#### Scenario: Identity files written on completion
+#### Scenario: Personal posture skips enabled-features bootstrap step
 
-- **WHEN** the wizard completes and writes config
-- **THEN** `SOUL.md` is written from the embedded SOUL template
-- **AND** `TOOLING.md` is written from the embedded TOOLING template
-- **AND** `AGENTS.md` is NOT written from a template
+- **GIVEN** the operator selected `Personal`
+- **WHEN** the posture step completes
+- **THEN** init does not open an Enabled Features step
 
-#### Scenario: Posture cascade applied non-interactively
+#### Scenario: Team posture continues into enabled-features bootstrap step
 
-- **GIVEN** the operator selected `Team` posture
-- **WHEN** the wizard completes its terminal write
-- **THEN** `Tools.AudienceProfiles.Team` is populated with the
-  posture-default mapping (memory, search, skills, scheduling,
-  sub-agents enabled; webhooks disabled per posture rule)
-- **AND** the wizard does not show a separate feature-selection step
-- **AND** the operator can edit per-audience features via
-  `netclaw config → Audience Profiles`
+- **GIVEN** the operator selected `Team`
+- **WHEN** the posture step completes
+- **THEN** init automatically continues into Enabled Features
 
-#### Scenario: Exposure-mode startup validation failure shown cleanly
+#### Scenario: Public posture continues into enabled-features bootstrap step
 
-- **GIVEN** the operator completes `netclaw init`
-- **AND** the written configuration causes `ExposureModeValidationService`
-  to reject daemon startup
-- **WHEN** the health-check step starts the daemon
-- **THEN** the wizard shows a failed health-check item containing the
-  validation message
-- **AND** the wizard includes remediation guidance for fixing the
-  exposure/auth configuration
-- **AND** the operator is not shown a raw stack trace
+- **GIVEN** the operator selected `Public`
+- **WHEN** the posture step completes
+- **THEN** init automatically continues into Enabled Features
 
-#### Scenario: Startup validation failure does not degrade to generic readiness timeout
+### ADDED Requirement: Existing-install init menu
 
-- **GIVEN** daemon startup fails immediately because exposure validation
-  rejects the configuration
-- **WHEN** the health-check step polls daemon readiness
-- **THEN** the wizard reports the actual startup validation failure
-- **AND** it does NOT report only `Daemon did not become ready` unless
-  the failure reason is genuinely unavailable
+When `netclaw init` runs on an existing install, it SHALL open an action
+menu with exactly these options:
 
-#### Scenario: Post-flight nudge points to netclaw config
+- `Redo identity setup`
+- `Open configuration editor`
+- `Start over from scratch`
+- `Cancel`
 
-- **GIVEN** the wizard completes its terminal write successfully
-- **WHEN** the health check passes
-- **THEN** Termina displays a post-flight screen confirming what was
-  set
-- **AND** Termina displays a line directing the operator at
-  `netclaw config` for further configuration
-- **AND** after Termina teardown the same one-line nudge prints to
-  stderr so it remains visible after the TUI clears
+#### Scenario: Existing install opens action menu
 
-## ADDED Requirements
+- **GIVEN** `netclaw.json` exists
+- **WHEN** the operator runs `netclaw init`
+- **THEN** init opens the existing-install menu with the documented four
+  options
 
-### Requirement: Existing-config detection at init entry
+#### Scenario: Existing install routes to config editor
 
-`netclaw init` SHALL detect the presence of a previously-written
-`netclaw.json` at startup. When detected and `--force` was not passed,
-the command SHALL refuse to proceed: in a TTY it renders a refusal
-screen pointing operators at `netclaw config` for live edits or
-`netclaw init --force` to reset; in non-TTY usage it prints the
-refusal to stderr. The TTY path SHALL exit with status 0 after the
-operator acknowledges; the non-TTY path SHALL exit with non-zero
-status so CI catches the surprise.
+- **GIVEN** the existing-install menu is open
+- **WHEN** the operator chooses `Open configuration editor`
+- **THEN** control routes to `netclaw config`
 
-#### Scenario: TTY refusal shows actionable guidance and exits zero
+#### Scenario: Existing install routes to init-owned identity flow
 
-- **GIVEN** `netclaw.json` exists on disk
-- **AND** `netclaw init` is run in an interactive TTY without `--force`
-- **WHEN** the command starts
-- **THEN** Termina renders a refusal screen that names both alternative
-  commands: `netclaw config` and `netclaw init --force`
-- **AND** the operator presses Enter to acknowledge
-- **AND** the command exits with status 0
-- **AND** `netclaw.json` and `secrets.json` are unchanged
+- **GIVEN** the existing-install menu is open
+- **WHEN** the operator chooses `Redo identity setup`
+- **THEN** control routes to the init-owned identity flow
 
-#### Scenario: Non-TTY refusal exits non-zero
+### ADDED Requirement: Start-over flow is double-confirmed
 
-- **GIVEN** `netclaw.json` exists on disk
-- **AND** `netclaw init` is run with stdout/stderr redirected (not a TTY)
-- **AND** `--force` was not passed
-- **WHEN** the command starts
-- **THEN** the refusal text prints to stderr
-- **AND** the command exits with non-zero status
-- **AND** `netclaw.json` and `secrets.json` are unchanged
+Choosing `Start over from scratch` SHALL open a second dialog with exactly:
 
-#### Scenario: No existing config proceeds normally
+- `Reset setup only`
+- `Full reset`
+- `Cancel`
 
-- **GIVEN** no `netclaw.json` exists on disk
-- **WHEN** `netclaw init` is run
-- **THEN** the wizard proceeds to Step 1 (Provider) without showing the
-  refusal screen
+Either destructive option SHALL require double confirmation before files are
+mutated.
 
-### Requirement: Force-reset backup flow
+#### Scenario: Start-over dialog presents reset choices
 
-`netclaw init --force` SHALL detect existing config and require an
-explicit type-to-confirm before proceeding. On confirm, the command
-SHALL rename `~/.netclaw/config/netclaw.json` to
-`netclaw.json.bak.<unix-millis>` and
-`~/.netclaw/config/secrets.json` to `secrets.json.bak.<unix-millis>`.
-A single timestamp SHALL be generated per invocation so both files
-share a suffix. On the extremely unlikely event of a collision (an
-existing file at the chosen suffix), an auto-incrementing dash
-suffix SHALL be appended (`.bak.<unix-millis>-1`, `-2`, ...) until a
-free filename is found. The wizard SHALL then proceed as a fresh
-first-run. The .bak files SHALL be preserved on disk so operators
-retain a manual recovery path. The command SHALL print the .bak file
-paths to the post-flight screen so operators know where the prior
-config went. `netclaw init --force` SHALL refuse to run in non-TTY
-contexts (no stdin or no terminal-controlled stdout) because the
-type-to-confirm prompt cannot be rendered safely; the command SHALL
-print a non-TTY refusal message to stderr and exit non-zero.
+- **GIVEN** the existing-install menu is open
+- **WHEN** the operator chooses `Start over from scratch`
+- **THEN** the second dialog presents `Reset setup only`, `Full reset`, and
+  `Cancel`
 
-#### Scenario: Force without confirm leaves config unchanged
+#### Scenario: Destructive reset requires double confirmation
 
-- **GIVEN** `netclaw.json` exists on disk
-- **AND** `netclaw init --force` is run in an interactive TTY
-- **WHEN** the confirm screen renders and the operator cancels
-- **THEN** the command exits with status 0
-- **AND** `netclaw.json` and `secrets.json` are unchanged
+- **GIVEN** the operator selected either `Reset setup only` or `Full reset`
+- **WHEN** the destructive flow proceeds
+- **THEN** two distinct confirmations are required before mutation
 
-#### Scenario: Force with confirm backs up and proceeds
+### ADDED Requirement: No init-force flag in this flow
 
-- **GIVEN** `netclaw.json` and `secrets.json` exist on disk
-- **AND** `netclaw init --force` is run in an interactive TTY
-- **WHEN** the operator types "reset" and confirms
-- **THEN** the original `netclaw.json` is renamed to
-  `netclaw.json.bak.<unix-timestamp>`
-- **AND** the original `secrets.json` is renamed to
-  `secrets.json.bak.<unix-timestamp>`
-- **AND** the wizard proceeds to Step 1 (Provider) with
-  `WizardContext.ExistingConfig` set to `null`
-- **AND** on successful completion the post-flight screen lists the
-  .bak file paths
+This bootstrap flow SHALL NOT rely on a `netclaw init --force` mode.
+Existing-install reset behavior is owned by the in-TUI existing-install
+menu and start-over dialogs.
 
-#### Scenario: Force on a fresh install behaves as plain init
+#### Scenario: Existing-install reset does not require hidden flag
 
-- **GIVEN** no `netclaw.json` exists on disk
-- **AND** `netclaw init --force` is run
-- **WHEN** the command starts
-- **THEN** no backup screen is shown (nothing to back up)
-- **AND** the wizard proceeds to Step 1 (Provider) normally
-
-#### Scenario: Force in non-TTY context refuses
-
-- **GIVEN** `netclaw.json` exists on disk
-- **AND** `netclaw init --force` is run with stdout or stdin not a TTY
-  (e.g. piped, redirected, or in CI)
-- **WHEN** the command starts
-- **THEN** stderr contains
-  `\`netclaw init --force\` requires an interactive terminal for the
-   reset confirmation. Run it from a TTY.`
-- **AND** the command exits with non-zero status
-- **AND** the existing `netclaw.json` and `secrets.json` are
-  unchanged
-- **AND** no .bak files are created
-
-#### Scenario: Force handles existing .bak filename collision
-
-- **GIVEN** `netclaw.json` exists on disk
-- **AND** a previously-created backup at
-  `~/.netclaw/config/netclaw.json.bak.<expected-millis>` already
-  exists (e.g. from a prior force run within the same millisecond)
-- **WHEN** the operator types "reset" and confirms
-- **THEN** the backup uses
-  `netclaw.json.bak.<expected-millis>-1` (and the corresponding
-  `secrets.json.bak.<expected-millis>-1`)
-- **AND** the existing backup file is not overwritten
+- **GIVEN** an existing install
+- **WHEN** the operator wants to restart setup
+- **THEN** the path is available from the existing-install init menu
+- **AND** it does not depend on `netclaw init --force`

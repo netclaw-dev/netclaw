@@ -1,245 +1,108 @@
 ## Context
 
-**UI wireframes:** SecurityPosture's appearance inside `netclaw config`
-is in `docs/ui/TUI-002-netclaw-config-wireframes.md` (§ Config.6).
-Provider and Identity remain init-only and their wireframes are in
-`docs/ui/TUI-003-simplified-init-wireframes.md` (§ Init.1, Init.2)
-once Change C lands; for this change they continue to use the prior
-init wizard wireframes documented in `docs/ui/TUI-001-command-wireframes.md`.
+This change defines the reusable leaf-editor contract that both
+bootstrap-time init flows and the later `netclaw config` command will use.
+The locked product shape matters:
 
-The `netclaw init` wizard composed of `WizardOrchestrator` + a fixed list of
-`IWizardStepViewModel`s produces a runnable Netclaw configuration but treats
-the on-disk state as a write-once target. There is no shared abstraction for
-"the editable surface of one configuration section," so every section's input
-collection, validation, and persistence logic lives inline in its step
-viewmodel. Three foundations from PR #432 partially anticipate the shared
-abstraction:
+- `netclaw init` is bootstrap, not the main editor.
+- `netclaw config` is the main post-install surface.
+- Identity stays init-owned.
 
-- `WizardContext.ExistingConfig` is declared on the context object but
-  never populated.
-- `ConfigFileHelper` and `ProviderCredentialWriter` already implement the
-  load-merge-write pattern, used today by `netclaw provider`/`model`/`mcp`
-  CLI subcommands.
-- Each `IWizardStepViewModel.OnEnter(context, direction)` already receives a
-  direction marker, but no step uses it.
-
-This change formalizes the shared abstraction so the next change can compose
-existing step viewmodels into the new `netclaw config` command without
-forking their logic. It also closes the long-standing reentrancy gap (#455):
-re-running `netclaw init` over an existing install now produces a sensible
-pre-filled wizard with merge-on-save semantics, rather than the prior
-undefined behavior.
+So the abstraction should model reusable leaf editors and semantic writes,
+not a specific top-level dashboard layout.
 
 ## Goals / Non-Goals
 
 **Goals:**
 
-- Define `ISectionEditor` such that any step viewmodel implementing it can
-  be hosted either by the linear init wizard or by a single-step
-  orchestrator that the next change introduces, with no per-host behavior
-  difference visible to the user.
-- Lock in three operational contracts that future section editors must
-  honor: reentrancy (pre-fill from `ExistingConfig`), secret handling
-  (never rehydrate; "leave blank to keep"), and merge-on-save
-  (byte-equality of every other top-level section).
-- Establish the audit + test harness up-front so the contracts are enforced
-  from the first registered editor, not retrofitted later when drift has
-  already begun.
-- Refactor Provider, Identity, and Posture step viewmodels to implement
-  `ISectionEditor`. Behavior inside today's linear init wizard remains
-  observable-equivalent for first-run.
-- Close #455 (reentrant init) as a byproduct of populating `ExistingConfig`
-  at entry and switching `WizardConfigBuilder` to merge-on-save.
+- Define `ISectionEditor` as the reusable leaf-editor contract.
+- Support init-owned editors and config-owned editors without forcing them
+  all into one menu.
+- Preserve existing config semantically on save, including inactive
+  exposure-mode values and unrelated sections.
+- Keep secrets masked and non-rehydratable.
+- Refactor the bootstrap leaves that matter to the locked split:
+  Provider, Identity, Security Posture, Enabled Features.
 
 **Non-Goals:**
 
-- Introducing the `netclaw config` command (next change).
-- Adding the remaining seven section editors (next change).
-- Simplifying the init wizard's step list to provider + identity +
-  posture only (third change).
-- Hot-reload of the running daemon on config change (out of scope; remains
-  a documented manual-restart limitation).
-- Section editor UI for sections that today are file-edited only
-  (`Persistence`, `Logging`, `Telemetry`, etc.) — these stay on the
-  exemption list.
-- Reworking `netclaw provider`/`model`/`mcp` CLI subcommands to share
-  backing logic with the new abstraction. Their existing behavior is
-  unchanged; future work may unify them.
+- Defining the `netclaw config` IA.
+- Making Identity editable from `netclaw config`.
+- Forcing all schema sections into TUI editors.
+- Byte-identical JSON preservation.
 
 ## Decisions
 
-### D1. `ISectionEditor` as a viewmodel factory, not a viewmodel base class
+### D1. The abstraction is for leaf editors, not dashboard IA
 
-The interface returns an `IWizardStepViewModel` from `CreateEditor(context)`
-rather than extending the existing viewmodel base. This keeps the
-orchestrator's lifecycle contract authoritative and avoids multiple
-inheritance / diamond issues for step viewmodels that already extend a
-shared base. It also lets a single `ISectionEditor` produce different
-viewmodels for different contexts in the future (e.g. a future
-"compact" view) without changing the interface.
+`ISectionEditor` describes the smallest reusable editable surface. The next
+change may compose those leaves under domain pages such as `Channels` or
+`Security & Access`, or route specific nodes to existing commands such as
+`netclaw provider` and `netclaw model`.
 
-Alternative considered: make `ISectionEditor` itself extend
-`IWizardStepViewModel`. Rejected because it conflates "this thing is a
-runnable step" with "this thing describes an editable section in the
-registry"; the dashboard and audit code want the metadata without
-constructing a runnable step.
+Alternative considered: make the registry shape equal the config dashboard
+shape. Rejected because the locked IA is domain-oriented and heavier on
+sub-pages, while the reusable abstraction is leaf-oriented.
 
-### D2. Merge-on-save via existing `ConfigFileHelper` primitives
+### D2. Merge-on-save is semantic, not byte-identical
 
-`WizardConfigBuilder` is refactored to call `ConfigFileHelper.LoadConfigFiles`
-and `GetOrCreateSection` rather than building a fresh dictionary. The
-existing primitives have already been proven by `ProviderCredentialWriter`
-and the CLI subcommands; no new merge code is introduced. Each editor
-contributes via an explicit `SectionContribution` record carrying
-`Dictionary<string, FieldAction>` for non-secrets and
-`Dictionary<string, SecretAction>` for secrets. The merge writer applies
-the actions deterministically; "blank means X" is the editor's job to
-interpret, not the merge layer's.
+The merge layer preserves the meaning of unrelated sections and inactive
+values, but ordering, whitespace, and exact serialized shape are not part of
+the contract. Tests compare semantics, not raw file bytes.
 
-Alternative considered: introduce a fresh JSON-patch-style operation log.
-Rejected because the existing dictionary-based pattern is already in
-production use and a parallel mechanism would introduce a forking point.
+Alternative considered: keep byte-identical guarantees. Rejected because the
+locked product decisions explicitly require semantic round-tripping and
+inactive-value preservation without turning formatting into a compatibility
+surface.
 
-### D3. Secret-presence lookup as a first-class API
+### D3. Existing config loading supports init-owned re-entry, not init-as-editor
 
-`ConfigFileHelper.SecretPresent(paths, sectionId, key)` is added to satisfy
-the "configured / not set" hint without exposing the decrypted value. This
-keeps the secret-handling contract enforceable at the type level: editors
-that need to show the hint cannot accidentally hold the decrypted value
-because the API does not return one.
+`WizardContext.ExistingConfig` is populated when an init-owned flow needs to
+re-enter existing state. This supports things like identity re-entry and
+shared bootstrap leaves, but does not commit the product to "re-run init to
+edit everything".
 
-Alternative considered: have editors call the secrets protector and discard
-the decrypted value after a length check. Rejected because the decrypted
-value would still transit through process memory; a presence-only API
-guarantees the value is never decrypted at all.
+Alternative considered: frame this change as full init reentrancy. Rejected
+because the locked split moves ongoing editing to `netclaw config`.
 
-### D4. Audit walks the menu registry, not the full schema
+### D4. Identity is synthetic and permanently init-owned in this branch
 
-`MenuRegistryAuditTests` walks `SectionEditorRegistry.All()`. Schema
-sections without a registered editor are not audited unless they appear
-in the exemption list. The audit's purpose is to enforce contracts on
-editors we ship, not to demand editors for every schema knob; the
-exemption list is the explicit "we know about this section and choose
-not to expose it" record.
+Identity spans config plus generated identity files, so it keeps a synthetic
+`SectionId` and `ShowInMenu = false`. The config dashboard must not surface
+Identity as just another settings page.
 
-The audit distinguishes three kinds of editor:
+### D5. Enabled Features is a separate reusable leaf from Security Posture
 
-- **`ShowInMenu == true` editors with a top-level `SectionId`** (e.g.
-  `Search`, `Slack`). Require: round-trip test class, non-empty
-  `RelevantDoctorChecks` (or `[NoDoctorChecks]`), AND a smoke tape at
-  `tests/smoke/tapes/config-<sectionid-lower>.tape` (once the
-  `netclaw config` dashboard exists from the next change).
-- **`ShowInMenu == true` editors with a dotted-path `SectionId`** (e.g.
-  `Security.Posture`, `Daemon.ExposureMode`, `Tools.AudienceProfiles`).
-  Same requirements as above. The top-level parent section (e.g.
-  `Security`) must appear in `SectionEditorExemptions` with a
-  "covered by another editor" entry naming the dotted-path editor as
-  the canonical owner.
-- **`ShowInMenu == false` editors** (e.g. `Providers`, `Identity`).
-  Require: round-trip test class and `RelevantDoctorChecks`. Smoke-tape
-  existence is NOT required — these editors run inside the init wizard
-  (covered by `init-wizard.tape`) or via dedicated CLI subcommands
-  (covered by their respective tapes).
+Security Posture, Enabled Features, and Audience Profiles are distinct
+concepts. This change therefore refactors posture and enabled-features as
+separate leaves rather than encoding runtime feature enablement inside the
+posture editor.
 
-The synthetic-identifier case (e.g. `Identity`, which spans several
-schema sections rather than owning one) is treated as `ShowInMenu ==
-false` and must appear in the exemption list with category
-`"synthetic-spans-multiple-sections"` so reviewers can see it's not a
-real schema key.
+### D6. Audit scope is registered leaf editors only
 
-Alternative considered: walk the schema and require every top-level
-section to either have an editor or an exemption. Rejected per planning
-discussion: forcing editors for every schema knob produces shallow,
-unhelpful UIs for sections nobody edits via TUI. The menu-driven audit
-prevents drift on the surfaces we promise to users, which is the failure
-mode that actually matters.
-
-### D5. Refactor exactly three editors in this change
-
-Provider, Identity, and Posture are the three steps that survive in the
-simplified init wizard (third change). Refactoring them here lets us
-verify the abstraction end-to-end against real editors without entangling
-this change with the larger config-command surface. The remaining seven
-editors are introduced as new `ISectionEditor` implementations in the
-next change, alongside the dashboard that hosts them.
-
-Alternative considered: refactor all ten existing init steps at once.
-Rejected because it bloats this PR and ties the abstraction's correctness
-to behavioral equivalence across far more surface area than necessary to
-prove the contract.
-
-### D6. `ExistingConfig` is `Dictionary<string, object>`, not strongly typed
-
-Reuses the type already declared on `WizardContext`. Strongly-typed access
-would require introducing a parallel typed view of `netclaw.json`, which
-defeats the schema-as-source-of-truth principle. The dictionary form is
-also forgiving across schema versions: an unknown key simply doesn't
-surface in any editor's slice.
-
-Alternative considered: bind to typed `*Config` records via
-`IConfiguration`. Rejected because the merge step would then need to
-re-emit the typed records as JSON, multiplying the round-trip surface
-area and introducing per-property null/default ambiguity.
-
-### D7. `WizardOrchestrator` gets a single-step constructor, not a new class
-
-Existing orchestration logic (back/forward, dirty tracking, save flow)
-already covers the single-step case; we add a constructor and a mode
-flag rather than a parallel orchestrator type. This keeps the
-orchestrator the single authority on step lifecycle.
-
-Alternative considered: introduce `SectionEditorRunner` as a separate
-host. Rejected because behavior would inevitably drift between two
-orchestrators over time.
+Registered leaf editors require round-trip tests and validation contracts.
+Future routed handoff entries are not leaf editors and only need shallow
+routing coverage in the config command change.
 
 ## Risks / Trade-offs
 
-- [Refactor risk] Touching three existing step viewmodels could regress
-  first-run init behavior. → Mitigation: existing `init-wizard.tape`
-  smoke test continues to gate every PR. Round-trip xUnit tests added in
-  this change provide finer-grained protection than the tape alone.
-
-- [Merge-on-save regressions] If the merge logic loses precision on edge
-  shapes (`JsonElement` value kinds, nested arrays), unrelated sections
-  could silently change. → Mitigation: round-trip tests assert
-  byte-equality of unmodified sections. The existing `ConfigFileHelper`
-  already handles the JsonElement coercion path; we extend its coverage,
-  not rewrite it.
-
-- [Vacuous audit] At the end of this change, the registry contains only
-  three editors and the audit asserts a small surface. The audit's value
-  scales with the next change. → Mitigation: the audit is wired now so
-  that adding any editor in the next change automatically tightens the
-  enforcement; no follow-up wiring step is required.
-
-- [Secrets in `ExistingConfig`] The parsed `netclaw.json` may include
-  schema fields that are themselves sensitive (e.g. allowed user IDs,
-  email domains). → Mitigation: only `secrets.json` is exempted from
-  context loading; non-secret PII present in `netclaw.json` is no more
-  exposed than today. Section editors that render lists of IDs already
-  display them in clear; this is unchanged.
-
-- [Schema sections added without registry update] Future schema additions
-  not in the exemption list and not bound to an editor would fail the
-  audit immediately on their first PR. → Mitigation: this is the intended
-  behavior. The exemption list is updated in the same PR that adds the
-  schema section.
+- Refactoring four existing bootstrap leaves can regress init behavior.
+  Mitigation: keep init smoke coverage and add leaf-level round-trip tests.
+- Semantic merge assertions are less strict than byte equality.
+  Mitigation: test meaningful preservation of unrelated values,
+  hidden/inactive values, and secrets behavior.
+- A synthetic Identity editor can be confusing to reviewers.
+  Mitigation: keep the exemption entry explicit and document that Identity
+  remains init-owned.
 
 ## Migration Plan
 
-This change is internal-only and observable behavior is preserved for
-first-run init. No data migration is required. The deploy story:
-
-1. Land this change. `netclaw init` continues to behave identically for
-   first-run installs; re-runs over existing config now pre-populate
-   fields and merge on save (previously undefined).
-2. The next change introduces `netclaw config`. No further migration
-   needed.
-
-Rollback: revert the change. `WizardContext.ExistingConfig` returns to its
-declared-but-unused state. `WizardConfigBuilder` returns to overwrite.
-First-run behavior is unaffected.
+1. Land the abstraction and the four leaf refactors.
+2. The next change composes those leaves into the domain-oriented
+   `netclaw config` dashboard.
+3. The third change constrains `netclaw init` to bootstrap-only behavior.
 
 ## Open Questions
 
-None at execution time. All architectural decisions are locked above.
+None. The abstraction is intentionally narrower after the locked product
+decisions.

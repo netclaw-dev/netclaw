@@ -9,6 +9,8 @@
   commands, Cocona + Termina frameworks)
 - Revised: 2026-02-23 (daemon + thin client split, daemon management commands,
   offline vs daemon-required command categorization)
+- Revised: 2026-05-24 (bootstrap-only `init`, domain-oriented `config`,
+  init-owned identity re-entry, explicit reset flow)
 - Depends on: `PRD-001`, `PRD-002`
 
 ## Goal
@@ -44,42 +46,70 @@ Netclaw ships as two binaries (see PRD-001 for full architecture):
 - Configuration files contain API keys/secrets — config read/write commands
   operate on local files directly, never query config over the wire
 
-## Two-Phase Onboarding
+## Bootstrap and Ongoing Configuration
 
-### Phase 1: CLI Wizard (`netclaw init`)
+### Bootstrap: `netclaw init`
 
-Technical setup, no LLM required. `netclaw init` runs as a **lightweight mode**
-— no Akka actor system, no persistence, no SignalR. Only config services are
-booted. Provider testing uses direct DI service calls (`ChatClientFactory`),
-not REST endpoints.
+Technical setup, no daemon required. `netclaw init` runs as a lightweight
+offline mode: no Akka actor system, no SignalR, no runtime session host.
+Provider testing uses direct DI service calls and local validation.
 
-The wizard is **reentrant** — re-running `netclaw init` detects existing config
-and shows a section dashboard with status per section. Each section is
-independently enterable for modification. First-run guides linearly through
-all steps.
+`netclaw init` is bootstrap-first and intentionally short.
 
-Steps:
+Fresh-install flow:
 
 1. LLM provider configuration (endpoint URL, API key or OAuth device flow,
-   model selection, connectivity test via direct HTTP to provider)
-2. Slack app setup (bot token, app token for Socket Mode)
-3. ACL bootstrap (owner identity, initial channel rules)
-4. MCP server configuration (optional — Memorizer recommended)
-5. Exposure mode selection (local-only default)
-6. Health check (verify Slack connection, LLM reachability, MCP connectivity)
+   model selection, connectivity test)
+2. Identity setup (workspaces directory, user name, timezone) with init-owned
+   regeneration of `SOUL.md` and `TOOLING.md`
+3. Security posture (`Personal`, `Team`, `Public`)
+4. Enabled Features for `Team` and `Public` only
+5. Final validation / health check / next steps
 
-### Phase 2: Conversational Personality Bootstrap (first `netclaw chat`)
+Existing-install flow:
 
-Agent-driven setup, requires running LLM:
+1. `Redo identity setup`
+2. `Open configuration editor`
+3. `Start over from scratch`
+4. `Cancel`
 
-1. "Hi, I'm Netclaw. Let me learn about you and your setup."
-2. Ask about projects to register (repo paths on disk)
-3. Discover environment capabilities (scan for installed tools)
-4. Write PERSONALITY.md, USER.md, environment inventory
-5. Confirm readiness
+`Start over from scratch` is owned by the existing-install init menu, not a
+hidden flag. It opens a scope selector:
 
-Phase 2 is triggered automatically on first `netclaw chat` if personality files
-don't exist. It can also be re-triggered via CLI (`netclaw personality reset`).
+1. `Reset setup only`
+2. `Full reset`
+3. `Cancel`
+
+Both destructive paths require double confirmation.
+
+`Reset setup only` archives and recreates setup-owned state while preserving
+working data such as the SQLite database, logs, projects, schedules,
+environment, and skills. `Full reset` wipes the entire Netclaw home except the
+installed binary payload.
+
+### Ongoing Settings: `netclaw config`
+
+`netclaw config` is the main post-install settings surface. It is a
+domain-oriented Termina TUI, not a flat dump of raw config sections.
+
+Top-level domains:
+
+1. `Inference Providers`
+2. `Models`
+3. `Channels`
+4. `Inbound Webhooks`
+5. `Skill Sources`
+6. `Search`
+7. `Browser Automation`
+8. `Telemetry & Alerting`
+9. `Security & Access`
+
+Command ownership stays explicit:
+
+1. `netclaw init` owns bootstrap and identity re-entry
+2. `netclaw config` owns normal post-install tuning
+3. `netclaw provider` and `netclaw model` remain their canonical standalone
+   entrypoints and may be routed to from `netclaw config`
 
 ## Command Surface (MVP)
 
@@ -101,12 +131,16 @@ don't exist. It can also be re-triggered via CLI (`netclaw personality reset`).
 
 ### TUI-Interactive Commands (Termina, offline)
 
-- `netclaw init` — guided first-time setup wizard (7-step TUI wizard). Reads
-  and writes local config files directly. No daemon required.
+- `netclaw init` — guided bootstrap wizard plus rare existing-install
+  identity/reset re-entry. Reads and writes local config files directly. No
+  daemon required.
+- `netclaw config` — domain-oriented post-install settings dashboard. Reads and
+  writes local config files directly. No daemon required.
+- `netclaw provider` — bare invocation launches interactive provider manager.
+- `netclaw model` — bare invocation launches interactive model manager.
 
 ### Onboarding and Configuration (Plain CLI, offline)
 
-- `netclaw config show|validate` — display/validate current configuration
 - `netclaw personality reset` — re-trigger conversational personality setup
 - `netclaw project list|add|remove` — project registry management (local files)
 - `netclaw environment scan|show` — capability self-discovery (scans local system)
@@ -155,11 +189,22 @@ Onboarding captures all Phase 1 setup items in a stepwise flow.
 `netclaw init` SHALL support an interactive guided onboarding flow that:
 
 1. Captures LLM provider configuration (OpenRouter default, OAuth or API key)
-2. Configures Slack Socket Mode credentials (bot token + app token)
-3. Scaffolds ACL in default-deny mode with owner identity
-4. Optionally configures MCP servers (Memorizer recommended)
-5. Selects exposure mode (local default)
-6. Runs final validation and prints next-step run commands
+2. Captures init-owned identity settings and regenerates `SOUL.md` /
+   `TOOLING.md`
+3. Selects security posture (`Personal`, `Team`, `Public`)
+4. Continues into Enabled Features when posture is `Team` or `Public`
+5. Runs final validation and prints next-step run commands
+
+### CLI-001B Post-Install Configuration
+
+`netclaw config` SHALL be the primary post-install settings surface. It SHALL:
+
+1. Launch a domain-oriented dashboard
+2. Route providers/models to their dedicated interactive managers
+3. Group `Security Posture`, `Enabled Features`, `Audience Profiles`, and
+   `Exposure Mode` under `Security & Access`
+4. Refuse with a plain non-zero message directing the operator to
+   `netclaw init` when no install exists
 
 ### CLI-002 Validation
 
@@ -192,10 +237,12 @@ and active tool grants for the session.
 Commands default to read-only behavior unless explicit write/apply flags are
 provided.
 
-### CLI-007 Onboarding Resume
+### CLI-007 Existing-Install Re-entry
 
-The onboarding flow SHALL be resumable and indicate which setup steps are
-completed, pending, or invalid.
+When `netclaw init` runs on an existing install, it SHALL present an explicit
+action menu rather than silently re-entering the full bootstrap flow. Identity
+re-entry remains init-owned; all normal configuration edits route to
+`netclaw config`.
 
 ### CLI-008 Project Registration
 
@@ -218,9 +265,11 @@ Results are persisted to the environment inventory file.
 
 ### CLI-010 TUI Commands
 
-`netclaw init` and `netclaw chat` SHALL use Termina 0.5.1 for interactive TUI
-rendering. All other commands SHALL use plain console output. TUI commands SHALL
-launch Termina as a hosted service within the mode-selected host builder.
+`netclaw init`, `netclaw config`, and `netclaw chat` SHALL use Termina 0.5.1
+for interactive TUI rendering. Bare `netclaw provider` and `netclaw model`
+SHALL also use Termina. All other commands SHALL use plain console output. TUI
+commands SHALL launch Termina as a hosted service within the mode-selected host
+builder.
 
 ### CLI-011 Chat Thin Client
 
@@ -267,7 +316,8 @@ endpoints. No TUI rendering. This is the primary production entry point.
 2. Every high-risk command has confirmation or explicit `--yes` semantics.
 3. Error output includes remediation guidance.
 4. Fresh install reaches a runnable baseline in one guided flow.
-5. Personality bootstrap triggers automatically on first conversation.
+5. Existing installs can re-enter identity setup or open `netclaw config`
+   without replaying full bootstrap.
 6. Environment scan discovers and persists capability inventory.
 7. Project registration persists project registry to disk.
 

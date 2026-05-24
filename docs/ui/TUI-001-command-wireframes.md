@@ -15,6 +15,7 @@ single-shot CLI commands suitable for scripting.
 | Command              | Interface    | Framework |
 |----------------------|--------------|-----------|
 | `netclaw init`       | TUI          | Termina (lightweight mode — no Akka) |
+| `netclaw config`     | TUI          | Termina (offline settings dashboard) |
 | `netclaw chat`       | TUI          | Termina (daemon mode — full stack)   |
 | `netclaw provider`   | Dual-mode    | Termina (bare) / Plain CLI (with subcommand) |
 | `netclaw model`      | Dual-mode    | Termina (bare) / Plain CLI (with args) |
@@ -33,85 +34,15 @@ All wireframes reference actual Termina 0.5.1 components:
 
 ---
 
-## `netclaw init` — Onboarding Wizard (TUI)
+## `netclaw init` and `netclaw config`
 
-Interactive 6-step setup wizard. Termina hosts the full wizard as a single
-application with step navigation.
+The dedicated wireframes for the bootstrap-only init flow and the post-install
+config dashboard live in:
 
-### Wireframe
+- `TUI-003-simplified-init-wireframes.md`
+- `TUI-002-netclaw-config-wireframes.md`
 
-```
-╭─ Netclaw Setup ──────────────────────────────────────────────╮
-│                                                              │
-│  Step 2 of 6: Slack Configuration        [■■□□□□□] 33%      │
-│                                                              │
-│  ╭─ Slack Bot Token ───────────────────────────────────────╮ │
-│  │ xoxb-************************************               │ │
-│  ╰─────────────────────────────────────────────────────────╯ │
-│                                                              │
-│  ╭─ Slack App Token ───────────────────────────────────────╮ │
-│  │ xapp-************************************               │ │
-│  ╰─────────────────────────────────────────────────────────╯ │
-│                                                              │
-│  ℹ  Socket Mode requires both tokens. See:                  │
-│     https://api.slack.com/apis/socket-mode                   │
-│                                                              │
-│  [Enter] Next   [Esc] Back   [Ctrl+Q] Quit                  │
-╰──────────────────────────────────────────────────────────────╯
-```
-
-### Components Per Step
-
-| Step | Title                  | Components                                            |
-|------|------------------------|-------------------------------------------------------|
-| 1    | LLM Provider           | SelectionListNode (OpenRouter/Anthropic/OpenAI/Ollama) + auth branch (API key or OAuth device flow) |
-| 2    | Slack Configuration    | TextInputNode (bot token) + TextInputNode (app token) |
-| 3    | ACL Bootstrap          | TextInputNode (owner identity) + SelectionListNode (initial channels) |
-| 4    | MCP Servers            | SelectionListNode (Memorizer recommended / custom / skip) |
-| 5    | Exposure Mode          | SelectionListNode (local-only default / tailscale / cloudflare) |
-| 6    | Health Check           | TextNode (validation results with SpinnerNodes → checkmarks) |
-
-### Layout Structure
-
-```
-PanelNode (outer: "Netclaw Setup")
-├── TextNode (step indicator + progress bar)
-├── [step-specific components]
-│   ├── TextInputNode (for text/secret input, masked for tokens)
-│   ├── SelectionListNode (for choice input)
-│   └── SpinnerNode (for live validation)
-├── TextNode (help text / contextual guidance)
-└── TextNode (key bindings: Enter/Esc/Ctrl+Q)
-```
-
-### Step Detail: Health Check (Step 6)
-
-```
-╭─ Netclaw Setup ──────────────────────────────────────────────╮
-│                                                              │
-│  Step 6 of 6: Health Check               [■■■■■■■] 100%     │
-│                                                              │
-│  Verifying configuration...                                  │
-│                                                              │
-│  ✓  LLM provider reachable (OpenRouter)                      │
-│  ✓  Slack bot token valid                                    │
-│  ✓  Slack app token valid                                    │
-│  ✓  MCP: memorizer connected (12 tools)                      │
-│  ●  Exposure: local-only (loopback-only daemon access)       │
-│                                                              │
-│  All checks passed. Run `netclaw run` to start.              │
-│                                                              │
-│  [Enter] Finish   [Esc] Back   [Ctrl+Q] Quit                │
-╰──────────────────────────────────────────────────────────────╯
-```
-
-### Behaviors
-
-- Progress bar uses block characters (■□) rendered via TextNode
-- Secret inputs (API keys, tokens) use masked TextInputNode
-- Step 6 (Health Check) runs all probes in sequence with SpinnerNode → result
-- [Esc] navigates back to previous step; [Ctrl+Q] exits with confirmation
-- Config file written to `~/.netclaw/config/netclaw.json` on completion
+This document intentionally does not duplicate those detailed flows.
 
 ---
 

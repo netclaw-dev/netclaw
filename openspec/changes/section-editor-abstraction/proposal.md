@@ -1,117 +1,99 @@
 ## Why
 
-Netclaw's `netclaw init` wizard is a linear forward-pass over a hardcoded step
-sequence with no reentrancy: re-running it over an existing install is
-undefined, and changing one configuration knob requires editing
-`netclaw.json` by hand. Existing single-section CLI editors
-(`netclaw provider`, `netclaw model`, `netclaw mcp`) prove the load-merge-write
-pattern works, but they duplicate logic with the wizard rather than sharing it.
-This change introduces the shared abstraction that both the init wizard and a
-forthcoming `netclaw config` command (next change) will compose, completes the
-long-deferred reentrancy of `netclaw init` (#455), and makes future config
-knobs reentrant by construction.
+Netclaw needs one reusable editing contract for bootstrap-only init flows
+and for the heavier post-install `netclaw config` command, but the product
+split is now locked:
 
-Source PRDs: `PRD-004-cli-onboarding-and-config.md`, `PRD-001-netclaw-mvp.md`.
+- `netclaw init` is first-run bootstrap and then rarely used again.
+- `netclaw config` is the main post-install settings surface.
+- Identity remains `netclaw init` owned.
+
+That means the shared abstraction cannot assume a flat dashboard, cannot
+assume every section is menu-editable, and cannot promise byte-identical
+JSON preservation as a product contract. It needs to support reusable leaf
+editors, routed handoffs, semantic merge-on-save, and init-owned surfaces
+that are intentionally absent from `netclaw config`.
+
+Source PRDs: `PRD-004-cli-onboarding-and-config.md`,
+`PRD-001-netclaw-mvp.md`.
 
 ## What Changes
 
-- Add a `ISectionEditor` interface in `Netclaw.Cli.Tui.Sections`. Each instance
-  describes one editable configuration section: schema-keyed identity,
-  dashboard summary, status badge computation, relevant doctor checks, and a
-  factory that returns a `IWizardStepViewModel` runnable either by the wizard
-  orchestrator or standalone.
-- Add `SectionEditorRegistry`, `SectionStatus`, `SectionContribution`
-  (carrying explicit `FieldAction` and `SecretAction` per field), and
-  `SectionEditorExemptions` (documented opt-outs for schema sections that
-  intentionally have no TUI editor).
-- Add a single-step constructor to `WizardOrchestrator` so a section editor can
-  be run outside the linear wizard with the same lifecycle, save, and cancel
-  semantics.
-- Populate `WizardContext.ExistingConfig` at `netclaw init` entry when an
-  existing `netclaw.json` is present. Each refactored section editor's
-  `OnEnter()` pre-fills non-secret fields from its slice.
-- Switch `WizardConfigBuilder.WriteConfigFile()` from "build fresh +
-  overwrite" to "load existing + merge + write," matching the pattern already
-  used by `ProviderCredentialWriter`. Apply the same load-merge-write rule to
-  the secrets writer.
-- Refactor three existing init step viewmodels — Provider, Identity,
-  SecurityPosture — to implement `ISectionEditor`. Behavior inside the linear
-  init wizard is unchanged for first-run; reentrant pre-population is gained
-  for the next change's config command.
-- Establish day-one reentrancy contracts in code: secrets never rehydrate
-  to screen (masked input with "leave blank to keep" semantics), and
-  section saves preserve every other top-level section in `netclaw.json` and
-  `secrets.json` byte-for-byte.
-- Add a `MenuRegistryAuditTests` xUnit test that walks the registry and
-  asserts each registered editor declares non-empty `RelevantDoctorChecks`
-  (or carries an explicit `[NoDoctorChecks]` justification attribute), has a
-  registered round-trip test class, and — once the config command lands in
-  the next change — has a matching smoke tape. In this change the audit runs
-  vacuously over a registry containing the three refactored editors.
-- Add a `SectionEditorTestBase<TEditor>` xUnit harness with shared round-trip
-  scenarios: `RoundTrip_NoOpEdit_PreservesConfig`,
-  `RoundTrip_SingleFieldEdit_UpdatesOnlyThatField`,
-  `Secrets_BlankSubmit_PreservesExistingSecret`,
-  `Secrets_NonBlankSubmit_ReplacesSecret`,
-  `Secrets_RemoveAction_DeletesSecret`. Concrete subclasses for the three
-  refactored editors are included.
-- Add `ConfigFileHelper.SecretPresent(paths, section, key)` so editors can
-  render "configured — leave blank to keep" hints without decrypting the
-  secret value (#455 contract: never rehydrate secrets to the screen).
-- Closes #455 (`netclaw init` reentrancy gap).
+- Add an `ISectionEditor` contract in `Netclaw.Cli.Tui.Sections` for
+  reusable leaf editors. Each editor describes one editable leaf surface:
+  stable identity, status/summary, relevant validation checks, and a
+  factory that returns an `IWizardStepViewModel` runnable either from
+  `netclaw init` or from `netclaw config`.
+- Keep the registry flat at the leaf-editor level, but explicitly DO NOT
+  make the registry shape the `netclaw config` IA contract. The next change
+  is free to build a domain-oriented dashboard with grouped pages and
+  routed handoffs on top of the leaf registry.
+- Add `SectionEditorRegistry`, `SectionStatus`, `SectionContribution`, and
+  `SectionEditorExemptions` so schema-backed leaves, dotted-path leaves,
+  and synthetic init-owned editors can all participate without pretending
+  everything is a top-level config page.
+- Add single-step `WizardOrchestrator` hosting so one editor can run
+  standalone without the full init step list.
+- Populate `WizardContext.ExistingConfig` from on-disk config when an
+  init-owned flow needs existing state, so init-owned editors can re-enter
+  with non-secret fields prefilled.
+- Switch wizard/config persistence from overwrite semantics to semantic
+  merge-on-save. Unrelated sections and inactive per-mode values are
+  preserved semantically; formatting and property ordering are not part of
+  the contract.
+- Refactor four existing bootstrap editors to implement `ISectionEditor`:
+  Provider, Identity, Security Posture, and Enabled Features. Identity
+  remains `ShowInMenu = false` because it stays init-owned. Security
+  Posture and Enabled Features become reusable leaf editors for the next
+  change's `Security & Access` area.
+- Keep the secret-handling contract: secrets never rehydrate to screen;
+  masked inputs use "leave blank to keep" semantics; explicit removal is
+  the only delete path.
+- Add `MenuRegistryAuditTests` and `SectionEditorTestBase<TEditor>` so
+  registered leaf editors require meaningful round-trip coverage and
+  validation declarations. Routed handoff entries in the next change are
+  covered separately and do not pretend to be leaf editors.
 
 **In scope (MVP):** the abstraction, registry, exemption list, audit and
-round-trip test harnesses, single-step orchestrator mode, merge-on-save for
-both `netclaw.json` and `secrets.json`, `ExistingConfig` population at init
-entry, and refactor of Provider/Identity/Posture to implement the contract.
+round-trip harnesses, single-step orchestrator mode, semantic merge-on-save
+for `netclaw.json` and `secrets.json`, `ExistingConfig` population, and the
+refactor of Provider / Identity / Security Posture / Enabled Features.
 
-**Out of scope:** the new `netclaw config` command itself (next change), the
-remaining nine section editors (next change), simplification of the init
-wizard step list (third change), and hot-reload of the running daemon on
-config changes.
+**Out of scope:** the `netclaw config` command itself, the domain-oriented
+dashboard IA, routed handoff nodes for `netclaw provider` / `netclaw model`
+ / `netclaw mcp permissions`, simplification of the init flow, and daemon
+hot-reload.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `section-editor-abstraction`: contract requirements for the reusable
-  editable-section abstraction — `ISectionEditor`, registry semantics,
-  reentrancy contract, secret-handling contract, merge-on-save semantics,
-  and audit obligations for every registered editor.
+- `section-editor-abstraction`: reusable leaf-editor contract for init and
+  config, including reentrancy, secret handling, semantic merge-on-save,
+  and audit obligations.
 
 ### Modified Capabilities
 
-- `netclaw-onboarding`: `netclaw init` SHALL populate `WizardContext.ExistingConfig`
-  at entry from on-disk config, and section editors SHALL pre-fill non-secret
-  fields from it in `OnEnter()` while leaving secret fields empty with the
-  documented "configured" hint. The wizard's terminal write SHALL be a merge
-  over existing config, not an overwrite.
+- `netclaw-onboarding`: init-owned editable flows SHALL load existing
+  config state when needed, prefill non-secret fields, keep secrets masked,
+  and write via semantic merge-on-save.
 
 ## Impact
 
 **Affected systems:**
 
-- CLI init wizard wiring (`Netclaw.Cli.Program`,
-  `Netclaw.Cli.Tui.Wizard.WizardOrchestrator`,
-  `Netclaw.Cli.Tui.Wizard.WizardConfigBuilder`,
-  `Netclaw.Cli.Tui.Wizard.WizardContext`).
-- Three init step viewmodels (`ProviderStepViewModel`, `IdentityStepViewModel`,
-  `SecurityPostureStepViewModel`) gain `ISectionEditor` implementations.
-- Config merge helper (`Netclaw.Cli.Config.ConfigFileHelper`) gains
-  `SecretPresent(...)`.
-- New test surface under `tests/Netclaw.Cli.Tests/Tui/Sections/` covering the
-  abstraction and the three refactored editors.
+- CLI wizard infrastructure (`Program`, `WizardOrchestrator`,
+  `WizardConfigBuilder`, `WizardContext`).
+- Bootstrap editors (`ProviderStepViewModel`, `IdentityStepViewModel`,
+  `SecurityPostureStepViewModel`, `FeatureSelectionStepViewModel` / its
+  Enabled Features successor naming).
+- Config merge helper (`ConfigFileHelper`).
+- Test surface under `tests/Netclaw.Cli.Tests/Tui/Sections/`.
 
 **Security and operational impact:**
 
-- Secrets are never re-rendered to the TUI; the new `SecretPresent` lookup
-  returns existence only, never the decrypted value. This preserves the
-  default-deny posture for credential display.
-- Merge-on-save replaces overwrite-on-save. The contract guarantee is
-  byte-equality of all other top-level sections in `netclaw.json` and
-  `secrets.json`. Round-trip tests enforce the guarantee.
-- Re-running `netclaw init` over an existing config is no longer undefined;
-  in this change the wizard pre-fills fields and merges on save. Explicit
-  "existing-config refusal" UX lands in the third change.
-- No new network surface, no new persistence schema, no new daemon
-  contract changes.
+- Secrets remain non-rehydratable in the UI.
+- Merge behavior preserves meaning, not file bytes.
+- The abstraction now matches the locked product split instead of
+  implying that `netclaw init` is the long-term editor for ongoing
+  settings.

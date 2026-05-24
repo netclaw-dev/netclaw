@@ -1,4 +1,9 @@
-## ADDED Requirements
+## Purpose
+
+Define the post-install `netclaw config` dashboard, its domain-oriented
+navigation model, and the rules for how configuration editing routes or saves.
+
+## Requirements
 
 ### Requirement: Config command launches a domain-oriented dashboard
 
@@ -28,7 +33,7 @@ The root SHALL include:
 ### Requirement: Missing install refuses before TUI startup
 
 `netclaw config` SHALL detect a missing install/config before starting the
-TUI. It SHALL print `No configuration found. Run \`netclaw init\` first.`
+TUI. It SHALL print ``No configuration found. Run `netclaw init` first.``
 to stderr and exit non-zero.
 
 #### Scenario: No install refusal renders no TUI
@@ -39,13 +44,12 @@ to stderr and exit non-zero.
 - **AND** exits non-zero
 - **AND** no partial TUI is rendered
 
-### Requirement: Routed handoffs SHALL be first-class config outcomes
+### Requirement: Routed handoffs are first-class config outcomes
 
-The config dashboard SHALL treat routed handoffs as first-class config
-outcomes and MAY route specific domain entries into existing commands
-instead of re-hosting the full editor inline. In this branch, `Inference
-Providers` SHALL route to `netclaw provider` and `Models` SHALL route to
-`netclaw model`.
+The config dashboard SHALL allow specific domain entries to route into
+existing commands instead of re-hosting the full editor inline. In this
+branch, `Inference Providers` SHALL route to `netclaw provider` and
+`Models` SHALL route to `netclaw model`.
 
 #### Scenario: Inference Providers routes to provider command
 
@@ -139,7 +143,7 @@ when inactive.
 - **THEN** the inactive Cloudflare values remain preserved in config
 - **AND** the active mode remains determined only by `Daemon.ExposureMode`
 
-### Requirement: First non-local exposure enablement SHALL bootstrap pairing when needed
+### Requirement: First non-local exposure enablement may bootstrap pairing
 
 The flow SHALL auto-pair the current configuring client when the operator
 first enables a non-local exposure mode from `netclaw config` and no

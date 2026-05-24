@@ -10,29 +10,14 @@ alongside `netclaw config`).
 
 ## Overview
 
-`netclaw config` is a menu-driven Termina TUI command for live configuration
-editing. Operators reach every editable section without leaving the terminal,
-without re-entering existing secrets, and without hand-editing
-`netclaw.json`. Each section editor is reentrant by construction (pre-fills
-non-secret fields from on-disk state) and doctor-blessed on save (relevant
-checks run against the candidate config before write).
+`netclaw config` is a menu-driven Termina TUI command for post-install
+configuration. The root is domain-oriented and navigation-first rather than a
+flat list of every editable leaf. Operators reach the high-churn settings
+surfaces without leaving the terminal, without re-entering existing secrets,
+and without hand-editing `netclaw.json`.
 
-Twelve editors ship day one:
-
-| Editor                  | SectionId                    | Category        | Multi-value |
-|-------------------------|------------------------------|-----------------|-------------|
-| Search Provider         | `Search`                     | —               | no          |
-| Slack Channels          | `Slack`                      | Chat Channels   | partial     |
-| Discord Channels        | `Discord`                    | Chat Channels   | partial     |
-| Mattermost Channels     | `Mattermost`                 | Chat Channels   | partial     |
-| Exposure Mode           | `Daemon.ExposureMode`        | —               | partial     |
-| Security Posture        | `Security.Posture`           | —               | no          |
-| Audience Profiles       | `Tools.AudienceProfiles`     | —               | partial     |
-| Outbound Webhooks       | `Notifications.Webhooks`     | —               | yes         |
-| Inbound Webhooks        | `Webhooks`                   | —               | no          |
-| External Skill Dirs     | `ExternalSkills`             | —               | yes         |
-| Skill Feeds             | `SkillFeeds`                 | —               | yes         |
-| Browser Automation      | `BrowserAutomation`          | —               | no          |
+Leaf editors remain reentrant by construction and validate before save, but
+the root dashboard groups them by operator intent.
 
 ## Termina Component Vocabulary
 
@@ -98,24 +83,31 @@ Sub-pages use a breadcrumb form:
 
 ```
 netclaw config
-  └── Config.0  Dashboard  ◀─ all editors return here on Save/Cancel
-        ├── Config.1   Search Provider
-        ├── Config.2   Slack Channels
-        ├── Config.3   Discord Channels
-        ├── Config.4   Mattermost Channels
-        ├── Config.5   Exposure Mode
-        ├── Config.6   Security Posture
-        ├── Config.7   Audience Profiles            ← addresses #1150
-        ├── Config.8   Outbound Webhooks
-        ├── Config.9   Inbound Webhooks
-        ├── Config.10  External Skill Directories
-        ├── Config.11  Skill Feeds
-        ├── Config.12  Browser Automation
-        ├── Config.D   Run full doctor
+  └── Config.0  Domain dashboard
+        ├── Config.1   Inference Providers  ──→ routes to `netclaw provider`
+        ├── Config.2   Models               ──→ routes to `netclaw model`
+        ├── Config.3   Channels
+        │     ├── Slack
+        │     ├── Discord
+        │     └── Mattermost
+        ├── Config.4   Inbound Webhooks
+        ├── Config.5   Skill Sources
+        │     ├── External Skill Directories
+        │     └── Skill Feeds
+        ├── Config.6   Search
+        ├── Config.7   Browser Automation
+        ├── Config.8   Telemetry & Alerting
+        │     ├── Telemetry
+        │     └── Outbound Webhooks
+        ├── Config.9   Security & Access
+        │     ├── Security Posture
+        │     ├── Enabled Features
+        │     ├── Audience Profiles            ← addresses #1150
+        │     └── Exposure Mode
         └── Quit
 
 netclaw config  (when no netclaw.json exists)
-  └── Config.E0  Refuse with `netclaw init` pointer ─── exit non-zero
+  └── prints refusal to stderr and exits non-zero
 ```
 
 ---
@@ -291,83 +283,107 @@ Shown when a list editor opens with zero items.
 
 ---
 
-## Config.0 — Dashboard
+## Config.0 — Domain dashboard
 
 ```
 ╭─ Netclaw Configuration ─────────────────────────────────────╮
 │                                                             │
-│ ▸ Search Provider           ✓ Brave                         │
-│   Chat Channels                                             │
-│     Slack                   ✓ 3 channels, 2 users           │
-│     Discord                 – not configured                │
-│     Mattermost              – not configured                │
-│   Exposure Mode             ✓ Local                         │
-│   Security Posture          ✓ Personal                      │
-│   Audience Profiles         ✓ default                       │
-│   Outbound Webhooks         ⚠ 2 configured, 1 unreachable   │
-│   Inbound Webhooks          – disabled                      │
-│   External Skill Dirs       ✓ 2 directories                 │
-│   Skill Feeds               – none                          │
-│   Browser Automation        – disabled                      │
+│ ▸ Inference Providers      2 configured                     │
+│   Models                   3 roles assigned                 │
+│   Channels                 2 enabled                        │
+│   Inbound Webhooks         – disabled                       │
+│   Skill Sources            2 dirs · 1 feed                  │
+│   Search                   ✓ Brave                          │
+│   Browser Automation       – disabled                       │
+│   Telemetry & Alerting     OTLP off · 1 webhook             │
+│   Security & Access        Team · 4/6 enabled               │
 │                                                             │
-│   ──────────                                                │
-│   Run full doctor                                           │
 │   Quit                                                      │
 │                                                             │
 │ ↑/↓ navigate · Enter open · q quit · ✓ ok · ⚠ warn · ✗ err  │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-**Status computation:** on dashboard entry, each editor's
-`GetStatus(currentConfig)` runs (with `RelevantDoctorChecks` against
-on-disk state). Results cached for the dashboard session; re-computed
-when returning from a saved editor.
+**Status computation:** each domain row shows a concise aggregate summary of
+the underlying leaf editors or routed command state.
 
-**Sub-grouping indentation:** chat-channel rows render at +2 indent under
-the "Chat Channels" label. The label itself is unselectable.
-
-**No "Save dashboard" action:** the dashboard is purely a navigation
-layer. All saves are at section granularity.
+**No root save action:** the dashboard is purely a navigation layer. All saves
+are at leaf-editor granularity.
 
 ### Layout structure
 
 ```
 PanelNode (outer: "Netclaw Configuration")
-├── SelectionListNode (single-select; entries from SectionEditorRegistry
-│                       grouped by Category, plus "Run full doctor" and
-│                       "Quit" tail items)
+├── SelectionListNode (single-select; domain entries plus Quit)
 └── TextNode (footer hint line)
 ```
 
 ---
 
-## Config.E0 — No-config refusal
+## Config.1 — Inference Providers
 
-Rendered when `~/.netclaw/config/netclaw.json` is missing at launch.
+Selecting `Inference Providers` hands off to the existing `netclaw provider`
+TUI. In this branch, that handoff is one-way: provider manager behavior stays
+unchanged and does not grow a config-dashboard back-stack.
 
-```
-╭─ No Netclaw configuration found ────────────────────────────╮
-│                                                             │
-│  No configuration file at:                                  │
-│    ~/.netclaw/config/netclaw.json                           │
-│                                                             │
-│  Run `netclaw init` to create one.                          │
-│                                                             │
-│  [ OK ]                                                     │
-│                                                             │
-│ Enter exit                                                  │
-╰─────────────────────────────────────────────────────────────╯
-```
+## Config.2 — Models
 
-Non-interactive (when stdout is not a TTY, e.g. CI): prints
-`No configuration found. Run \`netclaw init\` first.` to stderr and exits
-non-zero. The interactive variant exits zero after acknowledgement.
+Selecting `Models` hands off to the existing `netclaw model` TUI. Model
+manager behavior stays unchanged in this branch.
 
 ---
 
-## Config.1 — Search Provider
+## No-config refusal
 
-### 1.1 Main editor
+When `~/.netclaw/config/netclaw.json` is missing, `netclaw config` does not
+start Termina at all. It prints:
+
+`No configuration found. Run \`netclaw init\` first.`
+
+to stderr and exits non-zero.
+
+---
+
+## Config.3 — Channels
+
+### 3.1 Channels sub-page
+
+```
+╭─ Channels ──────────────────────────────────────────────────╮
+│                                                             │
+│  ▸ Slack                    3 channels, 2 users             │
+│    Discord                  not configured                  │
+│    Mattermost               not configured                  │
+│                                                             │
+│  [ Open ]    [ Back ]                                       │
+│                                                             │
+│ ↑/↓ navigate · Enter open · Esc back                        │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+---
+
+## Config.5 — Skill Sources
+
+### 5.1 Skill Sources sub-page
+
+```
+╭─ Skill Sources ─────────────────────────────────────────────╮
+│                                                             │
+│  ▸ External Skill Directories   2 configured                │
+│    Skill Feeds                  1 configured                │
+│                                                             │
+│  [ Open ]    [ Back ]                                       │
+│                                                             │
+│ ↑/↓ navigate · Enter open · Esc back                        │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+---
+
+## Config.6 — Search
+
+### 6.1 Main editor
 
 ```
 ╭─ Search Provider ───────────────────────────────────────────╮
@@ -401,7 +417,7 @@ SearXng URL disabled when backend ≠ SearXng; DuckDuckGo has no fields.
 field is empty regardless; hint indicates "configured" or "not set"
 based on `ConfigFileHelper.SecretPresent(...)`.
 
-### 1.2 Remove credential confirm (T5)
+### 6.2 Remove credential confirm (T5)
 
 ```
 ╭─ Remove Brave API key? ─────────────────────────────────────╮
@@ -421,9 +437,9 @@ based on `ConfigFileHelper.SecretPresent(...)`.
 
 ---
 
-## Config.2 — Slack Channels
+## Config.3.2 — Slack Channels
 
-### 2.1 Main editor
+### 3.2.1 Main editor
 
 ```
 ╭─ Slack Channels ────────────────────────────────────────────╮
@@ -453,10 +469,10 @@ based on `ConfigFileHelper.SecretPresent(...)`.
 ```
 
 Sub-pages:
-- "Allowed channels" → 2.2 list editor.
-- "Allowed users" → 2.3 list editor.
+- "Allowed channels" → 3.2.2 list editor.
+- "Allowed users" → 3.2.3 list editor.
 
-### 2.2 Allowed channels list (T2)
+### 3.2.2 Allowed channels list (T2)
 
 ```
 ╭─ Slack Channels › Allowed channel IDs ──────────────────────╮
@@ -473,14 +489,14 @@ Sub-pages:
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-`Save` here is "apply to in-memory state and return to 2.1." Disk write
-happens when 2.1 itself saves.
+`Save` here is "apply to in-memory state and return to 3.2.1." Disk write
+happens when 3.2.1 itself saves.
 
-### 2.3 Allowed users list
+### 3.2.3 Allowed users list
 
 Same shape as 2.2 with user IDs. Uses `IdentifierItemEditor`.
 
-### 2.4 Test connection (inline banner)
+### 3.2.4 Test connection (inline banner)
 
 Runs the existing Slack probe logic from `SlackStepViewModel`; result
 rendered in an inline banner above the action row:
@@ -504,7 +520,7 @@ Failure shape:
 
 Test results never modify config; they're advisory before Save.
 
-### 2.5 Remove credentials confirm (T5)
+### 3.2.5 Remove credentials confirm (T5)
 
 ```
 ╭─ Remove Slack credentials? ─────────────────────────────────╮
@@ -525,20 +541,20 @@ Test results never modify config; they're advisory before Save.
 
 ---
 
-## Config.3 — Discord Channels
+## Config.3.3 — Discord Channels
 
 Structurally identical to 2.x except:
 - Single token field (bot token only; no app token).
 - Otherwise: allowed channels list, allowed users list, DMs toggle,
   audience profile, test connection, remove credentials.
 
-(Layouts identical to 2.1–2.5 with the App token row removed.)
+(Layouts identical to 3.2.1–3.2.5 with the App token row removed.)
 
 **Doctor checks:** `ConfigSchemaDoctorCheck`, `DiscordAuthDoctorCheck`.
 
 ---
 
-## Config.4 — Mattermost Channels
+## Config.3.4 — Mattermost Channels
 
 Structurally identical to 2.x plus:
 - `Server URL` text field at the top.
@@ -575,9 +591,9 @@ Structurally identical to 2.x plus:
 
 ---
 
-## Config.5 — Exposure Mode
+## Config.9.5 — Exposure Mode
 
-### 5.1 Mode selection
+### 9.5.1 Mode selection
 
 ```
 ╭─ Exposure Mode ─────────────────────────────────────────────╮
@@ -590,11 +606,14 @@ Structurally identical to 2.x plus:
 │    Reverse Proxy                                            │
 │    Behind nginx/Caddy/etc. Trusted proxies required.        │
 │                                                             │
-│    Tailscale                                                │
-│    Auth via Tailscale identity. Mesh network required.      │
+│    Tailscale Serve                                          │
+│    Tailscale-served local access.                           │
+│                                                             │
+│    Tailscale Funnel                                         │
+│    Public Tailscale funnel exposure.                        │
 │                                                             │
 │    Cloudflare Tunnel                                        │
-│    Cloudflare access-protected. Tunnel credentials needed.  │
+│    Cloudflare-managed tunnel access.                        │
 │                                                             │
 │  ──────                                                     │
 │  Daemon host:    127.0.0.1                                  │
@@ -606,19 +625,13 @@ Structurally identical to 2.x plus:
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-**Conditionality:** "Configure mode →" button is enabled only when
-selected mode requires sub-config (Reverse Proxy, Tailscale, Cloudflare).
-Local has no sub-config.
+**Conditionality:** `Configure mode →` is enabled only when the selected mode
+requires sub-config. Local has no sub-config.
 
-### 5.2 Reverse Proxy sub-form (T1-shaped)
+### 9.5.2 Reverse Proxy sub-form (T1-shaped)
 
 ```
 ╭─ Exposure Mode › Reverse Proxy ─────────────────────────────╮
-│                                                             │
-│  External base URL (must be HTTPS):                         │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │ https://netclaw.example.com                            │ │
-│  ╰────────────────────────────────────────────────────────╯ │
 │                                                             │
 │  Trusted proxies (CIDR list):    2 configured  →            │
 │                                                             │
@@ -628,48 +641,45 @@ Local has no sub-config.
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-Trusted proxies row → 5.5 list editor.
+Trusted proxies row → 9.5.6 list editor.
 
-### 5.3 Tailscale sub-form
+### 9.5.3 Tailscale Serve sub-form
 
 ```
-╭─ Exposure Mode › Tailscale ─────────────────────────────────╮
+╭─ Exposure Mode › Tailscale Serve ───────────────────────────╮
 │                                                             │
-│  Tailscale auth key:                                        │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│  (configured — leave blank to keep)                         │
+│  No Netclaw-managed credentials are stored here.            │
 │                                                             │
-│  Hostname on tailnet:    netclaw                            │
+│  Tunnel process:  ▸ Managed on this host                    │
+│                    Managed externally / sidecar             │
 │                                                             │
-│  [ Apply ]    [ Cancel ]    [ Remove auth key ]             │
+│  [ Apply ]    [ Cancel ]                                    │
 │                                                             │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 5.4 Cloudflare Tunnel sub-form
+### 9.5.4 Tailscale Funnel sub-form
+
+Same shape as Tailscale Serve, but with stronger public-exposure warning copy.
+
+### 9.5.5 Cloudflare Tunnel sub-form
 
 ```
 ╭─ Exposure Mode › Cloudflare Tunnel ─────────────────────────╮
 │                                                             │
-│  Tunnel token:                                              │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│  (configured — leave blank to keep)                         │
+│  No Netclaw-managed tunnel token is stored here.            │
+│  Configure `cloudflared` outside Netclaw, then return for   │
+│  validation.                                                │
 │                                                             │
-│  Access policy email domain (optional):                     │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
+│  Tunnel process:  ▸ Managed on this host                    │
+│                    Managed externally / sidecar             │
 │                                                             │
-│  [ Apply ]    [ Cancel ]    [ Remove tunnel token ]         │
+│  [ Apply ]    [ Cancel ]                                    │
 │                                                             │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 5.5 Trusted proxies list (T2 with `IdentifierItemEditor`)
+### 9.5.6 Trusted proxies list (T2 with `IdentifierItemEditor`)
 
 ```
 ╭─ Exposure Mode › Trusted Proxies ───────────────────────────╮
@@ -689,9 +699,27 @@ Trusted proxies row → 5.5 list editor.
 
 ---
 
-## Config.6 — Security Posture
+## Config.9 — Security & Access
 
-### 6.1 Posture selection (T1-shaped)
+### 9.1 Security & Access sub-page
+
+```
+╭─ Security & Access ─────────────────────────────────────────╮
+│                                                             │
+│  ▸ Security Posture         Team                            │
+│    Enabled Features         4/6 enabled                     │
+│    Audience Profiles        Team customized                 │
+│    Exposure Mode            Cloudflare Tunnel               │
+│                                                             │
+│  [ Open ]    [ Back ]                                       │
+│                                                             │
+│ ↑/↓ navigate · Enter open · Esc back                        │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+## Config.9.1 — Security Posture
+
+### 9.1.1 Posture selection (T1-shaped)
 
 ```
 ╭─ Security Posture ──────────────────────────────────────────╮
@@ -704,8 +732,9 @@ Trusted proxies row → 5.5 list editor.
 │    Team                                                     │
 │    Small team via Slack/Discord. Audience-restricted tools. │
 │                                                             │
-│    Enterprise                                               │
-│    Production deployment. Strict audience profiles, audit.  │
+│    Public                                                   │
+│    Open to untrusted users. Strict defaults and access      │
+│    controls.                                                │
 │                                                             │
 │  [ Save ]    [ Cancel ]                                     │
 │                                                             │
@@ -713,7 +742,7 @@ Trusted proxies row → 5.5 list editor.
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 6.2 Cascade warning (T5 variant — three options)
+### 9.1.2 Cascade warning (T5 variant — three options)
 
 Shown only when changing posture AND `Tools.AudienceProfiles` has been
 customized away from the prior posture's defaults.
@@ -736,22 +765,41 @@ customized away from the prior posture's defaults.
 
 ---
 
-## Config.7 — Audience Profiles *(addresses #1150)*
+## Config.9.3 — Enabled Features
 
-### 7.1 Audience selection
+```
+╭─ Enabled Features ──────────────────────────────────────────╮
+│                                                             │
+│  Toggle deployment-wide runtime features. Audience          │
+│  exposure is configured separately in Audience Profiles.    │
+│                                                             │
+│  [ X ] memory                                               │
+│  [ X ] search                                               │
+│  [ X ] skills                                               │
+│  [ X ] scheduling                                           │
+│  [ X ] sub-agents                                           │
+│  [ X ] webhooks                                             │
+│                                                             │
+│  [ Save ]    [ Cancel ]                                     │
+│                                                             │
+│ ↑/↓ navigate · Space toggle · Tab to buttons                │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+---
+
+## Config.9.4 — Audience Profiles *(addresses #1150)*
+
+### 9.4.1 Audience selection
 
 ```
 ╭─ Audience Profiles ─────────────────────────────────────────╮
 │                                                             │
-│  Configure tool access per audience tier.                   │
+│  Configure high-level access per audience tier.             │
 │                                                             │
 │  ▸ Personal           ✓ Default for posture: Personal       │
 │    Team               ✓ Default for posture: Personal       │
 │    Public             ✓ Default for posture: Personal       │
-│                                                             │
-│  ──────                                                     │
-│                                                             │
-│  Shell mode (global): HostAllowed                           │
 │                                                             │
 │  [ Cancel ]                                                 │
 │                                                             │
@@ -759,22 +807,24 @@ customized away from the prior posture's defaults.
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 7.2 Per-audience editor
+### 9.4.2 Per-audience editor
 
 ```
 ╭─ Audience Profiles › Team ──────────────────────────────────╮
 │                                                             │
-│  Tools enabled for the Team audience:                       │
+│  Tool access for the Team audience:                         │
 │                                                             │
-│  [ X ] memory                                               │
-│  [ X ] search                                               │
-│  [ X ] skills                                               │
-│  [   ] scheduling                                           │
-│  [ X ] sub-agents                                           │
-│  [   ] webhooks                                             │
+│  [ X ] Read files                                           │
+│  [ X ] Edit files                                           │
+│  [ X ] Web access                                           │
+│  [ X ] Skills                                               │
+│  [ X ] Scheduling                                           │
+│  [ X ] Change working directory                             │
 │                                                             │
-│  Shell mode for Team:    SandboxOnly                        │
-│  Approval policy:        Required                           │
+│  File access:               Session only →                  │
+│  Incoming attachments:      Common work files               │
+│  MCP permissions:           Manage in `netclaw mcp         │
+│                              permissions` →                 │
 │                                                             │
 │  [ Save ]    [ Cancel ]    [ Reset to posture default ]     │
 │                                                             │
@@ -788,8 +838,8 @@ customized away from the prior posture's defaults.
 - `Space` MUST toggle the focused checkbox.
 - `Enter` on a checkbox row also toggles (alternative to Space).
 - `Tab` moves to the action row.
-- `Reset to posture default` replaces all toggles + shell mode with the
-  posture-default mapping.
+- `Reset to posture default` replaces the full underlying audience profile,
+  including hidden MCP and approval settings, with the posture-default mapping.
 
 The `config-audience.tape` smoke tape explicitly exercises `↓`, `Space`,
 `↑`, `Space` to lock in the keystroke contract. Regression in arrow
@@ -799,9 +849,47 @@ nav OR toggle is caught.
 
 ---
 
-## Config.8 — Outbound Webhooks
+## Config.8 — Telemetry & Alerting
 
-### 8.1 List page (T3)
+### 8.1 Telemetry & Alerting sub-page
+
+```
+╭─ Telemetry & Alerting ──────────────────────────────────────╮
+│                                                             │
+│  ▸ Telemetry                Disabled                        │
+│    Outbound Webhooks        2 configured                    │
+│                                                             │
+│  [ Open ]    [ Back ]                                       │
+│                                                             │
+│ ↑/↓ navigate · Enter open · Esc back                        │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+### 8.2 Telemetry editor
+
+```
+╭─ Telemetry & Alerting › Telemetry ──────────────────────────╮
+│                                                             │
+│  Telemetry enabled:         [ X ] yes                       │
+│                                                             │
+│  OTLP endpoint:                                              │
+│  ╭────────────────────────────────────────────────────────╮ │
+│  │ http://127.0.0.1:4317                                 │ │
+│  ╰────────────────────────────────────────────────────────╯ │
+│                                                             │
+│  gRPC OTLP only. Netclaw expects collector port 4317.      │
+│                                                             │
+│  [ Save ]    [ Cancel ]                                     │
+│                                                             │
+│ Tab next · Enter activate · Esc cancel                      │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+---
+
+## Config.8.3 — Outbound Webhooks
+
+### 8.3.1 List page (T3)
 
 ```
 ╭─ Outbound Webhooks ─────────────────────────────────────────╮
@@ -832,7 +920,7 @@ Empty-state (T8):
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 8.2 Add/edit form (T4)
+### 8.3.2 Add/edit form (T4)
 
 ```
 ╭─ Outbound Webhooks › Edit "critical-pager" ─────────────────╮
@@ -864,7 +952,7 @@ Empty-state (T8):
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 8.3 Delete confirm (T5)
+### 8.3.3 Delete confirm (T5)
 
 ```
 ╭─ Remove webhook "critical-pager"? ──────────────────────────╮
@@ -882,7 +970,7 @@ Empty-state (T8):
 
 ---
 
-## Config.9 — Inbound Webhooks
+## Config.4 — Inbound Webhooks
 
 ```
 ╭─ Inbound Webhooks ──────────────────────────────────────────╮
@@ -911,7 +999,7 @@ we do NOT silently default to dummy routes.
 
 ---
 
-## Config.10 — External Skill Directories
+## Config.5.2 — External Skill Directories
 
 ### 10.1 List page (T2 with `PathItemEditor`)
 
@@ -961,7 +1049,7 @@ Single-keypress. `y` removes; anything else cancels. No modal.
 
 ---
 
-## Config.11 — Skill Feeds
+## Config.5.3 — Skill Feeds
 
 ### 11.1 List page (T3 with `SkillFeedItemEditor`)
 
@@ -1026,7 +1114,7 @@ Single-keypress. `y` removes; anything else cancels. No modal.
 
 ---
 
-## Config.12 — Browser Automation
+## Config.7 — Browser Automation
 
 ### 12.1 Status & toggle (Playwright not installed)
 
@@ -1091,43 +1179,6 @@ run them in their shell. Detection on re-open is automatic
 editor entry).
 
 **Doctor checks:** `ConfigSchemaDoctorCheck`, `BrowserAutomationDoctorCheck`.
-
----
-
-## Config.D — Run full doctor
-
-```
-╭─ Doctor — full configuration check ─────────────────────────╮
-│                                                             │
-│  ✓ ConfigSchema             OK                              │
-│  ✓ Providers                OK                              │
-│  ✓ Models                   OK                              │
-│  ⚠ Search                   Brave API key valid but rate-   │
-│                              limited per recent probes       │
-│  ✓ Slack                    OK                              │
-│  – Discord                  Not configured                  │
-│  – Mattermost               Not configured                  │
-│  ✓ Exposure                 OK (Local)                      │
-│  ✓ AudienceProfiles         OK                              │
-│  ✗ Notifications.Webhooks   critical-pager unreachable      │
-│  ✓ ExternalSkills           OK                              │
-│  – SkillFeeds               None configured                 │
-│  – BrowserAutomation        Disabled                        │
-│                                                             │
-│  Summary: 8 pass · 1 warning · 1 error · 4 skipped          │
-│                                                             │
-│  Exit code on close: 1 (errors present)                     │
-│                                                             │
-│  [ Back to dashboard ]                                      │
-│                                                             │
-│ Enter back · Esc back                                       │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-Invokes the same `DoctorRunner` used by `netclaw doctor`. Results page
-renders status per check.
-
----
 
 ## Daemon-restart nudge at exit
 

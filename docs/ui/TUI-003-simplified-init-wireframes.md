@@ -10,15 +10,14 @@ superseded by this document), `TUI-002-netclaw-config-wireframes.md`
 
 ## Overview
 
-`netclaw init` is trimmed from 12 steps to three: LLM provider,
-identity, security posture. The goal is time-to-first-chat. Everything
-else (channels, search, webhooks, exposure mode, audience profiles,
-skill feeds, external skill directories, browser automation, MCP
-servers) moves to `netclaw config` (see TUI-002).
+`netclaw init` is trimmed to bootstrap plus a small existing-install menu.
+The goal is time-to-first-chat. Everything else (channels, search,
+webhooks, exposure mode, audience profiles, skill feeds, external skill
+directories, browser automation, MCP servers, and other ongoing tuning)
+moves to `netclaw config` (see TUI-002).
 
-Existing-config detection is now explicit: re-running over an existing
-install refuses with helpful pointers, or accepts `--force` to back
-up and reset.
+Existing-config detection is explicit: re-running over an existing install
+opens a small action menu instead of replaying the full wizard.
 
 ## Termina Component Vocabulary
 
@@ -46,18 +45,18 @@ Glyphs and keystrokes follow TUI-002 conventions. Init-specific:
 ```
 netclaw init  (fresh install — no existing config)
   ├── Init.1  Provider selection (+ existing auth sub-flow)
-  ├── Init.2  Identity (agent name, user name, timezone)
+  ├── Init.2  Identity (workspaces directory, user name, timezone)
   ├── Init.3  Security Posture
-  └── Init.4  Post-flight (health-check, summary) ─── exit + stderr nudge
+  ├── Init.4  Enabled Features (Team/Public only)
+  └── Init.5  Post-flight (health-check, summary) ─── exit + stderr nudge
 
-netclaw init  (existing config detected, no --force)
-  └── Init.E1  Refuse + suggest `netclaw config` or `netclaw init --force`
-
-netclaw init --force  (existing config detected)
-  └── Init.E2  Backup confirm ──→ Init.1 (proceeds as fresh)
-
-netclaw init --force  (no existing config)
-  └── Init.1 (proceeds as fresh; no backup screen)
+netclaw init  (existing config detected)
+  ├── Init.E1  Existing-install menu
+  ├── Init.2   Identity re-entry form (prefilled)
+  ├── Init.E2  Start-over scope chooser
+  ├── Init.E3  First destructive confirmation
+  ├── Init.E4  Second destructive confirmation
+  └── Init.1 / Init.2 / Init.3 / Init.4 / Init.5 as applicable
 ```
 
 ---
@@ -71,7 +70,7 @@ key or OAuth device flow → model selection). Behavior unchanged from
 prior versions.
 
 ```
-╭─ Netclaw Setup — Step 1 of 3: LLM Provider ─────────────────╮
+╭─ Netclaw Setup — Step 1: LLM Provider ──────────────────────╮
 │                                                             │
 │  Choose your LLM provider:                                  │
 │                                                             │
@@ -91,29 +90,23 @@ prior versions.
 - `Enter` → existing auth sub-flow (TUI-001 covers the sub-flow shapes).
 - `Esc` → quit setup (with discard confirm if anything was entered).
 
-**Reentrancy:** in the rare case `netclaw init` runs over existing
-config (only via `--force` reset; otherwise the command refuses
-at Init.E1), the provider selector pre-fills the existing provider
-type. API key field renders empty per the secret-handling contract
+**Reentrancy:** when existing-install init routes into an init-owned
+sub-flow, the provider selector pre-fills the existing provider type.
+API key fields render empty per the secret-handling contract
 (`configured — leave blank to keep`).
 
 ---
 
 ## Init.2 — Identity
 
-Trimmed `IdentityStepViewModel` (see Change C tasks 5.x). Drops the
-prior webhook URL prompt, the workspaces-directory prompt, and the
-communication-style prompt. Keeps agent name, user name, timezone.
+Identity remains init-owned. The form reuses the familiar identity step,
+prefilled from the existing install on re-entry, and hands off to the
+bot-assisted identity conversation afterward.
 
 ```
-╭─ Netclaw Setup — Step 2 of 3: Identity ─────────────────────╮
+╭─ Netclaw Setup — Step 2: Identity ──────────────────────────╮
 │                                                             │
 │  Your provider is configured. Now let's set up the agent.   │
-│                                                             │
-│  Agent name:                                                │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │ Netclaw                                                │ │
-│  ╰────────────────────────────────────────────────────────╯ │
 │                                                             │
 │  Your name (what the agent calls you):                      │
 │  ╭────────────────────────────────────────────────────────╮ │
@@ -123,6 +116,11 @@ communication-style prompt. Keeps agent name, user name, timezone.
 │  Timezone (IANA name):                                      │
 │  ╭────────────────────────────────────────────────────────╮ │
 │  │ America/Los_Angeles                                    │ │
+│  ╰────────────────────────────────────────────────────────╯ │
+│                                                             │
+│  Workspaces directory:                                      │
+│  ╭────────────────────────────────────────────────────────╮ │
+│  │ ~/.netclaw/workspaces                                  │ │
 │  ╰────────────────────────────────────────────────────────╯ │
 │                                                             │
 │  [ Next ]    [ Back ]    [ Cancel ]                         │
@@ -137,15 +135,12 @@ communication-style prompt. Keeps agent name, user name, timezone.
 - `Back` → Init.1.
 - `Cancel` → discard confirm → exit.
 
-**Validation:** Agent name required, no whitespace. User name required.
-Timezone validates against `TimeZoneInfo.FindSystemTimeZoneById`.
+**Validation:** User name required. Timezone validates against
+`TimeZoneInfo.FindSystemTimeZoneById`. Workspaces directory must be a
+valid local path.
 
-**Dropped fields' defaults:** webhook URL is left unset (operators add
-operational webhooks via `netclaw config → Outbound Webhooks`).
-Workspaces directory defaults to `~/.netclaw/workspaces`. Communication
-style defaults to neutral. These remain editable via file edit for now
-(future Identity section editor in `netclaw config` is out of MVP
-scope).
+On completion, the flow can continue into the existing bot-assisted
+identity conversation that regenerates `SOUL.md` and `TOOLING.md`.
 
 ---
 
@@ -154,7 +149,7 @@ scope).
 Reuses existing `SecurityPostureStepViewModel`.
 
 ```
-╭─ Netclaw Setup — Step 3 of 3: Security Posture ─────────────╮
+╭─ Netclaw Setup — Step 3: Security Posture ──────────────────╮
 │                                                             │
 │  How will Netclaw be used?                                  │
 │                                                             │
@@ -164,8 +159,9 @@ Reuses existing `SecurityPostureStepViewModel`.
 │    Team                                                     │
 │    Small team via Slack/Discord. Audience-restricted tools. │
 │                                                             │
-│    Enterprise                                               │
-│    Production deployment. Strict audience profiles, audit.  │
+│    Public                                                   │
+│    Open to untrusted users. Strict defaults and access      │
+│    controls.                                                │
 │                                                             │
 │  [ Next ]    [ Back ]    [ Cancel ]                         │
 │                                                             │
@@ -176,43 +172,66 @@ Reuses existing `SecurityPostureStepViewModel`.
 **Transitions:**
 
 - `Next` (Enter on Next button OR Enter on a posture row) → applies
-  posture-default `Tools.AudienceProfiles` mapping in-memory →
-  proceeds to Init.4 (terminal write + health check).
+  posture-default `Tools.AudienceProfiles` mapping in-memory.
+- `Personal` proceeds directly to Init.5.
+- `Team` and `Public` proceed to Init.4 (Enabled Features).
 - `Back` → Init.2.
 
-**Posture cascade applied non-interactively (no separate feature
-selection step):**
-
-| Posture    | Audience.Personal | Audience.Team               | Audience.Public            | Shell mode    |
-|------------|-------------------|-----------------------------|----------------------------|---------------|
-| Personal   | all features on   | n/a (Personal-only)         | n/a                        | HostAllowed   |
-| Team       | all features on   | search+memory+skills on; webhooks off | webhooks off; memory off | SandboxOnly   |
-| Enterprise | search+memory on  | search+memory on            | nothing on                 | SandboxOnly   |
-
-Operators override per-audience post-install via `netclaw config →
-Audience Profiles`.
+**Shell mode remains global:** the posture step writes the global shell
+default. It does not create per-audience shell settings.
 
 ---
 
-## Init.4 — Post-flight
+## Init.4 — Enabled Features
 
-After Init.3 applies posture, the wizard writes merged config + secrets
-+ runs the existing health check + shows results.
+Shown only for `Team` and `Public`. This is deployment-wide runtime
+enablement, not per-audience access policy.
+
+```
+╭─ Netclaw Setup — Step 4: Enabled Features ──────────────────╮
+│                                                             │
+│  Choose which runtime features are enabled for this         │
+│  deployment. Audience exposure is configured later in       │
+│  `netclaw config`.                                          │
+│                                                             │
+│  [ X ] memory                                               │
+│  [ X ] search                                               │
+│  [ X ] skills                                               │
+│  [ X ] scheduling                                           │
+│  [ X ] sub-agents                                           │
+│  [ X ] webhooks                                             │
+│                                                             │
+│  [ Next ]    [ Back ]    [ Cancel ]                         │
+│                                                             │
+│ ↑/↓ navigate · Space toggle · Tab to buttons                │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+`Personal` skips this step. `Team` and `Public` use different defaults,
+but the toggles always write deployment-wide `Enabled` flags.
+
+---
+
+## Init.5 — Post-flight
+
+After the final step, the wizard writes merged config + secrets, runs the
+existing health check, and shows results.
 
 ```
 ╭─ Netclaw Setup — Setup Complete ────────────────────────────╮
 │                                                             │
 │  ✓ Provider configured: Anthropic (claude-sonnet-4-6)       │
-│  ✓ Identity set: Netclaw (aaron, America/Los_Angeles)       │
+│  ✓ Identity set: aaron, America/Los_Angeles                 │
 │  ✓ Posture: Personal                                        │
+│  ✓ Enabled Features: all defaults applied                   │
 │  ✓ Configuration written to ~/.netclaw/config/netclaw.json  │
 │  ✓ Health check passed                                      │
 │                                                             │
 │  ──────                                                     │
 │                                                             │
 │  Run `netclaw chat` to start talking to your agent.         │
-│  Run `netclaw config` to set up channels, search, webhooks, │
-│  external skills, browser automation, and more.             │
+│  Run `netclaw config` to set up providers, models,          │
+│  channels, webhooks, search, security, and more.            │
 │                                                             │
 │  [ Done ]                                                   │
 │                                                             │
@@ -226,103 +245,51 @@ After Init.3 applies posture, the wizard writes merged config + secrets
   to stderr after exit so users see it even after the TUI clears.
 
 **Failure path:** if health check fails (doctor errors), the page shows
-the errors and a `[ Back to Posture ]` action instead of `[ Done ]`.
-Operator returns to Init.3 to fix.
+the errors and a `[ Back ]` action instead of `[ Done ]`. The operator
+returns to the previous applicable step to fix.
 
-### Post-flight when `--force` was used
+## Init.E1 — Existing-install menu
 
-When `netclaw init --force` triggered a backup, the post-flight screen
-appends a `.bak` file disclosure section so operators know where the
-prior config went:
+Rendered when `netclaw init` detects an existing install.
 
 ```
-│  ──────                                                     │
-│  Previous configuration backed up to:                       │
-│    ~/.netclaw/config/netclaw.json.bak.1716508800            │
-│    ~/.netclaw/config/secrets.json.bak.1716508800            │
+╭─ Existing Netclaw install detected ─────────────────────────╮
 │                                                             │
-│  Restore manually if needed.                                │
-```
-
-The same paths are printed to stderr after Termina teardown.
-
----
-
-## Init.E1 — Existing config refusal
-
-Rendered when `netclaw init` is invoked, `~/.netclaw/config/netclaw.json`
-exists, and `--force` was not passed.
-
-```
-╭─ Netclaw is already initialized ────────────────────────────╮
+│  Choose what to do next.                                    │
 │                                                             │
-│  Found existing configuration:                              │
-│    ~/.netclaw/config/netclaw.json                           │
+│  ▸ Redo identity setup                                      │
+│    Open configuration editor                                │
+│    Start over from scratch                                  │
+│    Cancel                                                   │
 │                                                             │
-│  To edit your configuration interactively, run:             │
-│    netclaw config                                           │
-│                                                             │
-│  To start over from scratch (existing config backed up):    │
-│    netclaw init --force                                     │
-│                                                             │
-│  [ OK ]                                                     │
-│                                                             │
-│ Enter exit                                                  │
+│ ↑/↓ navigate · Enter select · Esc cancel                    │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-**Non-interactive variant** (when stdout is not a TTY, e.g. CI):
-prints the same text to stderr and exits non-zero. The interactive
-variant exits zero on acknowledgement.
+## Init.E2 — Start-over scope chooser
 
----
-
-## Init.E2 — Force-reset backup confirm
-
-Rendered when `netclaw init --force` runs and existing config is
-detected.
+Rendered after `Start over from scratch`.
 
 ```
-╭─ Reset Netclaw configuration? ──────────────────────────────╮
+╭─ Start over from scratch ───────────────────────────────────╮
 │                                                             │
-│  This will:                                                 │
-│    • Move netclaw.json → netclaw.json.bak.<timestamp>       │
-│    • Move secrets.json → secrets.json.bak.<timestamp>       │
-│    • Start setup from scratch                               │
+│  Choose reset scope.                                        │
 │                                                             │
-│  Your old config is preserved as a .bak file; you can       │
-│  restore it manually if needed.                             │
+│  ▸ Reset setup only                                         │
+│    Archive config, secrets, pairing/bootstrap state, and    │
+│    identity files. Preserve DB, logs, projects, schedules,  │
+│    environment, and skills.                                 │
 │                                                             │
-│  Type "reset" to confirm:                                   │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
+│    Full reset                                               │
+│    Wipe the full Netclaw home except the binary payload.    │
 │                                                             │
-│  ▸ [ Cancel ]    [ Reset and continue ]                     │
+│    Cancel                                                   │
 │                                                             │
+│ ↑/↓ navigate · Enter select · Esc cancel                    │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-**Type-to-confirm here because this is genuinely destructive** (running
-config + secrets get moved aside, fresh setup writes new ones).
-Single-Y/N is insufficient.
+## Init.E3 / Init.E4 — Double confirmation
 
-**Transitions:**
-
-- `Cancel` → exit zero. Config unchanged.
-- `Reset and continue` (enabled only when "reset" typed) → backup
-  performed (rename atomically; timestamp generated once per
-  invocation so both files share a suffix) → proceed to Init.1.
-
-**Non-TTY refusal:** `netclaw init --force > /dev/null 2>&1` cannot
-prompt for the type-to-confirm. The command SHALL refuse in non-TTY
-contexts with `--force` requires interactive confirm and exit non-zero.
-
-**`--force` over no existing config:** silently behaves as plain
-`netclaw init` (no backup screen, no extra prompt).
-
-**Backup timestamp collision avoidance:** the timestamp suffix uses
-unix-milliseconds (`netclaw.json.bak.<millis>`). On the extremely
-unlikely event of a collision (two `--force` invocations in the same
-millisecond), an auto-increment suffix is appended
-(`netclaw.json.bak.<millis>-1`).
+Both reset scopes require two explicit confirmations before mutation.
+Default focus stays on the non-destructive option.

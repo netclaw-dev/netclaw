@@ -2,54 +2,31 @@
 
 ### Requirement: Config command surface
 
-The CLI SHALL expose `netclaw config` as a top-level command. The
-command SHALL be offline (no daemon connection), SHALL operate on
-local config files only, and SHALL behave per the
-`netclaw-config-command` capability. `netclaw config --help` SHALL
-print a one-paragraph description and exit zero. `netclaw config show`
-and `netclaw config validate` are RESERVED subcommands (PRD-004) and
-SHALL print a not-yet-implemented notice and exit non-zero in this
-change, preserving the documented future surface. Unknown subcommands
-SHALL print usage and exit non-zero.
+The CLI SHALL expose `netclaw config` as a top-level command. The command
+SHALL operate on local config files and SHALL behave per the
+`netclaw-config-command` capability.
 
-#### Scenario: Help text describes the command
+If no config exists, `netclaw config` SHALL print a plain message directing
+the operator to `netclaw init` and exit non-zero without launching Termina.
+
+#### Scenario: Help text describes config as post-install settings surface
 
 - **WHEN** the operator runs `netclaw config --help`
-- **THEN** the command exits with status 0
-- **AND** stdout contains a one-paragraph description naming
-  "interactive configuration editor"
-- **AND** stdout references the `netclaw init` companion command
-- **AND** stdout lists the reserved `show` and `validate` subcommands
-  with a "not yet implemented; see PRD-004" note
+- **THEN** the command exits zero
+- **AND** help text describes `netclaw config` as the main post-install
+  settings surface
+- **AND** help text references `netclaw init` as the bootstrap companion
 
-#### Scenario: Reserved subcommand show exits non-zero with reservation notice
+#### Scenario: No-args invocation launches dashboard on configured install
 
-- **WHEN** the operator runs `netclaw config show`
-- **THEN** stderr contains
-  `\`netclaw config show\` is reserved for future use (PRD-004) and is
-   not yet implemented.`
-- **AND** the command exits with non-zero status
-- **AND** no `netclaw.json` write occurs
+- **GIVEN** `netclaw.json` exists
+- **WHEN** the operator runs `netclaw config`
+- **THEN** the domain-oriented dashboard launches
 
-#### Scenario: Reserved subcommand validate exits non-zero with reservation notice
+#### Scenario: Missing install refuses with plain message
 
-- **WHEN** the operator runs `netclaw config validate`
-- **THEN** stderr contains
-  `\`netclaw config validate\` is reserved for future use (PRD-004)
-   and is not yet implemented.`
-- **AND** the command exits with non-zero status
-- **AND** no `netclaw.json` write occurs
-
-#### Scenario: Unknown subcommand rejected with usage
-
-- **WHEN** the operator runs `netclaw config foo`
-- **THEN** the command exits with non-zero status
-- **AND** stderr contains usage text naming the dashboard launch
-  (`netclaw config` with no args) and the reserved subcommands
-
-#### Scenario: No-args invocation launches dashboard
-
-- **WHEN** the operator runs `netclaw config` with no arguments
-- **AND** `netclaw.json` exists
-- **THEN** the dashboard launches per the
-  `netclaw-config-command` capability
+- **GIVEN** `netclaw.json` does not exist
+- **WHEN** the operator runs `netclaw config`
+- **THEN** stderr contains `No configuration found. Run \`netclaw init\` first.`
+- **AND** the command exits non-zero
+- **AND** no partial TUI starts
