@@ -36,6 +36,13 @@ journaled tool-batch and approval events. Snapshots SHALL remain a cache of
 state already implied by earlier journal events; they SHALL NOT be the source of
 truth for in-flight approval state.
 
+When recovery restores an outstanding approval for a channel that supports
+interactive prompt updates, restart continuity SHALL include prompt
+reconciliation continuity as well as session-state continuity. A post-recovery
+approval click on the original prompt SHALL both resume or close the approval
+workflow in the session and drive reconciliation of the original prompt's
+visible state when a durable prompt handle exists.
+
 #### Scenario: Pending approval restored from journal on recovery
 
 - **GIVEN** a `ToolApprovalRequested` event was written while a tool-approval prompt was outstanding
@@ -50,16 +57,23 @@ truth for in-flight approval state.
 - **THEN** recovery SHALL clear the superseded pending interaction
 - **AND** the recovered session SHALL NOT treat the superseded approval as outstanding
 
-#### Scenario: Approval click resumes a cold-resumed session
+#### Scenario: Approval click resumes a cold-resumed session and reconciles prompt continuity
 
 - **GIVEN** a tool approval prompt was outstanding when the session passivated
 - **WHEN** the session cold-resumes and the user clicks the approval afterward
 - **THEN** the session SHALL re-drive the parked tool batch and continue the turn
-- **AND** the user SHALL NOT have to send a separate message to wake the agent
+- **AND** the original prompt SHALL be reconciled into a terminal state when the channel has a durable prompt handle
 
-#### Scenario: Pre-change snapshot recovers with no pending approval projection
+#### Scenario: Expired recovered prompt remains user-visible as expired rather than silently stale
 
-- **GIVEN** a snapshot written before approval recovery existed
-- **WHEN** the session recovers from that snapshot
-- **THEN** recovery SHALL succeed with an empty pending-interaction set
-- **AND** SHALL NOT fail or error on the missing field
+- **GIVEN** a recovered session receives a response for an approval prompt that is no longer pending or reconstructable
+- **WHEN** the session classifies that prompt as expired
+- **THEN** the user SHALL receive an explicit expired-prompt notice
+- **AND** any channel with a durable handle for the original prompt SHALL reconcile it into an expired or disabled state
+
+#### Scenario: Pre-change recovery still succeeds without prompt-handle durability
+
+- **GIVEN** a session snapshot or restart path created before prompt-handle reconciliation existed
+- **WHEN** the session recovers from that older durable state
+- **THEN** recovery SHALL still succeed with normal pending-approval restoration semantics
+- **AND** missing prompt-handle metadata SHALL degrade to explicit no-reconciliation diagnostics rather than a recovery failure
