@@ -17,6 +17,7 @@ using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using SlackNet.Blocks;
 
 namespace Netclaw.Channels.Slack;
 
@@ -1167,6 +1168,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 if (promptMessageTs is not null)
                 {
                     pendingApproval.PromptMessageTs = promptMessageTs;
+                    await RecordApprovalPromptHandleAsync(interaction.CallId, promptMessageTs.Value.Value);
                 }
                 else
                 {
@@ -1176,6 +1178,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     _pendingApprovalRequests.Remove(pendingApproval);
                     await SendApprovalDenyOnFailureAsync(interaction);
                 }
+                break;
+
+            case ApprovalPromptReconciliationOutput reconciliation:
+                await HandleApprovalPromptReconciliationAsync(reconciliation);
                 break;
 
             case ErrorOutput err:
@@ -1263,10 +1269,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 SenderId = message.SenderId
             });
 
-            _pendingApprovalRequests.RemoveAt(pendingIndex);
-
-            await TryResolveApprovalPromptAsync(pending, selectedKey, message.SenderId.Value);
-
             _log.Info(
                 "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
                 pending.Request.CallId,
@@ -1345,9 +1347,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
             if (pending is not null)
             {
-                _pendingApprovalRequests.RemoveAt(pendingIndex);
-                await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
-
                 _log.Info(
                     "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
                     pending.Request.CallId,
@@ -1356,12 +1355,11 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
             else
             {
-                // Cold-spawn path: binding has no original ToolInteractionRequest to drive
-                // the resolved-state redraw. The approval still routes; the button just
-                // stays in its pre-resolution form. Persisting requests across passivation
-                // is tracked separately by #939.
+                // Cold-spawn path: the binding has no local pending request, so prompt
+                // reconciliation must come from the session-owned terminal outcome plus
+                // any durable prompt handle recorded when the prompt was originally posted.
                 _log.Info(
-                    "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redraw skipped",
+                    "Forwarded Slack button approval response for call {CallId} to session without local pending entry; awaiting reconciliation output",
                     message.CallId);
             }
         }
@@ -1517,6 +1515,110 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 "Failed to update resolved approval prompt for call {CallId} messageTs={MessageTs}",
                 pending.Request.CallId,
                 pending.PromptMessageTs);
+        }
+    }
+
+    private async Task RecordApprovalPromptHandleAsync(Netclaw.Tools.ToolCallId callId, string promptHandle)
+    {
+        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+        try
+        {
+            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new RecordApprovalPromptHandle
+            {
+                SessionId = _sessionId,
+                CallId = callId,
+                PromptHandle = promptHandle
+            }, feedbackCts.Token);
+
+            if (reply is CommandNack nack)
+            {
+                _log.Warning(
+                    "Slack posted approval prompt for call {CallId} but failed to persist reconciliation handle: {Reason}",
+                    callId,
+                    nack.Reason);
+                ChannelTelemetry.For(ChannelType.Slack).RecordExtra("interactionErrors", "prompt_handle_persist_failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "Slack posted approval prompt for call {CallId} but failed recording reconciliation handle",
+                callId);
+            ChannelTelemetry.For(ChannelType.Slack).RecordExtra("interactionErrors", "prompt_handle_persist_failed");
+        }
+    }
+
+    private async Task HandleApprovalPromptReconciliationAsync(ApprovalPromptReconciliationOutput reconciliation)
+    {
+        var pendingIndex = _pendingApprovalRequests.FindIndex(request => request.Request.CallId == reconciliation.CallId);
+        var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
+        if (pendingIndex >= 0)
+            _pendingApprovalRequests.RemoveAt(pendingIndex);
+
+        var promptTs = pending?.PromptMessageTs;
+        if (promptTs is null && !string.IsNullOrWhiteSpace(reconciliation.PromptHandle))
+            promptTs = new SlackEventTs(reconciliation.PromptHandle);
+
+        if (promptTs is null)
+        {
+            _log.Warning(
+                "Slack could not reconcile approval prompt for call {CallId}: no local prompt state or durable handle",
+                reconciliation.CallId);
+            ChannelTelemetry.For(ChannelType.Slack).RecordExtra("interactionErrors", "prompt_handle_missing");
+            return;
+        }
+
+        var request = pending?.Request ?? reconciliation.ToInteractionRequest();
+        string text;
+        IReadOnlyList<Block> blocks;
+
+        switch (reconciliation.TerminalState)
+        {
+            case ApprovalPromptTerminalState.Resolved:
+                text = SlackApprovalBlockBuilder.BuildResolvedApprovalText(
+                    request,
+                    reconciliation.SelectedKey ?? ApprovalOptionKeys.Deny,
+                    reconciliation.ResponderSenderId ?? "unknown");
+                blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocks(
+                    request,
+                    reconciliation.SelectedKey ?? ApprovalOptionKeys.Deny,
+                    reconciliation.ResponderSenderId ?? "unknown");
+                break;
+
+            case ApprovalPromptTerminalState.Abandoned:
+                text = SlackApprovalBlockBuilder.BuildAbandonedApprovalText(request);
+                blocks = SlackApprovalBlockBuilder.BuildAbandonedApprovalBlocks(request);
+                break;
+
+            default:
+                text = SlackApprovalBlockBuilder.BuildExpiredApprovalText(request);
+                blocks = SlackApprovalBlockBuilder.BuildExpiredApprovalBlocks(request);
+                break;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdateThreadMessageAsync(
+                _channelId,
+                promptTs.Value,
+                text,
+                blocks,
+                cts.Token);
+
+            await _dependencies.Pipeline.SendFeedbackAsync(new AcknowledgeApprovalPromptReconciliation
+            {
+                SessionId = _sessionId,
+                CallId = reconciliation.CallId
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(
+                ex,
+                "Failed to reconcile Slack approval prompt for call {CallId} messageTs={MessageTs}",
+                reconciliation.CallId,
+                promptTs.Value);
         }
     }
 

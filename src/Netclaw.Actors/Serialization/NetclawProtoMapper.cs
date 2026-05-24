@@ -29,7 +29,10 @@ internal static class NetclawProtoMapper
         ToolBatchStarted v => ToProto(v),
         ToolCallRecorded v => ToProto(v),
         ToolApprovalRequested v => ToProto(v),
+        ApprovalPromptHandleRecorded v => ToProto(v),
         ToolApprovalResolved v => ToProto(v),
+        ApprovalPromptExpired v => ToProto(v),
+        ApprovalPromptReconciliationCompleted v => ToProto(v),
         ToolBatchAbandoned v => ToProto(v),
         SessionSnapshot v => ToProto(v),
         TurnBroadcast v => ToProto(v),
@@ -254,11 +257,14 @@ internal static class NetclawProtoMapper
             SessionId = ToProto(evt.SessionId),
             CallId = evt.CallId,
             ToolName = evt.ToolName,
+            DisplayText = evt.DisplayText,
             Audience = (Proto.TrustAudience)(int)evt.Audience,
+            HasAdoptedContext = evt.HasAdoptedContext,
             RequestedAtMs = evt.RequestedAtMs
         };
         proto.Patterns.AddRange(evt.Patterns);
         proto.CandidateVerbs.AddRange(evt.CandidateVerbs);
+        proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
         if (evt.RequesterSenderId is not null)
             proto.RequesterSenderId = evt.RequesterSenderId.Value.Value;
         if (evt.RequesterPrincipal is not null)
@@ -281,6 +287,7 @@ internal static class NetclawProtoMapper
         SessionId = FromProto(proto.SessionId),
         CallId = proto.CallId,
         ToolName = proto.ToolName,
+        DisplayText = proto.DisplayText,
         Patterns = proto.Patterns.ToArray(),
         CandidateVerbs = proto.CandidateVerbs.ToArray(),
         Audience = (Configuration.TrustAudience)(int)proto.Audience,
@@ -294,23 +301,78 @@ internal static class NetclawProtoMapper
         SupportsInteractiveApproval = proto.HasSupportsInteractiveApproval ? proto.SupportsInteractiveApproval : null,
         OptionKeys = proto.OptionKeys.ToArray(),
         Candidates = proto.Candidates.Select(FromApprovalCandidateProto).ToArray(),
+        HasAdoptedContext = proto.HasAdoptedContext,
+        AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
         RequestedAtMs = proto.RequestedAtMs
     };
 
-    internal static Proto.ToolApprovalResolvedProto ToProto(ToolApprovalResolved evt) => new()
+    internal static Proto.ApprovalPromptHandleRecordedProto ToProto(ApprovalPromptHandleRecorded evt) => new()
     {
         SessionId = ToProto(evt.SessionId),
         CallId = evt.CallId,
-        Decision = evt.Decision,
-        ResolvedAtMs = evt.ResolvedAtMs
+        PromptHandle = evt.PromptHandle,
+        RecordedAtMs = evt.RecordedAtMs
     };
+
+    internal static ApprovalPromptHandleRecorded FromProto(Proto.ApprovalPromptHandleRecordedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        CallId = proto.CallId,
+        PromptHandle = proto.PromptHandle,
+        RecordedAtMs = proto.RecordedAtMs
+    };
+
+    internal static Proto.ToolApprovalResolvedProto ToProto(ToolApprovalResolved evt)
+    {
+        var proto = new Proto.ToolApprovalResolvedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            CallId = evt.CallId,
+            Decision = evt.Decision,
+            SelectedKey = evt.SelectedKey,
+            ResolvedAtMs = evt.ResolvedAtMs
+        };
+        if (evt.ResponderSenderId is not null)
+            proto.ResponderSenderId = evt.ResponderSenderId.Value.Value;
+        return proto;
+    }
 
     internal static ToolApprovalResolved FromProto(Proto.ToolApprovalResolvedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
         CallId = proto.CallId,
         Decision = proto.Decision,
+        SelectedKey = proto.SelectedKey,
+        ResponderSenderId = proto.HasResponderSenderId ? new SenderId(proto.ResponderSenderId) : null,
         ResolvedAtMs = proto.ResolvedAtMs
+    };
+
+    internal static Proto.ApprovalPromptExpiredProto ToProto(ApprovalPromptExpired evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        CallId = evt.CallId,
+        ExpiredAtMs = evt.ExpiredAtMs
+    };
+
+    internal static ApprovalPromptExpired FromProto(Proto.ApprovalPromptExpiredProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        CallId = proto.CallId,
+        ExpiredAtMs = proto.ExpiredAtMs
+    };
+
+    internal static Proto.ApprovalPromptReconciliationCompletedProto ToProto(ApprovalPromptReconciliationCompleted evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        CallId = evt.CallId,
+        CompletedAtMs = evt.CompletedAtMs
+    };
+
+    internal static ApprovalPromptReconciliationCompleted FromProto(Proto.ApprovalPromptReconciliationCompletedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        CallId = proto.CallId,
+        CompletedAtMs = proto.CompletedAtMs
     };
 
     internal static Proto.ToolBatchAbandonedProto ToProto(ToolBatchAbandoned evt)
@@ -367,6 +429,7 @@ internal static class NetclawProtoMapper
         proto.History.AddRange(snap.History.Select(ToProto));
         proto.ActiveBackgroundJobs.AddRange(snap.ActiveBackgroundJobs.Select(ToProto));
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
+        proto.ApprovalPromptRecords.AddRange(snap.ApprovalPromptRecords.Select(ToApprovalPromptSnapshotRecord));
         return proto;
     }
 
@@ -380,7 +443,74 @@ internal static class NetclawProtoMapper
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
-        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray()
+        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
+        ApprovalPromptRecords = proto.ApprovalPromptRecords.Select(FromApprovalPromptSnapshotRecord).ToArray()
+    };
+
+    private static Proto.SessionSnapshotProto.Types.ApprovalPromptSnapshotRecord ToApprovalPromptSnapshotRecord(
+        SessionSnapshot.ApprovalPromptSnapshotRecord r)
+    {
+        var proto = new Proto.SessionSnapshotProto.Types.ApprovalPromptSnapshotRecord
+        {
+            CallId = r.CallId,
+            ToolName = r.ToolName,
+            DisplayText = r.DisplayText,
+            HasAdoptedContext = r.HasAdoptedContext
+        };
+        proto.Patterns.AddRange(r.Patterns);
+        proto.CandidateVerbs.AddRange(r.CandidateVerbs);
+        proto.Candidates.AddRange(r.Candidates.Select(ToApprovalPromptSnapshotCandidateRecord));
+        proto.AdoptedSpeakerIds.AddRange(r.AdoptedSpeakerIds);
+        if (r.Cwd is not null)
+            proto.Cwd = r.Cwd;
+        if (r.PromptHandle is not null)
+            proto.PromptHandle = r.PromptHandle;
+        if (r.TerminalState is not null)
+            proto.TerminalState = r.TerminalState;
+        if (r.SelectedKey is not null)
+            proto.SelectedKey = r.SelectedKey;
+        if (r.ResponderSenderId is not null)
+            proto.ResponderSenderId = r.ResponderSenderId;
+        return proto;
+    }
+
+    private static SessionSnapshot.ApprovalPromptSnapshotRecord FromApprovalPromptSnapshotRecord(
+        Proto.SessionSnapshotProto.Types.ApprovalPromptSnapshotRecord proto) => new()
+    {
+        CallId = proto.CallId,
+        ToolName = proto.ToolName,
+        DisplayText = proto.DisplayText,
+        Patterns = proto.Patterns.ToArray(),
+        CandidateVerbs = proto.CandidateVerbs.ToArray(),
+        Candidates = proto.Candidates.Select(FromApprovalPromptSnapshotCandidateRecord).ToArray(),
+        Cwd = proto.HasCwd ? proto.Cwd : null,
+        HasAdoptedContext = proto.HasAdoptedContext,
+        AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
+        PromptHandle = proto.HasPromptHandle ? proto.PromptHandle : null,
+        TerminalState = proto.HasTerminalState ? proto.TerminalState : null,
+        SelectedKey = proto.HasSelectedKey ? proto.SelectedKey : null,
+        ResponderSenderId = proto.HasResponderSenderId ? proto.ResponderSenderId : null
+    };
+
+    private static Proto.SessionSnapshotProto.Types.ApprovalPromptSnapshotRecord.Types.ApprovalCandidateSnapshotRecord
+        ToApprovalPromptSnapshotCandidateRecord(
+            SessionSnapshot.ApprovalPromptSnapshotRecord.ApprovalCandidateSnapshotRecord r)
+    {
+        var proto = new Proto.SessionSnapshotProto.Types.ApprovalPromptSnapshotRecord.Types.ApprovalCandidateSnapshotRecord
+        {
+            Verb = r.Verb
+        };
+        if (r.Directory is not null)
+            proto.Directory = r.Directory;
+        return proto;
+    }
+
+    private static SessionSnapshot.ApprovalPromptSnapshotRecord.ApprovalCandidateSnapshotRecord
+        FromApprovalPromptSnapshotCandidateRecord(
+            Proto.SessionSnapshotProto.Types.ApprovalPromptSnapshotRecord.Types.ApprovalCandidateSnapshotRecord proto) => new()
+    {
+        Verb = proto.Verb,
+        Directory = proto.HasDirectory ? proto.Directory : null
     };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(

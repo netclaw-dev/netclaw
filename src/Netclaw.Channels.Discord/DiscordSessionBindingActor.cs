@@ -814,19 +814,20 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         if (pending is not null)
         {
-            _pendingApprovalRequests.Remove(pending);
-            await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
+            _log.Info(
+                "Recorded Discord approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
+                pending.Request.CallId,
+                message.SenderId,
+                message.SelectedKey);
         }
         else
         {
             // Cold-spawn path (#979): binding has no original ToolInteractionRequest to
-            // drive the resolved-state redraw. The approval still routes; the message
-            // just stays in its pre-resolution form. Persistence across daemon restart
-            // is tracked separately by #939.
+            // drive the resolved-state redraw. The approval still routes; prompt
+            // reconciliation now waits for the session-owned terminal outcome.
             _log.Info(
-                "Forwarded Discord approval response for call {0} to session without local pending entry; redraw skipped",
+                "Forwarded Discord approval response for call {0} to session without local pending entry; awaiting reconciliation output",
                 message.CallId);
-            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
         }
     }
 
@@ -859,6 +860,102 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 ex,
                 "Failed to update resolved approval prompt for call {CallId} messageId={MessageId}",
                 pending.CallId,
+                promptMessageId.Value);
+        }
+    }
+
+    private async Task RecordApprovalPromptHandleAsync(Netclaw.Tools.ToolCallId callId, string promptHandle)
+    {
+        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+        try
+        {
+            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new RecordApprovalPromptHandle
+            {
+                SessionId = _sessionId,
+                CallId = callId,
+                PromptHandle = promptHandle
+            }, feedbackCts.Token);
+
+            if (reply is CommandNack nack)
+            {
+                _log.Warning(
+                    "Discord posted approval prompt for call {CallId} but failed to persist reconciliation handle: {Reason}",
+                    callId,
+                    nack.Reason);
+                ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "prompt_handle_persist_failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "Discord posted approval prompt for call {CallId} but failed recording reconciliation handle",
+                callId);
+            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "prompt_handle_persist_failed");
+        }
+    }
+
+    private async Task HandleApprovalPromptReconciliationAsync(ApprovalPromptReconciliationOutput reconciliation)
+    {
+        var pending = _pendingApprovalRequests.FirstOrDefault(request => request.Request.CallId == reconciliation.CallId);
+        if (pending is not null)
+            _pendingApprovalRequests.Remove(pending);
+
+        var promptMessageId = pending?.PromptMessageId;
+        if (promptMessageId is null && !string.IsNullOrWhiteSpace(reconciliation.PromptHandle))
+            promptMessageId = new DiscordMessageId(reconciliation.PromptHandle);
+
+        if (promptMessageId is null)
+        {
+            _log.Warning(
+                "Discord could not reconcile approval prompt for call {CallId}: no local prompt state or durable handle",
+                reconciliation.CallId);
+            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "prompt_handle_missing");
+            return;
+        }
+
+        var request = pending?.Request ?? reconciliation.ToInteractionRequest();
+        string text;
+
+        switch (reconciliation.TerminalState)
+        {
+            case ApprovalPromptTerminalState.Resolved:
+                text = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+                    request,
+                    reconciliation.SelectedKey ?? ApprovalOptionKeys.Deny,
+                    reconciliation.ResponderSenderId ?? "unknown");
+                break;
+
+            case ApprovalPromptTerminalState.Abandoned:
+                text = DiscordApprovalPromptBuilder.BuildAbandonedPromptText(request);
+                break;
+
+            default:
+                text = DiscordApprovalPromptBuilder.BuildExpiredPromptText(request);
+                break;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdateMessageAsync(
+                _replyChannelId,
+                promptMessageId.Value,
+                text,
+                removeComponents: true,
+                cts.Token);
+
+            await _dependencies.Pipeline.SendFeedbackAsync(new AcknowledgeApprovalPromptReconciliation
+            {
+                SessionId = _sessionId,
+                CallId = reconciliation.CallId
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(
+                ex,
+                "Failed to reconcile Discord approval prompt for call {CallId} messageId={MessageId}",
+                reconciliation.CallId,
                 promptMessageId.Value);
         }
     }
@@ -980,11 +1077,16 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 if (promptMessageId is not null)
                 {
                     pendingApproval.PromptMessageId = promptMessageId;
+                    await RecordApprovalPromptHandleAsync(request.CallId, promptMessageId.Value.Value);
                 }
                 else
                 {
                     _pendingApprovalRequests.Remove(pendingApproval);
                 }
+                break;
+
+            case ApprovalPromptReconciliationOutput reconciliation:
+                await HandleApprovalPromptReconciliationAsync(reconciliation);
                 break;
 
             case SessionTitleOutput titleOutput:

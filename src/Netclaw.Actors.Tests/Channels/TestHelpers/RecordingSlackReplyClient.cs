@@ -12,6 +12,7 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
 {
     private readonly object _lock = new();
     private readonly List<SlackPostMessage> _posts = [];
+    private readonly List<(SlackEventTs MessageTs, string Text, IReadOnlyList<Block>? Blocks)> _updates = [];
 
     public IReadOnlyList<SlackPostMessage> Posts
     {
@@ -20,9 +21,18 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
 
     public Exception? ThrowOnPost { get; set; }
 
+    public IReadOnlyList<(SlackEventTs MessageTs, string Text, IReadOnlyList<Block>? Blocks)> Updates
+    {
+        get { lock (_lock) return _updates.ToList(); }
+    }
+
     public void Clear()
     {
-        lock (_lock) _posts.Clear();
+        lock (_lock)
+        {
+            _posts.Clear();
+            _updates.Clear();
+        }
     }
 
     public Task PostThreadReplyAsync(SlackPostMessage message, CancellationToken cancellationToken = default)
@@ -46,7 +56,11 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
         SlackEventTs messageTs,
         string text,
         IReadOnlyList<Block>? blocks = null,
-        CancellationToken cancellationToken = default) => Task.CompletedTask;
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock) _updates.Add((messageTs, text, blocks));
+        return Task.CompletedTask;
+    }
 
     public Task UploadFileToThreadAsync(
         SlackChannelId channelId,

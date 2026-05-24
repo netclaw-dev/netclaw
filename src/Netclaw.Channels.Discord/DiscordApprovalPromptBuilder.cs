@@ -93,6 +93,42 @@ internal static class DiscordApprovalPromptBuilder
         return sb.ToString();
     }
 
+    public static string BuildExpiredPromptText(ToolInteractionRequest request)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(":warning: **Tool approval expired**");
+        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
+        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Status:** This prompt is no longer active. Please re-issue the request if you still want me to run it.**");
+
+        if (request.HasAdoptedContext)
+        {
+            sb.AppendLine();
+            sb.Append("**Adopted context:** present").AppendLine();
+            sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).Append('`');
+        }
+
+        return sb.ToString();
+    }
+
+    public static string BuildAbandonedPromptText(ToolInteractionRequest request)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(":warning: **Tool approval closed**");
+        sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
+        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Status:** Superseded by a newer message before the tool ran.**");
+
+        if (request.HasAdoptedContext)
+        {
+            sb.AppendLine();
+            sb.Append("**Adopted context:** present").AppendLine();
+            sb.Append("**Speakers:** `").Append(string.Join(", ", request.AdoptedSpeakerIds)).Append('`');
+        }
+
+        return sb.ToString();
+    }
+
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");

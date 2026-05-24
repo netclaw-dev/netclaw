@@ -94,3 +94,33 @@ public sealed record ToolInteractionTextResponse : IWithSessionId, INoSerializat
     /// </summary>
     public required SenderId SenderId { get; init; }
 }
+
+/// <summary>
+/// Adapter feedback sent after an approval prompt was successfully posted so the
+/// session can durably remember the channel artifact needed for later
+/// reconciliation after recovery.
+/// </summary>
+public sealed record RecordApprovalPromptHandle : IWithSessionId, INoSerializationVerificationNeeded
+{
+    public required SessionId SessionId { get; init; }
+
+    public required ToolCallId CallId { get; init; }
+
+    /// <summary>
+    /// Opaque channel-owned prompt handle, such as a Slack <c>messageTs</c>,
+    /// Mattermost <c>postId</c>, or Discord <c>messageId</c>.
+    /// </summary>
+    public required string PromptHandle { get; init; }
+}
+
+/// <summary>
+/// Adapter feedback acknowledging that a terminal approval prompt state was
+/// successfully reconciled in the channel so the session can drop the durable
+/// prompt projection.
+/// </summary>
+public sealed record AcknowledgeApprovalPromptReconciliation : IWithSessionId, INoSerializationVerificationNeeded
+{
+    public required SessionId SessionId { get; init; }
+
+    public required ToolCallId CallId { get; init; }
+}

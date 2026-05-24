@@ -167,6 +167,34 @@ internal static class SlackApprovalBlockBuilder
         return blocks;
     }
 
+    public static string BuildExpiredApprovalText(ToolInteractionRequest request)
+        => string.Join("\n", new[]
+        {
+            ":warning: *Tool approval expired*",
+            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            "This prompt is no longer active. Please re-issue the request if you still want me to run it."
+        });
+
+    public static IReadOnlyList<Block> BuildExpiredApprovalBlocks(ToolInteractionRequest request)
+        => BuildTerminalApprovalBlocks(
+            request,
+            ":warning: *Tool approval expired*",
+            "This prompt is no longer active. Please re-issue the request if you still want me to run it.");
+
+    public static string BuildAbandonedApprovalText(ToolInteractionRequest request)
+        => string.Join("\n", new[]
+        {
+            ":warning: *Tool approval closed*",
+            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            "Superseded by a newer message before the tool ran."
+        });
+
+    public static IReadOnlyList<Block> BuildAbandonedApprovalBlocks(ToolInteractionRequest request)
+        => BuildTerminalApprovalBlocks(
+            request,
+            ":warning: *Tool approval closed*",
+            "Superseded by a newer message before the tool ran.");
+
     /// <summary>
     /// Builds the prompt's header line. Single-verb invocations collapse the
     /// verb into the header (<c>Approve git status in ~/repos/foo/?</c>);
@@ -255,6 +283,38 @@ internal static class SlackApprovalBlockBuilder
             ApprovalOptionKeys.Deny => "Denied",
             _ => "Resolved"
         };
+    }
+
+    private static IReadOnlyList<Block> BuildTerminalApprovalBlocks(
+        ToolInteractionRequest request,
+        string header,
+        string detail)
+    {
+        var blocks = new List<Block>
+        {
+            new SectionBlock
+            {
+                Text = new Markdown(header)
+            },
+            new SectionBlock
+            {
+                Text = new Markdown(
+                    $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
+                    + $"*Request:* `{EscapeMarkdown(request.DisplayText)}`\n"
+                    + $"*{EscapeMarkdown(detail)}*"),
+                Expand = true
+            }
+        };
+
+        if (request.HasAdoptedContext)
+        {
+            blocks.Add(new SectionBlock
+            {
+                Text = new Markdown(BuildAdoptedContextMarkdown(request))
+            });
+        }
+
+        return blocks;
     }
 
     /// <summary>

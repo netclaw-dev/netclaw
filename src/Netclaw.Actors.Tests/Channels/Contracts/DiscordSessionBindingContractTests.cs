@@ -103,6 +103,12 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 
+    protected override int GetPromptUpdateCount()
+        => _replyClient.Updates.Count;
+
+    protected override string GetDurablePromptHandle()
+        => "msg-durable";
+
     protected override ChannelType ExpectedChannelType => ChannelType.Discord;
 
     protected override bool SupportsThreadHydration => true;

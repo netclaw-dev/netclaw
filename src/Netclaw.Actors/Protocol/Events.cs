@@ -89,6 +89,8 @@ public sealed record ToolApprovalRequested : INetclawSerializableMessage
 
     public string ToolName { get; init; } = string.Empty;
 
+    public string DisplayText { get; init; } = string.Empty;
+
     public IReadOnlyList<string> Patterns { get; init; } = Array.Empty<string>();
 
     public IReadOnlyList<string> CandidateVerbs { get; init; } = Array.Empty<string>();
@@ -112,7 +114,22 @@ public sealed record ToolApprovalRequested : INetclawSerializableMessage
     public IReadOnlyList<ApprovalCandidateRecord> Candidates { get; init; } =
         Array.Empty<ApprovalCandidateRecord>();
 
+    public bool HasAdoptedContext { get; init; }
+
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = Array.Empty<string>();
+
     public long RequestedAtMs { get; init; }
+}
+
+public sealed record ApprovalPromptHandleRecorded : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public string CallId { get; init; } = string.Empty;
+
+    public string PromptHandle { get; init; } = string.Empty;
+
+    public long RecordedAtMs { get; init; }
 }
 
 public sealed record ToolApprovalResolved : INetclawSerializableMessage
@@ -123,7 +140,29 @@ public sealed record ToolApprovalResolved : INetclawSerializableMessage
 
     public string Decision { get; init; } = string.Empty;
 
+    public string SelectedKey { get; init; } = string.Empty;
+
+    public SenderId? ResponderSenderId { get; init; }
+
     public long ResolvedAtMs { get; init; }
+}
+
+public sealed record ApprovalPromptExpired : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public string CallId { get; init; } = string.Empty;
+
+    public long ExpiredAtMs { get; init; }
+}
+
+public sealed record ApprovalPromptReconciliationCompleted : INetclawSerializableMessage
+{
+    public SessionId SessionId { get; init; }
+
+    public string CallId { get; init; } = string.Empty;
+
+    public long CompletedAtMs { get; init; }
 }
 
 public sealed record ToolBatchAbandoned : INetclawSerializableMessage

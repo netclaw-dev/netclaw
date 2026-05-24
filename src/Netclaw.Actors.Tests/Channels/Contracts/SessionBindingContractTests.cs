@@ -41,6 +41,10 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected abstract void ClearReplyClientThrows();
 
+    protected abstract int GetPromptUpdateCount();
+
+    protected abstract string GetDurablePromptHandle();
+
     protected abstract ChannelType ExpectedChannelType { get; }
 
     protected virtual bool SupportsApprovalSenderReplies => false;
@@ -434,6 +438,105 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
             Assert.Equal("user-1", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Approval_response_reconciles_prompt_when_session_emits_terminal_outcome()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-approval-reconcile-live");
+        var request = new ToolInteractionRequest
+        {
+            SessionId = sid,
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-reconcile-live"),
+            ToolName = new Netclaw.Tools.ToolName("execute_shell"),
+            DisplayText = "git push origin main",
+            RequesterSenderId = new SenderId("user-1"),
+            Patterns = ["git push"],
+            CandidateVerbs = ["git push"],
+            Candidates = [new ApprovalCandidate("git push", "/repo")],
+            Cwd = "/repo",
+            Options =
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+        var pipeline = new FeedbackDrivenSessionPipeline(
+            [request],
+            feedback => feedback switch
+            {
+                ToolInteractionResponse =>
+                [
+                    new ApprovalPromptReconciliationOutput
+                    {
+                        SessionId = sid,
+                        CallId = request.CallId,
+                        ToolName = request.ToolName,
+                        DisplayText = request.DisplayText,
+                        Patterns = request.Patterns,
+                        CandidateVerbs = request.CandidateVerbs,
+                        Candidates = request.Candidates,
+                        Cwd = request.Cwd,
+                        HasAdoptedContext = request.HasAdoptedContext,
+                        AdoptedSpeakerIds = request.AdoptedSpeakerIds,
+                        TerminalState = ApprovalPromptTerminalState.Resolved,
+                        SelectedKey = ApprovalOptionKeys.ApproveOnce,
+                        ResponderSenderId = "user-1"
+                    }
+                ],
+                _ => []
+            });
+
+        var actor = CreateBindingActorWithPipeline(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        actor.Tell(CreateApprovalResponse("call-reconcile-live", ApprovalOptionKeys.ApproveOnce, "user-1"), TestActor);
+
+        await AwaitAssertAsync(() => Assert.True(GetPromptUpdateCount() > 0), cancellationToken: ct);
+    }
+
+    [Fact]
+    public async Task Cold_spawned_approval_response_reconciles_prompt_from_durable_handle()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-approval-reconcile-cold");
+        var pipeline = new FeedbackDrivenSessionPipeline(
+            [],
+            feedback => feedback switch
+            {
+                ToolInteractionResponse =>
+                [
+                    new ApprovalPromptReconciliationOutput
+                    {
+                        SessionId = sid,
+                        CallId = new Netclaw.Tools.ToolCallId("call-reconcile-cold"),
+                        ToolName = new Netclaw.Tools.ToolName("execute_shell"),
+                        DisplayText = "git push origin main",
+                        Patterns = ["git push"],
+                        CandidateVerbs = ["git push"],
+                        Candidates = [new ApprovalCandidate("git push", "/repo")],
+                        Cwd = "/repo",
+                        PromptHandle = GetDurablePromptHandle(),
+                        TerminalState = ApprovalPromptTerminalState.Expired
+                    }
+                ],
+                _ => []
+            });
+
+        var actor = CreateBindingActorWithPipeline(sid, pipeline, detector);
+
+        actor.Tell(CreateApprovalResponse("call-reconcile-cold", ApprovalOptionKeys.ApproveOnce, "user-1"), TestActor);
+
+        await AwaitAssertAsync(() => Assert.True(GetPromptUpdateCount() > 0), cancellationToken: ct);
     }
 
     [Fact]

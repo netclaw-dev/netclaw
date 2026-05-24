@@ -135,7 +135,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         // The parked batch re-drives: the tool executes successfully (the
         // ApprovedOnce pre-seed bypassed the gate without a duplicate prompt)
         // and the follow-up LLM call produces a final text response.
-        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+        await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -210,7 +210,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.IsType<CommandAck>(validReply);
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+        await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriber,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -273,7 +273,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.IsType<CommandAck>(reply);
-        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+        await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -358,7 +358,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         });
 
-        var shellResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+        var shellResult = await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(shellCallId, shellResult.CallId.Value);
         await subscriberB.ExpectMsgAsync<TextOutput>(
@@ -441,6 +441,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
 
         // One sibling approval is still pending, so the recovered session must
         // not advance the LLM with a half-closed assistant tool-call batch.
+        var reconciliation = await subscriberB.ExpectMsgAsync<ApprovalPromptReconciliationOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(readCallId, reconciliation.CallId.Value);
+        Assert.Equal(ApprovalPromptTerminalState.Resolved, reconciliation.TerminalState);
         await subscriberB.ExpectNoMsgAsync(
             TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
         Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
@@ -458,7 +462,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         {
             while (resultCallIds.Count < 2)
             {
-                var result = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+                var result = await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
                     TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
                 resultCallIds.Add(result.CallId.Value);
             }
@@ -613,7 +617,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         });
 
-        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+        await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriber,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -774,7 +778,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
 
-        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+        await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -840,7 +844,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
 
-        var toolResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+        var toolResult = await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -907,7 +911,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
 
-        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+        await ExpectNextNonReconciliationAsync<ToolResultOutput>(subscriberB,
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -975,6 +979,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             Content = "Never mind — just say hello"
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
+        var reconciliation = await subscriberB.ExpectMsgAsync<ApprovalPromptReconciliationOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(callId, reconciliation.CallId.Value);
+        Assert.Equal(ApprovalPromptTerminalState.Abandoned, reconciliation.TerminalState);
         await subscriberB.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         var completed = await subscriberB.ExpectMsgAsync<TurnCompleted>(
@@ -991,7 +999,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             && m.Contents.OfType<FunctionResultContent>().Any(r => r.CallId == callId));
         Assert.True(healed, "parked tool_use should be closed with a synthetic tool result");
 
-        // A late click on the abandoned prompt is now treated as expired.
+        // A late click on the abandoned prompt replays the abandoned terminal
+        // reconciliation state rather than re-driving the tool.
         sessionManager.Tell(new ToolInteractionResponse
         {
             SessionId = sessionId,
@@ -999,9 +1008,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
-        var notice = await subscriberB.ExpectMsgAsync<TextOutput>(
+        var reconciliationAgain = await subscriberB.ExpectMsgAsync<ApprovalPromptReconciliationOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("expired", notice.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(callId, reconciliationAgain.CallId.Value);
+        Assert.Equal(ApprovalPromptTerminalState.Abandoned, reconciliationAgain.TerminalState);
     }
 
     [Fact]
@@ -1058,6 +1068,22 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         Watch(child);
         Sys.Stop(child);
         await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<T> ExpectNextNonReconciliationAsync<T>(
+        Akka.TestKit.TestProbe probe,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        while (true)
+        {
+            var msg = await probe.ExpectMsgAsync<object>(timeout, cancellationToken: cancellationToken);
+            if (msg is ApprovalPromptReconciliationOutput)
+                continue;
+
+            return Assert.IsType<T>(msg);
+        }
     }
 
     private MessageSource RequesterSource(string senderId) => new()

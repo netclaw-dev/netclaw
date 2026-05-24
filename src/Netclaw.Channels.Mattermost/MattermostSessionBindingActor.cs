@@ -826,21 +826,15 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 return;
         }
 
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.Remove(pending);
-            await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
-        }
-        else
+        if (pending is null)
         {
             // Cold-spawn path (#979): the binding was re-spawned after passivation
             // and never observed the original ToolInteractionRequest. The approval
-            // still routes by session identity to the session actor; only the
-            // prompt redraw is skipped because there is no local prompt post.
+            // still routes by session identity to the session actor; prompt
+            // reconciliation now waits for the session-owned terminal outcome.
             _log.Info(
-                "Forwarded Mattermost approval response for call {0} to session without local pending entry; redraw skipped",
+                "Forwarded Mattermost approval response for call {0} to session without local pending entry; awaiting reconciliation output",
                 message.CallId);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
         }
 
         ReplyIfExpected(replyTo, ack);
@@ -874,6 +868,108 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 ex,
                 "Failed to update resolved approval prompt for call {CallId} postId={PostId}",
                 pending.CallId,
+                promptPostId.Value);
+        }
+    }
+
+    private async Task RecordApprovalPromptHandleAsync(ToolCallId callId, string promptHandle)
+    {
+        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+        try
+        {
+            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new RecordApprovalPromptHandle
+            {
+                SessionId = _sessionId,
+                CallId = callId,
+                PromptHandle = promptHandle
+            }, feedbackCts.Token);
+
+            if (reply is CommandNack nack)
+            {
+                _log.Warning(
+                    "Mattermost posted approval prompt for call {CallId} but failed to persist reconciliation handle: {Reason}",
+                    callId,
+                    nack.Reason);
+                ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "prompt_handle_persist_failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(ex,
+                "Mattermost posted approval prompt for call {CallId} but failed recording reconciliation handle",
+                callId);
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "prompt_handle_persist_failed");
+        }
+    }
+
+    private async Task HandleApprovalPromptReconciliationAsync(ApprovalPromptReconciliationOutput reconciliation)
+    {
+        var pending = _pendingApprovalRequests.FirstOrDefault(request => request.Request.CallId == reconciliation.CallId);
+        if (pending is not null)
+            _pendingApprovalRequests.Remove(pending);
+
+        var promptPostId = pending?.PromptPostId;
+        if (promptPostId is null && !string.IsNullOrWhiteSpace(reconciliation.PromptHandle))
+            promptPostId = new MattermostPostId(reconciliation.PromptHandle);
+
+        if (promptPostId is null)
+        {
+            _log.Warning(
+                "Mattermost could not reconcile approval prompt for call {CallId}: no local prompt state or durable handle",
+                reconciliation.CallId);
+            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "prompt_handle_missing");
+            return;
+        }
+
+        var request = pending?.Request ?? reconciliation.ToInteractionRequest();
+        string text;
+        IReadOnlyList<MattermostAttachment>? attachments;
+
+        switch (reconciliation.TerminalState)
+        {
+            case ApprovalPromptTerminalState.Resolved:
+                var resolvedAttachment = MattermostApprovalPromptBuilder.BuildResolvedAttachment(
+                    request,
+                    reconciliation.SelectedKey ?? ApprovalOptionKeys.Deny,
+                    reconciliation.ResponderSenderId ?? "unknown");
+                text = resolvedAttachment.Text ?? string.Empty;
+                attachments = [resolvedAttachment];
+                break;
+
+            case ApprovalPromptTerminalState.Abandoned:
+                var abandonedAttachment = MattermostApprovalPromptBuilder.BuildAbandonedAttachment(request);
+                text = abandonedAttachment.Text ?? string.Empty;
+                attachments = [abandonedAttachment];
+                break;
+
+            default:
+                var expiredAttachment = MattermostApprovalPromptBuilder.BuildExpiredAttachment(request);
+                text = expiredAttachment.Text ?? string.Empty;
+                attachments = [expiredAttachment];
+                break;
+        }
+
+        try
+        {
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UpdatePostAsync(
+                promptPostId.Value,
+                text,
+                attachments,
+                cts.Token);
+
+            await _dependencies.Pipeline.SendFeedbackAsync(new AcknowledgeApprovalPromptReconciliation
+            {
+                SessionId = _sessionId,
+                CallId = reconciliation.CallId
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Warning(
+                ex,
+                "Failed to reconcile Mattermost approval prompt for call {CallId} postId={PostId}",
+                reconciliation.CallId,
                 promptPostId.Value);
         }
     }
@@ -995,11 +1091,16 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 if (promptPostId is not null)
                 {
                     pendingApproval.PromptPostId = promptPostId;
+                    await RecordApprovalPromptHandleAsync(request.CallId, promptPostId.Value.Value);
                 }
                 else
                 {
                     _pendingApprovalRequests.Remove(pendingApproval);
                 }
+                break;
+
+            case ApprovalPromptReconciliationOutput reconciliation:
+                await HandleApprovalPromptReconciliationAsync(reconciliation);
                 break;
 
             // Mattermost threads don't support renaming, so SessionTitleOutput is ignored.

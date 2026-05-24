@@ -184,6 +184,25 @@ public static class SessionOutputDtoMapper
             InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds]
         },
 
+        ApprovalPromptReconciliationOutput msg => new SessionOutputDto
+        {
+            Type = SessionOutputTypes.ApprovalPromptReconciliation,
+            SessionId = msg.SessionId.Value,
+            TimestampMs = msg.TimestampMs,
+            CallId = msg.CallId.Value,
+            ToolName = msg.ToolName.Value,
+            InteractionDisplayText = msg.DisplayText,
+            InteractionPatterns = [.. msg.Patterns],
+            InteractionCandidateVerbs = [.. msg.CandidateVerbs],
+            InteractionCwd = msg.Cwd,
+            InteractionHasAdoptedContext = msg.HasAdoptedContext,
+            InteractionAdoptedSpeakerIds = [.. msg.AdoptedSpeakerIds],
+            PromptHandle = msg.PromptHandle,
+            PromptTerminalState = msg.TerminalState.ToString(),
+            SelectedKey = msg.SelectedKey,
+            ResponderSenderId = msg.ResponderSenderId
+        },
+
         _ => new SessionOutputDto
         {
             Type = SessionOutputTypes.Unknown,
@@ -336,6 +355,25 @@ public static class SessionOutputDtoMapper
                 Cwd = dto.InteractionCwd,
                 IsMessy = dto.InteractionIsMessy ?? false,
                 Options = dto.InteractionOptions ?? []
+            },
+            SessionOutputTypes.ApprovalPromptReconciliation => new ApprovalPromptReconciliationOutput
+            {
+                SessionId = sessionId,
+                TimestampMs = dto.TimestampMs,
+                CallId = new Netclaw.Tools.ToolCallId(dto.CallId ?? string.Empty),
+                ToolName = new Netclaw.Tools.ToolName(dto.ToolName ?? "unknown"),
+                DisplayText = dto.InteractionDisplayText ?? string.Empty,
+                Patterns = dto.InteractionPatterns ?? [],
+                CandidateVerbs = dto.InteractionCandidateVerbs ?? [],
+                Cwd = dto.InteractionCwd,
+                HasAdoptedContext = dto.InteractionHasAdoptedContext ?? false,
+                AdoptedSpeakerIds = dto.InteractionAdoptedSpeakerIds ?? [],
+                PromptHandle = dto.PromptHandle,
+                TerminalState = Enum.TryParse<ApprovalPromptTerminalState>(dto.PromptTerminalState, ignoreCase: true, out var terminal)
+                    ? terminal
+                    : ApprovalPromptTerminalState.Expired,
+                SelectedKey = dto.SelectedKey,
+                ResponderSenderId = dto.ResponderSenderId
             },
             _ => new ErrorOutput
             {

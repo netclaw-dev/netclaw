@@ -28,6 +28,7 @@ public static class SessionOutputTypes
     public const string Compaction = "compaction";
     public const string SessionJoined = "session_joined";
     public const string ToolInteraction = "tool_interaction";
+    public const string ApprovalPromptReconciliation = "approval_prompt_reconciliation";
     public const string Unknown = "unknown";
 }
 
@@ -110,6 +111,12 @@ public sealed record SessionOutputDto
     public bool? InteractionHasAdoptedContext { get; init; }
     public bool? InteractionHasThirdPartyAdoptedContext { get; init; }
     public List<string>? InteractionAdoptedSpeakerIds { get; init; }
+
+    // Approval Prompt Reconciliation
+    public string? PromptHandle { get; init; }
+    public string? PromptTerminalState { get; init; }
+    public string? SelectedKey { get; init; }
+    public string? ResponderSenderId { get; init; }
 
     // SubAgent
     public string? AgentName { get; init; }

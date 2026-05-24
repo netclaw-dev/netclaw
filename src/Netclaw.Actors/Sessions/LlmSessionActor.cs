@@ -75,6 +75,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly List<AITool> _availableTools = [];
     private readonly Dictionary<string, PendingToolInteraction> _pendingToolInteractions = new(StringComparer.Ordinal);
     private readonly Dictionary<string, ResolvedToolApproval> _resolvedToolApprovals = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ApprovalPromptProjection> _approvalPromptProjections = new(StringComparer.Ordinal);
     // Live-only coordination for the currently executing streamed tool batch.
     // Durable recovery derives unanswered calls from _state.History.
     private readonly ActiveToolBatchTracker _activeToolBatch = new();
@@ -257,13 +258,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Recover<ToolBatchStarted>(ApplyToolBatchStarted);
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);
+        Recover<ApprovalPromptHandleRecorded>(ApplyApprovalPromptHandleRecorded);
         Recover<ToolApprovalResolved>(ApplyToolApprovalResolved);
+        Recover<ApprovalPromptExpired>(ApplyApprovalPromptExpired);
+        Recover<ApprovalPromptReconciliationCompleted>(ApplyApprovalPromptReconciliationCompleted);
         Recover<ToolBatchAbandoned>(ApplyToolBatchAbandoned);
         Recover<SnapshotOffer>(offer =>
         {
             if (offer.Snapshot is SessionSnapshot snapshot)
             {
                 _state = SessionState.FromSnapshot(snapshot);
+                LoadApprovalPromptProjectionSnapshot(snapshot);
                 if (snapshot.EligibleDeliveryTurnNumber is { } eligibleTurn)
                     _deliveryRetry.MarkEligible(eligibleTurn);
 
@@ -364,6 +369,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CommandSubscriptionMessages();
         CommandSessionContextMessages();
         CommandSnapshotMessages();
+        CommandApprovalPromptFeedbackMessages();
 
         // Passivation: stop after idle timeout, snapshot first for fast recovery
         if (_config.IdleTimeout > TimeSpan.Zero)
@@ -394,11 +400,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _log.Info(
                     "Session idle with {ResolvedApprovalCount} resolved approval(s) but no completed tool result; abandoning parked tool batch before passivation",
                     _resolvedToolApprovals.Count);
+                var promptCallIds = _approvalPromptProjections.Values
+                    .Where(projection => projection.Terminal is null)
+                    .Select(projection => projection.CallId)
+                    .ToArray();
                 var abandoned = BuildToolBatchAbandonedEvent(
                     "Tool call was not completed — the session became idle before the approved action completed.");
                 Persist(abandoned, evt =>
                 {
                     ApplyToolBatchAbandoned(evt);
+                    foreach (var promptCallId in promptCallIds)
+                        EmitApprovalPromptReconciliationOutput(promptCallId);
                     TransitionTo(SessionPhase.Passivating);
                 });
                 return;
@@ -435,6 +447,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CommandSubscriptionMessages();
         CommandSessionContextMessages();
         CommandSnapshotMessages();
+        CommandApprovalPromptFeedbackMessages();
 
         Command<SendUserMessage>(cmd =>
         {
@@ -535,6 +548,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 CallId = msg.CallId.Value,
                 ToolName = msg.ToolName.Value,
+                DisplayText = msg.DisplayText,
                 Patterns = msg.Patterns,
                 CandidateVerbs = msg.CandidateVerbs,
                 Audience = CurrentTurnAudience(),
@@ -552,6 +566,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                         Directory = c.Directory
                     })
                     .ToArray(),
+                HasAdoptedContext = msg.HasAdoptedContext,
+                AdoptedSpeakerIds = msg.AdoptedSpeakerIds.ToArray(),
                 RequestedAtMs = NowMs()
             };
 
@@ -1082,6 +1098,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CommandSubscriptionMessages();
         CommandSessionContextMessages();
         CommandSnapshotMessages();
+        CommandApprovalPromptFeedbackMessages();
 
         // Buffer user messages during compaction (same as Processing)
         Command<SendUserMessage>(cmd =>
@@ -1414,6 +1431,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CommandSubscriptionMessages();
         CommandSessionContextMessages();
         CommandSnapshotMessages();
+        CommandApprovalPromptFeedbackMessages();
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
 
         Command<SendUserMessage>(cmd =>
@@ -2104,10 +2122,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // API, which would otherwise wedge every subsequent turn.
         if (_pendingToolInteractions.Count > 0)
         {
+            var promptCallIds = _approvalPromptProjections.Values
+                .Where(projection => projection.Terminal is null)
+                .Select(projection => projection.CallId)
+                .ToArray();
             var abandoned = BuildToolBatchAbandonedEvent();
             Persist(abandoned, evt =>
             {
                 ApplyToolBatchAbandoned(evt);
+                foreach (var promptCallId in promptCallIds)
+                    EmitApprovalPromptReconciliationOutput(promptCallId);
                 ContinueIncomingUserMessage(cmd);
             });
             return;
@@ -2390,6 +2414,56 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SaveSnapshotFailure>(msg =>
         {
             _log.Warning("Snapshot failed: {Reason}", msg.Cause.Message);
+        });
+    }
+
+    private void CommandApprovalPromptFeedbackMessages()
+    {
+        Command<RecordApprovalPromptHandle>(HandleRecordApprovalPromptHandle);
+        Command<AcknowledgeApprovalPromptReconciliation>(HandleAcknowledgeApprovalPromptReconciliation);
+    }
+
+    private void HandleRecordApprovalPromptHandle(RecordApprovalPromptHandle msg)
+    {
+        if (!_approvalPromptProjections.ContainsKey(msg.CallId.Value))
+        {
+            _log.Warning(
+                "Rejecting approval prompt handle record for unknown call {CallId}",
+                msg.CallId);
+            TryReplyNack("approval_prompt_unknown_call");
+            return;
+        }
+
+        Persist(new ApprovalPromptHandleRecorded
+        {
+            SessionId = _sessionId,
+            CallId = msg.CallId.Value,
+            PromptHandle = msg.PromptHandle,
+            RecordedAtMs = NowMs()
+        }, evt =>
+        {
+            ApplyApprovalPromptHandleRecorded(evt);
+            TryReplyAck();
+        });
+    }
+
+    private void HandleAcknowledgeApprovalPromptReconciliation(AcknowledgeApprovalPromptReconciliation msg)
+    {
+        if (!_approvalPromptProjections.ContainsKey(msg.CallId.Value))
+        {
+            TryReplyAck();
+            return;
+        }
+
+        Persist(new ApprovalPromptReconciliationCompleted
+        {
+            SessionId = _sessionId,
+            CallId = msg.CallId.Value,
+            CompletedAtMs = NowMs()
+        }, evt =>
+        {
+            ApplyApprovalPromptReconciliationCompleted(evt);
+            TryReplyAck();
         });
     }
 
@@ -3037,8 +3111,59 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         return _state.ToSnapshot() with
         {
-            EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber
+            EligibleDeliveryTurnNumber = _deliveryRetry.EligibleTurnNumber,
+            ApprovalPromptRecords = [.. _approvalPromptProjections.Values
+                .OrderBy(projection => projection.CallId, StringComparer.Ordinal)
+                .Select(projection => new SessionSnapshot.ApprovalPromptSnapshotRecord
+                {
+                    CallId = projection.CallId,
+                    ToolName = projection.ToolName,
+                    DisplayText = projection.DisplayText,
+                    Patterns = [.. projection.Patterns],
+                    CandidateVerbs = [.. projection.CandidateVerbs],
+                    Candidates = [.. projection.Candidates
+                        .Select(candidate => new SessionSnapshot.ApprovalPromptSnapshotRecord.ApprovalCandidateSnapshotRecord
+                        {
+                            Verb = candidate.Verb,
+                            Directory = candidate.Directory
+                        })],
+                    Cwd = projection.Cwd,
+                    HasAdoptedContext = projection.HasAdoptedContext,
+                    AdoptedSpeakerIds = [.. projection.AdoptedSpeakerIds],
+                    PromptHandle = projection.PromptHandle,
+                    TerminalState = projection.Terminal?.State.ToString(),
+                    SelectedKey = projection.Terminal?.SelectedKey,
+                    ResponderSenderId = projection.Terminal?.ResponderSenderId
+                })]
         };
+    }
+
+    private void LoadApprovalPromptProjectionSnapshot(SessionSnapshot snapshot)
+    {
+        _approvalPromptProjections.Clear();
+
+        foreach (var record in snapshot.ApprovalPromptRecords)
+        {
+            ApprovalPromptTerminal? terminal = null;
+            if (record.TerminalState is { } terminalState
+                && Enum.TryParse<ApprovalPromptTerminalState>(terminalState, ignoreCase: true, out var parsedTerminal))
+            {
+                terminal = new ApprovalPromptTerminal(parsedTerminal, record.SelectedKey, record.ResponderSenderId);
+            }
+
+            _approvalPromptProjections[record.CallId] = new ApprovalPromptProjection(
+                record.CallId,
+                record.ToolName,
+                record.DisplayText,
+                record.Patterns,
+                record.CandidateVerbs,
+                record.Candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToArray(),
+                record.Cwd,
+                record.HasAdoptedContext,
+                record.AdoptedSpeakerIds,
+                record.PromptHandle,
+                terminal);
+        }
     }
 
     private void ApplyTurnRecorded(TurnRecorded evt)
@@ -3109,7 +3234,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.RequestedAtMs,
             evt.OptionKeys,
             evt.Candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToArray());
+
+        _approvalPromptProjections[evt.CallId] = new ApprovalPromptProjection(
+            evt.CallId,
+            evt.ToolName,
+            evt.DisplayText,
+            evt.Patterns,
+            evt.CandidateVerbs,
+            evt.Candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToArray(),
+            evt.Cwd,
+            evt.HasAdoptedContext,
+            evt.AdoptedSpeakerIds,
+            PromptHandle: _approvalPromptProjections.TryGetValue(evt.CallId, out var existing)
+                ? existing.PromptHandle
+                : null,
+            Terminal: null);
         _resolvedToolApprovals.Remove(evt.CallId);
+    }
+
+    private void ApplyApprovalPromptHandleRecorded(ApprovalPromptHandleRecorded evt)
+    {
+        if (!_approvalPromptProjections.TryGetValue(evt.CallId, out var projection))
+            return;
+
+        _approvalPromptProjections[evt.CallId] = projection with { PromptHandle = evt.PromptHandle };
     }
 
     private void ApplyToolApprovalResolved(ToolApprovalResolved evt)
@@ -3120,6 +3268,33 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (_pendingToolInteractions.Remove(evt.CallId, out var pending))
             _resolvedToolApprovals[evt.CallId] = new ResolvedToolApproval(pending, decision);
+
+        if (_approvalPromptProjections.TryGetValue(evt.CallId, out var projection))
+        {
+            _approvalPromptProjections[evt.CallId] = projection with
+            {
+                Terminal = new ApprovalPromptTerminal(
+                    ApprovalPromptTerminalState.Resolved,
+                    evt.SelectedKey,
+                    evt.ResponderSenderId?.Value)
+            };
+        }
+    }
+
+    private void ApplyApprovalPromptExpired(ApprovalPromptExpired evt)
+    {
+        if (!_approvalPromptProjections.TryGetValue(evt.CallId, out var projection))
+            return;
+
+        _approvalPromptProjections[evt.CallId] = projection with
+        {
+            Terminal = new ApprovalPromptTerminal(ApprovalPromptTerminalState.Expired, null, null)
+        };
+    }
+
+    private void ApplyApprovalPromptReconciliationCompleted(ApprovalPromptReconciliationCompleted evt)
+    {
+        _approvalPromptProjections.Remove(evt.CallId);
     }
 
     private void ApplyToolBatchAbandoned(ToolBatchAbandoned evt)
@@ -3131,6 +3306,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ToolResult = result,
                 RecordedAtMs = evt.AbandonedAtMs
             });
+
+        foreach (var (callId, projection) in _approvalPromptProjections.ToArray())
+        {
+            if (projection.Terminal is not null)
+                continue;
+
+            _approvalPromptProjections[callId] = projection with
+            {
+                Terminal = new ApprovalPromptTerminal(ApprovalPromptTerminalState.Abandoned, null, null)
+            };
+        }
+
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
         ClearActiveToolBatchTracking();
@@ -3275,6 +3462,65 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId
         }, OutputFilter.Text);
 
+    private void EmitApprovalPromptReconciliationOutput(string callId)
+    {
+        if (!_approvalPromptProjections.TryGetValue(callId, out var projection)
+            || projection.Terminal is not { } terminal)
+        {
+            return;
+        }
+
+        EmitOutput(new ApprovalPromptReconciliationOutput
+        {
+            SessionId = _sessionId,
+            CallId = new ToolCallId(projection.CallId),
+            ToolName = new ToolName(projection.ToolName),
+            DisplayText = projection.DisplayText,
+            Patterns = projection.Patterns,
+            CandidateVerbs = projection.CandidateVerbs,
+            Candidates = projection.Candidates,
+            Cwd = projection.Cwd,
+            HasAdoptedContext = projection.HasAdoptedContext,
+            AdoptedSpeakerIds = projection.AdoptedSpeakerIds,
+            PromptHandle = projection.PromptHandle,
+            TerminalState = terminal.State,
+            SelectedKey = terminal.SelectedKey,
+            ResponderSenderId = terminal.ResponderSenderId
+        });
+    }
+
+    private bool TryHandleUnknownApprovalPrompt(string callId, bool emitExpiredNotice)
+    {
+        if (!_approvalPromptProjections.TryGetValue(callId, out var projection))
+            return false;
+
+        if (projection.Terminal is not null)
+        {
+            if (emitExpiredNotice && projection.Terminal.State == ApprovalPromptTerminalState.Expired)
+                EmitExpiredPromptNotice();
+
+            EmitApprovalPromptReconciliationOutput(callId);
+            TryReplyAck();
+            return true;
+        }
+
+        Persist(new ApprovalPromptExpired
+        {
+            SessionId = _sessionId,
+            CallId = callId,
+            ExpiredAtMs = NowMs()
+        }, evt =>
+        {
+            ApplyApprovalPromptExpired(evt);
+            if (emitExpiredNotice)
+                EmitExpiredPromptNotice();
+            EmitApprovalPromptReconciliationOutput(callId);
+            TryReplyAck();
+        });
+
+        return true;
+    }
+
     /// <summary>
     /// Classifies why a tool-interaction response could not be matched to a
     /// pending interaction. Intent is operational triage: the same expired
@@ -3284,6 +3530,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private string ClassifyUnknownApprovalCall(string callId)
     {
+        if (_approvalPromptProjections.TryGetValue(callId, out var projection)
+            && projection.Terminal is not null)
+        {
+            return $"terminal_{projection.Terminal.State.ToString().ToLowerInvariant()}";
+        }
+
         if (_resolvedToolApprovals.ContainsKey(callId))
             return "already_resolved";
 
@@ -3443,6 +3695,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!_pendingToolInteractions.TryGetValue(msg.CallId.Value, out var pending))
         {
             _log.Warning("Ignoring tool interaction response for unknown call {CallId}", msg.CallId);
+            if (TryHandleUnknownApprovalPrompt(msg.CallId.Value, emitExpiredNotice: true))
+                return;
             TryReplyNack("approval_prompt_expired");
             return;
         }
@@ -3479,10 +3733,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             CallId = msg.CallId.Value,
             Decision = decision.ToString(),
+            SelectedKey = msg.SelectedKey.Value,
+            ResponderSenderId = msg.SenderId,
             ResolvedAtMs = NowMs()
         }, evt =>
         {
             ApplyToolApprovalResolved(evt);
+            EmitApprovalPromptReconciliationOutput(msg.CallId.Value);
             afterPersist();
         });
     }
@@ -3519,6 +3776,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Warning(
                 "Tool interaction response for unknown/expired call {CallId} ({Classification}); pending={PendingCount} resolved={ResolvedCount}",
                 msg.CallId, classification, _pendingToolInteractions.Count, _resolvedToolApprovals.Count);
+            if (TryHandleUnknownApprovalPrompt(callId, emitExpiredNotice: true))
+                return;
             EmitExpiredPromptNotice();
             TryReplyNack("approval_prompt_expired");
             return;
@@ -3613,9 +3872,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _log.Info(
             "Abandoning recovered parked tool batch with {ResolvedApprovalCount} resolved approval(s) after restart",
             _resolvedToolApprovals.Count);
+        var promptCallIds = _approvalPromptProjections.Values
+            .Where(projection => projection.Terminal is null)
+            .Select(projection => projection.CallId)
+            .ToArray();
         var abandoned = BuildToolBatchAbandonedEvent(
             "Tool call was not completed — the session restarted after approval before the action completed.");
-        Persist(abandoned, ApplyToolBatchAbandoned);
+        Persist(abandoned, evt =>
+        {
+            ApplyToolBatchAbandoned(evt);
+            foreach (var promptCallId in promptCallIds)
+                EmitApprovalPromptReconciliationOutput(promptCallId);
+        });
 
         return true;
     }
