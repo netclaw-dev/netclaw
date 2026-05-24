@@ -113,6 +113,8 @@ public sealed class MattermostChannel : IChannel
             return;
         }
 
+        _gatewayClient.Disconnected += HandleGatewayDisconnectedAsync;
+
         // A misconfiguration must never escape StartAsync: an unhandled
         // exception from IHostedService.StartAsync aborts the .NET host and
         // takes the whole daemon down. A misconfigured channel degrades; it
@@ -230,6 +232,15 @@ public sealed class MattermostChannel : IChannel
         StartReconnectLoop();
     }
 
+    private Task HandleGatewayDisconnectedAsync(ChannelConnectException failure)
+    {
+        if (_lifetimeCts.IsCancellationRequested)
+            return Task.CompletedTask;
+
+        HandleConnectFailure(failure);
+        return Task.CompletedTask;
+    }
+
     private void StartReconnectLoop()
     {
         if (_reconnectTask is { IsCompleted: false })
@@ -327,6 +338,7 @@ public sealed class MattermostChannel : IChannel
         }
 
         _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
+        _gatewayClient.Disconnected -= HandleGatewayDisconnectedAsync;
 
         if (_gateway is not null)
         {

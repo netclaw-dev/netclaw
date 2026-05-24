@@ -61,6 +61,8 @@ public interface IMattermostGatewayClient
     // the WebSocket, so its client does expose an InteractionReceived event.)
     event Func<MattermostGatewayMessage, Task>? MessageReceived;
 
+    event Func<ChannelConnectException, Task>? Disconnected;
+
     bool IsConnected { get; }
 
     MattermostUserId? BotUserId { get; }
@@ -149,6 +151,12 @@ public sealed record MattermostPostResult(
 public sealed class UnconfiguredMattermostGatewayClient : IMattermostGatewayClient
 {
     public event Func<MattermostGatewayMessage, Task>? MessageReceived
+    {
+        add { }
+        remove { }
+    }
+
+    public event Func<ChannelConnectException, Task>? Disconnected
     {
         add { }
         remove { }

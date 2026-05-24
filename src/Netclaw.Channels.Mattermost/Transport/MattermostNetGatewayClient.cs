@@ -12,13 +12,16 @@ namespace Netclaw.Channels.Mattermost.Transport;
 
 internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDisposable
 {
-    private readonly MattermostClient _client;
+    private readonly IMattermostSdkClient _client;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<MattermostNetGatewayClient> _logger;
 
     private string? _serverUrl;
+    private bool _eventsAttached;
 
     public event Func<MattermostGatewayMessage, Task>? MessageReceived;
+
+    public event Func<ChannelConnectException, Task>? Disconnected;
 
     public bool IsConnected => _client.IsConnected;
     public MattermostUserId? BotUserId { get; private set; }
@@ -26,6 +29,14 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
     public MattermostNetGatewayClient(
         MattermostClient client,
+        TimeProvider timeProvider,
+        ILogger<MattermostNetGatewayClient> logger)
+        : this(new MattermostSdkClientAdapter(client), timeProvider, logger)
+    {
+    }
+
+    internal MattermostNetGatewayClient(
+        IMattermostSdkClient client,
         TimeProvider timeProvider,
         ILogger<MattermostNetGatewayClient> logger)
     {
@@ -42,12 +53,8 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
         // MattermostGatewayMessage construction site) defends against a future
         // SDK option default flip or a server-side replay that bypasses the
         // SDK filter — Slack does the same double-check.
-        _client.Options.IgnoreOwnMessages = true;
-
-        _client.OnMessageReceived += OnMessageReceived;
-        _client.OnConnected += OnConnected;
-        _client.OnDisconnected += OnDisconnected;
-        _client.OnLogMessage += OnLogMessage;
+        _client.IgnoreOwnMessages = true;
+        AttachSdkEvents();
 
         var me = await _client.GetMeAsync();
         BotUserId = new MattermostUserId(me.Id);
@@ -60,6 +67,8 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
+        DetachSdkEvents();
+
         if (!_client.IsConnected)
             return;
 
@@ -86,7 +95,8 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
         var botId = BotUserId?.Value;
         var containsMention = botId is not null
             && !string.IsNullOrEmpty(post.Text)
-            && post.Text.Contains($"@{e.Client.CurrentUserInfo.Username}", StringComparison.OrdinalIgnoreCase);
+            && BotUsername is not null
+            && post.Text.Contains($"@{BotUsername}", StringComparison.OrdinalIgnoreCase);
 
         // Mentions field is a JSON array of user IDs
         if (!containsMention && botId is not null && !string.IsNullOrEmpty(e.Message.Mentions))
@@ -145,7 +155,19 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
     private void OnDisconnected(object? sender, DisconnectionEventArgs e)
     {
-        _logger.LogWarning("Disconnected from Mattermost WebSocket: {Reason}", e.CloseStatusDescription);
+        var reason = string.IsNullOrWhiteSpace(e.CloseStatusDescription)
+            ? e.CloseStatus?.ToString() ?? "unknown reason"
+            : e.CloseStatusDescription;
+        _logger.LogWarning("Disconnected from Mattermost WebSocket: {Reason}", reason);
+
+        var disconnected = Disconnected;
+        if (disconnected is null)
+            return;
+
+        _ = NotifyDisconnectedAsync(
+            disconnected,
+            MattermostConnectFailureClassifier.Classify(
+                new InvalidOperationException($"Mattermost WebSocket disconnected: {reason}")));
     }
 
     private void OnLogMessage(object? sender, LogEventArgs e)
@@ -183,10 +205,125 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
 
     public void Dispose()
     {
+        DetachSdkEvents();
+        // Do not dispose the MattermostClient — it's owned by the DI container.
+    }
+
+    private void AttachSdkEvents()
+    {
+        if (_eventsAttached)
+            return;
+
+        _client.OnMessageReceived += OnMessageReceived;
+        _client.OnConnected += OnConnected;
+        _client.OnDisconnected += OnDisconnected;
+        _client.OnLogMessage += OnLogMessage;
+        _eventsAttached = true;
+    }
+
+    private void DetachSdkEvents()
+    {
+        if (!_eventsAttached)
+            return;
+
         _client.OnMessageReceived -= OnMessageReceived;
         _client.OnConnected -= OnConnected;
         _client.OnDisconnected -= OnDisconnected;
         _client.OnLogMessage -= OnLogMessage;
-        // Do not dispose the MattermostClient — it's owned by the DI container.
+        _eventsAttached = false;
+    }
+
+    private async Task NotifyDisconnectedAsync(
+        Func<ChannelConnectException, Task> disconnected,
+        ChannelConnectException failure)
+    {
+        try
+        {
+            await disconnected(failure);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error handling Mattermost disconnect notification");
+        }
+    }
+}
+
+internal sealed record MattermostGatewayBotIdentity(string Id, string Username);
+
+internal sealed record MattermostGatewayFileDetails(string? Name, string? MimeType, long Size);
+
+internal interface IMattermostSdkClient
+{
+    bool IsConnected { get; }
+
+    bool IgnoreOwnMessages { get; set; }
+
+    event EventHandler<MessageEventArgs>? OnMessageReceived;
+
+    event EventHandler<ConnectionEventArgs>? OnConnected;
+
+    event EventHandler<DisconnectionEventArgs>? OnDisconnected;
+
+    event EventHandler<LogEventArgs>? OnLogMessage;
+
+    Task<MattermostGatewayBotIdentity> GetMeAsync();
+
+    Task StartReceivingAsync(CancellationToken cancellationToken = default);
+
+    Task StopReceivingAsync();
+
+    Task<MattermostGatewayFileDetails> GetFileDetailsAsync(string fileId);
+}
+
+internal sealed class MattermostSdkClientAdapter(MattermostClient client) : IMattermostSdkClient
+{
+    public bool IsConnected => client.IsConnected;
+
+    public bool IgnoreOwnMessages
+    {
+        get => client.Options.IgnoreOwnMessages;
+        set => client.Options.IgnoreOwnMessages = value;
+    }
+
+    public event EventHandler<MessageEventArgs>? OnMessageReceived
+    {
+        add => client.OnMessageReceived += value;
+        remove => client.OnMessageReceived -= value;
+    }
+
+    public event EventHandler<ConnectionEventArgs>? OnConnected
+    {
+        add => client.OnConnected += value;
+        remove => client.OnConnected -= value;
+    }
+
+    public event EventHandler<DisconnectionEventArgs>? OnDisconnected
+    {
+        add => client.OnDisconnected += value;
+        remove => client.OnDisconnected -= value;
+    }
+
+    public event EventHandler<LogEventArgs>? OnLogMessage
+    {
+        add => client.OnLogMessage += value;
+        remove => client.OnLogMessage -= value;
+    }
+
+    public async Task<MattermostGatewayBotIdentity> GetMeAsync()
+    {
+        var me = await client.GetMeAsync();
+        return new MattermostGatewayBotIdentity(me.Id, me.Username);
+    }
+
+    public Task StartReceivingAsync(CancellationToken cancellationToken = default)
+        => client.StartReceivingAsync(cancellationToken);
+
+    public Task StopReceivingAsync()
+        => client.StopReceivingAsync();
+
+    public async Task<MattermostGatewayFileDetails> GetFileDetailsAsync(string fileId)
+    {
+        var details = await client.GetFileDetailsAsync(fileId);
+        return new MattermostGatewayFileDetails(details.Name, details.MimeType, details.Size);
     }
 }

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading.RateLimiting;
 using Akka.Actor;
 using Akka.Hosting;
+using Akka.Pattern;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.RateLimiting;
 using Netclaw.Actors.Hosting;
@@ -86,7 +87,7 @@ public static class MattermostActionEndpointExtensions
                 return TypedResults.BadRequest("Missing required context field: action_token.");
             }
 
-            if (!actionStore.TryConsume(actionToken, out var storedAction)
+            if (!actionStore.TryGet(actionToken, out var storedAction)
                 || storedAction is null)
             {
                 logger.LogWarning("Rejected Mattermost action callback with invalid, expired, or replayed action token");
@@ -130,6 +131,16 @@ public static class MattermostActionEndpointExtensions
                 return TypedResults.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
 
+            if (!actionStore.TryConsume(actionToken, out storedAction)
+                || storedAction is null)
+            {
+                logger.LogWarning("Rejected Mattermost action callback with invalid, expired, or replayed action token");
+                return TypedResults.Json(new ActionCallbackResponse
+                {
+                    EphemeralText = "That approval button is no longer valid. Please re-issue the request and try again."
+                }, JsonOptions);
+            }
+
             var interaction = new MattermostGatewayInteraction(
                 ChannelId: new MattermostChannelId(storedAction.ChannelId),
                 RootPostId: new MattermostRootPostId(storedAction.RootPostId),
@@ -159,6 +170,18 @@ public static class MattermostActionEndpointExtensions
                     }, JsonOptions),
                     _ => TypedResults.StatusCode(StatusCodes.Status500InternalServerError)
                 };
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                logger.LogError("Mattermost gateway actor did not acknowledge callback for call {CallId} before timeout.", storedAction.CallId);
+                RestoreActionToken(actionStore, actionToken, storedAction, logger);
+                return TypedResults.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+            catch (AskTimeoutException ex)
+            {
+                logger.LogError(ex, "Mattermost gateway actor timed out routing callback for call {CallId}", storedAction.CallId);
+                RestoreActionToken(actionStore, actionToken, storedAction, logger);
+                return TypedResults.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
             catch (Exception ex)
             {
@@ -244,4 +267,18 @@ public static class MattermostActionEndpointExtensions
             SessionIngressGate.RestartInProgressMessage => SessionIngressGate.RestartInProgressMessage,
             _ => "That approval could not be recorded. Please try again."
         };
+
+    private static void RestoreActionToken(
+        MattermostCallbackActionStore actionStore,
+        string token,
+        MattermostCallbackActionStore.StoredAction action,
+        ILogger logger)
+    {
+        if (actionStore.TryRestore(token, action))
+            return;
+
+        logger.LogWarning(
+            "Mattermost action token for call {CallId} could not be restored after transient callback failure",
+            action.CallId);
+    }
 }

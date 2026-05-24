@@ -80,6 +80,42 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
         return true;
     }
 
+    public bool TryGet(string token, out StoredAction? action)
+    {
+        action = null;
+        var now = timeProvider.GetUtcNow();
+        CleanupExpired(now);
+
+        if (!_entries.TryGetValue(token, out var entry))
+            return false;
+
+        if (entry.ExpiresAt < now)
+        {
+            _entries.TryRemove(token, out _);
+            return false;
+        }
+
+        action = entry;
+        return true;
+    }
+
+    public bool TryRestore(string token, StoredAction action)
+    {
+        var now = timeProvider.GetUtcNow();
+        CleanupExpired(now);
+
+        if (action.ExpiresAt < now)
+            return false;
+
+        if (!_entries.TryAdd(token, action))
+            return false;
+
+        _insertionOrder.Enqueue(token);
+        EvictExcess();
+        CleanupExpired(now);
+        return true;
+    }
+
     public sealed record StoredAction(
         string ChannelId,
         string CallId,

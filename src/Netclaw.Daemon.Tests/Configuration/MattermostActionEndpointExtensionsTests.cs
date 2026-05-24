@@ -344,6 +344,100 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     }
 
     [Fact]
+    public async Task Callback_before_gateway_actor_is_registered_does_not_burn_action_token()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
+        var actionStore = new MattermostCallbackActionStore(time);
+        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+
+        await using (var unavailableApp = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandAck.For(new SessionId("ch-1/root-1")),
+            recorder: new GatewayInteractionRecorder(),
+            registerGatewayActor: false))
+        {
+            var unavailableClient = unavailableApp.GetTestClient();
+            var unavailableResponse = await unavailableClient.PostAsJsonAsync("/api/mattermost/actions", new
+            {
+                user_id = "requester-1",
+                post_id = "prompt-55",
+                channel_id = "ch-1",
+                context = new Dictionary<string, string> { ["action_token"] = token }
+            }, TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, unavailableResponse.StatusCode);
+        }
+
+        var recorder = new GatewayInteractionRecorder();
+        await using var recoveredApp = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandAck.For(new SessionId("ch-1/root-1")),
+            recorder: recorder);
+        var recoveredClient = recoveredApp.GetTestClient();
+
+        var recoveredResponse = await recoveredClient.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "prompt-55",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, recoveredResponse.StatusCode);
+        var interaction = await recorder.ReadAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("call-1", interaction.CallId);
+        Assert.Equal(ApprovalOptionKeys.ApproveOnce, interaction.SelectedKey);
+    }
+
+    [Fact]
+    public async Task Callback_gateway_timeout_restores_action_token_for_retry()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
+        var actionStore = new MattermostCallbackActionStore(time);
+        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+
+        await using (var timingOutApp = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => GatewayResponderActor.NoReply.Instance,
+            recorder: new GatewayInteractionRecorder()))
+        {
+            var timingOutClient = timingOutApp.GetTestClient();
+            var timeoutResponse = await timingOutClient.PostAsJsonAsync("/api/mattermost/actions", new
+            {
+                user_id = "requester-1",
+                post_id = "prompt-55",
+                channel_id = "ch-1",
+                context = new Dictionary<string, string> { ["action_token"] = token }
+            }, TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, timeoutResponse.StatusCode);
+        }
+
+        var recorder = new GatewayInteractionRecorder();
+        await using var recoveredApp = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandAck.For(new SessionId("ch-1/root-1")),
+            recorder: recorder);
+        var recoveredClient = recoveredApp.GetTestClient();
+
+        var recoveredResponse = await recoveredClient.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "prompt-55",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, recoveredResponse.StatusCode);
+        var interaction = await recorder.ReadAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("call-1", interaction.CallId);
+    }
+
+    [Fact]
     public async Task Callback_accepts_clicked_prompt_post_id_instead_of_thread_root()
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
@@ -433,6 +527,13 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
 
     private sealed class GatewayResponderActor : ReceiveActor
     {
+        public sealed class NoReply
+        {
+            public static readonly NoReply Instance = new();
+
+            private NoReply() { }
+        }
+
         public GatewayResponderActor(
             Func<MattermostGatewayInteraction, object> gatewayResponseFactory,
             GatewayInteractionRecorder recorder)
@@ -440,7 +541,9 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
             Receive<MattermostGatewayInteraction>(interaction =>
             {
                 recorder.Record(interaction);
-                Sender.Tell(gatewayResponseFactory(interaction));
+                var response = gatewayResponseFactory(interaction);
+                if (!ReferenceEquals(response, NoReply.Instance))
+                    Sender.Tell(response);
             });
         }
     }
