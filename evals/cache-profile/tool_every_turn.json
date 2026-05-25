@@ -1,0 +1,44 @@
+{
+  "scenario": "tool_every_turn",
+  "description": "Tool call on every turn \u2014 does execution bust the cache?",
+  "turns": [
+    {
+      "turn": 1,
+      "input": 8643,
+      "output": 46,
+      "cached": 8192,
+      "prompt_ms": 1163.559,
+      "ttft_ms": 7712.5
+    },
+    {
+      "turn": 2,
+      "input": 8750,
+      "output": 90,
+      "cached": 8192,
+      "prompt_ms": 1244.17,
+      "ttft_ms": 5652
+    },
+    {
+      "turn": 3,
+      "input": 9032,
+      "output": 121,
+      "cached": 8464,
+      "prompt_ms": 1277.838,
+      "ttft_ms": 6612.2
+    },
+    {
+      "turn": 4,
+      "input": 9029,
+      "output": 106,
+      "cached": 8192,
+      "prompt_ms": 1815.401,
+      "ttft_ms": 3268.7
+    }
+  ],
+  "totals": {
+    "total_input": 35454,
+    "total_cached": 33040,
+    "total_output": 363,
+    "effective_processed": 2777
+  }
+}

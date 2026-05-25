@@ -1,0 +1,44 @@
+{
+  "scenario": "context_heavy",
+  "description": "Conversation where responses are long, growing context fast",
+  "turns": [
+    {
+      "turn": 1,
+      "input": 9169,
+      "output": 1266,
+      "cached": 8192,
+      "prompt_ms": 1984.957,
+      "ttft_ms": 3734.2
+    },
+    {
+      "turn": 2,
+      "input": 11299,
+      "output": 1275,
+      "cached": 8192,
+      "prompt_ms": 6215.469,
+      "ttft_ms": 29370.4
+    },
+    {
+      "turn": 3,
+      "input": 15135,
+      "output": 1672,
+      "cached": 8192,
+      "prompt_ms": 13144.664,
+      "ttft_ms": 58917.9
+    },
+    {
+      "turn": 4,
+      "input": 16797,
+      "output": 1627,
+      "cached": 8192,
+      "prompt_ms": 16317.276,
+      "ttft_ms": 27381.1
+    }
+  ],
+  "totals": {
+    "total_input": 52400,
+    "total_cached": 32768,
+    "total_output": 5840,
+    "effective_processed": 25472
+  }
+}

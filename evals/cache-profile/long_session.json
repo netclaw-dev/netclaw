@@ -1,0 +1,76 @@
+{
+  "scenario": "long_session",
+  "description": "Extended 8-turn conversation to see progressive cache behavior",
+  "turns": [
+    {
+      "turn": 1,
+      "input": 9152,
+      "output": 129,
+      "cached": 8192,
+      "prompt_ms": 1957.888,
+      "ttft_ms": 2955.3
+    },
+    {
+      "turn": 2,
+      "input": 8703,
+      "output": 227,
+      "cached": 8192,
+      "prompt_ms": 1204.43,
+      "ttft_ms": 3546.5
+    },
+    {
+      "turn": 3,
+      "input": 8894,
+      "output": 308,
+      "cached": 8192,
+      "prompt_ms": 2047.879,
+      "ttft_ms": 26258.9
+    },
+    {
+      "turn": 4,
+      "input": 9133,
+      "output": 597,
+      "cached": 8378,
+      "prompt_ms": 1649.744,
+      "ttft_ms": 4758.6
+    },
+    {
+      "turn": 5,
+      "input": 9643,
+      "output": 249,
+      "cached": 8378,
+      "prompt_ms": 2550.913,
+      "ttft_ms": 6686.9
+    },
+    {
+      "turn": 6,
+      "input": 9739,
+      "output": 273,
+      "cached": 8378,
+      "prompt_ms": 3108.343,
+      "ttft_ms": 24604.6
+    },
+    {
+      "turn": 7,
+      "input": 9955,
+      "output": 469,
+      "cached": 8378,
+      "prompt_ms": 3191.507,
+      "ttft_ms": 10621
+    },
+    {
+      "turn": 8,
+      "input": 10114,
+      "output": 190,
+      "cached": 8378,
+      "prompt_ms": 3413.379,
+      "ttft_ms": 6258.8
+    }
+  ],
+  "totals": {
+    "total_input": 75333,
+    "total_cached": 66466,
+    "total_output": 2442,
+    "effective_processed": 11309
+  }
+}

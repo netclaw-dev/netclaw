@@ -1,0 +1,36 @@
+{
+  "scenario": "memory_recall",
+  "description": "Plant a fact, distract, then recall it",
+  "turns": [
+    {
+      "turn": 1,
+      "input": 8720,
+      "output": 55,
+      "cached": 8192,
+      "prompt_ms": 1439.396,
+      "ttft_ms": 30017.4
+    },
+    {
+      "turn": 2,
+      "input": 8757,
+      "output": 45,
+      "cached": 8192,
+      "prompt_ms": 1494.623,
+      "ttft_ms": 2605.3
+    },
+    {
+      "turn": 3,
+      "input": 8916,
+      "output": 37,
+      "cached": 8192,
+      "prompt_ms": 1608.141,
+      "ttft_ms": 2437.7
+    }
+  ],
+  "totals": {
+    "total_input": 26393,
+    "total_cached": 24576,
+    "total_output": 137,
+    "effective_processed": 1954
+  }
+}

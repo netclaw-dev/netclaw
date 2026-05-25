@@ -1,0 +1,44 @@
+{
+  "scenario": "tool_then_text",
+  "description": "Tool calls first, then text-only \u2014 does cache recover?",
+  "turns": [
+    {
+      "turn": 1,
+      "input": 8801,
+      "output": 133,
+      "cached": 8192,
+      "prompt_ms": 1474.11,
+      "ttft_ms": 7730.5
+    },
+    {
+      "turn": 2,
+      "input": 8938,
+      "output": 48,
+      "cached": 8372,
+      "prompt_ms": 1468.291,
+      "ttft_ms": 7040.5
+    },
+    {
+      "turn": 3,
+      "input": 8901,
+      "output": 138,
+      "cached": 8192,
+      "prompt_ms": 1843.653,
+      "ttft_ms": 6725
+    },
+    {
+      "turn": 4,
+      "input": 8959,
+      "output": 123,
+      "cached": 8385,
+      "prompt_ms": 1486.056,
+      "ttft_ms": 3236.6
+    }
+  ],
+  "totals": {
+    "total_input": 35599,
+    "total_cached": 33141,
+    "total_output": 442,
+    "effective_processed": 2900
+  }
+}
