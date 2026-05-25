@@ -314,6 +314,49 @@ public sealed class SessionMessageAssemblerTests
     }
 
     [Fact]
+    public void Volatile_block_drop_emits_warning_when_no_user_message_in_history()
+    {
+        // History contains only System + Assistant — no User-role message.
+        // The volatile block has nowhere to land. CLAUDE.md "No silent
+        // fallbacks" requires we surface this loudly rather than drop in
+        // silence.
+        var history = ImmutableList.Create(
+            new SerializableChatMessage { Role = ProtocolChatRole.System, Content = PersistedSystemPrompt },
+            new SerializableChatMessage { Role = ProtocolChatRole.Assistant, Content = "post-compaction summary" });
+
+        var input = MakeInput(history, FakeRecall("important-memory"));
+
+        var warnings = new List<string>();
+        var messages = SessionMessageAssembler.Assemble(input, warn: warnings.Add);
+
+        Assert.Single(warnings);
+        Assert.Contains("volatile_block_dropped", warnings[0]);
+        Assert.Contains("reason=no_user_message", warnings[0]);
+
+        // And the volatile content really did NOT leak into any message.
+        var allText = string.Join("\n", messages.Select(m => m.Text ?? string.Empty));
+        Assert.DoesNotContain("[memory-recall]", allText);
+        Assert.DoesNotContain("important-memory", allText);
+    }
+
+    [Fact]
+    public void Volatile_block_drop_does_not_warn_when_volatile_is_empty()
+    {
+        // No recall, no working context, no slash command → volatile block
+        // is empty → no warning fires even if no user message exists.
+        var history = ImmutableList.Create(
+            new SerializableChatMessage { Role = ProtocolChatRole.System, Content = PersistedSystemPrompt },
+            new SerializableChatMessage { Role = ProtocolChatRole.Assistant, Content = "post-compaction summary" });
+
+        var input = MakeInput(history, activeRecall: null);
+
+        var warnings = new List<string>();
+        SessionMessageAssembler.Assemble(input, warn: warnings.Add);
+
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
     public void Volatile_tail_is_suppressed_when_empty()
     {
         // No recall, no working context, no slash command, no overlay, no

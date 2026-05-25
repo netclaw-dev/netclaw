@@ -101,4 +101,25 @@ public sealed class ContextOverflowDetectionTests
         var ex = new ProviderException(msg, msg, statusCode: 400);
         Assert.False(LlmSessionActor.IsContextOverflowError(ex));
     }
+
+    [Fact]
+    public void Non_400_with_structural_keyword_does_not_suppress_overflow_classification()
+    {
+        // A 5xx (or non-400) exception whose message incidentally contains
+        // a structural keyword must NOT suppress overflow detection. The
+        // structural short-circuit is gated on ProviderException{StatusCode:400}.
+        const string msg = "upstream proxy returned invalid role configuration; context length exceeded retrying";
+        var ex = new ProviderException(msg, msg, statusCode: 500);
+        Assert.True(LlmSessionActor.IsContextOverflowError(ex));
+    }
+
+    [Fact]
+    public void Non_400_with_only_structural_keyword_is_not_overflow()
+    {
+        // 5xx without any overflow keyword should not classify as overflow
+        // regardless of structural-keyword presence (control case).
+        const string msg = "upstream proxy returned invalid role configuration";
+        var ex = new ProviderException(msg, msg, statusCode: 500);
+        Assert.False(LlmSessionActor.IsContextOverflowError(ex));
+    }
 }

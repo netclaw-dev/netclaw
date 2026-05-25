@@ -2565,7 +2565,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SkillHint: skillHint,
             // Canonical names live in history (post-PR follow-up); the
             // LLM provider wants the sanitized alias back on the wire.
-            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName));
+            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName),
+            warn: msg => TurnLog().Warning(msg));
         _startupContextInjected = true;
 
         var self = Self;

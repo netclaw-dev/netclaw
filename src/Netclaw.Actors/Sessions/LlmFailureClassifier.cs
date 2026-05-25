@@ -83,19 +83,19 @@ internal static class LlmFailureClassifier
         // overflow path triggers a doomed compaction → retry → second 400,
         // ending in the misleading user message "Context window exceeded
         // even after compaction." Compaction cannot fix a wire-format bug.
-        var current = ex;
-        while (current is not null)
-        {
-            if (ContainsStructuralBadRequestKeyword(current.Message))
-                return false;
-            current = current.InnerException;
-        }
-
+        //
+        // Gate strictly on ProviderException{StatusCode:400}: a 5xx whose
+        // chain incidentally contains a structural keyword (e.g.,
+        // "invalid role configuration in proxy") must NOT suppress overflow
+        // classification on the outer exception.
         var providerEx = FindException<ProviderException>(ex);
+        if (providerEx is { StatusCode: 400 } && ContainsStructuralBadRequestKeyword(providerEx.Message))
+            return false;
+
         if (providerEx is { StatusCode: 400 } && ContainsOverflowKeyword(providerEx.Message))
             return true;
 
-        current = ex;
+        var current = ex;
         while (current is not null)
         {
             if (ContainsOverflowKeyword(current.Message))

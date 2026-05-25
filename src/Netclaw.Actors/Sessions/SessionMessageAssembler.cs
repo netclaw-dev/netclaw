@@ -108,7 +108,7 @@ public static class SessionMessageAssembler
         "Never silently ignore an attachment the user sent — always acknowledge what you received by name, " +
         "even if you cannot fully process it.";
 
-    public static List<AiChatMessage> Assemble(ContextAssemblyInput input)
+    public static List<AiChatMessage> Assemble(ContextAssemblyInput input, Action<string>? warn = null)
     {
         var sessionDir = SessionDirectoryHelper.GetSessionDirectory(input.SessionId, input.SessionsBasePath);
         var messages = ChatMessageConverter.ToAiMessages(
@@ -134,7 +134,7 @@ public static class SessionMessageAssembler
         var volatileBlock = BuildVolatileContextBlock(input);
         if (!string.IsNullOrEmpty(volatileBlock))
         {
-            PrependContextToLastUserMessage(messages, volatileBlock);
+            PrependContextToLastUserMessage(messages, volatileBlock, warn);
         }
 
         return messages;
@@ -146,10 +146,13 @@ public static class SessionMessageAssembler
     /// <c>&lt;context&gt;...&lt;/context&gt;</c> tags. Preserves any
     /// non-text contents (images, attachments) on that message intact.
     /// If no User message is present (edge case: fresh session before
-    /// the first user turn lands in history), the volatile block is
-    /// silently dropped — there is no valid wire position for it.
+    /// the first user turn lands in history, or post-compaction state
+    /// where only System/Assistant/Tool messages remain), the volatile
+    /// block has no valid wire position; the assembler invokes
+    /// <paramref name="warn"/> so the caller can surface this as a loud
+    /// failure instead of silently degrading.
     /// </summary>
-    private static void PrependContextToLastUserMessage(List<AiChatMessage> messages, string volatileBlock)
+    private static void PrependContextToLastUserMessage(List<AiChatMessage> messages, string volatileBlock, Action<string>? warn)
     {
         var prefix = "<context>\n" + volatileBlock + "\n</context>\n\n";
 
@@ -181,6 +184,8 @@ public static class SessionMessageAssembler
             messages[i] = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, newContents);
             return;
         }
+
+        warn?.Invoke($"volatile_block_dropped reason=no_user_message chars={volatileBlock.Length}");
     }
 
     private static string BuildStaticContextBlock(ContextAssemblyInput input, string sessionDir)
