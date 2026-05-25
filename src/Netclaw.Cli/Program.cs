@@ -15,6 +15,7 @@ using Netclaw.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli;
 using Netclaw.Cli.Approvals;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Json;
@@ -25,6 +26,9 @@ using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Config;
+using Netclaw.Cli.Tui.Sections;
+using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Cli.Skills;
 using Netclaw.Cli.Update;
 using Netclaw.Cli.Webhooks;
@@ -159,6 +163,11 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton(TimeProvider.System);
             builder.Services.AddSingleton<DaemonManager>();
             builder.Services.AddSingleton<IBrowserAutomationBootstrapper, BrowserAutomationBootstrapper>();
+            builder.Services
+                .AddSectionEditor<ProviderStepViewModel>()
+                .AddSectionEditor<IdentityStepViewModel>()
+                .AddSectionEditor<SecurityPostureStepViewModel>()
+                .AddSectionEditor<FeatureSelectionStepViewModel>();
 
             // Register DaemonClient, ChatNavigationState, and SessionConfig for ChatPage
             // (uses freshly-written config from the wizard's WriteConfig)
@@ -854,10 +863,71 @@ static async Task RunAsync(string[] args)
         return;
     }
 
-    // ── Config management stubs ──
+    // ── Config dashboard ──
     if (mode is "config")
     {
-        Console.WriteLine("netclaw config: not yet implemented");
+        var configPaths = new NetclawPaths();
+        configPaths.EnsureDirectoriesExist();
+
+        var configExitCode = ConfigCommand.Run(args, configPaths);
+        if (configExitCode != 0 || (args.Length > 1 && IsHelpToken(args[1])))
+        {
+            Environment.ExitCode = configExitCode;
+            return;
+        }
+
+        var builder = Host.CreateApplicationBuilder(args);
+        ConfigureConfigServices(builder.Services, builder.Configuration);
+        builder.Services.AddSingleton(configPaths);
+        builder.Services.AddSingleton(new ConfigDashboardNavigationState());
+        builder.Services.AddProviderDescriptors();
+        builder.Services.AddHttpClient("OAuthDeviceFlow");
+        builder.Services.AddSingleton(sp =>
+            new OAuthDeviceFlowService(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                sp.GetService<TimeProvider>()));
+        builder.Services.AddSingleton(sp =>
+            new OpenAiDeviceFlowService(
+                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+                sp.GetService<TimeProvider>()));
+        builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+        builder.Logging.ClearProviders();
+        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+        var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
+        builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+        builder.Services.AddTermina("/config", t =>
+        {
+            t.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>("/config");
+            t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
+            t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
+            t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
+        });
+
+        using var host = builder.Build();
+        await RunTerminaHostAsync(host);
+
+        var navigationState = host.Services.GetRequiredService<ConfigDashboardNavigationState>();
+        if (navigationState.PendingAction == ConfigDashboardAction.RunDoctor)
+        {
+            var doctorArgs = new[] { "doctor" };
+            var doctorBuilder = Host.CreateApplicationBuilder(doctorArgs);
+            ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
+            doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+            doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            doctorBuilder.Services.AddDoctorChecks();
+            doctorBuilder.Logging.ClearProviders();
+            doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+            using var doctorHost = doctorBuilder.Build();
+            using var scope = doctorHost.Services.CreateScope();
+            var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
+            var result = await runner.RunAsync();
+            WriteDoctorResult(result);
+            Environment.ExitCode = result.ExitCode;
+        }
+
         return;
     }
 
@@ -1129,7 +1199,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  init                     First-run setup wizard");
     Console.WriteLine("  update                   Check for and install updates");
     Console.WriteLine("  version, --version       Show CLI version");
-    Console.WriteLine("  config                   Configuration management (planned)");
+    Console.WriteLine("  config                   Main post-install settings dashboard");
     Console.WriteLine();
     Console.WriteLine("Run `netclaw <command> --help` for details on any command.");
     Console.WriteLine();

@@ -177,4 +177,35 @@ public sealed class FeatureSelectionStepViewModelTests : WizardStepTestBase
         AssertNoEnabledKey(config, "Webhooks");
     }
 
+    [Fact]
+    public void OnEnter_PrefillsFromExistingConfig()
+    {
+        using var step = new FeatureSelectionStepViewModel();
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = Context.Registry,
+            RequestRedraw = () => { },
+            SelectedPosture = DeploymentPosture.Team,
+            ExistingConfig = new Dictionary<string, object>
+            {
+                ["Memory"] = new Dictionary<string, object> { ["Enabled"] = false },
+                ["Search"] = new Dictionary<string, object> { ["Enabled"] = true },
+                ["SkillSync"] = new Dictionary<string, object> { ["Enabled"] = false },
+                ["Scheduling"] = new Dictionary<string, object> { ["Enabled"] = true },
+                ["SubAgents"] = new Dictionary<string, object> { ["Enabled"] = false },
+                ["Webhooks"] = new Dictionary<string, object> { ["Enabled"] = true }
+            }
+        };
+
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        Assert.False(step.IsFeatureEnabled(0));
+        Assert.True(step.IsFeatureEnabled(1));
+        Assert.False(step.IsFeatureEnabled(2));
+        Assert.True(step.IsFeatureEnabled(3));
+        Assert.False(step.IsFeatureEnabled(4));
+        Assert.True(step.IsFeatureEnabled(5));
+    }
+
 }

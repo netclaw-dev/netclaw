@@ -5,6 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Reflection;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -13,7 +16,8 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for configuring agent identity (name, communication style, user profile, webhook, workspaces).
 /// 6 sub-steps: agent name → comm style → user name → timezone → workspaces directory → webhook URL.
 /// </summary>
-public sealed class IdentityStepViewModel : IWizardStepViewModel
+[NoDoctorChecks("Identity is synthetic and init-owned. Doctor coverage applies to the underlying config and generated identity files instead.")]
+public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
 {
     private int _currentSubStep;
     private int _highWaterSubStep;
@@ -21,6 +25,11 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
     public string StepId => WizardStepIds.Identity;
     public string DisplayTitle => "Identity";
+    public string SectionId => StepId;
+    public string DisplayName => DisplayTitle;
+    public string? Category => null;
+    public bool ShowInMenu => false;
+    public IReadOnlyList<string> RelevantDoctorChecks => [];
 
     // ── State ──
     public string AgentName { get; set; } = "Netclaw";
@@ -71,6 +80,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
         _context = context;
+        PrefillFromExistingConfig(context);
         if (direction == NavigationDirection.Forward)
             _currentSubStep = 0;
         else if (direction == NavigationDirection.Back)
@@ -110,6 +120,37 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
         // Memory backend check (always SQLite)
         runner.Add(new HealthCheckItem("Memory backend (SQLite)", true));
         return Task.CompletedTask;
+    }
+
+    public SectionStatus GetStatus(WizardContext context)
+        => HasPersistedIdentity(context) ? SectionStatus.Configured : SectionStatus.NotConfigured;
+
+    public string Summary(WizardContext context)
+    {
+        var name = !string.IsNullOrWhiteSpace(AgentName) ? AgentName : ReadString(context, "Identity.AgentName");
+        var timezone = !string.IsNullOrWhiteSpace(UserTimezone) ? UserTimezone : ReadString(context, "Identity.UserTimezone");
+        return string.IsNullOrWhiteSpace(name) ? "Not configured" : string.IsNullOrWhiteSpace(timezone) ? name : $"{name} ({timezone})";
+    }
+
+    public IWizardStepViewModel CreateEditor(IServiceProvider services)
+        => ActivatorUtilities.CreateInstance<IdentityStepViewModel>(services);
+
+    public SectionContribution BuildContribution(IWizardStepViewModel editor)
+    {
+        var vm = (IdentityStepViewModel)editor;
+        return new SectionContribution(
+        [
+            new SectionFieldAction("Identity.AgentName", SectionFieldActionKind.Set, vm.AgentName),
+            new SectionFieldAction("Identity.CommunicationStyle", SectionFieldActionKind.Set, vm.CommunicationStyle ?? "Concise & casual"),
+            string.IsNullOrWhiteSpace(vm.UserName)
+                ? new SectionFieldAction("Identity.UserName", SectionFieldActionKind.Delete)
+                : new SectionFieldAction("Identity.UserName", SectionFieldActionKind.Set, vm.UserName),
+            new SectionFieldAction("Identity.UserTimezone", SectionFieldActionKind.Set, vm.UserTimezone),
+            new SectionFieldAction("Workspaces.Directory", SectionFieldActionKind.Set, vm.WorkspacesDirectory),
+            string.IsNullOrWhiteSpace(vm.WebhookUrl)
+                ? new SectionFieldAction("Notifications", SectionFieldActionKind.Delete)
+                : new SectionFieldAction("Notifications", SectionFieldActionKind.Set, BuildNotifications(vm.WebhookUrl!))
+        ]);
     }
 
     /// <summary>
@@ -289,6 +330,50 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
 
         File.WriteAllText(path, content);
     }
+
+    private void PrefillFromExistingConfig(WizardContext context)
+    {
+        if (context.ExistingConfig is null)
+            return;
+
+        AgentName = ReadString(context, "Identity.AgentName") ?? AgentName;
+        CommunicationStyle ??= ReadString(context, "Identity.CommunicationStyle");
+        UserName ??= ReadString(context, "Identity.UserName");
+        UserTimezone = ReadString(context, "Identity.UserTimezone") ?? UserTimezone;
+        WorkspacesDirectory = ReadString(context, "Workspaces.Directory") ?? WorkspacesDirectory;
+
+        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Notifications.Webhooks", out var webhooks)
+            && webhooks is object[] items
+            && items.Length > 0
+            && items[0] is Dictionary<string, object> firstWebhook
+            && firstWebhook.TryGetValue("Url", out var urlValue)
+            && urlValue is string url)
+        {
+            WebhookUrl ??= url;
+        }
+    }
+
+    private static bool HasPersistedIdentity(WizardContext context)
+        => !string.IsNullOrWhiteSpace(ReadString(context, "Identity.AgentName"));
+
+    private static string? ReadString(WizardContext context, string path)
+        => context.ExistingConfig is not null
+           && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, path, out var value)
+            ? value as string
+            : null;
+
+    private static Dictionary<string, object> BuildNotifications(string webhookUrl)
+        => new()
+        {
+            ["Webhooks"] = new object[]
+            {
+                new Dictionary<string, object>
+                {
+                    ["Url"] = webhookUrl,
+                    ["Format"] = WebhookFormatDetection.InferFromUrl(webhookUrl).ToString()
+                }
+            }
+        };
 
     public void Dispose() { }
 }

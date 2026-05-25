@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -113,6 +114,79 @@ internal static class ConfigFileHelper
         SecretsFileWriter.Write(paths.SecretsPath, data, options: JsonDefaults.Indented, protector: protector);
     }
 
+    internal static bool PathPresent(Dictionary<string, object> root, string path)
+        => TryGetPathValue(root, path, out _);
+
+    internal static bool TryGetPathValue(Dictionary<string, object> root, string path, out object? value)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        object? current = root;
+
+        foreach (var segment in segments)
+        {
+            if (!TryGetChildValue(current, segment, out current))
+            {
+                value = null;
+                return false;
+            }
+        }
+
+        value = NormalizeNodeValue(current);
+        return true;
+    }
+
+    internal static void SetPathValue(Dictionary<string, object> root, string path, object? value)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        Dictionary<string, object> current = root;
+
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            var segment = segments[i];
+            current = GetOrCreateSection(current, segment);
+        }
+
+        current[segments[^1]] = value!;
+    }
+
+    internal static bool RemovePath(Dictionary<string, object> root, string path)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        Dictionary<string, object>? current = root;
+
+        for (var i = 0; i < segments.Length - 1; i++)
+        {
+            current = current is null ? null : GetSectionOrNull(current, segments[i]);
+            if (current is null)
+                return false;
+        }
+
+        if (current is null)
+            return false;
+
+        var removed = current.Remove(segments[^1]);
+        if (!removed)
+            return false;
+
+        PruneEmptySections(root, segments);
+        return true;
+    }
+
+    internal static bool SecretPresent(Configuration.NetclawPaths paths, string path)
+    {
+        var secrets = LoadJsonDict(paths.SecretsPath);
+        return PathPresent(secrets, path);
+    }
+
     internal static string DecryptIfEncrypted(Configuration.NetclawPaths paths, string? value)
     {
         if (string.IsNullOrEmpty(value) || !ISecretsProtector.IsEncrypted(value))
@@ -120,5 +194,62 @@ internal static class ConfigFileHelper
 
         var protector = SecretsProtection.CreateProtector(paths);
         return protector.Unprotect(value);
+    }
+
+    private static bool TryGetChildValue(object? current, string segment, out object? child)
+    {
+        switch (current)
+        {
+            case Dictionary<string, object> dict when dict.TryGetValue(segment, out child):
+                return true;
+            case JsonObject jsonObject when jsonObject.TryGetPropertyValue(segment, out var node):
+                child = node;
+                return true;
+            case JsonElement element when element.ValueKind == JsonValueKind.Object && element.TryGetProperty(segment, out var property):
+                child = property;
+                return true;
+            default:
+                child = null;
+                return false;
+        }
+    }
+
+    private static object? NormalizeNodeValue(object? value)
+        => value switch
+        {
+            JsonElement element when element.ValueKind == JsonValueKind.Object
+                => JsonSerializer.Deserialize<Dictionary<string, object>>(element.GetRawText()),
+            JsonElement element when element.ValueKind == JsonValueKind.Array
+                => JsonSerializer.Deserialize<object[]>(element.GetRawText()),
+            JsonElement element when element.ValueKind == JsonValueKind.String
+                => element.GetString(),
+            JsonElement element when element.ValueKind == JsonValueKind.True
+                => true,
+            JsonElement element when element.ValueKind == JsonValueKind.False
+                => false,
+            JsonElement element when element.ValueKind == JsonValueKind.Number && element.TryGetInt64(out var longValue)
+                => longValue,
+            JsonElement element when element.ValueKind == JsonValueKind.Number
+                => element.GetDouble(),
+            JsonNode node => node.Deserialize<object>(),
+            _ => value
+        };
+
+    private static void PruneEmptySections(Dictionary<string, object> root, string[] segments)
+    {
+        for (var depth = segments.Length - 1; depth > 0; depth--)
+        {
+            var parentPath = string.Join('.', segments.Take(depth));
+            if (!TryGetPathValue(root, parentPath, out var parentValue)
+                || parentValue is not Dictionary<string, object> parentSection)
+            {
+                continue;
+            }
+
+            if (parentSection.Count != 0)
+                break;
+
+            RemovePath(root, parentPath);
+        }
     }
 }

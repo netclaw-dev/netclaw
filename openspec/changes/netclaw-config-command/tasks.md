@@ -1,33 +1,33 @@
 ## 1. OpenSpec planning artifacts and traceability
 
-- [ ] 1.1 Confirm proposal, design, and spec deltas reflect the
+- [x] 1.1 Confirm proposal, design, and spec deltas reflect the
   domain-oriented config IA and the locked ownership split.
-- [ ] 1.2 Remove planning language that still assumes Enterprise posture,
+- [x] 1.2 Remove planning language that still assumes Enterprise posture,
   per-audience runtime feature toggles, per-audience shell mode, inline
   MCP permission editing, flat dashboards, or byte-identical assertions.
-- [ ] 1.3 Run `openspec validate netclaw-config-command --type change`.
+- [x] 1.3 Run `openspec validate netclaw-config-command --type change`.
 
 ## 2. Command entry and refusal behavior
 
-- [ ] 2.1 Add `netclaw config` to CLI routing.
-- [ ] 2.2 Refuse with a plain non-zero message when no install/config is
+- [x] 2.1 Add `netclaw config` to CLI routing.
+- [x] 2.2 Refuse with a plain non-zero message when no install/config is
   present: direct operators to `netclaw init` and render no TUI.
-- [ ] 2.3 Keep `--help` discoverable from `netclaw --help`.
+- [x] 2.3 Keep `--help` discoverable from `netclaw --help`.
 
 ## 3. Root dashboard IA
 
-- [ ] 3.1 Implement the root dashboard as domain navigation, not a flat
+- [x] 3.1 Implement the root dashboard as domain navigation, not a flat
   list of every leaf editor.
-- [ ] 3.2 Add these root entries: Inference Providers, Models, Channels,
+- [x] 3.2 Add these root entries: Inference Providers, Models, Channels,
   Inbound Webhooks, Skill Sources, Search, Browser Automation,
   Telemetry & Alerting, Security & Access.
-- [ ] 3.3 Add Quit and Run Full Doctor affordances at the root.
+- [x] 3.3 Add Quit and Run Full Doctor affordances at the root.
 
 ## 4. Routed handoffs
 
-- [ ] 4.1 Route `Inference Providers` to `netclaw provider`.
-- [ ] 4.2 Route `Models` to `netclaw model`.
-- [ ] 4.3 Add shallow routing coverage for both handoffs.
+- [x] 4.1 Route `Inference Providers` to `netclaw provider`.
+- [x] 4.2 Route `Models` to `netclaw model`.
+- [x] 4.3 Add shallow routing coverage for both handoffs.
 
 ## 5. Channels area
 
@@ -129,5 +129,5 @@
 - [ ] 15.3 `./scripts/smoke/run-smoke.sh light` clean.
 - [ ] 15.4 `dotnet slopwatch analyze` clean.
 - [ ] 15.5 `./scripts/Add-FileHeaders.ps1 -Verify` clean.
-- [ ] 15.6 `openspec validate netclaw-config-command --type change`
+- [x] 15.6 `openspec validate netclaw-config-command --type change`
   passes.

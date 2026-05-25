@@ -127,4 +127,38 @@ public sealed class IdentityStepViewModelTests : WizardStepTestBase
         Assert.Null(step.CommunicationStyle);
         Assert.Equal(TimeZoneInfo.Local.Id, step.UserTimezone);
     }
+
+    [Fact]
+    public void OnEnter_PrefillsFromExistingConfig()
+    {
+        using var step = new IdentityStepViewModel();
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = Context.Registry,
+            RequestRedraw = () => { },
+            ExistingConfig = new Dictionary<string, object>
+            {
+                ["Identity"] = new Dictionary<string, object>
+                {
+                    ["AgentName"] = "ExistingBot",
+                    ["CommunicationStyle"] = "Detailed & casual",
+                    ["UserName"] = "Dana",
+                    ["UserTimezone"] = "UTC"
+                },
+                ["Workspaces"] = new Dictionary<string, object>
+                {
+                    ["Directory"] = "/tmp/workspaces"
+                }
+            }
+        };
+
+        step.OnEnter(context, NavigationDirection.Forward);
+
+        Assert.Equal("ExistingBot", step.AgentName);
+        Assert.Equal("Detailed & casual", step.CommunicationStyle);
+        Assert.Equal("Dana", step.UserName);
+        Assert.Equal("UTC", step.UserTimezone);
+        Assert.Equal("/tmp/workspaces", step.WorkspacesDirectory);
+    }
 }

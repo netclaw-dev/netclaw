@@ -10,6 +10,7 @@ using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Secrets;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -22,10 +23,12 @@ namespace Netclaw.Cli.Tui.Wizard;
 public sealed class WizardConfigBuilder
 {
     private readonly NetclawPaths _paths;
+    private readonly Dictionary<string, object> _existingConfig;
 
     public WizardConfigBuilder(NetclawPaths paths)
     {
         _paths = paths;
+        _existingConfig = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
     }
 
     // ── Typed sections populated by steps ──
@@ -59,9 +62,7 @@ public sealed class WizardConfigBuilder
         _paths.EnsureDirectoriesExist();
         PreserveExistingUpdateChannel();
         var config = BuildConfigDictionary();
-
-        File.WriteAllText(_paths.NetclawConfigPath,
-            JsonSerializer.Serialize(config, JsonDefaults.ConfigFile));
+        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
     }
 
     private void PreserveExistingUpdateChannel()
@@ -89,14 +90,16 @@ public sealed class WizardConfigBuilder
     /// </summary>
     internal Dictionary<string, object> BuildConfigDictionary()
     {
-        var config = new Dictionary<string, object>
-        {
-            ["configVersion"] = 1
-        };
+        var config = _existingConfig.Count == 0
+            ? new Dictionary<string, object>()
+            : new Dictionary<string, object>(_existingConfig, StringComparer.Ordinal);
+
+        config["configVersion"] = 1;
 
         // Provider section
         if (Provider is not null)
         {
+            var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
             var providerEntry = new Dictionary<string, object>
             {
                 ["Type"] = Provider.TypeKey
@@ -104,29 +107,26 @@ public sealed class WizardConfigBuilder
 
             if (Provider.AuthMethod != AuthMethod.None)
                 providerEntry["AuthMethod"] = Provider.AuthMethod.ToString();
+            else
+                providerEntry.Remove("AuthMethod");
 
             if (!string.IsNullOrWhiteSpace(Provider.Endpoint))
                 providerEntry["Endpoint"] = Provider.Endpoint;
 
-            config["Providers"] = new Dictionary<string, object>
-            {
-                [Provider.TypeKey] = providerEntry
-            };
+            providers[Provider.TypeKey] = providerEntry;
         }
 
         // Models section
         if (Model is not null)
         {
-            config["Models"] = new Dictionary<string, object>
-            {
-                ["Main"] = ModelEntryWriter.BuildModelEntry(
-                    Model.Provider,
-                    Model.ModelId,
-                    Model.Provenance,
-                    Model.ContextWindow,
-                    Model.InputModalities,
-                    Model.OutputModalities)
-            };
+            var models = ConfigFileHelper.GetOrCreateSection(config, "Models");
+            models["Main"] = ModelEntryWriter.BuildModelEntry(
+                Model.Provider,
+                Model.ModelId,
+                Model.Provenance,
+                Model.ContextWindow,
+                Model.InputModalities,
+                Model.OutputModalities);
         }
 
         // Slack section
@@ -225,17 +225,22 @@ public sealed class WizardConfigBuilder
         }
 
         // Search section
-        if (Search is not null && Search.Backend != SearchBackend.DuckDuckGo)
+        if (Search is not null)
         {
-            var searchSection = new Dictionary<string, object>
+            if (Search.Backend == SearchBackend.DuckDuckGo)
             {
-                ["Backend"] = Search.Backend.ToWireValue()
-            };
+                config.Remove("Search");
+            }
+            else
+            {
+                var searchSection = ConfigFileHelper.GetOrCreateSection(config, "Search");
+                searchSection["Backend"] = Search.Backend.ToWireValue();
 
-            if (Search.Backend == SearchBackend.SearXng && !string.IsNullOrWhiteSpace(Search.SearXngEndpoint))
-                searchSection["SearXngEndpoint"] = Search.SearXngEndpoint;
-
-            config["Search"] = searchSection;
+                if (Search.Backend == SearchBackend.SearXng && !string.IsNullOrWhiteSpace(Search.SearXngEndpoint))
+                    searchSection["SearXngEndpoint"] = Search.SearXngEndpoint;
+                else
+                    searchSection.Remove("SearXngEndpoint");
+            }
         }
 
         // Security section
@@ -257,6 +262,22 @@ public sealed class WizardConfigBuilder
             {
                 ["Directory"] = Workspaces.Directory
             };
+        }
+
+        if (Identity is not null)
+        {
+            config["Identity"] = new Dictionary<string, object>
+            {
+                ["AgentName"] = Identity.AgentName,
+                ["CommunicationStyle"] = Identity.CommunicationStyle,
+                ["UserTimezone"] = Identity.UserTimezone
+            };
+
+            if (!string.IsNullOrWhiteSpace(Identity.UserName)
+                && config["Identity"] is Dictionary<string, object> identity)
+            {
+                identity["UserName"] = Identity.UserName;
+            }
         }
 
         // Skill sync
@@ -407,6 +428,25 @@ public sealed class WizardConfigBuilder
             };
         }
     }
+
+    internal Dictionary<string, object> ApplyContribution(SectionContribution contribution)
+    {
+        var config = BuildConfigDictionary();
+        foreach (var action in contribution.FieldActionsOrEmpty)
+        {
+            switch (action.Action)
+            {
+                case SectionFieldActionKind.Set:
+                    ConfigFileHelper.SetPathValue(config, action.Path, action.Value);
+                    break;
+                case SectionFieldActionKind.Delete:
+                    ConfigFileHelper.RemovePath(config, action.Path);
+                    break;
+            }
+        }
+
+        return config;
+    }
 }
 
 /// <summary>
@@ -416,10 +456,12 @@ public sealed class WizardSecretsBuilder
 {
     private readonly NetclawPaths _paths;
     private readonly Dictionary<string, object> _secrets = [];
+    private readonly Dictionary<string, object> _existingSecrets;
 
     public WizardSecretsBuilder(NetclawPaths paths)
     {
         _paths = paths;
+        _existingSecrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
     }
 
     internal NetclawPaths Paths => _paths;
@@ -439,30 +481,40 @@ public sealed class WizardSecretsBuilder
         if (_secrets.Count == 0)
             return;
 
-        if (File.Exists(_paths.SecretsPath))
-        {
-            var existingText = File.ReadAllText(_paths.SecretsPath);
-            var existingNode = JsonNode.Parse(existingText)?.AsObject();
-            if (existingNode is not null)
-            {
-                foreach (var (key, value) in _secrets)
-                {
-                    var segments = SecretsJsonUpdater.ParseKeyPath(key);
-                    var node = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
-                    if (node is JsonObject obj)
-                        SecretsJsonUpdater.MergeObject(existingNode, segments, obj);
-                    else
-                        SecretsJsonUpdater.UpsertNode(existingNode, segments, node);
-                }
+        var existingNode = JsonSerializer.SerializeToNode(_existingSecrets, JsonDefaults.ConfigFile)?.AsObject()
+                           ?? [];
 
-                SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
-                    protector: SensitiveStringTypeConverter.Protector);
-                return;
-            }
+        foreach (var (key, value) in _secrets)
+        {
+            var segments = SecretsJsonUpdater.ParseKeyPath(key);
+            var node = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+            if (node is JsonObject obj)
+                SecretsJsonUpdater.MergeObject(existingNode, segments, obj);
+            else
+                SecretsJsonUpdater.UpsertNode(existingNode, segments, node);
         }
 
-        SecretsFileWriter.Write(_paths.SecretsPath, _secrets,
-            options: JsonDefaults.ConfigFile, protector: SensitiveStringTypeConverter.Protector);
+        SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
+            protector: SensitiveStringTypeConverter.Protector);
+    }
+
+    internal void ApplyContribution(SectionContribution contribution)
+    {
+        foreach (var action in contribution.SecretActionsOrEmpty)
+        {
+            switch (action.Action)
+            {
+                case SectionSecretActionKind.Preserve:
+                    break;
+                case SectionSecretActionKind.Set:
+                    ConfigFileHelper.SetPathValue(_secrets, action.Path, action.Value);
+                    break;
+                case SectionSecretActionKind.Delete:
+                    ConfigFileHelper.RemovePath(_secrets, action.Path);
+                    ConfigFileHelper.RemovePath(_existingSecrets, action.Path);
+                    break;
+            }
+        }
     }
 }
 

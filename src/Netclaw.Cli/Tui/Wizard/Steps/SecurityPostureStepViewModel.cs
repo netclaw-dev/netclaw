@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
 
@@ -11,12 +13,17 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for selecting the deployment security posture (Personal/Team/Public).
 /// Single sub-step, no async operations.
 /// </summary>
-public sealed class SecurityPostureStepViewModel : IWizardStepViewModel
+public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectionEditor
 {
     private WizardContext? _context;
 
     public string StepId => WizardStepIds.SecurityPosture;
     public string DisplayTitle => "Security Posture";
+    public string SectionId => StepId;
+    public string DisplayName => DisplayTitle;
+    public string? Category => "Security & Access";
+    public bool ShowInMenu => true;
+    public IReadOnlyList<string> RelevantDoctorChecks => ["Security Policy", "Tool Audience Profiles"];
 
     public DeploymentPosture? SelectedPosture { get; set; }
 
@@ -97,6 +104,74 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel
     {
         // No health check — posture is always valid
         return Task.CompletedTask;
+    }
+
+    public SectionStatus GetStatus(WizardContext context)
+        => context.SelectedPosture.HasValue || SectionEditorAudit.HasExistingConfig(context, "Security.DeploymentPosture")
+            ? SectionStatus.Configured
+            : SectionStatus.NotConfigured;
+
+    public string Summary(WizardContext context)
+    {
+        var posture = SelectedPosture
+            ?? context.SelectedPosture
+            ?? ReadExistingPosture(context);
+
+        return posture?.ToString() ?? "Not configured";
+    }
+
+    public IWizardStepViewModel CreateEditor(IServiceProvider services)
+        => ActivatorUtilities.CreateInstance<SecurityPostureStepViewModel>(services);
+
+    public SectionContribution BuildContribution(IWizardStepViewModel editor)
+    {
+        var vm = (SecurityPostureStepViewModel)editor;
+        var posture = vm.SelectedPosture ?? DeploymentPosture.Personal;
+        var shellMode = posture == DeploymentPosture.Personal
+            ? ShellExecutionMode.HostAllowed
+            : ShellExecutionMode.Off;
+
+        return new SectionContribution(
+        [
+            new SectionFieldAction("Security.DeploymentPosture", SectionFieldActionKind.Set, posture.ToString()),
+            new SectionFieldAction("Security.ShellExecutionMode", SectionFieldActionKind.Set, shellMode.ToString()),
+            new SectionFieldAction("Security.StrictDefaults", SectionFieldActionKind.Set, true),
+            new SectionFieldAction("Tools", SectionFieldActionKind.Set, BuildToolsDictionary(posture, shellMode))
+        ]);
+    }
+
+    private static DeploymentPosture? ReadExistingPosture(WizardContext context)
+    {
+        if (context.ExistingConfig is null
+            || !ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Security.DeploymentPosture", out var value))
+        {
+            return null;
+        }
+
+        return value is string text && Enum.TryParse<DeploymentPosture>(text, ignoreCase: true, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static Dictionary<string, object> BuildToolsDictionary(DeploymentPosture posture, ShellExecutionMode shellMode)
+    {
+        var profiles = ToolAudienceProfileDefaults.CreateProfiles();
+        if (posture == DeploymentPosture.Personal)
+        {
+            profiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+            {
+                ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+                {
+                    ["shell_execute"] = ToolApprovalMode.Approval
+                }
+            };
+        }
+
+        return new Dictionary<string, object>
+        {
+            ["ShellMode"] = shellMode.ToString(),
+            ["AudienceProfiles"] = profiles
+        };
     }
 
     public void Dispose()

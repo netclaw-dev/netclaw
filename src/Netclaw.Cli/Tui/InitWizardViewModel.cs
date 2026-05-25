@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Daemon;
+using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -29,6 +31,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
     private readonly WizardOrchestrator _orchestrator;
     private readonly Dictionary<string, IWizardStepView> _stepViews;
     private readonly HealthCheckStepViewModel _healthCheckStep;
+    private readonly SectionEditorRegistry? _sectionEditors;
 
     /// <summary>The wizard orchestrator managing step sequencing.</summary>
     public WizardOrchestrator Orchestrator => _orchestrator;
@@ -58,12 +61,12 @@ public partial class InitWizardViewModel : ReactiveViewModel
         DaemonManager? daemonManager = null,
         DaemonApi? daemonApi = null,
         IClipboardService? clipboardService = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        SectionEditorRegistry? sectionEditors = null)
         : this(paths, registry, registry, slackProbe, discordProbe,
             navigationState: navigationState,
             oauthFactory: oauthFactory, daemonManager: daemonManager, daemonApi: daemonApi,
-            clipboardService: clipboardService,
-            timeProvider: timeProvider)
+            clipboardService: clipboardService, timeProvider: timeProvider, sectionEditors: sectionEditors)
     {
     }
 
@@ -81,14 +84,18 @@ public partial class InitWizardViewModel : ReactiveViewModel
         DaemonManager? daemonManager = null,
         DaemonApi? daemonApi = null,
         IClipboardService? clipboardService = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        SectionEditorRegistry? sectionEditors = null)
     {
+        _sectionEditors = sectionEditors;
+
         // Create shared context
         _context = new WizardContext
         {
             Paths = paths,
             Registry = registry,
-            RequestRedraw = RequestRedraw
+            RequestRedraw = RequestRedraw,
+            ExistingConfig = LoadExistingConfig(paths)
         };
 
         // Create step VMs in the canonical order:
@@ -220,9 +227,19 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        _sectionEditors?.Dispose();
         _orchestrator.Dispose();
         _context.Dispose();
         base.Dispose();
+    }
+
+    private static Dictionary<string, object>? LoadExistingConfig(NetclawPaths paths)
+    {
+        if (!File.Exists(paths.NetclawConfigPath))
+            return null;
+
+        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
+        return config.Count == 0 ? null : config;
     }
 }
 

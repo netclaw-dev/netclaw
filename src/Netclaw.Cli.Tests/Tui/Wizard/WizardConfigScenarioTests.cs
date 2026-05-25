@@ -192,6 +192,42 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         AssertSectionEnabled(config, "Webhooks", true);
     }
 
+    [Fact]
+    public void ExistingConfig_SearchEdit_PreservesUnrelatedSections()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Slack": { "Enabled": true, "SocketMode": true },
+              "Daemon": { "ExposureMode": "reverse-proxy", "Host": "10.0.0.2", "TrustedProxies": ["10.0.0.0/24"] },
+              "Search": { "Backend": "duckduckgo" }
+            }
+            """);
+
+        using var context = new WizardContext
+        {
+            Paths = Context.Paths,
+            Registry = Context.Registry,
+            RequestRedraw = () => { },
+            ExistingConfig = Netclaw.Cli.Config.ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath),
+            SelectedPosture = DeploymentPosture.Personal
+        };
+
+        var steps = new List<IWizardStepViewModel>
+        {
+            new SearchStepViewModel { SelectedBackend = SearchBackend.Brave }
+        };
+
+        using var orchestrator = new WizardOrchestrator(steps, context, singleStepMode: true);
+        orchestrator.WriteConfig();
+
+        var config = LoadWrittenConfig();
+        Assert.True(config.ContainsKey("Slack"));
+        Assert.True(config.ContainsKey("Daemon"));
+        Assert.Equal("brave", GetSection(config, "Search")["Backend"]);
+    }
+
     // ── Helpers ──
 
     private static List<IWizardStepViewModel> BuildCoreSteps()
@@ -251,6 +287,12 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
     {
         _orchestrator = new WizardOrchestrator(steps, Context);
         _orchestrator.WriteConfig();
+
+        return LoadWrittenConfig();
+    }
+
+    private Dictionary<string, object> LoadWrittenConfig()
+    {
 
         var json = File.ReadAllText(Context.Paths.NetclawConfigPath);
         var doc = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!;
