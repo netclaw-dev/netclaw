@@ -13,6 +13,7 @@
     <InternalsVisibleTo Include="Netclaw.Configuration.Tests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
     <InternalsVisibleTo Include="Netclaw.Cli.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
   </ItemGroup>
 
   <ItemGroup>

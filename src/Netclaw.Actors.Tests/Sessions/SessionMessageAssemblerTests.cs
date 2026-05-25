@@ -1,5 +1,5 @@
-﻿// -----------------------------------------------------------------------
-// <copyright file="SessionMessageAssemblerTests.cs" company="Petabridge, LLC">
+// -----------------------------------------------------------------------
+// <copyright file="SessionMessageAssembler.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -8,6 +8,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Providers.SelfHosted;
 using Xunit;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using ProtocolChatRole = Netclaw.Actors.Protocol.ChatRole;
@@ -442,5 +443,110 @@ public sealed class SessionMessageAssemblerTests
     private static string Truncate(string s)
     {
         return s.Length <= 30 ? s : s[..27] + "...";
+    }
+
+    /// <summary>
+    /// Verifies that the OpenAI-compatible provider's <c>NormalizeMessages</c>
+    /// preserves the trailing volatile system message instead of merging it
+    /// into the leading system prefix. This is the wire-format test that
+    /// catches the KV cache prefix invalidation regression.
+    /// </summary>
+    [Fact]
+    public void NormalizeMessages_preserves_trailing_volatile_system_for_cache_stability()
+    {
+        // Simulate the message structure produced by SessionMessageAssembler:
+        // [0] System - static prompt (cache prefix)
+        // [1] System - static dynamic context
+        // [2] User - turn 1
+        // [3] Assistant - reply
+        // [4] System - volatile tail (memory recall, current time, ...)
+        var messages = new List<AiChatMessage>
+        {
+            new(Microsoft.Extensions.AI.ChatRole.System, "You are Netclaw"),
+            new(Microsoft.Extensions.AI.ChatRole.System, "[session]\nid: test/123"),
+            new(Microsoft.Extensions.AI.ChatRole.User, "first question"),
+            new(Microsoft.Extensions.AI.ChatRole.Assistant, "first answer"),
+            new(Microsoft.Extensions.AI.ChatRole.System, "[memory-recall]\nstatus: healthy\n[memory-recall-item] something\n\n[current-time]\ncurrent_utc: 2026-05-25T00:00:00Z"),
+        };
+
+        var normalized = OpenAiCompatibleChatClient.NormalizeMessages(messages);
+
+        // The leading system messages should be merged into one at position 0
+        Assert.True(normalized.Count >= 3, "Expected at least 3 messages after normalization");
+
+        // Position 0: merged leading system messages
+        var leadingSystem = (System.Text.Json.Nodes.JsonObject)normalized[0]!;
+        Assert.Equal("system", leadingSystem["role"]!.GetValue<string>());
+        var leadingContent = leadingSystem["content"]!.GetValue<string>();
+        Assert.Contains("You are Netclaw", leadingContent);
+        Assert.Contains("[session]", leadingContent);
+
+        // CRITICAL: the volatile tail must NOT be merged into the leading system
+        Assert.DoesNotContain("[memory-recall]", leadingContent);
+        Assert.DoesNotContain("current_utc", leadingContent);
+
+        // The volatile tail must appear as a separate message at the end
+        var last = (System.Text.Json.Nodes.JsonObject)normalized[^1]!;
+        var lastRole = last["role"]!.GetValue<string>();
+        Assert.Equal("system", lastRole);
+
+        var lastContent = last["content"]!.GetValue<string>();
+        Assert.Contains("[memory-recall]", lastContent);
+        Assert.Contains("current_utc", lastContent);
+
+        // Conversation history in between should be intact
+        Assert.Equal("user", normalized[1]!["role"]!.GetValue<string>());
+        Assert.Equal("assistant", normalized[2]!["role"]!.GetValue<string>());
+    }
+
+    /// <summary>
+    /// Regression test: when volatile content differs between turns, the
+    /// normalized wire format must still produce a growing cache prefix
+    /// through the conversation history, not just the static system prompt.
+    /// </summary>
+    [Fact]
+    public void NormalizeMessages_cache_prefix_grows_through_history_across_turns()
+    {
+        // Turn 1: short history, volatile tail with recall-A
+        var turn1 = new List<AiChatMessage>
+        {
+            new(Microsoft.Extensions.AI.ChatRole.System, "You are Netclaw"),
+            new(Microsoft.Extensions.AI.ChatRole.System, "[session]\nid: test/123"),
+            new(Microsoft.Extensions.AI.ChatRole.User, "first question"),
+            new(Microsoft.Extensions.AI.ChatRole.System, "[memory-recall]\nstatus: healthy\nrecall-A"),
+        };
+
+        // Turn 2: history extended, volatile tail with recall-B (different!)
+        var turn2 = new List<AiChatMessage>
+        {
+            new(Microsoft.Extensions.AI.ChatRole.System, "You are Netclaw"),
+            new(Microsoft.Extensions.AI.ChatRole.System, "[session]\nid: test/123"),
+            new(Microsoft.Extensions.AI.ChatRole.User, "first question"),
+            new(Microsoft.Extensions.AI.ChatRole.Assistant, "first answer"),
+            new(Microsoft.Extensions.AI.ChatRole.User, "second question"),
+            new(Microsoft.Extensions.AI.ChatRole.System, "[memory-recall]\nstatus: healthy\nrecall-B"),
+        };
+
+        var norm1 = OpenAiCompatibleChatClient.NormalizeMessages(turn1);
+        var norm2 = OpenAiCompatibleChatClient.NormalizeMessages(turn2);
+
+        // Compute longest common prefix (by role + content string match)
+        var prefix = 0;
+        var minCount = Math.Min(norm1.Count, norm2.Count);
+        for (var i = 0; i < minCount; i++)
+        {
+            var a = norm1[i]!.ToJsonString();
+            var b = norm2[i]!.ToJsonString();
+            if (a == b)
+                prefix++;
+            else
+                break;
+        }
+
+        // The prefix should extend through: [0] merged system, [1] user turn1
+        // After normalization, the leading system is identical in both, and the
+        // user turn 1 is at position [1] in both. The prefix should be at least 2.
+        Assert.True(prefix >= 2,
+            $"Expected cache prefix >= 2 (merged system + user turn1), got {prefix}");
     }
 }

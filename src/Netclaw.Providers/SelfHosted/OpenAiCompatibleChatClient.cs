@@ -247,31 +247,47 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         return body;
     }
 
-    private static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages)
+    internal static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages)
     {
         var normalized = new JsonArray();
-        var systemSegments = new List<string>();
+        var all = messages.ToList();
 
-        foreach (var message in messages)
+        // Merge only the LEADING contiguous system messages into a single
+        // prefix. The assembler deliberately places volatile context
+        // (memory recall, current time, working context) in a trailing
+        // System-role message so it doesn't invalidate the cache prefix.
+        // If we merge that trailing system into the lead (as the old code
+        // did), the volatile content changes every turn and the prefix
+        // cache is busted from token 0.
+        int leadingSystemCount = 0;
+        while (leadingSystemCount < all.Count && all[leadingSystemCount].Role == ChatRole.System)
+            leadingSystemCount++;
+
+        // Merge the leading contiguous system messages
+        if (leadingSystemCount > 0)
         {
-            if (message.Role == ChatRole.System)
+            var segments = new List<string>(leadingSystemCount);
+            for (int i = 0; i < leadingSystemCount; i++)
             {
-                if (!string.IsNullOrWhiteSpace(message.Text))
-                    systemSegments.Add(message.Text);
-
-                continue;
+                if (!string.IsNullOrWhiteSpace(all[i].Text))
+                    segments.Add(all[i].Text);
             }
 
-            normalized.Add(ToMessage(message));
+            if (segments.Count > 0)
+            {
+                normalized.Add(new JsonObject
+                {
+                    ["role"] = "system",
+                    ["content"] = string.Join("\n\n", segments)
+                });
+            }
         }
 
-        if (systemSegments.Count > 0)
+        // Process remaining messages, preserving the trailing volatile
+        // system message at its original position
+        for (int i = leadingSystemCount; i < all.Count; i++)
         {
-            normalized.Insert(0, new JsonObject
-            {
-                ["role"] = "system",
-                ["content"] = string.Join("\n\n", systemSegments)
-            });
+            normalized.Add(ToMessage(all[i]));
         }
 
         return normalized;
