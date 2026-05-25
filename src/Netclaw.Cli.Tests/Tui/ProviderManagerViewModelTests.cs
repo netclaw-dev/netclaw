@@ -849,6 +849,19 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void GoBack_FromList_NavigatesToConfigWhenEmbedded()
+    {
+        using var vm = CreateViewModel();
+        vm.CurrentState.Value = ProviderManagerState.List;
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
+        vm.GoBack();
+
+        Assert.Equal("/config", route);
+    }
+
+    [Fact]
     public void DisplayProviders_ShowsMultipleInstancesOfSameType()
     {
         WriteConfig(new Dictionary<string, object>

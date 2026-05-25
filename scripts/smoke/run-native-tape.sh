@@ -24,6 +24,7 @@
 #   KEEP_TEMP         set to 1 to retain the combined tape for inspection
 #   TAPE_PREAMBLE     preamble file to prepend  (default: <TAPES_DIR>/preamble.tape)
 #   TAPE_BODY_DIR     directory holding <name>.tape (default: TAPES_DIR)
+#   TAPE_USER_HOME    per-tape HOME dir; default <tmp>/user-home-<name>
 #
 # TAPE_PREAMBLE / TAPE_BODY_DIR let the `screenshots` mode of run-smoke.sh
 # point this runner at screenshot-preamble.tape and tests/smoke/tapes/
@@ -58,6 +59,7 @@ NETCLAW_BIN_DIR="$(cd "$(dirname "$NETCLAW_SMOKE_CLI")" && pwd)"
 
 # Per-tape NETCLAW_HOME on the host filesystem.
 NETCLAW_HOME="${NETCLAW_HOME:-$(mktemp -d)/tape-home-${TAPE_NAME}}"
+TAPE_USER_HOME="${TAPE_USER_HOME:-$(mktemp -d "${TMPDIR:-/tmp}/user-home-${TAPE_NAME}.XXXXXX")}" 
 
 # Preamble + body dir are overridable so the screenshots mode can swap in
 # screenshot-preamble.tape + tests/smoke/tapes/screenshots/. Defaults keep
@@ -121,6 +123,7 @@ collect_failure_artifacts() {
 # means body tapes can use any token, not just the preamble.
 cat "$preamble" "$body" | sed \
   -e "s|__NETCLAW_HOME__|${NETCLAW_HOME}|g" \
+  -e "s|__NETCLAW_USER_HOME__|${TAPE_USER_HOME}|g" \
   -e "s|__NETCLAW_BIN_DIR__|${NETCLAW_BIN_DIR}|g" \
   -e "s|__NETCLAW_DAEMON__|${NETCLAW_SMOKE_DAEMON}|g" \
   -e "s|__TAPE_NAME__|${TAPE_NAME}|g" \

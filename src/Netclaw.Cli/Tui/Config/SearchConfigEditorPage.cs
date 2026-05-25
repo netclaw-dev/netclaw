@@ -16,6 +16,7 @@ namespace Netclaw.Cli.Tui.Config;
 internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorViewModel>
 {
     private SelectionListNode<string>? _fieldList;
+    private SelectionListNode<string>? _actionList;
     private SelectionListNode<string>? _enumList;
     private SelectionListNode<string>? _dialogList;
     private TextInputNode? _textInput;
@@ -27,6 +28,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
     {
         FieldList,
         FieldEditor,
+        ActionList,
         Dialog,
     }
 
@@ -54,8 +56,9 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
     {
         return Layouts.Vertical()
             .WithSpacing(1)
+            .WithChild(new TextNode("  Configure how Netclaw performs web search and URL fetch augmentation.")
+                .WithForeground(Color.BrightBlack))
             .WithChild(BuildContent())
-            .WithChild(Layouts.Empty().Fill())
             .WithChild(BuildStatusBar())
             .WithChild(BuildKeyBindings());
     }
@@ -66,6 +69,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         {
             _contentSubscriptions.Clear();
             _dialogList = null;
+            _actionList = null;
             _enumList = null;
             _textInput = null;
 
@@ -83,21 +87,14 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
     private ILayoutNode BuildEditorLayout()
     {
-        var rows = ViewModel.Fields
-            .Select(field =>
-            {
-                var issues = ViewModel.GetIssues(field);
-                var marker = issues.Count > 0 ? "!" : ViewModel.IsApplicable(field) ? " " : "-";
-                var value = ViewModel.IsApplicable(field) ? ViewModel.GetDisplayValue(field) : ViewModel.GetInactiveText(field);
-                return $"{marker} {field.Label,-20} {value}";
-            })
-            .ToList();
+        var rows = ViewModel.Fields.Select(FormatFieldRow).ToList();
 
         _fieldList = Layouts.SelectionList(rows)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Cyan);
-        _fieldList.OnFocused();
-        _focusTarget = FocusTarget.FieldList;
+
+        if (_focusTarget == FocusTarget.FieldList)
+            _fieldList.OnFocused();
 
         _fieldList.SelectionConfirmed
             .Subscribe(selected =>
@@ -109,48 +106,73 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 if (index >= 0)
                 {
                     ViewModel.SelectedIndex.Value = index;
-                    FocusEditor();
+                    _focusTarget = FocusTarget.FieldEditor;
+                    _contentNode?.Invalidate();
+                    ViewModel.RequestRedraw();
                 }
             })
             .DisposeWith(_contentSubscriptions);
 
         return Layouts.Horizontal()
-            .WithChild(Layouts.Vertical()
-                .WithChild(new TextNode("  Search fields").WithForeground(Color.White).Bold())
-                .WithChild(_fieldList)
-                .Width(44))
-            .WithChild(Layouts.Vertical().WithChild(BuildEditorPanel()).Fill());
+            .WithChild(
+                new PanelNode()
+                    .WithTitle("Fields")
+                    .WithBorder(BorderStyle.Rounded)
+                    .WithBorderColor(Color.Cyan)
+                    .WithContent(
+                        Layouts.Vertical()
+                            .WithChild(new TextNode("  Select a field to edit.").WithForeground(Color.BrightBlack))
+                            .WithChild(_fieldList))
+                    .Width(42))
+            .WithChild(
+                Layouts.Vertical()
+                    .WithSpacing(1)
+                    .WithChild(BuildFieldCard())
+                    .WithChild(BuildActionCard())
+                    .Fill());
     }
 
-    private ILayoutNode BuildEditorPanel()
+    private string FormatFieldRow(ProjectedConfigField field)
+    {
+        var issues = ViewModel.GetIssues(field);
+        var marker = issues.Count > 0 ? "!" : ViewModel.IsApplicable(field) ? ">" : "-";
+        var value = ViewModel.IsApplicable(field)
+            ? ViewModel.GetDisplayValue(field)
+            : "Inactive for current backend";
+        var clippedValue = value.Length > 24 ? value[..21] + "..." : value;
+        return $"{marker} {field.Label,-22} {clippedValue}";
+    }
+
+    private ILayoutNode BuildFieldCard()
     {
         var field = ViewModel.SelectedField;
         var issues = ViewModel.GetIssues(field);
 
-        var layout = Layouts.Vertical()
+        var content = Layouts.Vertical()
             .WithSpacing(1)
             .WithChild(new TextNode($"  {field.Label}").WithForeground(Color.White).Bold());
 
         if (!string.IsNullOrWhiteSpace(field.Description))
-            layout.WithChild(new TextNode($"  {field.Description}").WithForeground(Color.BrightBlack));
+            content.WithChild(new TextNode($"  {field.Description}").WithForeground(Color.BrightBlack));
 
         if (!string.IsNullOrWhiteSpace(field.Hint))
-            layout.WithChild(new TextNode($"  {field.Hint}").WithForeground(Color.Cyan));
+            content.WithChild(new TextNode($"  {field.Hint}").WithForeground(Color.Cyan));
 
         if (!ViewModel.IsApplicable(field))
         {
-            layout.WithChild(new TextNode($"  {ViewModel.GetInactiveText(field)}").WithForeground(Color.BrightBlack));
-            return layout;
+            content.WithChild(new TextNode("  This field only matters for the currently selected backend.")
+                .WithForeground(Color.BrightBlack));
+            content.WithChild(new TextNode($"  {ViewModel.GetInactiveText(field)}").WithForeground(Color.BrightBlack));
         }
-
-        if (field.Widget == ConfigFieldWidget.EnumSelection)
+        else if (field.Widget == ConfigFieldWidget.EnumSelection)
         {
             var items = field.EnumOptions.Select(static option => option.Label).ToList();
             _enumList = Layouts.SelectionList(items)
                 .WithMode(SelectionMode.Single)
                 .WithHighlightColors(Color.Black, Color.Cyan);
-            _enumList.OnFocused();
-            _focusTarget = FocusTarget.FieldEditor;
+
+            if (_focusTarget == FocusTarget.FieldEditor)
+                _enumList.OnFocused();
 
             _enumList.SelectionConfirmed
                 .Subscribe(selected =>
@@ -164,7 +186,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 })
                 .DisposeWith(_contentSubscriptions);
 
-            layout.WithChild(_enumList);
+            content.WithChild(_enumList);
         }
         else
         {
@@ -175,20 +197,83 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 _textInput.WithPlaceholder(field.Placeholder);
 
             _textInput.Text = ViewModel.GetEditorSeed(field);
-            _textInput.OnFocused();
-            _focusTarget = FocusTarget.FieldEditor;
+            if (_focusTarget == FocusTarget.FieldEditor)
+                _textInput.OnFocused();
 
             _textInput.Submitted
                 .Subscribe(text => ViewModel.SetFieldValue(field.Path, text))
                 .DisposeWith(_contentSubscriptions);
 
-            layout.WithChild(Netclaw.Cli.Tui.Wizard.Steps.WizardStepHelpers.BuildTextInputPanel(_textInput, field.Label));
+            content.WithChild(Netclaw.Cli.Tui.Wizard.Steps.WizardStepHelpers.BuildTextInputPanel(_textInput, field.Label));
         }
 
         foreach (var issue in issues)
-            layout.WithChild(new TextNode($"  ! {issue.Message}").WithForeground(Color.Red));
+            content.WithChild(new TextNode($"  ! {issue.Message}").WithForeground(Color.Red));
 
-        return layout;
+        return new PanelNode()
+            .WithTitle("Selected Field")
+            .WithBorder(BorderStyle.Rounded)
+            .WithBorderColor(Color.Cyan)
+            .WithContent(content);
+    }
+
+    private ILayoutNode BuildActionCard()
+    {
+        var actions = new List<string>
+        {
+            "Test search backend",
+            "Save settings",
+            "Reset unsaved changes",
+            "Back to dashboard",
+        };
+
+        _actionList = Layouts.SelectionList(actions)
+            .WithMode(SelectionMode.Single)
+            .WithHighlightColors(Color.Black, Color.Green);
+
+        if (_focusTarget == FocusTarget.ActionList)
+            _actionList.OnFocused();
+
+        _actionList.SelectionConfirmed
+            .Subscribe(async selected =>
+            {
+                if (selected.Count == 0)
+                    return;
+
+                switch (selected[0])
+                {
+                    case "Test search backend":
+                        await ViewModel.TestCurrentConfigurationAsync();
+                        break;
+                    case "Save settings":
+                        await ViewModel.SaveAsync();
+                        break;
+                    case "Reset unsaved changes":
+                        ViewModel.ResetDraft();
+                        break;
+                    case "Back to dashboard":
+                        ViewModel.NavigateBack();
+                        break;
+                }
+            })
+            .DisposeWith(_contentSubscriptions);
+
+        var backendField = ViewModel.Fields.First(static f => f.Path == "Search.Backend");
+        var errorCount = ViewModel.ValidationSummary.Value.Issues.Count(static i => i.Severity == ConfigValidationSeverity.Error);
+        var dirtyText = ViewModel.IsDirty ? "Unsaved changes" : "No unsaved changes";
+        var validationText = errorCount == 0 ? "Ready to test or save" : $"{errorCount} validation error(s)";
+
+        return new PanelNode()
+            .WithTitle("Actions")
+            .WithBorder(BorderStyle.Rounded)
+            .WithBorderColor(Color.Green)
+            .WithContent(
+                Layouts.Vertical()
+                    .WithSpacing(1)
+                    .WithChild(new TextNode($"  Backend: {ViewModel.GetDisplayValue(backendField)}").WithForeground(Color.White))
+                    .WithChild(new TextNode($"  {dirtyText}").WithForeground(Color.BrightBlack))
+                    .WithChild(new TextNode($"  {validationText}").WithForeground(errorCount == 0 ? Color.BrightBlack : Color.Yellow))
+                    .WithChild(_actionList));
     }
 
     private ILayoutNode BuildProbeWarningDialog()
@@ -219,10 +304,12 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                         break;
                     case "Test again":
                         ViewModel.DismissDialog();
+                        _focusTarget = FocusTarget.ActionList;
                         await ViewModel.TestCurrentConfigurationAsync();
                         break;
                     default:
                         ViewModel.DismissDialog();
+                        _focusTarget = FocusTarget.FieldList;
                         break;
                 }
             })
@@ -254,7 +341,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
     private LayoutNode BuildKeyBindings()
     {
-        return new TextNode(" [↑/↓] Navigate  [Enter] Edit/Confirm  [T] Test  [S] Save  [R] Reset  [Esc] Back  [Ctrl+Q] Quit")
+        return new TextNode(" [↑/↓] Navigate  [Enter] Confirm  [Tab] Cycle focus  [T] Test  [S] Save  [R] Reset  [Esc] Back  [Ctrl+Q] Quit")
             .WithForeground(Color.BrightBlack)
             .Height(1);
     }
@@ -271,12 +358,14 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         if (keyInfo.Key == ConsoleKey.T)
         {
+            _focusTarget = FocusTarget.ActionList;
             _ = ViewModel.TestCurrentConfigurationAsync();
             return;
         }
 
         if (keyInfo.Key == ConsoleKey.S)
         {
+            _focusTarget = FocusTarget.ActionList;
             _ = ViewModel.SaveAsync();
             return;
         }
@@ -292,6 +381,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             if (ViewModel.ActiveDialog.Value != SearchConfigEditorDialog.None)
             {
                 ViewModel.DismissDialog();
+                _focusTarget = FocusTarget.FieldList;
                 return;
             }
 
@@ -299,10 +389,19 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             return;
         }
 
+        if (keyInfo.Key == ConsoleKey.Tab && ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.None)
+        {
+            CycleFocus();
+            return;
+        }
+
         switch (_focusTarget)
         {
             case FocusTarget.Dialog:
                 _dialogList?.HandleInput(keyInfo);
+                break;
+            case FocusTarget.ActionList:
+                _actionList?.HandleInput(keyInfo);
                 break;
             case FocusTarget.FieldEditor when _enumList is not null:
                 _enumList.HandleInput(keyInfo);
@@ -318,8 +417,16 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         ViewModel.RequestRedraw();
     }
 
-    private void FocusEditor()
+    private void CycleFocus()
     {
+        _focusTarget = _focusTarget switch
+        {
+            FocusTarget.FieldList => FocusTarget.FieldEditor,
+            FocusTarget.FieldEditor => FocusTarget.ActionList,
+            FocusTarget.ActionList => FocusTarget.FieldList,
+            _ => FocusTarget.FieldList,
+        };
+
         _contentNode?.Invalidate();
         ViewModel.RequestRedraw();
     }

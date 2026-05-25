@@ -79,6 +79,8 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     private readonly DeviceFlowServiceFactory? _oauthFactory;
     private CancellationTokenSource? _probeCts;
 
+    internal Action<string>? RouteRequested { get; set; }
+
     public ReactiveProperty<ProviderManagerState> CurrentState { get; } = new(ProviderManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<string> ErrorMessage { get; } = new("");
@@ -815,7 +817,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 CancelRename();
                 break;
             default:
-                Shutdown();
+                RouteRequested?.Invoke("/config");
+                Navigate?.Invoke("/config");
+                if (RouteRequested is null)
+                    Shutdown();
                 break;
         }
     }

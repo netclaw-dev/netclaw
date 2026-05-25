@@ -418,6 +418,19 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void GoBack_FromRoleOverview_NavigatesToConfigWhenEmbedded()
+    {
+        using var vm = CreateViewModel();
+        vm.CurrentState.Value = ModelManagerState.RoleOverview;
+        string? route = null;
+        vm.RouteRequested = r => route = r;
+
+        vm.GoBack();
+
+        Assert.Equal("/config", route);
+    }
+
+    [Fact]
     public void Refresh_PopulatesDisplayNameFromRegistry()
     {
         WriteConfig(new Dictionary<string, object>

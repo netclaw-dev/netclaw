@@ -104,8 +104,8 @@ Enter
 
 # Sub-step 3: notice with serving URL.
 Wait+Screen@10s /Reverse proxy configured/
-# Serving URL line is rendered as "Daemon will listen on:    http://0.0.0.0:5199"
-Wait+Screen@5s /http:\/\/0\.0\.0\.0:5199/
+# Serving URL line includes the configured bind address and smoke daemon port.
+Wait+Screen@5s /http:\/\/0\.0\.0\.0:[0-9]+/
 Enter
 
 # Sub-step 4: webhook toggle.
@@ -122,7 +122,7 @@ Enter
 Wait+Screen@10s /Press Enter to run health checks/
 Enter
 
-# Daemon starts on 0.0.0.0:5199 but in reverse-proxy mode the CLI cannot
+# Daemon starts on the configured reverse-proxy port, but in reverse-proxy mode the CLI cannot
 # auto-auth back to it via loopback (loopback auto-auth is intentionally
 # disabled for reverse-proxy to prevent a forwarded-header from inheriting
 # operator privileges). The wizard's chat-page handshake therefore gets 401

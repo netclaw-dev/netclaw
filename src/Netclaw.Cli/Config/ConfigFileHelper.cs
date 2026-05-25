@@ -102,7 +102,7 @@ internal static class ConfigFileHelper
         var dir = Path.GetDirectoryName(path);
         if (dir is not null)
             Directory.CreateDirectory(dir);
-        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.Indented));
+        File.WriteAllText(path, JsonSerializer.Serialize(data, JsonDefaults.ConfigFile));
     }
 
     /// <summary>

@@ -36,6 +36,7 @@
 #   SMOKE_OLLAMA_MODEL       primary model          (default: qwen2:0.5b)
 #   SMOKE_OLLAMA_ALT_MODEL   alternate model        (default: all-minilm:latest)
 #   SMOKE_LOG_DIR            artifact dir           (default: ./smoke-logs)
+#   SMOKE_DAEMON_PORT        isolated daemon port   (default: 56199)
 #   KEEP_RUN_ROOT            set 1 to keep the temp run root
 
 set -euo pipefail
@@ -154,6 +155,9 @@ RUN_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/netclaw-smoke.XXXXXX")"
 export RUN_ROOT
 mkdir -p "${RUN_ROOT}/home"
 
+SMOKE_DAEMON_PORT="${SMOKE_DAEMON_PORT:-56199}"
+SMOKE_DAEMON_BASE_URL="http://127.0.0.1:${SMOKE_DAEMON_PORT}"
+
 teardown_done=0
 teardown() {
   [[ $teardown_done -eq 1 ]] && return 0
@@ -268,8 +272,17 @@ run_one_tape() {
   echo "Tape: ${tape}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/tape-${tape}"
+  local user_home="${RUN_ROOT}/home/user-tape-${tape}"
   rm -rf "$home"
-  if ! NETCLAW_HOME="$home" \
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       TAPE_USER_HOME="$user_home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/${tape}" \
@@ -285,9 +298,18 @@ run_one_scenario() {
   echo "Scenario: ${scenario}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/scenario-${scenario}"
+  local user_home="${RUN_ROOT}/home/user-scenario-${scenario}"
   rm -rf "$home"
+  rm -rf "$user_home"
   mkdir -p "$home"
-  if ! NETCLAW_HOME="$home" \
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       TAPE_USER_HOME="$user_home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        NETCLAW_DAEMON_PATH="$NETCLAW_SMOKE_DAEMON" \
@@ -311,8 +333,16 @@ run_shot_tape() {
   echo "Screenshot tape: ${tape}"
   echo "════════════════════════════════════════════════════════"
   local home="${RUN_ROOT}/home/shot-${tape}"
+  local user_home="${RUN_ROOT}/home/user-shot-${tape}"
   rm -rf "$home"
-  if ! NETCLAW_HOME="$home" \
+  rm -rf "$user_home"
+  mkdir -p "$user_home"
+  if ! HOME="$user_home" \
+       NETCLAW_HOME="$home" \
+       NETCLAW_DAEMON_ENDPOINT="$SMOKE_DAEMON_BASE_URL" \
+       NETCLAW_DAEMON__PORT="$SMOKE_DAEMON_PORT" \
+       DAEMON_BASE_URL="$SMOKE_DAEMON_BASE_URL" \
+       DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/shot-${tape}" \
