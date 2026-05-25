@@ -20,7 +20,6 @@ Read first:
 
 - `PROJECT_CONTEXT.md`
 - `TOOLING.md`
-- `IMPLEMENTATION_PLAN.md`
 - `docs/prd/README.md`
 - `.opencode/skills/netclaw-*/SKILL.md`
 - `.claude/skills/ralph-*.md`
@@ -51,11 +50,13 @@ Expected outputs:
 - matching spec updates when behavior changes
 - no undocumented behavior drift
 
-## OpenSpec Workflow (MANDATORY)
+## OpenSpec Workflow
 
-**You MUST use OpenSpec skills for all planning and spec work.** Do not manually
-create or edit OpenSpec artifacts (specs, changes, proposals, delta specs,
-design docs, task files). Use the skills listed below.
+Use OpenSpec skills for substantial planning and spec work — new features,
+capability additions, or changes that touch multiple components. Skip it for
+targeted bug fixes, small refactors, and changes where scope is already clear.
+Do not manually create or edit OpenSpec artifacts (specs, changes, proposals,
+delta specs, design docs, task files); use the skills below instead.
 
 ### When Planning (new feature, capability, or spec change)
 
@@ -79,9 +80,9 @@ design docs, task files). Use the skills listed below.
 - `/opsx-onboard` — guided walkthrough of the full OpenSpec workflow
 - `/opsx-bulk-archive` — archive multiple completed changes
 
-**Hard rule:** If you need to create or modify files under `openspec/`, use the
-appropriate skill above. The only exception is updating task checkboxes in
-`openspec/changes/*/tasks.md` during RALPH iterations.
+If you do need to create or modify files under `openspec/`, use the appropriate
+skill above rather than editing them directly. The only exception is updating
+task checkboxes in `openspec/changes/*/tasks.md` during RALPH iterations.
 
 ## Discovery Rules
 
