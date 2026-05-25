@@ -46,32 +46,42 @@ public sealed record ContextAssemblyInput(
 /// <code>
 /// [0]      System  persisted prompt (SOUL/AGENTS/TOOLING)
 /// [1]      System  static dynamic context (OnceAtStart layers + [session] + [attachments])
-/// [2..N]   User/Assistant  conversation history (from SessionState.History, minus the
-///                          persisted prompt which was already at index 0)
-/// [last]   User    turn-context tail: [memory-recall] + current time +
-///                  [working-context] + slash command content + overlay +
-///                  turn restart notice. Only emitted when non-empty.
+/// [2..N]   User/Assistant/Tool  conversation history (from SessionState.History,
+///                               minus the persisted prompt which was already at index 0).
+///                               The last User-role message in this range carries the
+///                               volatile turn-context block as a &lt;context&gt; prefix on
+///                               its text content (see below).
 /// </code>
 ///
 /// The critical cache property: when the same session fires two turns in
 /// sequence, the longest common prefix of both assemblies extends through
-/// all static content and all conversation history up to (but not
-/// including) the volatile turn-context tail. Adding a turn to history
-/// extends the cache prefix for the next turn by exactly one more
-/// user/assistant pair.
+/// the leading System prefix and all conversation history up to (but not
+/// including) the user message whose <c>&lt;context&gt;</c> prefix carries
+/// volatile content. Adding a turn to history extends the cache prefix
+/// for the next turn by exactly one more user/assistant pair.
 ///
 /// All volatile content (memory recall, current time, working context,
 /// slash command, overlay, turn restart) is consolidated into a single
-/// System-role message at the end of the list. Keeping this content out
-/// of the leading System prefix means cache misses happen only for the
-/// new user turn, not for the entire conversation history. The role is
-/// intentionally System (not User): a trailing User-role message looks
-/// to chat templates like a fresh user turn and causes the model to
-/// restart an assistant response on every tool-loop iteration, which
-/// produces repeating-acknowledgement loops (e.g. "You're absolutely
-/// right — I had that backwards" restated on every tool call). A
-/// trailing System-role message reads as scaffolding and the model
-/// continues its tool work normally.
+/// <c>&lt;context&gt;...&lt;/context&gt;</c> block prepended to the text of
+/// the last User-role message in the list. This placement satisfies three
+/// constraints simultaneously:
+///
+/// <list type="bullet">
+///   <item>Keeps volatile content out of the leading System prefix so
+///   the cacheable head stays byte-stable across turns.</item>
+///   <item>Avoids emitting any message after the last conversation
+///   message — so a mid-tool-loop assembly (where the conversation
+///   tail is a Tool-role result, not a User-role message) does NOT
+///   inject a fake User turn that would make chat templates restart
+///   the assistant response and cause repeating-acknowledgement loops
+///   (e.g. "You're absolutely right — I had that backwards" restated
+///   on every tool call).</item>
+///   <item>Avoids emitting a trailing System-role message, which
+///   strict OpenAI-compatible servers (vLLM with the Qwen/Llama chat
+///   templates among them) reject with HTTP 400 "System message must
+///   be at the beginning." A trailing System tail used to be the
+///   previous design here and broke vLLM after PR #1171.</item>
+/// </list>
 /// </summary>
 public static class SessionMessageAssembler
 {
@@ -124,10 +134,53 @@ public static class SessionMessageAssembler
         var volatileBlock = BuildVolatileContextBlock(input);
         if (!string.IsNullOrEmpty(volatileBlock))
         {
-            messages.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, volatileBlock));
+            PrependContextToLastUserMessage(messages, volatileBlock);
         }
 
         return messages;
+    }
+
+    /// <summary>
+    /// Prepends the volatile context block to the text of the last
+    /// User-role message in <paramref name="messages"/>, wrapped in
+    /// <c>&lt;context&gt;...&lt;/context&gt;</c> tags. Preserves any
+    /// non-text contents (images, attachments) on that message intact.
+    /// If no User message is present (edge case: fresh session before
+    /// the first user turn lands in history), the volatile block is
+    /// silently dropped — there is no valid wire position for it.
+    /// </summary>
+    private static void PrependContextToLastUserMessage(List<AiChatMessage> messages, string volatileBlock)
+    {
+        var prefix = "<context>\n" + volatileBlock + "\n</context>\n\n";
+
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            var msg = messages[i];
+            if (msg.Role != Microsoft.Extensions.AI.ChatRole.User)
+                continue;
+
+            var newContents = new List<AIContent>(msg.Contents.Count + 1);
+            var prepended = false;
+            foreach (var content in msg.Contents)
+            {
+                if (!prepended && content is TextContent text)
+                {
+                    newContents.Add(new TextContent(prefix + (text.Text ?? string.Empty)));
+                    prepended = true;
+                }
+                else
+                {
+                    newContents.Add(content);
+                }
+            }
+            if (!prepended)
+            {
+                newContents.Insert(0, new TextContent(prefix));
+            }
+
+            messages[i] = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, newContents);
+            return;
+        }
     }
 
     private static string BuildStaticContextBlock(ContextAssemblyInput input, string sessionDir)

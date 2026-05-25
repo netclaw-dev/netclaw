@@ -76,11 +76,26 @@ internal static class LlmFailureClassifier
         if (ex is null)
             return false;
 
+        // Structural BadRequest errors must NEVER classify as context overflow.
+        // vLLM and other strict OpenAI-compatible servers return 400 for
+        // wire-format violations like a non-leading System message ("System
+        // message must be at the beginning."). Routing those through the
+        // overflow path triggers a doomed compaction → retry → second 400,
+        // ending in the misleading user message "Context window exceeded
+        // even after compaction." Compaction cannot fix a wire-format bug.
+        var current = ex;
+        while (current is not null)
+        {
+            if (ContainsStructuralBadRequestKeyword(current.Message))
+                return false;
+            current = current.InnerException;
+        }
+
         var providerEx = FindException<ProviderException>(ex);
         if (providerEx is { StatusCode: 400 } && ContainsOverflowKeyword(providerEx.Message))
             return true;
 
-        var current = ex;
+        current = ex;
         while (current is not null)
         {
             if (ContainsOverflowKeyword(current.Message))
@@ -130,4 +145,14 @@ internal static class LlmFailureClassifier
         || message.Contains("prompt is too long", StringComparison.OrdinalIgnoreCase)
         || message.Contains("token", StringComparison.OrdinalIgnoreCase)
             && message.Contains("exceed", StringComparison.OrdinalIgnoreCase);
+
+    // Wire-format / request-structure errors. These are 400s that mean
+    // "your request is malformed", not "your request is too big". They
+    // must short-circuit overflow detection so we don't trigger a
+    // doomed compaction loop on a structural bug.
+    private static bool ContainsStructuralBadRequestKeyword(string message) =>
+        message.Contains("System message must be at the beginning", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("must alternate", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("invalid role", StringComparison.OrdinalIgnoreCase)
+        || message.Contains("tools` must not be an empty array", StringComparison.Ordinal);
 }

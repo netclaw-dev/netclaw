@@ -207,7 +207,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         var body = new JsonObject
         {
             ["model"] = options?.ModelId ?? _modelId,
-            ["messages"] = NormalizeMessages(messages),
+            ["messages"] = NormalizeMessages(messages, _logger),
             ["stream"] = stream
         };
 
@@ -247,47 +247,69 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
         return body;
     }
 
-    internal static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages)
+    internal static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages, ILogger? logger = null)
     {
         var normalized = new JsonArray();
         var all = messages.ToList();
 
-        // Merge only the LEADING contiguous system messages into a single
-        // prefix. The assembler deliberately places volatile context
-        // (memory recall, current time, working context) in a trailing
-        // System-role message so it doesn't invalidate the cache prefix.
-        // If we merge that trailing system into the lead (as the old code
-        // did), the volatile content changes every turn and the prefix
-        // cache is busted from token 0.
-        int leadingSystemCount = 0;
-        while (leadingSystemCount < all.Count && all[leadingSystemCount].Role == ChatRole.System)
-            leadingSystemCount++;
+        // All System-role messages are merged into a single leading
+        // system message. Strict OpenAI-compatible servers (vLLM with
+        // Qwen/Llama chat templates among them) reject non-leading
+        // System messages with HTTP 400 "System message must be at the
+        // beginning." The session assembler is the source of truth and
+        // is expected to keep volatile per-turn context inside the last
+        // User-role message (wrapped in <context> tags), never as a
+        // trailing System. If a non-leading System slips through here
+        // it's a programming error upstream — we merge it into the
+        // leading prefix defensively so the request still reaches the
+        // provider, but we log Warning so the upstream bug surfaces.
+        var leadingSegments = new List<string>();
+        var passThrough = new List<ChatMessage>(all.Count);
+        var sawNonLeadingSystem = false;
+        var stillLeading = true;
 
-        // Merge the leading contiguous system messages
-        if (leadingSystemCount > 0)
+        foreach (var message in all)
         {
-            var segments = new List<string>(leadingSystemCount);
-            for (int i = 0; i < leadingSystemCount; i++)
+            if (message.Role == ChatRole.System)
             {
-                if (!string.IsNullOrWhiteSpace(all[i].Text))
-                    segments.Add(all[i].Text);
-            }
-
-            if (segments.Count > 0)
-            {
-                normalized.Add(new JsonObject
+                if (stillLeading)
                 {
-                    ["role"] = "system",
-                    ["content"] = string.Join("\n\n", segments)
-                });
+                    if (!string.IsNullOrWhiteSpace(message.Text))
+                        leadingSegments.Add(message.Text);
+                }
+                else
+                {
+                    sawNonLeadingSystem = true;
+                    if (!string.IsNullOrWhiteSpace(message.Text))
+                        leadingSegments.Add(message.Text);
+                }
+            }
+            else
+            {
+                stillLeading = false;
+                passThrough.Add(message);
             }
         }
 
-        // Process remaining messages, preserving the trailing volatile
-        // system message at its original position
-        for (int i = leadingSystemCount; i < all.Count; i++)
+        if (sawNonLeadingSystem)
         {
-            normalized.Add(ToMessage(all[i]));
+            logger?.LogWarning(
+                "NormalizeMessages received a non-leading System-role message — merging into the leading system prefix defensively. "
+                + "This indicates an upstream assembler bug: volatile per-turn context should be wrapped inside the last User-role message (<context>...</context>), not emitted as a separate System message.");
+        }
+
+        if (leadingSegments.Count > 0)
+        {
+            normalized.Add(new JsonObject
+            {
+                ["role"] = "system",
+                ["content"] = string.Join("\n\n", leadingSegments)
+            });
+        }
+
+        foreach (var message in passThrough)
+        {
+            normalized.Add(ToMessage(message));
         }
 
         return normalized;

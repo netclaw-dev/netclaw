@@ -2538,11 +2538,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // [attachments]) sits at the head so the prompt prefix stays
         // byte-stable across turns. Volatile per-turn content (memory
         // recall, current time, working context, slash command overlay,
-        // turn restart notice) is consolidated into a single User-role
-        // message appended at the tail so cache misses are confined to
-        // the end of the list. See SessionMessageAssembler for the full
-        // assembly contract. Mark startup injection complete after the
-        // first call to preserve the existing OnceAtStart semantics.
+        // turn restart notice) is wrapped in a <context>...</context>
+        // block and prepended to the text of the last User-role message
+        // in the list. That placement keeps cache misses confined to the
+        // user turn while remaining wire-compatible with strict providers
+        // (vLLM rejects trailing System messages with HTTP 400) and
+        // avoiding the mid-tool-loop "fake user turn" failure mode where
+        // a trailing User message makes Qwen-family chat templates
+        // restart the assistant response. See SessionMessageAssembler
+        // for the full assembly contract. Mark startup injection complete
+        // after the first call to preserve the existing OnceAtStart
+        // semantics.
         var skillHint = BuildSkillHint();
         var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
             State: _state,

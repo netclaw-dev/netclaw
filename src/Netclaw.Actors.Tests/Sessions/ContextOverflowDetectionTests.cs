@@ -70,4 +70,35 @@ public sealed class ContextOverflowDetectionTests
         var ex = new ProviderException("context length exceeded", "context length exceeded", statusCode: 500);
         Assert.True(LlmSessionActor.IsContextOverflowError(ex));
     }
+
+    [Theory]
+    [InlineData("System message must be at the beginning.")]                  // vLLM verbatim (post-#1171 regression)
+    [InlineData("system message must be at the beginning")]                   // case-insensitive
+    [InlineData("messages must alternate between user and assistant")]        // generic shape rule
+    [InlineData("invalid role 'developer' for this model")]                   // unsupported role
+    public void Structural_badrequest_does_not_classify_as_overflow(string message)
+    {
+        // These are wire-format violations, not "too many tokens". Routing
+        // them through the overflow path triggers a doomed compact-and-retry
+        // loop that ends in the misleading "Context window exceeded even
+        // after compaction" user-visible message. Compaction cannot fix
+        // wire-format bugs; the classifier must short-circuit.
+        var providerEx = new ProviderException(message, message, statusCode: 400);
+        Assert.False(LlmSessionActor.IsContextOverflowError(providerEx));
+
+        // Also covered when the structural message hides in an inner exception.
+        var wrapped = new Exception("LLM streaming failed", providerEx);
+        Assert.False(LlmSessionActor.IsContextOverflowError(wrapped));
+    }
+
+    [Fact]
+    public void Structural_badrequest_wins_even_if_message_also_mentions_context()
+    {
+        // Defensive: if a provider emitted both keywords (unlikely but
+        // not impossible), the structural classification still wins so
+        // we don't compaction-loop.
+        const string msg = "System message must be at the beginning. Note: also exceeded context length.";
+        var ex = new ProviderException(msg, msg, statusCode: 400);
+        Assert.False(LlmSessionActor.IsContextOverflowError(ex));
+    }
 }
