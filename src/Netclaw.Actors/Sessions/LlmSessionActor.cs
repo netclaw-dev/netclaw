@@ -2473,6 +2473,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        // Idempotent on content: if the freshly-rebuilt prompt is
+        // byte-identical to history[0], skip the replacement. The
+        // immutable-list SetItem allocates a new spine even when the value
+        // is unchanged, and the rebuild itself drops the persisted prompt
+        // from llama.cpp's KV cache from token 0 because the underlying
+        // prompt bytes change identity. PR #1171 fixed the volatile-tail
+        // merge; this fix closes the residual cache-bust path where
+        // SetSystemPrompt fires unconditionally on every channel-driven
+        // turn even when on-disk identity files are unchanged.
+        if (_state.History.Count > 0
+            && _state.History[0].Role == Protocol.ChatRole.System
+            && string.Equals(_state.History[0].Content, content, StringComparison.Ordinal))
+        {
+            return;
+        }
+
         var systemMsg = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.System,
@@ -2484,7 +2500,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ? _state with { History = _state.History.SetItem(0, systemMsg) }
             : _state with { History = _state.History.Insert(0, systemMsg) };
 
-        _log.Info("System prompt set ({PromptLength} chars)", content.Length);
+        // Hash is included so a future cache-drift investigation can confirm
+        // at a glance whether two "System prompt set" lines carry the same
+        // content or genuinely different content.
+        _log.Info("System prompt set ({PromptLength} chars, hash={ContentHash})",
+            content.Length,
+            ShortContentHash(content));
+    }
+
+    private static string ShortContentHash(string content)
+    {
+        var bytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(content));
+        return Convert.ToHexString(bytes.AsSpan(0, 8)).ToLowerInvariant();
     }
 
     private void FireLlmCall(string? recallQuery = null, bool forceNoTools = false)

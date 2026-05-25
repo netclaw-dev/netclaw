@@ -289,6 +289,35 @@ run_scenario context_heavy "Conversation where responses are long, growing conte
     "Compare that to how Redis handles it, especially with Redis Cluster." \
     "Given what we discussed, if I'm building a global e-commerce platform, which tradeoff would you recommend and why?"
 
+# Scenario 7: Memory recall across many turns (Regression A canary).
+# Live evidence from PR #1171 follow-up showed partial cache drops
+# mid-session when memory-recall content changed between turns and
+# something upstream rebuilt the leading prefix. With the
+# SetSystemPrompt idempotency fix in place, the prefix must stay
+# byte-stable and cache hit rate must extend monotonically across the
+# six turns. A regression to "cache plateau at ~static prefix size on
+# turn 3+" matches the pre-fix failure mode.
+run_scenario memory_recall_mid_session "Multi-turn with shifting recall anchors — cache must extend, not plateau" \
+    "Remember this for our chat: my primary project name is Aurora and uses Rust on Tokio. Confirm in one sentence." \
+    "What's 17 times 23? Just the number." \
+    "Remind me what programming language and runtime my Aurora project uses." \
+    "Now switch gears: name three approaches for handling backpressure in async systems." \
+    "Of those three, which one is most idiomatic for the runtime my Aurora project uses?" \
+    "Summarize Aurora's stack and the recommended backpressure approach in two sentences."
+
+# Scenario 8: Tool discovery mid-session (Regression B canary).
+# Live evidence showed permanent cache=0 on every turn after a
+# dynamic `load_tool` call. The session.log captured cache collapse
+# from 99% hit rate to 0% across 5+ subsequent turns over 24 minutes.
+# This scenario exercises the dynamic-tool registration path via
+# search_tools + load_tool, then verifies subsequent turns still
+# extend the cache prefix.
+run_scenario tool_loaded_mid_session "Discover and load a tool mid-conversation — cache must recover next turn" \
+    "Tell me a one-sentence fun fact about hummingbirds. No tools needed." \
+    "Now I want you to use search_tools to find a tool that can list directory contents, then call load_tool on it (no need to execute the listed tool — just discover and load it)." \
+    "Did you successfully load the tool? In one sentence, name the tool you loaded." \
+    "Without invoking any more tools, what was the hummingbird fact you told me earlier?"
+
 # ─── Write Combined Results ───────────────────────────────────────────────────
 
 echo ""

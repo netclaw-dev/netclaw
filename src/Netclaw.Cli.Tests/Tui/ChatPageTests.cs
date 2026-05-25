@@ -423,7 +423,8 @@ public sealed class ChatPageTests
                 new DaemonClient("http://127.0.0.1:1"),
                 TimeProvider.System,
                 new ModelCapabilities { ModelId = "test-model" },
-                new ChatNavigationState())
+                new ChatNavigationState(),
+                new NetclawPaths())
         {
             _seed = seed;
         }

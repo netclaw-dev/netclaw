@@ -23,6 +23,7 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly DaemonClient _daemonClient;
     private readonly TimeProvider _timeProvider;
     private readonly ModelCapabilities _modelCapabilities;
+    private readonly NetclawPaths _paths;
     private string? _resumeSessionId;
     private string? _initialMessage;
 
@@ -31,6 +32,12 @@ public partial class ChatViewModel : ReactiveViewModel
     private readonly Queue<ToolInteractionRequest> _pendingInteractions = new();
     private IDisposable? _daemonOutputSubscription;
     private IDisposable? _daemonConnectionSubscription;
+    // Per-session USAGE log writer. Mirrors HeadlessChannel's writer so the
+    // canonical signalr-{sessionId}.log file receives USAGE: in=... cached=...
+    // lines for both TUI and -p driven sessions. Without this, post-hoc KV
+    // cache analysis and eval tooling that anchors on the per-session log
+    // silently gets no data from TUI turns (issue #1173).
+    private StreamWriter? _usageLog;
     private bool _sessionReady;
     private int _connectAttempts;
     private readonly ObservableCollection<string> _approvalOptions = [];
@@ -73,11 +80,13 @@ public partial class ChatViewModel : ReactiveViewModel
         DaemonClient daemonClient,
         TimeProvider timeProvider,
         ModelCapabilities modelCapabilities,
-        ChatNavigationState navigationState)
+        ChatNavigationState navigationState,
+        NetclawPaths paths)
     {
         _daemonClient = daemonClient;
         _timeProvider = timeProvider;
         _modelCapabilities = modelCapabilities;
+        _paths = paths;
         _resumeSessionId = navigationState.TakeResumeSessionId();
         _initialMessage = navigationState.TakeInitialMessage();
     }
@@ -94,6 +103,11 @@ public partial class ChatViewModel : ReactiveViewModel
             .Subscribe(output =>
             {
                 _outputSubject.OnNext(output);
+
+                if (output is UsageOutput usage)
+                {
+                    AppendUsageLog(usage);
+                }
 
                 switch (output)
                 {
@@ -341,11 +355,72 @@ public partial class ChatViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
+    /// <summary>
+    /// Opens the per-session USAGE log file if not already open. Matches
+    /// HeadlessChannel's filename and append semantics so a single session
+    /// driven by both -p (headless) and TUI clients accumulates USAGE
+    /// lines in one canonical log. Safe to call repeatedly — guarded by
+    /// the null check so reconnects don't reopen the file.
+    /// </summary>
+    private void OpenUsageLogIfNeeded(string sessionIdValue)
+    {
+        if (_usageLog is not null)
+            return;
+
+        try
+        {
+            var logFileName = $"signalr-{sessionIdValue.Replace("/", "-", StringComparison.Ordinal)}.log";
+            var logPath = Path.Combine(_paths.LogsDirectory, logFileName);
+            _usageLog = new StreamWriter(logPath, append: true) { AutoFlush = true };
+            _usageLog.WriteLine($"[{_timeProvider.GetUtcNow():o}] TUI session attached: {sessionIdValue}");
+        }
+        catch (IOException ex)
+        {
+            // Logging is best-effort — never let a log-file failure break
+            // the live chat session. The daemon-side SessionLogActor at
+            // ~/.netclaw/logs/sessions/{id}/session.log remains the
+            // authoritative audit trail; surface the open failure to
+            // Debug so a misconfigured logs directory is at least visible
+            // under a debugger rather than silently lost.
+            System.Diagnostics.Debug.WriteLine($"ChatViewModel: failed to open USAGE log for session {sessionIdValue}: {ex.Message}");
+            _usageLog = null;
+        }
+    }
+
+    /// <summary>
+    /// Writes a USAGE line in the exact format produced by
+    /// HeadlessChannel.cs so existing tooling that grep's for "USAGE: in="
+    /// in the per-session log Just Works against TUI sessions too.
+    /// </summary>
+    private void AppendUsageLog(UsageOutput msg)
+    {
+        if (_usageLog is null)
+            return;
+
+        try
+        {
+            _usageLog.WriteLine(
+                $"[{_timeProvider.GetUtcNow():o}] USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens} prompt_ms={msg.PromptMs} predicted_tok_s={msg.PredictedPerSecond}");
+        }
+        catch (IOException ex)
+        {
+            // See OpenUsageLogIfNeeded: best-effort logging that must not
+            // affect the live session. Disk-full or rotation races land
+            // here and would otherwise spam every turn — disable further
+            // attempts on this session by dropping the writer reference.
+            System.Diagnostics.Debug.WriteLine($"ChatViewModel: USAGE log write failed, disabling per-session log: {ex.Message}");
+            _usageLog.Dispose();
+            _usageLog = null;
+        }
+    }
+
     public override void Dispose()
     {
         _daemonOutputSubscription?.Dispose();
         _daemonConnectionSubscription?.Dispose();
         _outputSubject.Dispose();
+        _usageLog?.Dispose();
+        _usageLog = null;
 
         IsGenerating.Dispose();
         IsInputEnabled.Dispose();
@@ -397,6 +472,7 @@ public partial class ChatViewModel : ReactiveViewModel
             ? await _daemonClient.ResumeSessionAsync(resumeId, DaemonClient.TuiChannelType)
             : await _daemonClient.EnsureSessionAsync(DaemonClient.TuiChannelType);
         SessionIdDisplay.Value = sessionId;
+        OpenUsageLogIfNeeded(sessionId);
         _sessionReady = true;
         IsInputEnabled.Value = true;
         _connectAttempts = 0;

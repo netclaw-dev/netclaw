@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -244,7 +245,99 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             }
         }
 
+        LogPrefixDiagnostic(body);
+
         return body;
+    }
+
+    /// <summary>
+    /// Emits per-turn byte hashes for the static portion of the outbound LLM
+    /// request so KV cache prefix drift can be diagnosed from the daemon log.
+    /// PR #1171 fixed the largest source of drift (volatile content merging
+    /// into the leading system message); PR #1176 moved the volatile tail
+    /// inside the last User message's <c>&lt;context&gt;</c> wrapper. The
+    /// diagnostic emits SHA-256 hashes of three independent regions so a
+    /// log-line diff between consecutive turns isolates which region drifted.
+    /// Post-#1176 the trailing message is normally the wrapped User turn (or
+    /// a Tool result mid-loop), never a System tail — <c>tail_is_system</c>
+    /// stays false on the new wire format and is kept as a defensive signal
+    /// in case an upstream regression re-emits a trailing System.
+    /// </summary>
+    private void LogPrefixDiagnostic(JsonObject body)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+            return;
+
+        var messages = body["messages"] as JsonArray;
+        if (messages is null || messages.Count == 0)
+            return;
+
+        // Leading system: messages[0] when role=system. Hash the content
+        // string only — the {role,content} envelope is invariant, so any
+        // drift here means the persisted prompt content itself changed.
+        var systemPrefixHash = "(none)";
+        var systemPrefixChars = 0;
+        if (messages[0] is JsonObject first
+            && first["role"]?.GetValue<string>() == "system")
+        {
+            var content = first["content"]?.GetValue<string>() ?? string.Empty;
+            systemPrefixChars = content.Length;
+            systemPrefixHash = ComputeShortHash(content);
+        }
+
+        // Defensive signal: post-#1176 the assembler does NOT emit a
+        // trailing System tail (volatile content goes inside the last User
+        // message). If this flips to true an upstream regression re-emitted
+        // a trailing System — that's exactly the regression #1176 fixed.
+        var tailIsSystem = messages.Count > 1
+            && messages[^1] is JsonObject last
+            && last["role"]?.GetValue<string>() == "system";
+
+        // History prefix: everything between the leading system and the new
+        // user turn (and excluding any trailing System tail if one slipped
+        // through). This is the region that should be byte-stable across
+        // consecutive turns; if it isn't, either history was rewritten
+        // mid-session or a message was re-serialized differently.
+        var historyEnd = tailIsSystem ? messages.Count - 1 : messages.Count;
+        var historyStart = systemPrefixHash == "(none)" ? 0 : 1;
+        if (historyEnd > historyStart
+            && messages[historyEnd - 1] is JsonObject newTurn
+            && newTurn["role"]?.GetValue<string>() == "user")
+        {
+            historyEnd -= 1;
+        }
+
+        var historyPrefixHash = "(none)";
+        var historyMsgCount = 0;
+        if (historyEnd > historyStart)
+        {
+            var sb = new StringBuilder();
+            for (var i = historyStart; i < historyEnd; i++)
+                sb.Append(messages[i]!.ToJsonString(JsonOptions));
+            historyPrefixHash = ComputeShortHash(sb.ToString());
+            historyMsgCount = historyEnd - historyStart;
+        }
+
+        var toolsHash = "(none)";
+        var toolsCount = 0;
+        if (body["tools"] is JsonArray toolsArray && toolsArray.Count > 0)
+        {
+            toolsHash = ComputeShortHash(toolsArray.ToJsonString(JsonOptions));
+            toolsCount = toolsArray.Count;
+        }
+
+        _logger.LogDebug(
+            "kv_prefix_diagnostic system_prefix_hash={SystemPrefixHash} system_prefix_chars={SystemPrefixChars} history_prefix_hash={HistoryPrefixHash} history_msg_count={HistoryMsgCount} tail_is_system={TailIsSystem} tools_hash={ToolsHash} tools_count={ToolsCount} total_messages={TotalMessages}",
+            systemPrefixHash, systemPrefixChars, historyPrefixHash, historyMsgCount, tailIsSystem, toolsHash, toolsCount, messages.Count);
+    }
+
+    private static string ComputeShortHash(string content)
+    {
+        // First 8 bytes (16 hex chars) is plenty to detect drift between
+        // consecutive turns; full SHA-256 would spam logs without adding
+        // diagnostic value at this scale.
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(content));
+        return Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
     }
 
     internal static JsonArray NormalizeMessages(IEnumerable<ChatMessage> messages, ILogger? logger = null)

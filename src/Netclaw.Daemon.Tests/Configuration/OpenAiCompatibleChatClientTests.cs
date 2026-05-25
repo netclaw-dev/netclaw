@@ -929,6 +929,139 @@ data: [DONE]
         Assert.Equal("store_memory", toolCall.Name);
     }
 
+    // ─── Phase 0 diagnostic tests for residual KV cache prefix drift ─────────
+    // These tests pin down byte-level invariants the existing logical
+    // assertions (Role/Text comparison) don't catch. A failure here means
+    // some serialization step between Assemble and the HTTP body is
+    // introducing per-turn drift that NormalizeMessages alone can't see.
+
+    [Fact]
+    public async Task Outbound_payload_static_prefix_byte_identical_when_only_volatile_context_differs()
+    {
+        // Post-#1176: per-turn volatile context lives inside <context>...
+        // </context> on the LAST User message rather than a trailing System
+        // tail (vLLM rejects trailing System messages). The cache prefix
+        // invariant becomes: leading System + every message except the last
+        // are byte-identical across consecutive turns.
+        var turn1Messages = new[]
+        {
+            new ChatMessage(ChatRole.System, "You are Netclaw, a helpful assistant.\n\n[session]\nid: test/cache-stability"),
+            new ChatMessage(ChatRole.User, "<context>\n[memory-recall]\nstatus: healthy\nrecall-A payload\n</context>\n\nfirst question"),
+        };
+        var turn2Messages = new[]
+        {
+            new ChatMessage(ChatRole.System, "You are Netclaw, a helpful assistant.\n\n[session]\nid: test/cache-stability"),
+            new ChatMessage(ChatRole.User, "first question"),
+            new ChatMessage(ChatRole.Assistant, "first answer"),
+            new ChatMessage(ChatRole.User, "<context>\n[memory-recall]\nstatus: healthy\nrecall-B payload completely different\n</context>\n\nsecond question"),
+        };
+
+        var bodies = await CaptureTwoRequestBodies(turn1Messages, turn2Messages);
+
+        // Strip the trailing volatile-carrying User message from each and
+        // assert byte equality position-by-position over what remains.
+        var turn1Static = ExtractStaticPrefixMessages(bodies.body1);
+        var turn2Static = ExtractStaticPrefixMessages(bodies.body2);
+        Assert.True(turn2Static.Count >= turn1Static.Count,
+            $"Turn 2 must have at least as many static messages as turn 1 (turn1={turn1Static.Count}, turn2={turn2Static.Count}).");
+        for (var i = 0; i < turn1Static.Count; i++)
+        {
+            Assert.Equal(turn1Static[i], turn2Static[i]);
+        }
+    }
+
+    [Fact]
+    public async Task Outbound_payload_tools_array_byte_identical_across_calls_with_same_tool_set()
+    {
+        // Regression B canary: two consecutive calls with the same tool
+        // collection (same order, same definitions) must serialize the
+        // `tools` field to byte-identical JSON. A failure here means
+        // tool-list serialization is non-deterministic, which would bust
+        // the cache the moment any tool is added to a session.
+        using var schemaDoc = JsonDocument.Parse(
+            "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}");
+        var toolA = AIFunctionFactory.CreateDeclaration("search_tools", "Search tools", schemaDoc.RootElement);
+        using var storeSchemaDoc = JsonDocument.Parse(
+            "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\"}},\"required\":[\"text\"]}");
+        var toolB = AIFunctionFactory.CreateDeclaration("store_memory", "Store memory", storeSchemaDoc.RootElement);
+
+        var sameMessages = new[] { new ChatMessage(ChatRole.User, "hello") };
+
+        var capturedBodies = new List<string>();
+        using var handler = new RecordingHandler(req =>
+        {
+            capturedBodies.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"id\":\"1\",\"model\":\"test\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}",
+                    Encoding.UTF8, "application/json")
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        var options = new ChatOptions { Tools = [toolA, toolB] };
+        await client.GetResponseAsync(sameMessages, options, cancellationToken: TestContext.Current.CancellationToken);
+        await client.GetResponseAsync(sameMessages, options, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, capturedBodies.Count);
+        var tools1 = ExtractToolsJson(capturedBodies[0]);
+        var tools2 = ExtractToolsJson(capturedBodies[1]);
+        Assert.Equal(tools1, tools2);
+    }
+
+    private async Task<(string body1, string body2)> CaptureTwoRequestBodies(
+        IReadOnlyList<ChatMessage> turn1, IReadOnlyList<ChatMessage> turn2)
+    {
+        var bodies = new List<string>();
+        using var handler = new RecordingHandler(req =>
+        {
+            bodies.Add(req.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    "{\"id\":\"1\",\"model\":\"test\",\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"role\":\"assistant\",\"content\":\"hi\"}}]}",
+                    Encoding.UTF8, "application/json")
+            };
+        });
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000") };
+        var endpoint = OpenAiCompatibleEndpoint.FromBaseUrl("http://localhost:8000");
+        var client = new OpenAiCompatibleChatClient(httpClient, endpoint, "test-model");
+
+        await client.GetResponseAsync(turn1, cancellationToken: TestContext.Current.CancellationToken);
+        await client.GetResponseAsync(turn2, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, bodies.Count);
+        return (bodies[0], bodies[1]);
+    }
+
+    private static List<string> ExtractStaticPrefixMessages(string requestBody)
+    {
+        // Return the messages array as a list of per-element JSON strings,
+        // with the trailing message stripped. Post-#1176 the trailing
+        // message is the volatile-carrying User turn (with <context>);
+        // pre-#1176 it was a trailing System tail. Either way, that final
+        // entry is the only one allowed to diverge between turns; the rest
+        // must be byte-identical position-for-position for the KV cache
+        // prefix to extend.
+        var root = JsonNode.Parse(requestBody)!.AsObject();
+        var messages = root["messages"]!.AsArray();
+        var end = messages.Count > 0 ? messages.Count - 1 : 0;
+        var result = new List<string>(end);
+        for (var i = 0; i < end; i++)
+            result.Add(messages[i]!.ToJsonString());
+        return result;
+    }
+
+    private static string ExtractToolsJson(string requestBody)
+    {
+        using var doc = JsonDocument.Parse(requestBody);
+        if (!doc.RootElement.TryGetProperty("tools", out var toolsElement))
+            return "(none)";
+        return toolsElement.GetRawText();
+    }
+
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _handler;
