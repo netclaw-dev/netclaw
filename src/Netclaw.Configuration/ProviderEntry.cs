@@ -30,5 +30,11 @@ public sealed class ProviderEntry
     /// <c>Providers:&lt;name&gt;:VendorOptions</c>. Plugins deserialize their own
     /// typed view instead of adding provider-specific properties here.
     /// </summary>
-    public JsonObject? VendorOptions { get; set; }
+    /// <remarks>
+    /// Setter is <c>internal</c> so Microsoft.Extensions.Configuration's binder skips this property —
+    /// <see cref="JsonObject"/> has multiple parameterized constructors the binder
+    /// can't pick from, and we populate it ourselves in
+    /// <see cref="ProviderConfigurationLoader"/>.
+    /// </remarks>
+    public JsonObject? VendorOptions { get; internal set; }
 }
