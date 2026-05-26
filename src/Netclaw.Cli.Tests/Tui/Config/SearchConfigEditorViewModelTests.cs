@@ -57,6 +57,58 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Starts_on_summary_screen()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal("duckduckgo", vm.CurrentBackendValue);
+        Assert.Equal("No additional setup required.", vm.GetSummaryStateText());
+    }
+
+    [Fact]
+    public void Selecting_brave_keeps_single_screen_matrix_active()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.BeginBackendSelection();
+        vm.SelectBackendForEditing("brave");
+
+        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal("brave", vm.CurrentBackendValue);
+        Assert.Equal("API key required.", vm.GetSummaryStateText());
+        Assert.Equal("Search.BraveApiKey", vm.CurrentProviderField?.Path);
+    }
+
+    [Fact]
+    public void Selecting_duckduckgo_has_no_provider_specific_field()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.BeginBackendSelection();
+        vm.SelectBackendForEditing("duckduckgo");
+
+        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Null(vm.CurrentProviderField);
+        Assert.Equal("No additional setup required.", vm.GetSummaryStateText());
+    }
+
+    [Fact]
+    public void Selecting_zero_config_provider_keeps_summary_quiet_when_effective_value_is_unchanged()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.BeginBackendSelection();
+        vm.SelectBackendForEditing("brave");
+        vm.BeginBackendSelection();
+        vm.SelectBackendForEditing("duckduckgo");
+
+        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.False(vm.IsDirty);
+        Assert.Equal("duckduckgo", vm.CurrentBackendValue);
+    }
+
+    [Fact]
     public async Task Brave_probe_failure_opens_override_dialog_before_save()
     {
         using var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>
@@ -111,6 +163,19 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Blank_secret_without_existing_value_is_still_structurally_invalid()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.SetFieldValue("Search.Backend", "brave");
+        vm.SetFieldValue("Search.BraveApiKey", "");
+
+        var issues = vm.ValidationSummary.Value.IssuesFor("Search.BraveApiKey");
+        Assert.Contains(issues, static issue => issue.Message.Contains("API key", StringComparison.OrdinalIgnoreCase));
+        Assert.False(vm.HasPersistedSecret("Search.BraveApiKey"));
+    }
+
+    [Fact]
     public async Task Successful_probe_allows_save_without_dialog()
     {
         using var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>
@@ -125,6 +190,7 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         await vm.SaveAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SearchConfigEditorDialog.None, vm.ActiveDialog.Value);
+        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
         Assert.Contains("Saved Search settings", vm.Status.Value.Text, StringComparison.Ordinal);
     }
 
@@ -145,8 +211,9 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     {
         using var vm = new SearchConfigEditorViewModel(_paths);
 
-        vm.SetFieldValue("Search.Backend", "searxng");
-        vm.SetFieldValue("Search.SearXngEndpoint", "https://search.example.com");
+        vm.SelectBackendForEditing("searxng");
+        vm.StageFieldValue("Search.SearXngEndpoint", "https://search.example.com");
+        vm.CommitFieldValue("Search.SearXngEndpoint");
         vm.OnDeactivating();
         vm.OnActivated();
 

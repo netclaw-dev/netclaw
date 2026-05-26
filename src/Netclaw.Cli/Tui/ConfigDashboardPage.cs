@@ -27,14 +27,7 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
 
     public override ILayoutNode BuildLayout()
     {
-        return Layouts.Vertical()
-            .WithChild(
-                new PanelNode()
-                    .WithTitle("Netclaw Config")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Cyan)
-                    .WithContent(BuildInnerLayout())
-                    .Fill());
+        return NetclawTuiChrome.BuildPageFrame("Netclaw Config", BuildInnerLayout());
     }
 
     private ILayoutNode BuildInnerLayout()
@@ -81,18 +74,14 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
     private LayoutNode BuildStatusBar()
     {
         return ViewModel.StatusMessage
-            .Select(msg => (ILayoutNode)(string.IsNullOrWhiteSpace(msg)
-                ? Layouts.Empty()
-                : new TextNode($"  {msg}").WithForeground(Color.Yellow)))
+            .Select(msg => NetclawTuiChrome.BuildStatusLine(msg, Color.Yellow))
             .AsLayout()
             .Height(1);
     }
 
     private LayoutNode BuildKeyBindings()
     {
-        return new TextNode(" [↑/↓] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit")
-            .WithForeground(Color.BrightBlack)
-            .Height(1);
+        return NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Enter] Select  [Esc] Quit  [Ctrl+Q] Quit");
     }
 
     private void HandleKeyPress(KeyPressed key)

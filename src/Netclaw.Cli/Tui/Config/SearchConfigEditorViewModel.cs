@@ -21,6 +21,13 @@ internal enum SearchConfigEditorDialog
     ProbeWarning,
 }
 
+internal enum SearchConfigEditorScreen
+{
+    Summary,
+    ChooseProvider,
+    ConfigureProvider,
+}
+
 internal sealed record SearchProbeResult(bool Success, string Message, ConfigStatusTone Tone);
 
 internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
@@ -30,6 +37,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private readonly JsonSchema _schema;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly TimeProvider _timeProvider;
+    private readonly Dictionary<string, ProjectedConfigField> _fieldsByPath;
     private ConfigValidationSummary _lastStructuralValidation = ConfigValidationSummary.Empty;
     private SearchProbeResult? _lastProbeResult;
 
@@ -47,6 +55,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
         var projector = new ConfigSectionSchemaProjector();
         Fields = projector.ProjectTopLevelSection("Search", SearchConfigMetadata.Fields);
+        _fieldsByPath = Fields.ToDictionary(static field => field.Path, StringComparer.Ordinal);
         _session = new ConfigSectionEditSession(paths, Fields);
 
         var schemaText = EmbeddedSchemaLoader.LoadConfigSchema(EmbeddedSchemaLoader.CurrentSchemaVersion)
@@ -58,6 +67,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         ValidationSummary = new ReactiveProperty<ConfigValidationSummary>(ConfigValidationSummary.Empty);
         ActiveDialog = new ReactiveProperty<SearchConfigEditorDialog>(SearchConfigEditorDialog.None);
+        CurrentScreen = new ReactiveProperty<SearchConfigEditorScreen>(SearchConfigEditorScreen.Summary);
 
         foreach (var field in Fields)
             FieldValues[field.Path] = new ReactiveProperty<string>(_session.GetEditableString(field.Path));
@@ -71,10 +81,22 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public ReactiveProperty<ConfigStatusMessage> Status { get; }
     public ReactiveProperty<ConfigValidationSummary> ValidationSummary { get; }
     public ReactiveProperty<SearchConfigEditorDialog> ActiveDialog { get; }
+    public ReactiveProperty<SearchConfigEditorScreen> CurrentScreen { get; }
 
     public ProjectedConfigField SelectedField => Fields[SelectedIndex.Value];
     public bool IsDirty => _session.IsDirty;
     public SearchProbeResult? LastProbeResult => _lastProbeResult;
+    public string CurrentBackendValue => _session.GetEffectiveString("Search.Backend") ?? SearchBackend.DuckDuckGo.ToWireValue();
+    public string CurrentBackendLabel => GetField("Search.Backend").EnumOptions
+        .FirstOrDefault(option => string.Equals(option.Value, CurrentBackendValue, StringComparison.OrdinalIgnoreCase))?.Label
+        ?? CurrentBackendValue;
+    public IReadOnlyList<ConfigEnumOption> BackendOptions => GetField("Search.Backend").EnumOptions;
+    public ProjectedConfigField? CurrentProviderField => CurrentBackendValue switch
+    {
+        "brave" => GetField("Search.BraveApiKey"),
+        "searxng" => GetField("Search.SearXngEndpoint"),
+        _ => null,
+    };
 
     public override void Dispose()
     {
@@ -85,6 +107,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Status.Dispose();
         ValidationSummary.Dispose();
         ActiveDialog.Dispose();
+        CurrentScreen.Dispose();
         base.Dispose();
     }
 
@@ -100,13 +123,33 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void SetFieldValue(string path, string? value)
     {
+        StageFieldValue(path, value);
+        CommitFieldValue(path);
+    }
+
+    public void StageFieldValue(string path, string? value)
+    {
         if (!FieldValues.TryGetValue(path, out var property))
             throw new InvalidOperationException($"Unknown search config field '{path}'.");
 
         property.Value = value ?? string.Empty;
+    }
+
+    public void CommitFieldValue(string path)
+    {
+        if (!FieldValues.TryGetValue(path, out var property))
+            throw new InvalidOperationException($"Unknown search config field '{path}'.");
+
         _session.SetValue(path, property.Value);
+        ClearTransientProbeState();
         Revalidate();
         RequestRedraw();
+    }
+
+    public void CommitCurrentProviderDraft()
+    {
+        if (CurrentProviderField is { } field)
+            CommitFieldValue(field.Path);
     }
 
     public string GetDisplayValue(ProjectedConfigField field)
@@ -129,7 +172,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     }
 
     public string GetEditorSeed(ProjectedConfigField field)
-        => _session.GetEditableString(field.Path);
+        => FieldValues[field.Path].Value;
 
     public bool IsApplicable(ProjectedConfigField field) => _session.IsApplicable(field);
 
@@ -139,6 +182,54 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public IReadOnlyList<ConfigValidationIssue> GetIssues(ProjectedConfigField field)
         => ValidationSummary.Value.IssuesFor(field.Path);
 
+    public IReadOnlyList<ConfigValidationIssue> GetCurrentProviderIssues()
+        => CurrentProviderField is { } field ? ValidationSummary.Value.IssuesFor(field.Path) : [];
+
+    public string GetSummaryStateText()
+        => CurrentBackendValue switch
+        {
+            "brave" => HasEffectiveValue("Search.BraveApiKey") ? "API key configured." : "API key required.",
+            "searxng" => HasEffectiveValue("Search.SearXngEndpoint") ? "Endpoint configured." : "Endpoint required.",
+            _ => "No additional setup required."
+        };
+
+    public ConfigStatusTone GetSummaryStateTone()
+        => CurrentBackendValue switch
+        {
+            "brave" when !HasEffectiveValue("Search.BraveApiKey") => ConfigStatusTone.Warning,
+            "searxng" when !HasEffectiveValue("Search.SearXngEndpoint") => ConfigStatusTone.Warning,
+            _ => ConfigStatusTone.Neutral,
+        };
+
+    public string? GetCurrentProviderSupportText()
+        => CurrentBackendValue switch
+        {
+            "brave" when HasPersistedSecret("Search.BraveApiKey") => "Existing key is configured. Leave blank to keep it.",
+            "searxng" => "Enter the base URL of your SearXNG instance.",
+            _ => null,
+        };
+
+    public bool HasPersistedSecret(string path) => _session.HasPersistedSecret(path);
+
+    public void BeginBackendSelection()
+    {
+        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        RequestRedraw();
+    }
+
+    public void SelectBackendForEditing(string backend)
+    {
+        SetFieldValue("Search.Backend", backend);
+        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        RequestRedraw();
+    }
+
+    public void ReturnToSummary()
+    {
+        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        RequestRedraw();
+    }
+
     public void DismissDialog()
     {
         ActiveDialog.Value = SearchConfigEditorDialog.None;
@@ -147,6 +238,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public async Task TestCurrentConfigurationAsync(CancellationToken ct = default)
     {
+        CommitCurrentProviderDraft();
         Revalidate();
         if (_lastStructuralValidation.HasErrors)
         {
@@ -164,6 +256,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public async Task SaveAsync(CancellationToken ct = default)
     {
+        CommitCurrentProviderDraft();
         Revalidate();
         if (_lastStructuralValidation.HasErrors)
         {
@@ -191,6 +284,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         _session.Save();
         Revalidate();
         ActiveDialog.Value = SearchConfigEditorDialog.None;
+        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
         Status.Value = new ConfigStatusMessage("Saved Search settings.", ConfigStatusTone.Success);
         RequestRedraw();
     }
@@ -223,6 +317,12 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     {
         _lastStructuralValidation = ValidateDraft();
         ValidationSummary.Value = _lastStructuralValidation;
+    }
+
+    private void ClearTransientProbeState()
+    {
+        _lastProbeResult = null;
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
     }
 
     private ConfigValidationSummary ValidateDraft()
@@ -328,6 +428,14 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     private HttpClient CreateHttpClient()
         => _httpClientFactory?.CreateClient() ?? new HttpClient();
+
+    private bool HasEffectiveValue(string path)
+        => !string.IsNullOrWhiteSpace(_session.GetEffectiveString(path));
+
+    private ProjectedConfigField GetField(string path)
+        => _fieldsByPath.TryGetValue(path, out var field)
+            ? field
+            : throw new InvalidOperationException($"Unknown search config field '{path}'.");
 
     private static string? MapSchemaInstanceLocationToField(string? instanceLocation)
     {

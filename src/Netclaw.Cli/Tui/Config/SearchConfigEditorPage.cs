@@ -4,8 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using R3;
+using Netclaw.Cli.Tui;
 using Termina.Extensions;
-using Termina.Input;
 using Termina.Layout;
 using Termina.Reactive;
 using Termina.Rendering;
@@ -15,53 +15,43 @@ namespace Netclaw.Cli.Tui.Config;
 
 internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorViewModel>
 {
-    private SelectionListNode<string>? _fieldList;
-    private SelectionListNode<string>? _actionList;
-    private SelectionListNode<string>? _enumList;
     private SelectionListNode<string>? _dialogList;
     private TextInputNode? _textInput;
     private DynamicLayoutNode? _contentNode;
     private readonly CompositeDisposable _contentSubscriptions = [];
-    private FocusTarget _focusTarget = FocusTarget.FieldList;
+    private SearchFocusTarget _focusTarget = SearchFocusTarget.ProviderList;
+    private int _providerIndex;
+    private string? _editingFieldPath;
+    private string _editSeed = string.Empty;
 
-    private enum FocusTarget
+    private enum SearchFocusTarget
     {
-        FieldList,
-        FieldEditor,
-        ActionList,
+        ProviderList,
+        FieldInput,
         Dialog,
     }
 
-    protected override void OnBound()
+    public override void OnNavigatedTo()
     {
-        base.OnBound();
-        ViewModel.Input.OfType<IInputEvent, KeyPressed>()
-            .Subscribe(HandleKeyPress)
+        base.OnNavigatedTo();
+
+        ViewModel.ActiveDialog.Subscribe(_ => _contentNode?.Invalidate())
+            .DisposeWith(Subscriptions);
+        ViewModel.ValidationSummary.Subscribe(_ => _contentNode?.Invalidate())
+            .DisposeWith(Subscriptions);
+        ViewModel.Status.Subscribe(_ => _contentNode?.Invalidate())
             .DisposeWith(Subscriptions);
     }
 
     public override ILayoutNode BuildLayout()
-    {
-        return Layouts.Vertical()
-            .WithChild(
-                new PanelNode()
-                    .WithTitle("Search")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Cyan)
-                    .WithContent(BuildInnerLayout())
-                    .Fill());
-    }
+        => NetclawTuiChrome.BuildPageFrame("Search", BuildInnerLayout());
 
     private ILayoutNode BuildInnerLayout()
-    {
-        return Layouts.Vertical()
+        => Layouts.Vertical()
             .WithSpacing(1)
-            .WithChild(new TextNode("  Configure how Netclaw performs web search and URL fetch augmentation.")
-                .WithForeground(Color.BrightBlack))
             .WithChild(BuildContent())
             .WithChild(BuildStatusBar())
             .WithChild(BuildKeyBindings());
-    }
 
     private LayoutNode BuildContent()
     {
@@ -69,227 +59,201 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         {
             _contentSubscriptions.Clear();
             _dialogList = null;
-            _actionList = null;
-            _enumList = null;
             _textInput = null;
 
-            return ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.ProbeWarning
-                ? BuildProbeWarningDialog()
-                : BuildEditorLayout();
-        });
+            if (ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.ProbeWarning)
+                return BuildProbeWarningDialog();
 
-        ViewModel.SelectedIndex.Subscribe(_ => _contentNode.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.ValidationSummary.Subscribe(_ => _contentNode.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.ActiveDialog.Subscribe(_ => _contentNode.Invalidate()).DisposeWith(Subscriptions);
+            return BuildProviderMatrixScreen();
+        });
 
         return _contentNode;
     }
 
-    private ILayoutNode BuildEditorLayout()
+    private ILayoutNode BuildProviderMatrixScreen()
     {
-        var rows = ViewModel.Fields.Select(FormatFieldRow).ToList();
-
-        _fieldList = Layouts.SelectionList(rows)
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-
-        if (_focusTarget == FocusTarget.FieldList)
-            _fieldList.OnFocused();
-
-        _fieldList.SelectionConfirmed
-            .Subscribe(selected =>
-            {
-                if (selected.Count == 0)
-                    return;
-
-                var index = rows.IndexOf(selected[0]);
-                if (index >= 0)
-                {
-                    ViewModel.SelectedIndex.Value = index;
-                    _focusTarget = FocusTarget.FieldEditor;
-                    _contentNode?.Invalidate();
-                    ViewModel.RequestRedraw();
-                }
-            })
-            .DisposeWith(_contentSubscriptions);
-
-        return Layouts.Horizontal()
-            .WithChild(
-                new PanelNode()
-                    .WithTitle("Fields")
-                    .WithBorder(BorderStyle.Rounded)
-                    .WithBorderColor(Color.Cyan)
-                    .WithContent(
-                        Layouts.Vertical()
-                            .WithChild(new TextNode("  Select a field to edit.").WithForeground(Color.BrightBlack))
-                            .WithChild(_fieldList))
-                    .Width(42))
-            .WithChild(
-                Layouts.Vertical()
-                    .WithSpacing(1)
-                    .WithChild(BuildFieldCard())
-                    .WithChild(BuildActionCard())
-                    .Fill());
-    }
-
-    private string FormatFieldRow(ProjectedConfigField field)
-    {
-        var issues = ViewModel.GetIssues(field);
-        var marker = issues.Count > 0 ? "!" : ViewModel.IsApplicable(field) ? ">" : "-";
-        var value = ViewModel.IsApplicable(field)
-            ? ViewModel.GetDisplayValue(field)
-            : "Inactive for current backend";
-        var clippedValue = value.Length > 24 ? value[..21] + "..." : value;
-        return $"{marker} {field.Label,-22} {clippedValue}";
-    }
-
-    private ILayoutNode BuildFieldCard()
-    {
-        var field = ViewModel.SelectedField;
-        var issues = ViewModel.GetIssues(field);
+        SyncProviderIndexToCurrentBackend();
 
         var content = Layouts.Vertical()
             .WithSpacing(1)
-            .WithChild(new TextNode($"  {field.Label}").WithForeground(Color.White).Bold());
+            .WithChild(new TextNode("  Choose your web search provider:").WithForeground(Color.White))
+            .WithChild(BuildProviderList())
+            .WithChild(BuildProviderDetails())
+            .WithChild(BuildMatrixState())
+            .WithChild(BuildCommandRail());
 
-        if (!string.IsNullOrWhiteSpace(field.Description))
-            content.WithChild(new TextNode($"  {field.Description}").WithForeground(Color.BrightBlack));
-
-        if (!string.IsNullOrWhiteSpace(field.Hint))
-            content.WithChild(new TextNode($"  {field.Hint}").WithForeground(Color.Cyan));
-
-        if (!ViewModel.IsApplicable(field))
-        {
-            content.WithChild(new TextNode("  This field only matters for the currently selected backend.")
-                .WithForeground(Color.BrightBlack));
-            content.WithChild(new TextNode($"  {ViewModel.GetInactiveText(field)}").WithForeground(Color.BrightBlack));
-        }
-        else if (field.Widget == ConfigFieldWidget.EnumSelection)
-        {
-            var items = field.EnumOptions.Select(static option => option.Label).ToList();
-            _enumList = Layouts.SelectionList(items)
-                .WithMode(SelectionMode.Single)
-                .WithHighlightColors(Color.Black, Color.Cyan);
-
-            if (_focusTarget == FocusTarget.FieldEditor)
-                _enumList.OnFocused();
-
-            _enumList.SelectionConfirmed
-                .Subscribe(selected =>
-                {
-                    if (selected.Count == 0)
-                        return;
-
-                    var option = field.EnumOptions.FirstOrDefault(o => o.Label == selected[0]);
-                    if (option is not null)
-                        ViewModel.SetFieldValue(field.Path, option.Value);
-                })
-                .DisposeWith(_contentSubscriptions);
-
-            content.WithChild(_enumList);
-        }
-        else
-        {
-            _textInput = new TextInputNode();
-            if (field.Widget == ConfigFieldWidget.PasswordInput)
-                _textInput.AsPassword();
-            if (!string.IsNullOrWhiteSpace(field.Placeholder))
-                _textInput.WithPlaceholder(field.Placeholder);
-
-            _textInput.Text = ViewModel.GetEditorSeed(field);
-            if (_focusTarget == FocusTarget.FieldEditor)
-                _textInput.OnFocused();
-
-            _textInput.Submitted
-                .Subscribe(text => ViewModel.SetFieldValue(field.Path, text))
-                .DisposeWith(_contentSubscriptions);
-
-            content.WithChild(Netclaw.Cli.Tui.Wizard.Steps.WizardStepHelpers.BuildTextInputPanel(_textInput, field.Label));
-        }
-
-        foreach (var issue in issues)
-            content.WithChild(new TextNode($"  ! {issue.Message}").WithForeground(Color.Red));
-
-        return new PanelNode()
-            .WithTitle("Selected Field")
-            .WithBorder(BorderStyle.Rounded)
-            .WithBorderColor(Color.Cyan)
-            .WithContent(content);
+        return content;
     }
 
-    private ILayoutNode BuildActionCard()
+    private ILayoutNode BuildProviderList()
     {
-        var actions = new List<string>
+        var content = Layouts.Vertical();
+        var options = ViewModel.BackendOptions;
+        for (var i = 0; i < options.Count; i++)
         {
-            "Test search backend",
-            "Save settings",
-            "Reset unsaved changes",
-            "Back to dashboard",
-        };
+            var option = options[i];
+            var isFocused = _focusTarget == SearchFocusTarget.ProviderList && i == _providerIndex;
+            var isActive = string.Equals(option.Value, ViewModel.CurrentBackendValue, StringComparison.OrdinalIgnoreCase);
+            var marker = isActive ? "(*)" : "( )";
+            var prefix = isFocused ? ">" : " ";
+            var line = $"  {prefix} {marker} {option.Label,-18} {GetProviderRequirementText(option.Value)}";
+            var color = isFocused ? Color.Cyan : Color.White;
 
-        _actionList = Layouts.SelectionList(actions)
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Green);
+            var node = new TextNode(line).WithForeground(color);
+            if (isActive)
+                node.Bold();
 
-        if (_focusTarget == FocusTarget.ActionList)
-            _actionList.OnFocused();
+            content.WithChild(node.Height(1));
+        }
 
-        _actionList.SelectionConfirmed
-            .Subscribe(async selected =>
+        return content;
+    }
+
+    private ILayoutNode BuildProviderDetails()
+    {
+        var content = Layouts.Vertical().WithSpacing(1);
+
+        content.WithChild(new TextNode($"  {ViewModel.CurrentBackendLabel}").WithForeground(Color.White).Bold());
+
+        var field = ViewModel.CurrentProviderField;
+        if (field is null)
+        {
+            content.WithChild(new TextNode("  No additional setup required.").WithForeground(Color.Gray));
+            return content;
+        }
+
+        content.WithChild(IsEditingField(field)
+            ? BuildEditingFieldLayout(field)
+            : BuildReadonlyFieldLayout(field));
+
+        foreach (var issue in ViewModel.GetCurrentProviderIssues())
+            content.WithChild(new TextNode($"  ! {issue.Message}").WithForeground(Color.Red));
+
+        return content;
+    }
+
+    private ILayoutNode BuildReadonlyFieldLayout(ProjectedConfigField field)
+    {
+        var displayValue = ViewModel.GetDisplayValue(field);
+        if (string.IsNullOrWhiteSpace(displayValue))
+            displayValue = "(not configured)";
+
+        var valueColor = displayValue.StartsWith("(", StringComparison.Ordinal)
+            ? Color.Gray
+            : Color.White;
+
+        var content = Layouts.Vertical()
+            .WithSpacing(1)
+            .WithChild(new TextNode($"  {field.Label}:").WithForeground(Color.White))
+            .WithChild(new TextNode($"  {displayValue}").WithForeground(valueColor))
+            .WithChild(new TextNode("  Press Enter to edit.").WithForeground(Color.Gray));
+
+        var supportText = ViewModel.GetCurrentProviderSupportText();
+        if (!string.IsNullOrWhiteSpace(supportText))
+            content.WithChild(new TextNode($"  {supportText}").WithForeground(Color.Gray));
+
+        return content;
+    }
+
+    private ILayoutNode BuildEditingFieldLayout(ProjectedConfigField field)
+    {
+        var content = Layouts.Vertical()
+            .WithSpacing(1)
+            .WithChild(new TextNode($"  {field.Label}:").WithForeground(Color.White));
+
+        _textInput = new TextInputNode();
+        if (field.Widget == ConfigFieldWidget.PasswordInput)
+            _textInput.AsPassword();
+        if (!string.IsNullOrWhiteSpace(field.Placeholder))
+            _textInput.WithPlaceholder(field.Placeholder);
+
+        _textInput.Text = ViewModel.GetEditorSeed(field);
+        if (_focusTarget == SearchFocusTarget.FieldInput)
+            _textInput.OnFocused();
+
+        _textInput.Submitted
+            .Subscribe(text =>
             {
-                if (selected.Count == 0)
-                    return;
-
-                switch (selected[0])
+                if (field.Path == "Search.BraveApiKey"
+                    && string.IsNullOrWhiteSpace(text)
+                    && !ViewModel.HasPersistedSecret(field.Path))
                 {
-                    case "Test search backend":
-                        await ViewModel.TestCurrentConfigurationAsync();
-                        break;
-                    case "Save settings":
-                        await ViewModel.SaveAsync();
-                        break;
-                    case "Reset unsaved changes":
-                        ViewModel.ResetDraft();
-                        break;
-                    case "Back to dashboard":
-                        ViewModel.NavigateBack();
-                        break;
+                    ViewModel.Status.Value = new ConfigStatusMessage("Brave requires an API key.", ConfigStatusTone.Error);
+                    ViewModel.RequestRedraw();
+                    return;
                 }
+
+                ViewModel.StageFieldValue(field.Path, text);
+                ViewModel.CommitFieldValue(field.Path);
+                _editingFieldPath = null;
+                _editSeed = string.Empty;
+                _focusTarget = SearchFocusTarget.ProviderList;
+                _contentNode?.Invalidate();
+                ViewModel.RequestRedraw();
             })
             .DisposeWith(_contentSubscriptions);
 
-        var backendField = ViewModel.Fields.First(static f => f.Path == "Search.Backend");
-        var errorCount = ViewModel.ValidationSummary.Value.Issues.Count(static i => i.Severity == ConfigValidationSeverity.Error);
-        var dirtyText = ViewModel.IsDirty ? "Unsaved changes" : "No unsaved changes";
-        var validationText = errorCount == 0 ? "Ready to test or save" : $"{errorCount} validation error(s)";
+        content.WithChild(NetclawTuiChrome.BuildTextInputPanel(_textInput, field.Label));
+        content.WithChild(new TextNode("  Press Enter to apply or Esc to cancel edit.").WithForeground(Color.Gray));
 
-        return new PanelNode()
-            .WithTitle("Actions")
-            .WithBorder(BorderStyle.Rounded)
-            .WithBorderColor(Color.Green)
-            .WithContent(
-                Layouts.Vertical()
-                    .WithSpacing(1)
-                    .WithChild(new TextNode($"  Backend: {ViewModel.GetDisplayValue(backendField)}").WithForeground(Color.White))
-                    .WithChild(new TextNode($"  {dirtyText}").WithForeground(Color.BrightBlack))
-                    .WithChild(new TextNode($"  {validationText}").WithForeground(errorCount == 0 ? Color.BrightBlack : Color.Yellow))
-                    .WithChild(_actionList));
+        var supportText = ViewModel.GetCurrentProviderSupportText();
+        if (!string.IsNullOrWhiteSpace(supportText))
+            content.WithChild(new TextNode($"  {supportText}").WithForeground(Color.Gray));
+
+        return content;
+    }
+
+    private ILayoutNode BuildMatrixState()
+    {
+        var children = Layouts.Vertical().WithSpacing(1);
+        var hasState = false;
+
+        if (ViewModel.GetSummaryStateTone() == ConfigStatusTone.Warning)
+        {
+            children.WithChild(new TextNode($"  {ViewModel.GetSummaryStateText()}").WithForeground(Color.Yellow));
+            hasState = true;
+        }
+
+        if (ViewModel.IsDirty)
+        {
+            children.WithChild(new TextNode("  Unsaved changes.").WithForeground(Color.Yellow));
+            hasState = true;
+        }
+
+        if (ViewModel.LastProbeResult is { } lastProbe)
+        {
+            children.WithChild(new TextNode($"  Last test: {lastProbe.Message}").WithForeground(ToColor(lastProbe.Tone)));
+            hasState = true;
+        }
+
+        return hasState ? children : Layouts.Empty();
+    }
+
+    private ILayoutNode BuildCommandRail()
+    {
+        var text = _focusTarget == SearchFocusTarget.FieldInput
+            ? "  [Enter] Apply   [Esc] Cancel edit"
+            : ViewModel.CurrentProviderField is null
+                ? "  [T] Test   [S] Save   [Esc] Back"
+                : "  [Enter] Edit   [T] Test   [S] Save   [Esc] Back";
+
+        return new TextNode(text).WithForeground(Color.Gray);
     }
 
     private ILayoutNode BuildProbeWarningDialog()
     {
         var options = new List<string>
         {
-            "Save anyway",
-            "Test again",
             "Keep editing",
+            "Test again",
+            "Save anyway",
         };
 
         _dialogList = Layouts.SelectionList(options)
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Yellow);
         _dialogList.OnFocused();
-        _focusTarget = FocusTarget.Dialog;
+        _focusTarget = SearchFocusTarget.Dialog;
 
         _dialogList.SelectionConfirmed
             .Subscribe(async selected =>
@@ -301,79 +265,73 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 {
                     case "Save anyway":
                         ViewModel.SaveWithoutProbeOverride();
+                        _focusTarget = SearchFocusTarget.ProviderList;
                         break;
                     case "Test again":
                         ViewModel.DismissDialog();
-                        _focusTarget = FocusTarget.ActionList;
+                        _focusTarget = SearchFocusTarget.ProviderList;
                         await ViewModel.TestCurrentConfigurationAsync();
                         break;
                     default:
                         ViewModel.DismissDialog();
-                        _focusTarget = FocusTarget.FieldList;
+                        _focusTarget = SearchFocusTarget.ProviderList;
                         break;
                 }
             })
             .DisposeWith(_contentSubscriptions);
 
         var message = ViewModel.LastProbeResult?.Message ?? "Search backend test failed.";
-        return new PanelNode()
-            .WithTitle("Probe Warning")
-            .WithBorder(BorderStyle.Rounded)
-            .WithBorderColor(Color.Yellow)
-            .WithContent(
-                Layouts.Vertical()
-                    .WithSpacing(1)
-                    .WithChild(new TextNode($"  {message}").WithForeground(Color.Yellow))
-                    .WithChild(new TextNode("  Save anyway stores the config despite the failed runtime probe.")
-                        .WithForeground(Color.BrightBlack))
-                    .WithChild(_dialogList));
+        return NetclawTuiChrome.BuildPanel(
+            "Search Test Warning",
+            Layouts.Vertical()
+                .WithSpacing(1)
+                .WithChild(new TextNode($"  {message}").WithForeground(Color.Yellow))
+                .WithChild(new TextNode("  Netclaw could not complete a live search using this configuration.")
+                    .WithForeground(Color.Gray))
+                .WithChild(_dialogList),
+            Color.Yellow);
     }
 
     private LayoutNode BuildStatusBar()
-    {
-        return ViewModel.Status
-            .Select(status => (ILayoutNode)(string.IsNullOrWhiteSpace(status.Text)
-                ? Layouts.Empty()
-                : new TextNode($"  {status.Text}").WithForeground(ToColor(status.Tone))))
+        => ViewModel.Status
+            .Select(status => NetclawTuiChrome.BuildStatusLine(status.Text, ToColor(status.Tone)))
             .AsLayout()
             .Height(1);
-    }
 
     private LayoutNode BuildKeyBindings()
     {
-        return new TextNode(" [↑/↓] Navigate  [Enter] Confirm  [Tab] Cycle focus  [T] Test  [S] Save  [R] Reset  [Esc] Back  [Ctrl+Q] Quit")
-            .WithForeground(Color.BrightBlack)
-            .Height(1);
+        var text = _focusTarget switch
+        {
+            SearchFocusTarget.Dialog => " [↑/↓] Navigate  [Enter] Confirm  [Esc] Dismiss  [Ctrl+Q] Quit",
+            SearchFocusTarget.FieldInput => " [Enter] Apply  [Esc] Cancel edit  [Ctrl+Q] Quit",
+            _ when ViewModel.CurrentProviderField is null => " [↑/↓] Navigate  [T] Test  [S] Save  [Esc] Back  [Ctrl+Q] Quit",
+            _ => " [↑/↓] Navigate  [Enter] Edit  [T] Test  [S] Save  [Esc] Back  [Ctrl+Q] Quit",
+        };
+
+        return NetclawTuiChrome.BuildKeyHintLine(text);
     }
 
-    private void HandleKeyPress(KeyPressed key)
+    public override bool HandlePageInput(ConsoleKeyInfo keyInfo)
     {
-        var keyInfo = key.KeyInfo;
+        if (base.HandlePageInput(keyInfo))
+            return true;
 
         if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             ViewModel.RequestQuit();
-            return;
+            return true;
         }
 
-        if (keyInfo.Key == ConsoleKey.T)
+        if (_focusTarget != SearchFocusTarget.FieldInput && keyInfo.Key == ConsoleKey.T)
         {
-            _focusTarget = FocusTarget.ActionList;
             _ = ViewModel.TestCurrentConfigurationAsync();
-            return;
+            return true;
         }
 
-        if (keyInfo.Key == ConsoleKey.S)
+        if (_focusTarget != SearchFocusTarget.FieldInput && keyInfo.Key == ConsoleKey.S)
         {
-            _focusTarget = FocusTarget.ActionList;
             _ = ViewModel.SaveAsync();
-            return;
-        }
-
-        if (keyInfo.Key == ConsoleKey.R)
-        {
-            ViewModel.ResetDraft();
-            return;
+            return true;
         }
 
         if (keyInfo.Key == ConsoleKey.Escape)
@@ -381,55 +339,124 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             if (ViewModel.ActiveDialog.Value != SearchConfigEditorDialog.None)
             {
                 ViewModel.DismissDialog();
-                _focusTarget = FocusTarget.FieldList;
-                return;
+                _focusTarget = SearchFocusTarget.ProviderList;
+                return true;
+            }
+
+            if (_focusTarget == SearchFocusTarget.FieldInput)
+            {
+                CancelActiveEdit();
+                return true;
             }
 
             ViewModel.NavigateBack();
-            return;
+            return true;
         }
 
-        if (keyInfo.Key == ConsoleKey.Tab && ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.None)
+        if (_focusTarget != SearchFocusTarget.FieldInput && keyInfo.Key == ConsoleKey.Enter)
         {
-            CycleFocus();
-            return;
+            BeginInlineEdit();
+            return true;
         }
 
         switch (_focusTarget)
         {
-            case FocusTarget.Dialog:
+            case SearchFocusTarget.Dialog:
                 _dialogList?.HandleInput(keyInfo);
                 break;
-            case FocusTarget.ActionList:
-                _actionList?.HandleInput(keyInfo);
-                break;
-            case FocusTarget.FieldEditor when _enumList is not null:
-                _enumList.HandleInput(keyInfo);
-                break;
-            case FocusTarget.FieldEditor when _textInput is not null:
+            case SearchFocusTarget.FieldInput when _textInput is not null:
+                var fieldPath = _editingFieldPath;
                 _textInput.HandleInput(keyInfo);
+                if (_focusTarget == SearchFocusTarget.FieldInput
+                    && !string.IsNullOrWhiteSpace(fieldPath))
+                {
+                    ViewModel.StageFieldValue(fieldPath, _textInput.Text);
+                }
+
                 break;
             default:
-                _fieldList?.HandleInput(keyInfo);
+                if (keyInfo.Key == ConsoleKey.UpArrow)
+                {
+                    MoveProviderSelection(-1);
+                    return true;
+                }
+
+                if (keyInfo.Key == ConsoleKey.DownArrow)
+                {
+                    MoveProviderSelection(1);
+                    return true;
+                }
+
                 break;
         }
 
         ViewModel.RequestRedraw();
+        return true;
     }
 
-    private void CycleFocus()
+    private void SyncProviderIndexToCurrentBackend()
     {
-        _focusTarget = _focusTarget switch
-        {
-            FocusTarget.FieldList => FocusTarget.FieldEditor,
-            FocusTarget.FieldEditor => FocusTarget.ActionList,
-            FocusTarget.ActionList => FocusTarget.FieldList,
-            _ => FocusTarget.FieldList,
-        };
+        var index = ViewModel.BackendOptions
+            .Select((option, idx) => (option, idx))
+            .FirstOrDefault(entry => string.Equals(entry.option.Value, ViewModel.CurrentBackendValue, StringComparison.OrdinalIgnoreCase))
+            .idx;
 
+        _providerIndex = Math.Clamp(index, 0, Math.Max(0, ViewModel.BackendOptions.Count - 1));
+    }
+
+    private void MoveProviderSelection(int delta)
+    {
+        if (ViewModel.BackendOptions.Count == 0)
+            return;
+
+        var next = Math.Clamp(_providerIndex + delta, 0, ViewModel.BackendOptions.Count - 1);
+        if (next == _providerIndex)
+            return;
+
+        _providerIndex = next;
+        _editingFieldPath = null;
+        _editSeed = string.Empty;
+
+        var option = ViewModel.BackendOptions[_providerIndex];
+        ViewModel.SelectBackendForEditing(option.Value);
+        _contentNode?.Invalidate();
+    }
+
+    private void BeginInlineEdit()
+    {
+        if (ViewModel.CurrentProviderField is not { } field)
+            return;
+
+        _editingFieldPath = field.Path;
+        _editSeed = ViewModel.GetEditorSeed(field);
+        _focusTarget = SearchFocusTarget.FieldInput;
         _contentNode?.Invalidate();
         ViewModel.RequestRedraw();
     }
+
+    private bool IsEditingField(ProjectedConfigField field)
+        => _focusTarget == SearchFocusTarget.FieldInput
+            && string.Equals(_editingFieldPath, field.Path, StringComparison.Ordinal);
+
+    private void CancelActiveEdit()
+    {
+        if (_editingFieldPath is { } path)
+            ViewModel.StageFieldValue(path, _editSeed);
+
+        _editingFieldPath = null;
+        _editSeed = string.Empty;
+        _focusTarget = SearchFocusTarget.ProviderList;
+        _contentNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
+    private static string GetProviderRequirementText(string backend)
+        => backend switch
+        {
+            "brave" => "Requires API key",
+            "searxng" => "Requires endpoint URL",
+            _ => "No setup required",
+        };
 
     private static Color ToColor(ConfigStatusTone tone) => tone switch
     {

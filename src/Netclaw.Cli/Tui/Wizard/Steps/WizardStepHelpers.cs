@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using R3;
+using Netclaw.Cli.Tui;
 using Termina.Extensions;
 using Termina.Layout;
 using Termina.Reactive;
@@ -46,12 +47,7 @@ internal static class WizardStepHelpers
     }
 
     internal static ILayoutNode BuildTextInputPanel(TextInputNode input, string title)
-        => new PanelNode()
-            .WithTitle(title)
-            .WithBorder(BorderStyle.Rounded)
-            .WithBorderColor(Color.Gray)
-            .WithContent(input)
-            .Height(3);
+        => NetclawTuiChrome.BuildTextInputPanel(input, title);
 
     internal static List<string> ParseUserIds(string? input)
         => string.IsNullOrWhiteSpace(input)

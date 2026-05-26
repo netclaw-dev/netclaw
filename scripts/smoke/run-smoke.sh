@@ -54,7 +54,7 @@ SMOKE_LOG_DIR="${SMOKE_LOG_DIR:-${ROOT_DIR}/smoke-logs}"
 
 # Cheapest harness checks first so a harness-level break fails fast
 # before paying for the wizard + probe tapes.
-LIGHT_TAPES=(help init-wizard init-wizard-reverse-proxy provider-add provider-rename tui-cleanup mcp-permissions approvals model-manager sessions-tui)
+LIGHT_TAPES=(help init-wizard init-wizard-reverse-proxy provider-add provider-rename config-search tui-cleanup mcp-permissions approvals model-manager sessions-tui)
 FULL_TAPES=("${LIGHT_TAPES[@]}")
 
 LIGHT_SCENARIOS=(
@@ -74,7 +74,7 @@ FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")
 # may emit several `Screenshot "/tmp/shot-<frame>.png"` directives. SHOT_FRAMES
 # is the full set of frame names the harness compares against baselines — it
 # MUST stay in sync with the Screenshot paths in those tapes.
-SHOT_TAPES=(help wizard-screens provider-manager mcp-permissions)
+SHOT_TAPES=(help wizard-screens provider-manager mcp-permissions config-search)
 SHOT_FRAMES=(
   help
   wizard-provider-picker
@@ -82,6 +82,9 @@ SHOT_FRAMES=(
   provider-manager-empty
   mcp-permissions-server-list
   mcp-permissions-tool-grid
+  config-search-matrix
+  config-search-brave
+  config-search-searxng-edit
 )
 
 usage() {
