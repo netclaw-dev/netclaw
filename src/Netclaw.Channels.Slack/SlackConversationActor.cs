@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Collections.Generic;
-using System.Linq;
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
@@ -19,7 +17,6 @@ public sealed class SlackConversationActor : ReceiveActor
     private readonly SlackChannelId _conversationId;
     private readonly SlackGatewayDependencies _dependencies;
     private readonly ILoggingAdapter _log;
-    private readonly Dictionary<IActorRef, int> _childPendingApprovals = [];
 
     public SlackConversationActor(SlackChannelId conversationId, SlackGatewayDependencies dependencies)
     {
@@ -32,28 +29,8 @@ public sealed class SlackConversationActor : ReceiveActor
         Context.SetReceiveTimeout(TimeSpan.FromHours(2));
         Receive<ReceiveTimeout>(_ =>
         {
-            if (_childPendingApprovals.Values.Any(count => count > 0))
-            {
-                _log.Info("Slack conversation idle but child approvals are still pending; deferring passivation");
-                return;
-            }
-
             _log.Info("Slack conversation idle for 2 hours, passivating");
             Context.Stop(Self);
-        });
-
-        Receive<PendingApprovalStateChanged>(message =>
-        {
-            if (message.PendingCount > 0)
-                _childPendingApprovals[message.Child] = message.PendingCount;
-            else
-                _childPendingApprovals.Remove(message.Child);
-        });
-
-        Receive<Terminated>(message =>
-        {
-            _childPendingApprovals.Remove(message.ActorRef);
-            _log.Debug("Slack thread binding stopped: {0}", message.ActorRef.Path.Name);
         });
 
         Receive<SlackInboundMessage>(message =>
@@ -122,7 +99,7 @@ public sealed class SlackConversationActor : ReceiveActor
             }
 
             var thread = existingThread.IsNobody()
-                ? WatchThread(Context.ActorOf(CreateThreadProps(message.ChannelId, threadTs), threadActorName))
+                ? Context.ActorOf(CreateThreadProps(message.ChannelId, threadTs), threadActorName)
                 : existingThread;
 
             var normalized = NormalizeInboundText(message.Text);
@@ -195,7 +172,7 @@ public sealed class SlackConversationActor : ReceiveActor
             var existingThread = Context.Child(threadActorName);
 
             var thread = existingThread.IsNobody()
-                ? WatchThread(Context.ActorOf(CreateThreadProps(message.ChannelId, message.ThreadTs), threadActorName))
+                ? Context.ActorOf(CreateThreadProps(message.ChannelId, message.ThreadTs), threadActorName)
                 : existingThread;
 
             _log.Debug("Routing proactive thread setup to thread actor {0}", message.ThreadTs);
@@ -234,7 +211,7 @@ public sealed class SlackConversationActor : ReceiveActor
             var threadActorName = Uri.EscapeDataString(threadTs.Value);
             var existingThread = Context.Child(threadActorName);
             var thread = existingThread.IsNobody()
-                ? WatchThread(Context.ActorOf(CreateThreadProps(_conversationId, threadTs), threadActorName))
+                ? Context.ActorOf(CreateThreadProps(_conversationId, threadTs), threadActorName)
                 : existingThread;
 
             _log.Debug(
@@ -290,12 +267,6 @@ public sealed class SlackConversationActor : ReceiveActor
             dependencies: _dependencies);
     }
 
-    private IActorRef WatchThread(IActorRef thread)
-    {
-        Context.Watch(thread);
-        return thread;
-    }
-
     private async Task PostIngressClosedReplyAsync(SlackChannelId channelId, SlackThreadTs threadTs, string message)
     {
         try
@@ -308,11 +279,5 @@ public sealed class SlackConversationActor : ReceiveActor
         {
             _log.Warning(ex, "Failed to post restart-drain reply to Slack thread {0}", threadTs.Value);
         }
-    }
-
-    protected override void PostStop()
-    {
-        _childPendingApprovals.Clear();
-        base.PostStop();
     }
 }

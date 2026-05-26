@@ -16,6 +16,7 @@ using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 using IOPath = System.IO.Path;
 
 namespace Netclaw.Channels.Discord;
@@ -108,6 +109,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "discord-session");
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
+        Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
+        Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
         // After journal replay completes, queue a one-shot hydration. The
         // self-tell lands in the mailbox after InitializePipeline (from
         // PreStart), so the actor finishes pipeline init first, then
@@ -142,7 +145,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
     protected override void PostStop()
     {
-        NotifyParentPendingApprovalStateChanged();
         _handle.Dispose();
         base.PostStop();
     }
@@ -742,23 +744,56 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         if (!ToolInteractionResponseParser.TryParseApprovalResponse(
                 message.Text ?? string.Empty,
-                pending!.Request.Options,
+                pending!.Options,
                 out var selectedKey)
             || selectedKey is null)
         {
             return false;
         }
 
-        _pendingApprovalRequests.Remove(pending!);
-        NotifyParentPendingApprovalStateChanged();
-
-        await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+        ICommandReply feedbackResult;
+        try
         {
-            SessionId = _sessionId,
-            CallId = pending!.CallId,
-            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
-            SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-        });
+            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
+                new ToolInteractionResponse
+                {
+                    SessionId = _sessionId,
+                    CallId = pending!.CallId,
+                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
+                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
+                }, feedbackCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to route Discord text approval response for call {CallId}", pending!.CallId);
+            return true;
+        }
+
+        switch (feedbackResult)
+        {
+            case CommandNack nack:
+                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
+                    await SafeReplyAsync(WrongRequesterWarning);
+                _log.Info(
+                    "Session rejected Discord text approval response for call {CallId} reason={Reason}; skipping redraw",
+                    pending!.CallId,
+                    nack.Reason ?? "<none>");
+                return true;
+
+            case not CommandAck:
+                _log.Warning(
+                    "Discord text approval response for call {CallId} returned unexpected feedback result {ResultType}",
+                    pending!.CallId,
+                    feedbackResult.GetType().Name);
+                return true;
+        }
+
+        _pendingApprovalRequests.Remove(pending!);
+        Persist(new PendingApprovalPromptCleared
+        {
+            CallId = pending.CallId.Value
+        }, ApplyPendingApprovalPromptCleared);
 
         await TryResolveApprovalPromptAsync(
             pending!.PromptMessageId,
@@ -867,7 +902,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
-            NotifyParentPendingApprovalStateChanged();
+            Persist(new PendingApprovalPromptCleared
+            {
+                CallId = pending.CallId.Value
+            }, ApplyPendingApprovalPromptCleared);
             // Prefer captured message ID; fall back to payload ID when capture failed.
             var promptMessageId = pending.PromptMessageId ?? message.PromptMessageId;
             await TryResolveApprovalPromptAsync(
@@ -935,9 +973,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 messageId.Value);
         }
     }
-
-    private void NotifyParentPendingApprovalStateChanged()
-        => Context.Parent.Tell(new PendingApprovalStateChanged(Self, _pendingApprovalRequests.Count));
 
     private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
     {
@@ -1013,7 +1048,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 p.CallId == resolvedCallId);
             if (byCallId is null)
                 return (ApprovalLookupResult.NotFound, null);
-            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId?.Value, senderId.Value))
+            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId, senderId.Value))
                 return (ApprovalLookupResult.WrongRequester, null);
             return (ApprovalLookupResult.Matched, byCallId);
         }
@@ -1022,7 +1057,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return (ApprovalLookupResult.NotFound, null);
 
         var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId?.Value, senderId.Value));
+            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId, senderId.Value));
         return bySender is not null
             ? (ApprovalLookupResult.Matched, bySender)
             : (ApprovalLookupResult.WrongRequester, null);
@@ -1051,17 +1086,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 _hasObservedApprovalRequest = true;
                 var pendingApproval = new PendingApprovalRequest(request);
                 _pendingApprovalRequests.Add(pendingApproval);
-                NotifyParentPendingApprovalStateChanged();
 
                 var promptMessageId = await SafeReplyWithButtonsAsync(request);
                 if (promptMessageId is not null)
                 {
                     pendingApproval.PromptMessageId = promptMessageId;
+                    Persist(new PendingApprovalPromptTracked
+                    {
+                        CallId = pendingApproval.CallId.Value,
+                        RequesterSenderId = pendingApproval.RequesterSenderId,
+                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
+                        OptionKeys = pendingApproval.OptionKeys,
+                        PromptId = promptMessageId.Value.Value
+                    }, ApplyPendingApprovalPromptTracked);
                 }
                 else
                 {
                     _pendingApprovalRequests.Remove(pendingApproval);
-                    NotifyParentPendingApprovalStateChanged();
                 }
                 break;
 
@@ -1087,8 +1128,19 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                     await SafeReplyAsync(EmptyTurnFallbackText);
 
                 _turnNumber = completed.TurnNumber;
+                var clearedPrompts = _pendingApprovalRequests
+                    .Select(pending => new PendingApprovalPromptCleared
+                    {
+                        CallId = pending.CallId.Value
+                    })
+                    .ToArray();
+                if (clearedPrompts.Length > 0)
+                {
+                    PersistAll(
+                        clearedPrompts,
+                        cleared => ApplyPendingApprovalPromptCleared(cleared));
+                }
                 _pendingApprovalRequests.Clear();
-                NotifyParentPendingApprovalStateChanged();
                 _deliveredThisTurn = false;
                 break;
         }
@@ -1557,6 +1609,28 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
             DeleteMessages(LastSequenceNr - 1);
     }
+
+    private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
+    {
+        _hasObservedApprovalRequest = true;
+
+        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
+        if (existing is not null)
+        {
+            existing.PromptMessageId = new DiscordMessageId(tracked.PromptId);
+            return;
+        }
+
+        _pendingApprovalRequests.Add(new PendingApprovalRequest(
+            new ToolCallId(tracked.CallId),
+            tracked.RequesterSenderId,
+            tracked.RequesterPrincipal,
+            tracked.OptionKeys,
+            new DiscordMessageId(tracked.PromptId)));
+    }
+
+    private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
+        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
 
     private static ulong? TryParseSnowflake(string value)
         => ulong.TryParse(value, out var id) ? id : null;

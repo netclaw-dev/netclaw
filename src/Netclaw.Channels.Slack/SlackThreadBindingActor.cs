@@ -95,6 +95,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             .WithContext("SlackThreadTs", _threadTs);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
+        Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
+        Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
         // After journal replay completes, queue a one-shot hydration. The
         // self-tell lands in the mailbox after InitializePipeline (from
         // PreStart), so the actor finishes pipeline init first, then
@@ -123,7 +125,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     protected override void PostStop()
     {
-        NotifyParentPendingApprovalStateChanged();
         _handle.Dispose();
         base.PostStop();
     }
@@ -1121,6 +1122,28 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             DeleteMessages(LastSequenceNr - 1);
     }
 
+    private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
+    {
+        _hasObservedApprovalRequest = true;
+
+        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
+        if (existing is not null)
+        {
+            existing.PromptMessageTs = new SlackEventTs(tracked.PromptId);
+            return;
+        }
+
+        _pendingApprovalRequests.Add(new PendingApprovalRequest(
+            new ToolCallId(tracked.CallId),
+            tracked.RequesterSenderId,
+            tracked.RequesterPrincipal,
+            tracked.OptionKeys,
+            new SlackEventTs(tracked.PromptId)));
+    }
+
+    private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
+        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
+
     private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
 
     private async Task ReinitializePipelineAsync(string reason)
@@ -1166,11 +1189,18 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _hasObservedApprovalRequest = true;
                 var pendingApproval = new PendingApprovalRequest(interaction);
                 _pendingApprovalRequests.Add(pendingApproval);
-                NotifyParentPendingApprovalStateChanged();
                 var promptMessageTs = await HandleApprovalRequestAsync(interaction);
                 if (promptMessageTs is not null)
                 {
                     pendingApproval.PromptMessageTs = promptMessageTs;
+                    Persist(new PendingApprovalPromptTracked
+                    {
+                        CallId = pendingApproval.CallId.Value,
+                        RequesterSenderId = pendingApproval.RequesterSenderId,
+                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
+                        OptionKeys = pendingApproval.OptionKeys,
+                        PromptId = promptMessageTs.Value.Value
+                    }, ApplyPendingApprovalPromptTracked);
                 }
                 else
                 {
@@ -1178,7 +1208,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     // route a deny back to the session so the blocked tool task can
                     // unwind instead of waiting on the infinite-timeout TCS.
                     _pendingApprovalRequests.Remove(pendingApproval);
-                    NotifyParentPendingApprovalStateChanged();
                     await SendApprovalDenyOnFailureAsync(interaction);
                 }
                 break;
@@ -1224,8 +1253,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
                 _lastFailedPost = null;
+                var clearedPrompts = _pendingApprovalRequests
+                    .Select(pending => new PendingApprovalPromptCleared
+                    {
+                        CallId = pending.CallId.Value
+                    })
+                    .ToArray();
+                if (clearedPrompts.Length > 0)
+                {
+                    PersistAll(
+                        clearedPrompts,
+                        cleared => ApplyPendingApprovalPromptCleared(cleared));
+                }
                 _pendingApprovalRequests.Clear();
-                NotifyParentPendingApprovalStateChanged();
 
                 break;
         }
@@ -1240,7 +1280,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
 
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            ApprovalButtonValueCodec.CanApprove(request.Request.RequesterPrincipal, request.Request.RequesterSenderId?.Value, message.SenderId.Value));
+            ApprovalButtonValueCodec.CanApprove(request.RequesterPrincipal, request.RequesterSenderId, message.SenderId.Value));
 
         if (pendingIndex < 0)
         {
@@ -1252,7 +1292,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         if (!ToolInteractionResponseParser.TryParseApprovalResponse(
                 message.Text ?? string.Empty,
-                pending.Request.Options,
+                pending.Options,
                 out var selectedKey)
             || selectedKey is null)
         {
@@ -1261,40 +1301,61 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         try
         {
-            await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+            var feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
+                new ToolInteractionResponse
+                {
+                    SessionId = _sessionId,
+                    CallId = pending.CallId,
+                    SelectedKey = new Actors.Protocol.ApprovalOptionKey(selectedKey),
+                    SenderId = message.SenderId
+                }, feedbackCts.Token);
+
+            switch (feedbackResult)
             {
-                SessionId = _sessionId,
-                CallId = pending.Request.CallId,
-                SelectedKey = new Actors.Protocol.ApprovalOptionKey(selectedKey),
-                SenderId = message.SenderId
-            });
+                case CommandNack nack:
+                    if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
+                        await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
+                    _log.Info(
+                        "Session rejected Slack text approval response for call {CallId} reason={Reason}; skipping redraw",
+                        pending.CallId,
+                        nack.Reason ?? "<none>");
+                    return true;
+
+                case not CommandAck:
+                    _log.Warning(
+                        "Slack text approval response for call {CallId} returned unexpected feedback result {ResultType}",
+                        pending.CallId,
+                        feedbackResult.GetType().Name);
+                    return true;
+            }
 
             _pendingApprovalRequests.RemoveAt(pendingIndex);
-            NotifyParentPendingApprovalStateChanged();
+            Persist(new PendingApprovalPromptCleared
+            {
+                CallId = pending.CallId.Value
+            }, ApplyPendingApprovalPromptCleared);
 
             await TryResolveApprovalPromptAsync(
                 pending.PromptMessageTs,
                 pending.Request,
-                pending.Request.CallId,
+                pending.CallId,
                 selectedKey,
                 message.SenderId.Value);
 
             _log.Info(
                 "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                pending.Request.CallId,
+                pending.CallId,
                 message.SenderId,
                 selectedKey);
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to route Slack approval response for call {CallId}", pending.Request.CallId);
+            _log.Error(ex, "Failed to route Slack approval response for call {CallId}", pending.CallId);
         }
 
         return true;
     }
-
-    private void NotifyParentPendingApprovalStateChanged()
-        => Context.Parent.Tell(new PendingApprovalStateChanged(Self, _pendingApprovalRequests.Count));
 
     private async Task<bool> TryHandleColdTextApprovalResponseAsync(SlackThreadInbound message)
     {
@@ -1337,7 +1398,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private async Task HandleApprovalResponseAsync(SlackApprovalResponse message)
     {
         var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            request.Request.CallId == message.CallId);
+            request.CallId == message.CallId);
         var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
 
         // CanApprove fast-path: if the binding still holds the original request we can
@@ -1347,8 +1408,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         // below blocks the redraw until the session has actually accepted the click —
         // see #939 + #979.
         if (pending is not null && !ApprovalButtonValueCodec.CanApprove(
-                pending.Request.RequesterPrincipal,
-                pending.Request.RequesterSenderId?.Value,
+                pending.RequesterPrincipal,
+                pending.RequesterSenderId,
                 message.SenderId.Value))
         {
             await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
@@ -1410,6 +1471,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (pending is not null)
         {
             _pendingApprovalRequests.RemoveAt(pendingIndex);
+            Persist(new PendingApprovalPromptCleared
+            {
+                CallId = pending.CallId.Value
+            }, ApplyPendingApprovalPromptCleared);
             // Prefer the captured TS, but fall back to the payload's TS when capture
             // failed (post raced or returned an empty TS). The payload TS is reliable
             // for a button click since Slack populates it in the envelope.
@@ -1417,13 +1482,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             await TryResolveApprovalPromptAsync(
                 promptTs,
                 pending.Request,
-                message.CallId,
+                pending.CallId,
                 message.SelectedKey,
                 message.SenderId.Value);
 
             _log.Info(
                 "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                pending.Request.CallId,
+                pending.CallId,
                 message.SenderId,
                 message.SelectedKey);
         }
@@ -1674,9 +1739,42 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private sealed record ThreadOutput(SessionOutput Output) : INoSerializationVerificationNeeded;
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
     private sealed record ReinitializePipeline(string Reason) : INoSerializationVerificationNeeded;
-    private sealed class PendingApprovalRequest(ToolInteractionRequest request)
+    private sealed class PendingApprovalRequest
     {
-        public ToolInteractionRequest Request { get; } = request;
+        public PendingApprovalRequest(ToolInteractionRequest request)
+        {
+            Request = request;
+            CallId = request.CallId;
+            RequesterSenderId = request.RequesterSenderId?.Value;
+            RequesterPrincipal = request.RequesterPrincipal;
+            Options = request.Options;
+            OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
+        }
+
+        public PendingApprovalRequest(
+            ToolCallId callId,
+            string? requesterSenderId,
+            PrincipalClassification? requesterPrincipal,
+            IReadOnlyList<string> optionKeys,
+            SlackEventTs? promptMessageTs)
+        {
+            Request = null;
+            CallId = callId;
+            RequesterSenderId = requesterSenderId;
+            RequesterPrincipal = requesterPrincipal;
+            OptionKeys = [.. optionKeys];
+            Options = OptionKeys
+                .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
+                .ToArray();
+            PromptMessageTs = promptMessageTs;
+        }
+
+        public ToolInteractionRequest? Request { get; }
+        public ToolCallId CallId { get; }
+        public string? RequesterSenderId { get; }
+        public PrincipalClassification? RequesterPrincipal { get; }
+        public IReadOnlyList<ToolInteractionOption> Options { get; }
+        public IReadOnlyList<string> OptionKeys { get; }
 
         public SlackEventTs? PromptMessageTs { get; set; }
     }

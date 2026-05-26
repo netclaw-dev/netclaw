@@ -27,7 +27,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
     private readonly MattermostGatewayDependencies _dependencies;
     private readonly string? _botMentionTag;
     private readonly ILoggingAdapter _log;
-    private readonly Dictionary<IActorRef, int> _childPendingApprovals = [];
 
     public MattermostConversationActor(MattermostChannelId channelId, MattermostGatewayDependencies dependencies)
     {
@@ -42,22 +41,8 @@ internal sealed class MattermostConversationActor : ReceiveActor
 
         Receive<ReceiveTimeout>(_ =>
         {
-            if (_childPendingApprovals.Values.Any(count => count > 0))
-            {
-                _log.Info("Mattermost conversation idle but child approvals are still pending; deferring passivation");
-                return;
-            }
-
             _log.Info("Mattermost conversation idle for 2 hours, passivating");
             Context.Stop(Self);
-        });
-
-        Receive<PendingApprovalStateChanged>(message =>
-        {
-            if (message.PendingCount > 0)
-                _childPendingApprovals[message.Child] = message.PendingCount;
-            else
-                _childPendingApprovals.Remove(message.Child);
         });
 
         Receive<MattermostGatewayMessage>(HandleGatewayMessage);
@@ -285,7 +270,6 @@ internal sealed class MattermostConversationActor : ReceiveActor
 
     private void HandleTerminated(Terminated msg)
     {
-        _childPendingApprovals.Remove(msg.ActorRef);
         _log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name);
     }
 

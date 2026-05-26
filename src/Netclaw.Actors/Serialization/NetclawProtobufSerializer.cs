@@ -44,6 +44,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string ToolApprovalRequestedManifest = "tar-v1";
     private const string ToolApprovalResolvedManifest = "tares-v1";
     private const string ToolBatchAbandonedManifest = "tba-v1";
+    private const string PendingApprovalPromptTrackedManifest = "papt-v1";
+    private const string PendingApprovalPromptClearedManifest = "papc-v1";
 
     private static readonly FrozenDictionary<Type, string> TypeToManifest = new Dictionary<Type, string>
     {
@@ -71,6 +73,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(ToolApprovalRequested)] = ToolApprovalRequestedManifest,
         [typeof(ToolApprovalResolved)] = ToolApprovalResolvedManifest,
         [typeof(ToolBatchAbandoned)] = ToolBatchAbandonedManifest,
+        [typeof(Channels.PendingApprovalPromptTracked)] = PendingApprovalPromptTrackedManifest,
+        [typeof(Channels.PendingApprovalPromptCleared)] = PendingApprovalPromptClearedManifest,
     }.ToFrozenDictionary();
 
     public override int Identifier => 150;
@@ -145,6 +149,10 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.ToolApprovalResolvedProto.Parser.ParseFrom(bytes)),
             ToolBatchAbandonedManifest => NetclawProtoMapper.FromProto(
                 Proto.ToolBatchAbandonedProto.Parser.ParseFrom(bytes)),
+            PendingApprovalPromptTrackedManifest => NetclawProtoMapper.FromProto(
+                Proto.PendingApprovalPromptTrackedProto.Parser.ParseFrom(bytes)),
+            PendingApprovalPromptClearedManifest => NetclawProtoMapper.FromProto(
+                Proto.PendingApprovalPromptClearedProto.Parser.ParseFrom(bytes)),
             _ => throw new ArgumentException(
                 $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
         };
