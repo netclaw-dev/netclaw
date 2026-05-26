@@ -2532,14 +2532,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
 
-            // Persist recalled memories into session history so they survive
-            // across turns. Without this, recalled memories are transient system
-            // messages that vanish after one turn, and the exclusion set prevents
-            // re-injection — making the memory invisible for the rest of the session.
+            // Observer audit: track which memories were recalled this turn
+            // independently of how they end up on the wire. Downstream
+            // distillation prompts grep for "[recalled-memory]" entries.
             if (resolved.Items.Count > 0)
             {
                 var recallContent = SessionRecallManager.FormatForHistory(resolved);
-                _state = _state.AddSystemNudge(recallContent);
                 _observerActor?.Tell(new ObserverSystemContext("recalled-memory", recallContent));
             }
 
@@ -2556,6 +2554,36 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (resolved.Items.Count > 0)
                 _sessionMetrics?.RecordMemoriesRecalled(resolved.Items.Count);
+
+            // Persist the FULL volatile context block (recall + current
+            // time + working context + skill hint + slash command body +
+            // session prompt overlay + turn restart notice + active
+            // background jobs) into History via AddSystemNudge. Gated on
+            // the same first-call-of-turn sentinel as recall resolution,
+            // so tool-loop iterations don't re-nudge. By persisting at
+            // turn-start (rather than wrapping at assemble-time), the
+            // volatile bytes become part of History — every byte-prefix
+            // caching provider (llama.cpp, vLLM, OpenAI, Ollama, ...)
+            // can extend the cache prefix through this content on every
+            // subsequent turn instead of re-tokenizing it from scratch.
+            _activeRecall = _recallManager.TurnRecallCache;
+            var volatileBlock = SessionMessageAssembler.BuildVolatileContextBlock(new ContextAssemblyInput(
+                State: _state,
+                ContextLayers: _contextLayers,
+                StartupContextInjected: _startupContextInjected,
+                SlashCommandSkillContent: _slashCommandSkillContent,
+                SessionPromptOverlay: _sessionPromptOverlay,
+                TurnRestartNotice: _turnRestartNotice,
+                SessionId: _sessionId,
+                SessionsBasePath: _sessionsBasePath,
+                FileReadGranted: HasFileReadGranted(),
+                ActiveRecall: _activeRecall,
+                Audience: CurrentTurnAudience(),
+                SkillHint: BuildSkillHint()));
+            if (!string.IsNullOrEmpty(volatileBlock))
+            {
+                _state = _state.AddSystemNudge(volatileBlock);
+            }
         }
 
         _activeRecall = _recallManager.TurnRecallCache;
@@ -2564,18 +2592,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // Static content (persisted prompt, OnceAtStart layers, [session],
         // [attachments]) sits at the head so the prompt prefix stays
         // byte-stable across turns. Volatile per-turn content (memory
-        // recall, current time, working context, slash command overlay,
-        // turn restart notice) is wrapped in a <context>...</context>
-        // block and prepended to the text of the last User-role message
-        // in the list. That placement keeps cache misses confined to the
-        // user turn while remaining wire-compatible with strict providers
-        // (vLLM rejects trailing System messages with HTTP 400) and
-        // avoiding the mid-tool-loop "fake user turn" failure mode where
-        // a trailing User message makes Qwen-family chat templates
-        // restart the assistant response. See SessionMessageAssembler
-        // for the full assembly contract. Mark startup injection complete
-        // after the first call to preserve the existing OnceAtStart
-        // semantics.
+        // recall, current time, working context, etc.) was already
+        // persisted into History above via AddSystemNudge — the assembler
+        // just emits the static head + history verbatim. See
+        // SessionMessageAssembler for the full assembly contract. Mark
+        // startup injection complete after the first call to preserve the
+        // existing OnceAtStart semantics.
         var skillHint = BuildSkillHint();
         var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
             State: _state,
@@ -2592,8 +2614,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SkillHint: skillHint,
             // Canonical names live in history (post-PR follow-up); the
             // LLM provider wants the sanitized alias back on the wire.
-            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName),
-            warn: msg => TurnLog().Warning(msg));
+            ToolNameToLlmFacing: _toolRegistry is null ? null : _toolRegistry.ToLlmFacingName));
         _startupContextInjected = true;
 
         var self = Self;

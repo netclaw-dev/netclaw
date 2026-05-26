@@ -254,13 +254,21 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
-    public async Task WorkingContext_populated_by_file_read_tool_execution()
+    public async Task WorkingContext_populated_by_file_read_tool_execution_visible_in_next_turn()
     {
-        // End-to-end: LLM emits a file_read tool call, the actor executes
-        // it and appends the result to history, the tool-execution hook
-        // pushes the path onto WorkingContext.RecentFiles, and the next
-        // LLM call receives a [working-context] block in its dynamic
-        // system message.
+        // End-to-end: LLM emits a file_read tool call on turn 1, the actor
+        // executes it and the tool-execution hook pushes the path onto
+        // WorkingContext.RecentFiles. The agent must see a [working-context]
+        // block mentioning that file on turn 2 (the next user turn).
+        //
+        // Under the cache-history-stable design (see SessionMessageAssembler
+        // class comment), volatile context is captured ONCE per turn at
+        // turn-start via SessionState.AddSystemNudge — not refreshed on
+        // each tool-loop iteration. Turn 1's nudge therefore reflects
+        // working_context as of turn-start (empty); the file opened during
+        // turn 1's tool loop surfaces in turn 2's nudge. This is the
+        // explicit trade-off for keeping the wire bytes byte-stable across
+        // turns (every byte-prefix-caching provider benefits).
         //
         // CRITICAL: the argument key here ("Path", PascalCase) must match
         // what NetclawToolGenerator emits for first-party file tools —
@@ -293,37 +301,39 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
             Content = "please read Rect.cs"
         }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        // Wait for the full tool-call loop: ToolCallOutput, ToolResultOutput,
-        // second LLM call's TextOutput, TurnCompleted.
+        // Drain turn 1's events: tool call, tool result, follow-up text, complete.
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
-        // The second (follow-up) main-model call after the tool execution
-        // should see a `[working-context]` block. Since #608, volatile
-        // content (including working-context) lives in a User-role tail
-        // message rather than a System message, so the agent sees it as
-        // runtime context appended after the user's message.
-        var mainModelCalls = _fakeChatClient.ReceivedMessages
-            .Where(msgs => !(msgs.FirstOrDefault(m => m.Role == Microsoft.Extensions.AI.ChatRole.System)?.Text
-                ?? string.Empty).Contains("session summarizer", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        // Turn 2: a follow-up user message. The fresh nudge captured at
+        // turn-2-start must include working_context with src/Rect.cs from
+        // turn 1's tool execution.
+        var turn1CallCount = _fakeChatClient.ReceivedMessages.Count;
 
-        Assert.True(mainModelCalls.Count >= 2,
-            $"Expected at least 2 main-model calls (initial + tool-loop follow-up); got {mainModelCalls.Count}");
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "what file did you read?"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        var followUpCall = mainModelCalls[^1];
-        var allContent = followUpCall
-            .Select(m => m.Text ?? string.Empty)
-            .ToList();
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Inspect the first main-model LLM call of turn 2 (the one with
+        // the fresh nudge applied).
+        Assert.True(_fakeChatClient.ReceivedMessages.Count > turn1CallCount,
+            $"Expected at least one main-model call on turn 2; total before={turn1CallCount} after={_fakeChatClient.ReceivedMessages.Count}");
+        var turn2Call = _fakeChatClient.ReceivedMessages[turn1CallCount];
+        var allContent = turn2Call.Select(m => m.Text ?? string.Empty).ToList();
 
         var hasWorkingContextBlock = allContent.Any(s =>
             s.Contains("[working-context]", StringComparison.Ordinal)
             && s.Contains("src/Rect.cs", StringComparison.Ordinal));
 
         Assert.True(hasWorkingContextBlock,
-            $"Expected the follow-up LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
+            $"Expected turn 2's first LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
     }
 }
 

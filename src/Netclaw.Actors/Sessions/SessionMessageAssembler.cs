@@ -48,39 +48,37 @@ public sealed record ContextAssemblyInput(
 /// [1]      System  static dynamic context (OnceAtStart layers + [session] + [attachments])
 /// [2..N]   User/Assistant/Tool  conversation history (from SessionState.History,
 ///                               minus the persisted prompt which was already at index 0).
-///                               The last User-role message in this range carries the
-///                               volatile turn-context block as a &lt;context&gt; prefix on
-///                               its text content (see below).
+///                               The actor injects the turn's volatile context as a
+///                               User-role <c>[system: ...]</c> nudge entry in
+///                               History at turn-start (see remarks).
 /// </code>
 ///
 /// The critical cache property: when the same session fires two turns in
 /// sequence, the longest common prefix of both assemblies extends through
-/// the leading System prefix and all conversation history up to (but not
-/// including) the user message whose <c>&lt;context&gt;</c> prefix carries
-/// volatile content. Adding a turn to history extends the cache prefix
-/// for the next turn by exactly one more user/assistant pair.
+/// the leading System prefix and the ENTIRE conversation history. Adding
+/// a turn extends the cache prefix for the next turn by every user, nudge,
+/// assistant, and tool message of the completed turn.
 ///
 /// All volatile content (memory recall, current time, working context,
-/// slash command, overlay, turn restart) is consolidated into a single
-/// <c>&lt;context&gt;...&lt;/context&gt;</c> block prepended to the text of
-/// the last User-role message in the list. This placement satisfies three
-/// constraints simultaneously:
+/// skill hint, slash command, overlay, turn restart, background jobs) is
+/// composed by <see cref="BuildVolatileContextBlock"/> and persisted into
+/// History via <c>SessionState.AddSystemNudge</c> at turn-start by the
+/// actor — NOT here. That placement satisfies the constraints that the
+/// previous design discovered the hard way:
 ///
 /// <list type="bullet">
-///   <item>Keeps volatile content out of the leading System prefix so
-///   the cacheable head stays byte-stable across turns.</item>
-///   <item>Avoids emitting any message after the last conversation
-///   message — so a mid-tool-loop assembly (where the conversation
-///   tail is a Tool-role result, not a User-role message) does NOT
-///   inject a fake User turn that would make chat templates restart
-///   the assistant response and cause repeating-acknowledgement loops
-///   (e.g. "You're absolutely right — I had that backwards" restated
-///   on every tool call).</item>
-///   <item>Avoids emitting a trailing System-role message, which
-///   strict OpenAI-compatible servers (vLLM with the Qwen/Llama chat
-///   templates among them) reject with HTTP 400 "System message must
-///   be at the beginning." A trailing System tail used to be the
-///   previous design here and broke vLLM after PR #1171.</item>
+///   <item>Volatile bytes live inside History, so on every subsequent
+///   turn's assembly they are reproduced verbatim — the cache prefix
+///   extends through every prior turn's volatile region as well.</item>
+///   <item>No trailing System-role message is emitted, so strict
+///   OpenAI-compatible servers (vLLM with Qwen/Llama chat templates)
+///   don't reject the request with "System message must be at the
+///   beginning." (PR #1171's regression.)</item>
+///   <item>No message is appended after the last conversation message,
+///   so mid-tool-loop assemblies (where the tail is a Tool result)
+///   don't accidentally inject a fake User turn that would make chat
+///   templates restart the assistant response and produce
+///   repeating-acknowledgement loops.</item>
 /// </list>
 /// </summary>
 public static class SessionMessageAssembler
@@ -108,7 +106,7 @@ public static class SessionMessageAssembler
         "Never silently ignore an attachment the user sent — always acknowledge what you received by name, " +
         "even if you cannot fully process it.";
 
-    public static List<AiChatMessage> Assemble(ContextAssemblyInput input, Action<string>? warn = null)
+    public static List<AiChatMessage> Assemble(ContextAssemblyInput input)
     {
         var sessionDir = SessionDirectoryHelper.GetSessionDirectory(input.SessionId, input.SessionsBasePath);
         var messages = ChatMessageConverter.ToAiMessages(
@@ -131,61 +129,15 @@ public static class SessionMessageAssembler
             messages.Insert(insertIndex, staticMessage);
         }
 
-        var volatileBlock = BuildVolatileContextBlock(input);
-        if (!string.IsNullOrEmpty(volatileBlock))
-        {
-            PrependContextToLastUserMessage(messages, volatileBlock, warn);
-        }
-
+        // The volatile per-turn context (memory recall, current time,
+        // working context, slash command body, etc.) is NOT injected
+        // here. It is composed by LlmSessionActor at turn-start and
+        // persisted into History via SessionState.AddSystemNudge so the
+        // wire bytes for that content are byte-stable across consecutive
+        // turns (the cache prefix can extend through history naturally
+        // on every byte-prefix-caching provider). The assembler now
+        // just emits the static head + history verbatim.
         return messages;
-    }
-
-    /// <summary>
-    /// Prepends the volatile context block to the text of the last
-    /// User-role message in <paramref name="messages"/>, wrapped in
-    /// <c>&lt;context&gt;...&lt;/context&gt;</c> tags. Preserves any
-    /// non-text contents (images, attachments) on that message intact.
-    /// If no User message is present (edge case: fresh session before
-    /// the first user turn lands in history, or post-compaction state
-    /// where only System/Assistant/Tool messages remain), the volatile
-    /// block has no valid wire position; the assembler invokes
-    /// <paramref name="warn"/> so the caller can surface this as a loud
-    /// failure instead of silently degrading.
-    /// </summary>
-    private static void PrependContextToLastUserMessage(List<AiChatMessage> messages, string volatileBlock, Action<string>? warn)
-    {
-        var prefix = "<context>\n" + volatileBlock + "\n</context>\n\n";
-
-        for (var i = messages.Count - 1; i >= 0; i--)
-        {
-            var msg = messages[i];
-            if (msg.Role != Microsoft.Extensions.AI.ChatRole.User)
-                continue;
-
-            var newContents = new List<AIContent>(msg.Contents.Count + 1);
-            var prepended = false;
-            foreach (var content in msg.Contents)
-            {
-                if (!prepended && content is TextContent text)
-                {
-                    newContents.Add(new TextContent(prefix + (text.Text ?? string.Empty)));
-                    prepended = true;
-                }
-                else
-                {
-                    newContents.Add(content);
-                }
-            }
-            if (!prepended)
-            {
-                newContents.Insert(0, new TextContent(prefix));
-            }
-
-            messages[i] = new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, newContents);
-            return;
-        }
-
-        warn?.Invoke($"volatile_block_dropped reason=no_user_message chars={volatileBlock.Length}");
     }
 
     private static string BuildStaticContextBlock(ContextAssemblyInput input, string sessionDir)
@@ -228,7 +180,18 @@ public static class SessionMessageAssembler
         return string.Join("\n\n", parts);
     }
 
-    private static string BuildVolatileContextBlock(ContextAssemblyInput input)
+    /// <summary>
+    /// Composes the per-turn volatile context block — memory recall, current
+    /// time, working context, skill hint, slash command body, session prompt
+    /// overlay, turn restart notice, active background jobs. Exposed
+    /// <c>internal</c> so <c>LlmSessionActor</c> can call this at turn-start
+    /// and persist the result into history via <c>AddSystemNudge</c>; that
+    /// makes the wire bytes for the volatile content byte-stable across turns
+    /// (the cache prefix can extend through history naturally). The assembler
+    /// itself no longer injects this block — it just emits the assembled
+    /// history verbatim, with the nudge already in place.
+    /// </summary>
+    internal static string BuildVolatileContextBlock(ContextAssemblyInput input)
     {
         var parts = new List<string>();
 

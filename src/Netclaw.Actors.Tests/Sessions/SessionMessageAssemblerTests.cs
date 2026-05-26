@@ -67,94 +67,87 @@ public sealed class SessionMessageAssemblerTests
     [Fact]
     public void Prefix_extends_through_history_when_startup_layers_settled()
     {
-        // Simulate the steady-state condition: both turns have
-        // StartupContextInjected=true, so the static block is structurally
-        // identical across them. This is the case during normal multi-turn
-        // operation (after the first turn fires).
-        const string turn1RecallMarker = "remembered-turn-1-secret-payload";
-        const string turn2RecallMarker = "completely-different-turn-2-content";
-
-        var turn1History = SeedHistory("first question");
-        var turn1 = MakeInput(turn1History, FakeRecall(turn1RecallMarker), startupDone: true);
+        // Steady-state: both turns have StartupContextInjected=true so the
+        // static block is structurally identical across them. The assembler
+        // no longer wraps the last User message — it just emits the static
+        // block + history verbatim. Cache prefix stability comes from the
+        // actor persisting the per-turn volatile block as a system-nudge
+        // entry in history (via SessionState.AddSystemNudge) BEFORE the
+        // assembler runs. We simulate that here by pre-populating history.
+        var turn1History = SeedHistory("first question")
+            .Add(new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.User,
+                Content = $"{SessionState.SystemNudgePrefix} turn-1-volatile-snapshot]",
+            });
+        var turn1 = MakeInput(turn1History, activeRecall: null, startupDone: true);
         var turn1Messages = SessionMessageAssembler.Assemble(turn1);
 
         var turn2History = turn1History
             .Add(new SerializableChatMessage { Role = ProtocolChatRole.Assistant, Content = "First answer" })
-            .Add(new SerializableChatMessage { Role = ProtocolChatRole.User, Content = "second question" });
-        var turn2 = MakeInput(turn2History, FakeRecall(turn2RecallMarker), startupDone: true);
+            .Add(new SerializableChatMessage { Role = ProtocolChatRole.User, Content = "second question" })
+            .Add(new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.User,
+                Content = $"{SessionState.SystemNudgePrefix} turn-2-volatile-snapshot]",
+            });
+        var turn2 = MakeInput(turn2History, activeRecall: null, startupDone: true);
         var turn2Messages = SessionMessageAssembler.Assemble(turn2);
 
         var prefix = LongestCommonPrefix(turn1Messages, turn2Messages);
 
-        // Expected stable prefix: [0] persisted prompt, [1] static dynamic
-        // context. The user turn 1 message diverges between assemblies
-        // because turn 1's last User-role message carries the turn-1
-        // volatile <context> while turn 2's last User-role message is the
-        // turn-2 user message ("second question") carrying turn-2's
-        // <context>. The intervening "first question" user message in
-        // turn 2 is NOT the last User-role message and therefore has no
-        // <context> wrapper — but in turn 1 the SAME message IS the
-        // last User and does have a wrapper, so it diverges too. The
-        // stable prefix is therefore [0]+[1] only when only the volatile
-        // tail differs (which is the cache property we care about: the
-        // cacheable prefix is byte-stable across turns).
-        Assert.True(prefix >= 2,
-            $"Expected cache prefix ≥ 2 messages (persisted prompt + static context), got {prefix}. " +
+        // Turn 1 wire: [persisted, static, user "first question", nudge-1]
+        // Turn 2 wire: [persisted, static, user "first question", nudge-1, assistant, user "second", nudge-2]
+        // Cache prefix should extend through turn 1's full content (4 messages)
+        // before turn 2 diverges with its own assistant+user2+nudge2.
+        Assert.True(prefix >= 4,
+            $"Expected cache prefix ≥ 4 (persisted+static+user1+nudge1), got {prefix}. " +
             $"Turn 1: [{FormatMessages(turn1Messages)}] Turn 2: [{FormatMessages(turn2Messages)}]");
-
-        // Guard against passing vacuously if recall was silently dropped:
-        // each turn's marker must appear in its own assembly's last User
-        // message, and must not leak into the other turn's assembly.
-        var turn1LastUser = LastUserMessage(turn1Messages);
-        var turn2LastUser = LastUserMessage(turn2Messages);
-        Assert.NotNull(turn1LastUser);
-        Assert.NotNull(turn2LastUser);
-        Assert.Contains("<context>", turn1LastUser!.Text ?? string.Empty);
-        Assert.Contains("<context>", turn2LastUser!.Text ?? string.Empty);
-        Assert.Contains(turn1RecallMarker, turn1LastUser.Text ?? string.Empty);
-        Assert.Contains(turn2RecallMarker, turn2LastUser.Text ?? string.Empty);
-        Assert.DoesNotContain(turn2RecallMarker,
-            string.Join("\n", turn1Messages.Select(m => m.Text ?? string.Empty)));
-        Assert.DoesNotContain(turn1RecallMarker,
-            string.Join("\n", turn2Messages.Select(m => m.Text ?? string.Empty)));
     }
 
     [Fact]
-    public void Volatile_block_is_wrapped_in_context_on_last_user_message()
+    public void Assemble_emits_history_verbatim_does_not_inject_volatile()
     {
-        // Volatile per-turn context (memory recall, slash command body,
-        // working context, etc.) is consolidated into a <context>...
-        // </context> block prepended to the text of the last User-role
-        // message. See SessionMessageAssembler XML doc for why this
-        // placement is correct across both strict OpenAI-compatible
-        // servers (vLLM rejects trailing System) and the mid-tool-loop
-        // chat-template "fake user turn" failure mode (would re-fire
-        // assistant restarts if the volatile tail were a User role).
+        // Post-#1176 follow-up: the assembler stopped wrapping the last
+        // User message with a <context> block. Volatile content (memory
+        // recall, slash command, working context, current time, etc.) is
+        // injected into history by LlmSessionActor via AddSystemNudge at
+        // turn-start, before the assembler runs. The assembler emits
+        // history verbatim — no <context> wrapper, no trailing System.
         var input = MakeInput(
             SeedHistory("hi"),
             FakeRecall("mem-1"),
             slashCommand: "[skill] do a thing");
         var messages = SessionMessageAssembler.Assemble(input);
 
-        Assert.NotEmpty(messages);
-        var lastUser = LastUserMessage(messages);
-        Assert.NotNull(lastUser);
+        var allText = string.Join("\n", messages.Select(m => m.Text ?? string.Empty));
+        Assert.DoesNotContain("<context>", allText);
+        Assert.DoesNotContain("</context>", allText);
+        Assert.DoesNotContain("[memory-recall]", allText);
+        Assert.DoesNotContain("[skill] do a thing", allText);
 
-        var text = lastUser!.Text ?? string.Empty;
-        Assert.Contains("<context>", text, StringComparison.Ordinal);
-        Assert.Contains("</context>", text, StringComparison.Ordinal);
-        Assert.Contains("[memory-recall]", text, StringComparison.Ordinal);
-        Assert.Contains("[skill] do a thing", text, StringComparison.Ordinal);
+        // Last message in the assembly is whatever was last in history —
+        // here, the user "hi" (no nudge pre-seeded for this test).
+        Assert.Equal(Microsoft.Extensions.AI.ChatRole.User, messages[^1].Role);
+        Assert.Equal("hi", messages[^1].Text);
+    }
 
-        // The original user content ("hi") must still be present AFTER
-        // the closing </context> tag.
-        var closingIndex = text.IndexOf("</context>", StringComparison.Ordinal);
-        Assert.True(closingIndex >= 0);
-        var afterClose = text[(closingIndex + "</context>".Length)..];
-        Assert.Contains("hi", afterClose);
+    [Fact]
+    public void BuildVolatileContextBlock_composes_recall_and_slash_command()
+    {
+        // Pure-function helper test — this is the composition logic that
+        // LlmSessionActor calls at turn-start to compute what to nudge
+        // into history. Verifies content presence; format is checked by
+        // existing FormatRecallForLlm / WorkingContext.ToContextBlock tests.
+        var input = MakeInput(
+            SeedHistory("hi"),
+            FakeRecall("mem-1"),
+            slashCommand: "[skill] do a thing");
+        var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
 
-        // And no trailing System-role message must be appended.
-        Assert.NotEqual(Microsoft.Extensions.AI.ChatRole.System, messages[^1].Role);
+        Assert.Contains("[memory-recall]", block);
+        Assert.Contains("mem-1", block);
+        Assert.Contains("[skill] do a thing", block);
     }
 
     [Fact]
@@ -173,13 +166,13 @@ public sealed class SessionMessageAssemblerTests
     [Fact]
     public void Working_context_update_does_not_poison_system_prefix()
     {
-        // Turn 1: no file in working context.
+        // Turn 1: no file in working context. The static block (messages[1])
+        // must stay byte-stable when working_context changes on turn 2 —
+        // it lives in the leading System prefix and is part of the
+        // cacheable head.
         var turn1 = MakeInput(SeedHistory("read Rect.cs"), FakeRecall("m"));
         var turn1Messages = SessionMessageAssembler.Assemble(turn1);
 
-        // Turn 2: same history but working context now has a file. If
-        // working-context content poisoned the static prefix, messages[1]
-        // would differ between the turns. It must not.
         var stateWithFile = turn1.State with
         {
             WorkingContext = WorkingContext.Empty.AddRecentFile("src/Rect.cs")
@@ -193,42 +186,36 @@ public sealed class SessionMessageAssemblerTests
         var staticSystemBlock = turn2Messages[1].Text ?? string.Empty;
         Assert.DoesNotContain("[working-context]", staticSystemBlock);
 
-        // Volatile working-context content lands in the <context> wrapper
-        // on the last User-role message, not in any System block.
-        var lastUser = LastUserMessage(turn2Messages);
-        Assert.NotNull(lastUser);
-        Assert.Contains("<context>", lastUser!.Text ?? string.Empty);
-        Assert.Contains("[working-context]", lastUser.Text ?? string.Empty);
+        // Working-context content does NOT appear in the assembler output —
+        // it would be injected by LlmSessionActor via AddSystemNudge at
+        // turn-start (verified separately by actor-level tests). The
+        // assembler-level invariant is that the static head stays clean.
+        Assert.DoesNotContain("[working-context]",
+            string.Join("\n", turn2Messages.Select(m => m.Text ?? string.Empty)));
     }
 
     [Fact]
-    public void Recall_is_not_in_leading_system_prefix_even_when_resolved()
+    public void Recall_is_not_emitted_by_assembler_lives_in_history_nudge()
     {
-        // Cache stability requires that volatile content only appears in the
-        // <context> wrapper on the last User-role message, never in the
-        // leading contiguous System prefix that makes up the cacheable
-        // prompt.
+        // Post-cache-history-stable: the assembler stopped composing the
+        // volatile block (recall, time, working context, etc.) into the
+        // wire format. LlmSessionActor persists those into History via
+        // AddSystemNudge before calling Assemble. The assembler tests for
+        // those things now exercise BuildVolatileContextBlock directly
+        // (see BuildVolatileContextBlock_composes_recall_and_slash_command).
+        // This test pins the assembler-side invariant: passing ActiveRecall
+        // does NOT cause recall content to leak into the leading system or
+        // the user message text.
         var input = MakeInput(SeedHistory("hi"), FakeRecall("remembered thing"));
         var messages = SessionMessageAssembler.Assemble(input);
 
-        foreach (var msg in messages)
-        {
-            if (msg.Role != Microsoft.Extensions.AI.ChatRole.System)
-                break;
-            var text = msg.Text ?? string.Empty;
-            Assert.DoesNotContain("[memory-recall]", text);
-            Assert.DoesNotContain("remembered thing", text);
-        }
-
-        var lastUser = LastUserMessage(messages);
-        Assert.NotNull(lastUser);
-        Assert.Contains("<context>", lastUser!.Text ?? string.Empty);
-        Assert.Contains("[memory-recall]", lastUser.Text ?? string.Empty);
-        Assert.Contains("remembered thing", lastUser.Text ?? string.Empty);
+        var allText = string.Join("\n", messages.Select(m => m.Text ?? string.Empty));
+        Assert.DoesNotContain("[memory-recall]", allText);
+        Assert.DoesNotContain("remembered thing", allText);
     }
 
     [Fact]
-    public void Volatile_block_does_not_create_fake_user_turn_after_tool_result()
+    public void Assembler_does_not_add_trailing_message_after_tool_result()
     {
         // Regression test for the production loop observed in
         // D0AC6CKBK5K/1776051715.090089 turn 10 on 2026-04-13.
@@ -276,20 +263,21 @@ public sealed class SessionMessageAssemblerTests
 
         Assert.NotEmpty(messages);
 
-        // The volatile block must NOT add a trailing message. The tail
-        // role must be whatever was last in the conversation history —
-        // here, a Tool result.
+        // The assembler must NOT add a trailing message. The tail role
+        // must be whatever was last in the conversation history — here,
+        // a Tool result.
         var tail = messages[^1];
         Assert.Equal(Microsoft.Extensions.AI.ChatRole.Tool, tail.Role);
 
-        // The volatile block must have landed on the LAST User-role
-        // message in history (the correction). The Tool result content
-        // must remain unwrapped.
+        // Volatile content (recall etc.) is NOT injected by the assembler
+        // anywhere — it lives in history via AddSystemNudge (actor-side).
+        var allText = string.Join("\n", messages.Select(m => m.Text ?? string.Empty));
+        Assert.DoesNotContain("[memory-recall]", allText);
+
+        // The original user correction stays as-is in history.
         var lastUser = LastUserMessage(messages);
         Assert.NotNull(lastUser);
-        Assert.Contains("<context>", lastUser!.Text ?? string.Empty);
-        Assert.Contains("[memory-recall]", lastUser.Text ?? string.Empty);
-        Assert.Contains("Public is the most restrictive audience", lastUser.Text ?? string.Empty);
+        Assert.Equal("Public is the most restrictive audience", lastUser!.Text);
 
         // Stronger invariant (kept from the original regression test):
         // no User-role message may appear AFTER the last Tool/Assistant
@@ -311,49 +299,6 @@ public sealed class SessionMessageAssemblerTests
         {
             Assert.NotEqual(Microsoft.Extensions.AI.ChatRole.User, messages[i].Role);
         }
-    }
-
-    [Fact]
-    public void Volatile_block_drop_emits_warning_when_no_user_message_in_history()
-    {
-        // History contains only System + Assistant — no User-role message.
-        // The volatile block has nowhere to land. CLAUDE.md "No silent
-        // fallbacks" requires we surface this loudly rather than drop in
-        // silence.
-        var history = ImmutableList.Create(
-            new SerializableChatMessage { Role = ProtocolChatRole.System, Content = PersistedSystemPrompt },
-            new SerializableChatMessage { Role = ProtocolChatRole.Assistant, Content = "post-compaction summary" });
-
-        var input = MakeInput(history, FakeRecall("important-memory"));
-
-        var warnings = new List<string>();
-        var messages = SessionMessageAssembler.Assemble(input, warn: warnings.Add);
-
-        Assert.Single(warnings);
-        Assert.Contains("volatile_block_dropped", warnings[0]);
-        Assert.Contains("reason=no_user_message", warnings[0]);
-
-        // And the volatile content really did NOT leak into any message.
-        var allText = string.Join("\n", messages.Select(m => m.Text ?? string.Empty));
-        Assert.DoesNotContain("[memory-recall]", allText);
-        Assert.DoesNotContain("important-memory", allText);
-    }
-
-    [Fact]
-    public void Volatile_block_drop_does_not_warn_when_volatile_is_empty()
-    {
-        // No recall, no working context, no slash command → volatile block
-        // is empty → no warning fires even if no user message exists.
-        var history = ImmutableList.Create(
-            new SerializableChatMessage { Role = ProtocolChatRole.System, Content = PersistedSystemPrompt },
-            new SerializableChatMessage { Role = ProtocolChatRole.Assistant, Content = "post-compaction summary" });
-
-        var input = MakeInput(history, activeRecall: null);
-
-        var warnings = new List<string>();
-        SessionMessageAssembler.Assemble(input, warn: warnings.Add);
-
-        Assert.Empty(warnings);
     }
 
     [Fact]
@@ -432,24 +377,21 @@ public sealed class SessionMessageAssemblerTests
     [Fact]
     public void Personal_audience_includes_working_context_in_volatile_block()
     {
+        // Working-context inclusion is audience-gated inside
+        // BuildVolatileContextBlock. The assembler itself no longer
+        // composes the volatile block; the actor calls BVCB at turn-start.
+        // Verifying the helper directly here.
         var stateWithWorkingContext = SessionState.Empty with
         {
             History = SeedHistory("hi"),
             WorkingContext = WorkingContext.Empty.AddRecentFile("src/Rect.cs")
         };
         var input = MakeInput(SeedHistory("hi"), FakeRecall("mem-1"), audience: TrustAudience.Personal);
-        input = input with
-        {
-            State = stateWithWorkingContext
-        };
-        var messages = SessionMessageAssembler.Assemble(input);
+        input = input with { State = stateWithWorkingContext };
 
-        // Working-context content surfaces inside the <context> wrapper
-        // on the last User-role message.
-        var lastUser = LastUserMessage(messages);
-        Assert.NotNull(lastUser);
-        Assert.Contains("<context>", lastUser!.Text ?? string.Empty);
-        Assert.Contains("[working-context]", lastUser.Text ?? string.Empty);
+        var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
+        Assert.Contains("[working-context]", block);
+        Assert.Contains("src/Rect.cs", block);
     }
 
     private static ContextAssemblyInput MakeInput(
