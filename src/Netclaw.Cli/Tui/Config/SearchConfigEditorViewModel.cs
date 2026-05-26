@@ -4,10 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using Json.Schema;
-using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Search;
 using R3;
@@ -24,22 +20,59 @@ internal enum SearchConfigEditorDialog
 internal enum SearchConfigEditorScreen
 {
     Summary,
-    ChooseProvider,
-    ConfigureProvider,
 }
 
 internal sealed record SearchProbeResult(bool Success, string Message, ConfigStatusTone Tone);
 
+internal sealed record SearchFieldCommitResult(bool Success, IReadOnlyList<SearchEditorValidationIssue> Issues)
+{
+    public static readonly SearchFieldCommitResult Ok = new(true, []);
+
+    public static SearchFieldCommitResult Invalid(IReadOnlyList<SearchEditorValidationIssue> issues)
+        => new(false, issues);
+}
+
 internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 {
     private readonly NetclawPaths _paths;
-    private readonly ConfigSectionEditSession _session;
-    private readonly JsonSchema _schema;
+    private readonly SearchEditorPersistenceMapper _mapper;
+    private readonly SearchEditorValidationAdapter _validator;
     private readonly IHttpClientFactory? _httpClientFactory;
     private readonly TimeProvider _timeProvider;
-    private readonly Dictionary<string, ProjectedConfigField> _fieldsByPath;
-    private ConfigValidationSummary _lastStructuralValidation = ConfigValidationSummary.Empty;
+    private SearchEditorModel _model;
+    private SearchEditorValidationResult _validation = SearchEditorValidationResult.Empty;
     private SearchProbeResult? _lastProbeResult;
+
+    public IReadOnlyList<ProjectedConfigField> Fields { get; } =
+    [
+        new(
+            Path: "Search.Backend",
+            PropertyName: "Backend",
+            Label: "Backend",
+            Description: "Search backend identifier.",
+            ValueKind: ConfigFieldValueKind.String,
+            Storage: ConfigFieldStorage.ConfigFile,
+            Widget: ConfigFieldWidget.EnumSelection,
+            Nullable: false,
+            DefaultValue: SearchBackend.DuckDuckGo.ToWireValue(),
+            TrimDefaultOnSave: true,
+            PreserveBlankSecret: false,
+            Placeholder: null,
+            Hint: "Choose your web search provider.",
+            ApplicableWhenPath: null,
+            ApplicableWhenEquals: null,
+            InactiveText: null,
+            EnumOptions:
+            [
+                new("duckduckgo", "DuckDuckGo"),
+                new("brave", "Brave"),
+                new("searxng", "SearXng (self-hosted)")
+            ]),
+        SearchFields.BraveApiKey,
+        SearchFields.SearXngEndpoint,
+    ];
+
+    public Dictionary<string, ReactiveProperty<string>> FieldValues { get; } = new(StringComparer.Ordinal);
 
     internal Action<string>? RouteRequested { get; set; }
     internal bool ShutdownRequestedForTest { get; private set; }
@@ -52,49 +85,46 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         _paths = paths;
         _httpClientFactory = httpClientFactory;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _mapper = new SearchEditorPersistenceMapper();
+        _validator = new SearchEditorValidationAdapter();
+        _model = _mapper.Load(paths);
 
-        var projector = new ConfigSectionSchemaProjector();
-        Fields = projector.ProjectTopLevelSection("Search", SearchConfigMetadata.Fields);
-        _fieldsByPath = Fields.ToDictionary(static field => field.Path, StringComparer.Ordinal);
-        _session = new ConfigSectionEditSession(paths, Fields);
+        foreach (var field in Fields)
+            FieldValues[field.Path] = new ReactiveProperty<string>(GetCurrentFieldValue(field.Path));
 
-        var schemaText = EmbeddedSchemaLoader.LoadConfigSchema(EmbeddedSchemaLoader.CurrentSchemaVersion)
-            ?? throw new InvalidOperationException(
-                $"Missing embedded netclaw config schema v{EmbeddedSchemaLoader.CurrentSchemaVersion}.");
-        _schema = JsonSchema.FromText(schemaText);
-
-        SelectedIndex = new ReactiveProperty<int>(0);
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         ValidationSummary = new ReactiveProperty<ConfigValidationSummary>(ConfigValidationSummary.Empty);
         ActiveDialog = new ReactiveProperty<SearchConfigEditorDialog>(SearchConfigEditorDialog.None);
         CurrentScreen = new ReactiveProperty<SearchConfigEditorScreen>(SearchConfigEditorScreen.Summary);
-
-        foreach (var field in Fields)
-            FieldValues[field.Path] = new ReactiveProperty<string>(_session.GetEditableString(field.Path));
-
         Revalidate();
     }
 
-    public IReadOnlyList<ProjectedConfigField> Fields { get; }
-    public Dictionary<string, ReactiveProperty<string>> FieldValues { get; } = new(StringComparer.Ordinal);
-    public ReactiveProperty<int> SelectedIndex { get; }
     public ReactiveProperty<ConfigStatusMessage> Status { get; }
     public ReactiveProperty<ConfigValidationSummary> ValidationSummary { get; }
     public ReactiveProperty<SearchConfigEditorDialog> ActiveDialog { get; }
     public ReactiveProperty<SearchConfigEditorScreen> CurrentScreen { get; }
 
-    public ProjectedConfigField SelectedField => Fields[SelectedIndex.Value];
-    public bool IsDirty => _session.IsDirty;
+    public bool IsDirty => ComputeIsDirty();
     public SearchProbeResult? LastProbeResult => _lastProbeResult;
-    public string CurrentBackendValue => _session.GetEffectiveString("Search.Backend") ?? SearchBackend.DuckDuckGo.ToWireValue();
-    public string CurrentBackendLabel => GetField("Search.Backend").EnumOptions
-        .FirstOrDefault(option => string.Equals(option.Value, CurrentBackendValue, StringComparison.OrdinalIgnoreCase))?.Label
-        ?? CurrentBackendValue;
-    public IReadOnlyList<ConfigEnumOption> BackendOptions => GetField("Search.Backend").EnumOptions;
-    public ProjectedConfigField? CurrentProviderField => CurrentBackendValue switch
+    public string CurrentBackendValue => _model.Backend.ToWireValue();
+    public string CurrentBackendLabel => _model.Backend switch
     {
-        "brave" => GetField("Search.BraveApiKey"),
-        "searxng" => GetField("Search.SearXngEndpoint"),
+        SearchBackend.Brave => "Brave",
+        SearchBackend.SearXng => "SearXng (self-hosted)",
+        _ => "DuckDuckGo",
+    };
+
+    public IReadOnlyList<ConfigEnumOption> BackendOptions { get; } =
+    [
+        new("duckduckgo", "DuckDuckGo"),
+        new("brave", "Brave"),
+        new("searxng", "SearXng (self-hosted)")
+    ];
+
+    public ProjectedConfigField? CurrentProviderField => _model.Backend switch
+    {
+        SearchBackend.Brave => SearchFields.BraveApiKey,
+        SearchBackend.SearXng => SearchFields.SearXngEndpoint,
         _ => null,
     };
 
@@ -103,7 +133,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         foreach (var value in FieldValues.Values)
             value.Dispose();
 
-        SelectedIndex.Dispose();
         Status.Dispose();
         ValidationSummary.Dispose();
         ActiveDialog.Dispose();
@@ -111,21 +140,73 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         base.Dispose();
     }
 
-    public void MoveSelection(int delta)
+    public SearchFieldCommitResult CommitField(string path, string? value)
     {
-        if (Fields.Count == 0)
-            return;
+        ApplyFieldValue(path, value);
+        SyncFieldValue(path);
+        ClearTransientProbeState();
+        Revalidate();
 
-        var next = Math.Clamp(SelectedIndex.Value + delta, 0, Fields.Count - 1);
-        if (next != SelectedIndex.Value)
-            SelectedIndex.Value = next;
+        var issues = _validation.IssuesFor(path);
+        if (issues.Count > 0)
+        {
+            Status.Value = new ConfigStatusMessage(issues[0].Message, ConfigStatusTone.Error);
+            RequestRedraw();
+            return SearchFieldCommitResult.Invalid(issues);
+        }
+
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
+        RequestRedraw();
+        return SearchFieldCommitResult.Ok;
     }
+
+    public string GetDisplayValue(ProjectedConfigField field)
+        => field.Path switch
+        {
+            "Search.BraveApiKey" when !string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft) => "(new secret entered)",
+            "Search.BraveApiKey" when _model.Brave.HasPersistedApiKey => "(stored secret preserved)",
+            "Search.SearXngEndpoint" when !string.IsNullOrWhiteSpace(_model.SearXng.Endpoint) => _model.SearXng.Endpoint!,
+            _ => field.InactiveText ?? string.Empty,
+        };
+
+    public string GetEditorSeed(ProjectedConfigField field)
+        => GetCurrentFieldValue(field.Path);
+
+    public IReadOnlyList<ConfigValidationIssue> GetIssues(ProjectedConfigField field)
+        => ValidationSummary.Value.IssuesFor(field.Path);
+
+    public IReadOnlyList<ConfigValidationIssue> GetCurrentProviderIssues()
+        => CurrentProviderField is { } field ? ValidationSummary.Value.IssuesFor(field.Path) : [];
+
+    public string GetSummaryStateText()
+        => _model.Backend switch
+        {
+            SearchBackend.Brave => HasEffectiveBraveKey() ? "API key configured." : "API key required.",
+            SearchBackend.SearXng => !string.IsNullOrWhiteSpace(_model.SearXng.Endpoint) ? "Endpoint configured." : "Endpoint required.",
+            _ => "No additional setup required."
+        };
+
+    public ConfigStatusTone GetSummaryStateTone()
+        => _model.Backend switch
+        {
+            SearchBackend.Brave when !HasEffectiveBraveKey() => ConfigStatusTone.Warning,
+            SearchBackend.SearXng when string.IsNullOrWhiteSpace(_model.SearXng.Endpoint) => ConfigStatusTone.Warning,
+            _ => ConfigStatusTone.Neutral,
+        };
+
+    public string? GetCurrentProviderSupportText()
+        => _model.Backend switch
+        {
+            SearchBackend.Brave when _model.Brave.HasPersistedApiKey => "Existing key is configured. Leave blank to keep it.",
+            SearchBackend.SearXng => "Enter the base URL of your SearXNG instance.",
+            _ => null,
+        };
+
+    public bool HasPersistedSecret(string path)
+        => string.Equals(path, "Search.BraveApiKey", StringComparison.Ordinal) && _model.Brave.HasPersistedApiKey;
 
     public void SetFieldValue(string path, string? value)
-    {
-        StageFieldValue(path, value);
-        CommitFieldValue(path);
-    }
+        => CommitField(path, value);
 
     public void StageFieldValue(string path, string? value)
     {
@@ -140,10 +221,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         if (!FieldValues.TryGetValue(path, out var property))
             throw new InvalidOperationException($"Unknown search config field '{path}'.");
 
-        _session.SetValue(path, property.Value);
-        ClearTransientProbeState();
-        Revalidate();
-        RequestRedraw();
+        CommitField(path, property.Value);
     }
 
     public void CommitCurrentProviderDraft()
@@ -151,65 +229,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         if (CurrentProviderField is { } field)
             CommitFieldValue(field.Path);
     }
-
-    public string GetDisplayValue(ProjectedConfigField field)
-    {
-        if (field.Widget == ConfigFieldWidget.PasswordInput)
-        {
-            var edited = _session.GetEditableString(field.Path);
-            if (!string.IsNullOrWhiteSpace(edited))
-                return "(new secret entered)";
-            if (_session.HasPersistedSecret(field.Path))
-                return "(stored secret preserved)";
-            return field.InactiveText ?? string.Empty;
-        }
-
-        var current = _session.GetEditableString(field.Path);
-        if (!string.IsNullOrWhiteSpace(current))
-            return current;
-
-        return field.DefaultValue?.ToString() ?? string.Empty;
-    }
-
-    public string GetEditorSeed(ProjectedConfigField field)
-        => FieldValues[field.Path].Value;
-
-    public bool IsApplicable(ProjectedConfigField field) => _session.IsApplicable(field);
-
-    public string GetInactiveText(ProjectedConfigField field)
-        => field.InactiveText ?? "(not applicable)";
-
-    public IReadOnlyList<ConfigValidationIssue> GetIssues(ProjectedConfigField field)
-        => ValidationSummary.Value.IssuesFor(field.Path);
-
-    public IReadOnlyList<ConfigValidationIssue> GetCurrentProviderIssues()
-        => CurrentProviderField is { } field ? ValidationSummary.Value.IssuesFor(field.Path) : [];
-
-    public string GetSummaryStateText()
-        => CurrentBackendValue switch
-        {
-            "brave" => HasEffectiveValue("Search.BraveApiKey") ? "API key configured." : "API key required.",
-            "searxng" => HasEffectiveValue("Search.SearXngEndpoint") ? "Endpoint configured." : "Endpoint required.",
-            _ => "No additional setup required."
-        };
-
-    public ConfigStatusTone GetSummaryStateTone()
-        => CurrentBackendValue switch
-        {
-            "brave" when !HasEffectiveValue("Search.BraveApiKey") => ConfigStatusTone.Warning,
-            "searxng" when !HasEffectiveValue("Search.SearXngEndpoint") => ConfigStatusTone.Warning,
-            _ => ConfigStatusTone.Neutral,
-        };
-
-    public string? GetCurrentProviderSupportText()
-        => CurrentBackendValue switch
-        {
-            "brave" when HasPersistedSecret("Search.BraveApiKey") => "Existing key is configured. Leave blank to keep it.",
-            "searxng" => "Enter the base URL of your SearXNG instance.",
-            _ => null,
-        };
-
-    public bool HasPersistedSecret(string path) => _session.HasPersistedSecret(path);
 
     public void BeginBackendSelection()
     {
@@ -219,7 +238,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void SelectBackendForEditing(string backend)
     {
-        SetFieldValue("Search.Backend", backend);
+        CommitField("Search.Backend", backend);
         CurrentScreen.Value = SearchConfigEditorScreen.Summary;
         RequestRedraw();
     }
@@ -238,9 +257,8 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public async Task TestCurrentConfigurationAsync(CancellationToken ct = default)
     {
-        CommitCurrentProviderDraft();
         Revalidate();
-        if (_lastStructuralValidation.HasErrors)
+        if (_validation.HasErrors)
         {
             Status.Value = new ConfigStatusMessage(
                 "Fix structural validation errors before testing this search configuration.",
@@ -256,9 +274,8 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public async Task SaveAsync(CancellationToken ct = default)
     {
-        CommitCurrentProviderDraft();
         Revalidate();
-        if (_lastStructuralValidation.HasErrors)
+        if (_validation.HasErrors)
         {
             Status.Value = new ConfigStatusMessage(
                 "Fix structural validation errors before saving.",
@@ -281,7 +298,9 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void SaveWithoutProbeOverride()
     {
-        _session.Save();
+        _mapper.Save(_paths, _model);
+        _model = _mapper.Load(_paths);
+        SyncAllFieldValues();
         Revalidate();
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.Summary;
@@ -291,10 +310,8 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void ResetDraft()
     {
-        _session.ResetDraft();
-        foreach (var field in Fields)
-            FieldValues[field.Path].Value = _session.GetEditableString(field.Path);
-
+        _model = _mapper.Load(_paths);
+        SyncAllFieldValues();
         _lastProbeResult = null;
         Revalidate();
         Status.Value = new ConfigStatusMessage("Reverted unsaved Search edits.", ConfigStatusTone.Neutral);
@@ -315,8 +332,9 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     private void Revalidate()
     {
-        _lastStructuralValidation = ValidateDraft();
-        ValidationSummary.Value = _lastStructuralValidation;
+        _validation = _validator.Validate(_model);
+        ValidationSummary.Value = new ConfigValidationSummary(
+            _validation.Issues.Select(static issue => new ConfigValidationIssue(issue.FieldId, issue.Severity, issue.Message)).ToList());
     }
 
     private void ClearTransientProbeState()
@@ -325,88 +343,57 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
     }
 
-    private ConfigValidationSummary ValidateDraft()
+    private void ApplyFieldValue(string path, string? value)
     {
-        var draft = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        switch (path)
+        {
+            case "Search.Backend":
+                _model.Backend = ParseBackend(value);
+                break;
+            case "Search.BraveApiKey":
+                _model.Brave.ApiKeyDraft = Normalize(value);
+                break;
+            case "Search.SearXngEndpoint":
+                _model.SearXng.Endpoint = Normalize(value);
+                break;
+            default:
+                throw new InvalidOperationException($"Unknown search config field '{path}'.");
+        }
+    }
+
+    private string GetCurrentFieldValue(string path)
+        => path switch
+        {
+            "Search.Backend" => _model.Backend.ToWireValue(),
+            "Search.BraveApiKey" => _model.Brave.ApiKeyDraft ?? string.Empty,
+            "Search.SearXngEndpoint" => _model.SearXng.Endpoint ?? string.Empty,
+            _ => string.Empty,
+        };
+
+    private void SyncFieldValue(string path)
+    {
+        if (FieldValues.TryGetValue(path, out var property))
+            property.Value = GetCurrentFieldValue(path);
+    }
+
+    private void SyncAllFieldValues()
+    {
         foreach (var field in Fields)
-        {
-            var value = _session.GetValue(field.Path);
-            var shouldRemove = value is null
-                || field.ValueKind == ConfigFieldValueKind.String && string.IsNullOrWhiteSpace(value.ToString())
-                || field.TrimDefaultOnSave && Equals(value?.ToString(), field.DefaultValue?.ToString());
-
-            if (shouldRemove)
-                ConfigFileHelper.RemovePath(draft, field.Path);
-            else
-                ConfigFileHelper.SetPathValue(draft, field.Path, value);
-        }
-
-        draft["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
-        var node = JsonSerializer.SerializeToNode(draft) as JsonObject
-            ?? throw new InvalidOperationException("Search config draft did not serialize to a JSON object.");
-
-        var evaluation = _schema.Evaluate(node, new EvaluationOptions
-        {
-            OutputFormat = OutputFormat.List,
-        });
-
-        var issues = new List<ConfigValidationIssue>();
-
-        foreach (var field in Fields)
-        {
-            if (!IsApplicable(field))
-                continue;
-
-            if (field.Path == "Search.Backend" && string.IsNullOrWhiteSpace(_session.GetEffectiveString(field.Path)))
-            {
-                issues.Add(new ConfigValidationIssue(field.Path, ConfigValidationSeverity.Error, "Choose a search backend."));
-            }
-
-            if (field.Path == "Search.BraveApiKey"
-                && string.Equals(_session.GetEffectiveString("Search.Backend"), "brave", StringComparison.OrdinalIgnoreCase)
-                && string.IsNullOrWhiteSpace(_session.GetEffectiveString(field.Path)))
-            {
-                issues.Add(new ConfigValidationIssue(field.Path, ConfigValidationSeverity.Error, "Brave requires an API key."));
-            }
-
-            if (field.Path == "Search.SearXngEndpoint"
-                && string.Equals(_session.GetEffectiveString("Search.Backend"), "searxng", StringComparison.OrdinalIgnoreCase)
-                && string.IsNullOrWhiteSpace(_session.GetEffectiveString(field.Path)))
-            {
-                issues.Add(new ConfigValidationIssue(field.Path, ConfigValidationSeverity.Error, "SearXNG requires an endpoint URL."));
-            }
-        }
-
-        if (!evaluation.IsValid && evaluation.Details is not null)
-        {
-            foreach (var detail in evaluation.Details.Where(static d => !d.IsValid && d.Errors is not null))
-            {
-                var path = MapSchemaInstanceLocationToField(detail.InstanceLocation?.ToString());
-                if (path is null)
-                    continue;
-
-                var message = string.Join("; ", detail.Errors!.Select(e => $"{e.Key}: {e.Value}"));
-                if (!issues.Any(i => i.Path == path && string.Equals(i.Message, message, StringComparison.Ordinal)))
-                    issues.Add(new ConfigValidationIssue(path, ConfigValidationSeverity.Error, message));
-            }
-        }
-
-        return issues.Count == 0 ? ConfigValidationSummary.Empty : new ConfigValidationSummary(issues);
+            SyncFieldValue(field.Path);
     }
 
     private async Task<SearchProbeResult> ProbeAsync(CancellationToken ct)
     {
-        var backend = _session.GetEffectiveString("Search.Backend") ?? SearchBackend.DuckDuckGo.ToWireValue();
         try
         {
-            ISearchBackend searchBackend = backend switch
+            ISearchBackend searchBackend = _model.Backend switch
             {
-                "brave" => new BraveSearchBackend(
-                    _session.GetEffectiveString("Search.BraveApiKey") ?? string.Empty,
+                SearchBackend.Brave => new BraveSearchBackend(
+                    _model.Brave.ApiKeyDraft ?? string.Empty,
                     CreateHttpClient(),
                     _timeProvider),
-                "searxng" => new SearXngBackend(
-                    _session.GetEffectiveString("Search.SearXngEndpoint") ?? string.Empty,
+                SearchBackend.SearXng => new SearXngBackend(
+                    _model.SearXng.Endpoint ?? string.Empty,
                     CreateHttpClient(),
                     _timeProvider),
                 _ => new DuckDuckGoBackend(CreateHttpClient(), _timeProvider),
@@ -427,22 +414,68 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     }
 
     private HttpClient CreateHttpClient()
-        => _httpClientFactory?.CreateClient() ?? new HttpClient();
+        => _httpClientFactory?.CreateClient(string.Empty) ?? new HttpClient();
 
-    private bool HasEffectiveValue(string path)
-        => !string.IsNullOrWhiteSpace(_session.GetEffectiveString(path));
+    private bool HasEffectiveBraveKey()
+        => !string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft) || _model.Brave.HasPersistedApiKey;
 
-    private ProjectedConfigField GetField(string path)
-        => _fieldsByPath.TryGetValue(path, out var field)
-            ? field
-            : throw new InvalidOperationException($"Unknown search config field '{path}'.");
-
-    private static string? MapSchemaInstanceLocationToField(string? instanceLocation)
+    private bool ComputeIsDirty()
     {
-        if (string.IsNullOrWhiteSpace(instanceLocation))
-            return null;
+        var persisted = _mapper.Load(_paths);
+        return persisted.Backend != _model.Backend
+            || !string.Equals(persisted.SearXng.Endpoint, _model.SearXng.Endpoint, StringComparison.Ordinal)
+            || !string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft);
+    }
 
-        var path = instanceLocation.TrimStart('/').Replace('/', '.');
-        return path.StartsWith("Search.", StringComparison.Ordinal) ? path : null;
+    private static SearchBackend ParseBackend(string? value)
+        => value?.Trim().ToLowerInvariant() switch
+        {
+            "brave" => SearchBackend.Brave,
+            "searxng" => SearchBackend.SearXng,
+            _ => SearchBackend.DuckDuckGo,
+        };
+
+    private static string? Normalize(string? value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static class SearchFields
+    {
+        internal static readonly ProjectedConfigField BraveApiKey = new(
+            Path: "Search.BraveApiKey",
+            PropertyName: "BraveApiKey",
+            Label: "Brave API key",
+            Description: "Brave Search API key. Required when Backend is Brave. Stored in secrets.json.",
+            ValueKind: ConfigFieldValueKind.String,
+            Storage: ConfigFieldStorage.SecretsFile,
+            Widget: ConfigFieldWidget.PasswordInput,
+            Nullable: true,
+            DefaultValue: null,
+            TrimDefaultOnSave: false,
+            PreserveBlankSecret: true,
+            Placeholder: "Enter Brave Search API key...",
+            Hint: "Stored in secrets.json. Leave blank to keep the existing key.",
+            ApplicableWhenPath: "Search.Backend",
+            ApplicableWhenEquals: "brave",
+            InactiveText: "(not configured)",
+            EnumOptions: []);
+
+        internal static readonly ProjectedConfigField SearXngEndpoint = new(
+            Path: "Search.SearXngEndpoint",
+            PropertyName: "SearXngEndpoint",
+            Label: "SearXng instance URL",
+            Description: "SearXNG instance base URL. Required when Backend is SearXng.",
+            ValueKind: ConfigFieldValueKind.String,
+            Storage: ConfigFieldStorage.ConfigFile,
+            Widget: ConfigFieldWidget.TextInput,
+            Nullable: true,
+            DefaultValue: null,
+            TrimDefaultOnSave: true,
+            PreserveBlankSecret: false,
+            Placeholder: "https://search.example.com",
+            Hint: "Enter the base URL of your SearXNG instance.",
+            ApplicableWhenPath: "Search.Backend",
+            ApplicableWhenEquals: "searxng",
+            InactiveText: "(not configured)",
+            EnumOptions: []);
     }
 }

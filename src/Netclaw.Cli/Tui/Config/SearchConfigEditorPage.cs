@@ -174,17 +174,13 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         _textInput.Submitted
             .Subscribe(text =>
             {
-                if (field.Path == "Search.BraveApiKey"
-                    && string.IsNullOrWhiteSpace(text)
-                    && !ViewModel.HasPersistedSecret(field.Path))
+                var result = ViewModel.CommitField(field.Path, text);
+                if (!result.Success)
                 {
-                    ViewModel.Status.Value = new ConfigStatusMessage("Brave requires an API key.", ConfigStatusTone.Error);
                     ViewModel.RequestRedraw();
                     return;
                 }
 
-                ViewModel.StageFieldValue(field.Path, text);
-                ViewModel.CommitFieldValue(field.Path);
                 _editingFieldPath = null;
                 _editSeed = string.Empty;
                 _focusTarget = SearchFocusTarget.ProviderList;
@@ -365,14 +361,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 _dialogList?.HandleInput(keyInfo);
                 break;
             case SearchFocusTarget.FieldInput when _textInput is not null:
-                var fieldPath = _editingFieldPath;
                 _textInput.HandleInput(keyInfo);
-                if (_focusTarget == SearchFocusTarget.FieldInput
-                    && !string.IsNullOrWhiteSpace(fieldPath))
-                {
-                    ViewModel.StageFieldValue(fieldPath, _textInput.Text);
-                }
-
                 break;
             default:
                 if (keyInfo.Key == ConsoleKey.UpArrow)
@@ -441,7 +430,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
     private void CancelActiveEdit()
     {
         if (_editingFieldPath is { } path)
-            ViewModel.StageFieldValue(path, _editSeed);
+            ViewModel.CommitField(path, _editSeed);
 
         _editingFieldPath = null;
         _editSeed = string.Empty;
