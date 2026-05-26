@@ -32,8 +32,7 @@ public class SearXngBackendIntegrationTests : IAsyncLifetime
 
         try
         {
-            container = new ContainerBuilder()
-                .WithImage(SearXngImage)
+            container = new ContainerBuilder(SearXngImage)
                 .WithPortBinding(8080, assignRandomHostPort: true)
                 .WithResourceMapping(
                     Encoding.UTF8.GetBytes(settingsYml),

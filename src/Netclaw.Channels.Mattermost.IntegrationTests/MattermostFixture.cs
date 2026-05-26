@@ -59,8 +59,7 @@ public sealed class MattermostFixture : IAsyncLifetime
         {
             // Both the builder chain and StartAsync can surface a
             // Docker-unavailable error, so both run inside the try.
-            var builder = new ContainerBuilder()
-                .WithImage("mattermost/mattermost-preview")
+            var builder = new ContainerBuilder("mattermost/mattermost-preview")
                 .WithPortBinding(8065, true);
 
             foreach (var (name, value) in MattermostBootstrapper.DefaultEnvironmentVariables)
