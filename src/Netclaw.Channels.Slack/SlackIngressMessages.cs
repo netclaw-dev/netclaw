@@ -81,10 +81,20 @@ public sealed record ProactiveThreadAck(SessionId SessionId) : INoSerializationV
 /// back into the Slack actor hierarchy so the thread actor can enforce
 /// requester checks and clear pending approval state consistently.
 /// </summary>
+/// <remarks>
+/// <paramref name="PromptMessageTs"/> is the timestamp of the message that
+/// contained the clicked button. Slack's <c>BlockActionRequest</c> always
+/// carries this in its <c>Container</c> envelope, so it survives even when
+/// the thread binding actor has been passivated and lost its in-memory
+/// approval state — the binding can still redraw the original prompt to its
+/// resolved state. Null for text-reply responses (no Block Kit payload).
+/// See issue #939.
+/// </remarks>
 public sealed record SlackApprovalResponse(
     SlackChannelId ChannelId,
     SlackThreadTs ThreadTs,
     ToolCallId CallId,
     string SelectedKey,
     SenderId SenderId,
-    SenderId? RequesterSenderId = null) : INoSerializationVerificationNeeded;
+    SenderId? RequesterSenderId = null,
+    SlackEventTs? PromptMessageTs = null) : INoSerializationVerificationNeeded;

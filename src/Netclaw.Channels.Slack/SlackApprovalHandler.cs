@@ -47,6 +47,13 @@ public sealed class SlackApprovalHandler : IAsyncBlockActionHandler
             ?? request.Container?.MessageTs
             ?? request.Message?.ThreadTs
             ?? request.Message?.Ts;
+        // Timestamp of the message that holds the clicked button — needed to
+        // chat.update the prompt back to its resolved state, including the
+        // cold-spawn case where the binding has lost its in-memory pending
+        // approval entry. Prefer Container.MessageTs because Slack populates
+        // that envelope field for every block action; fall back to Message.Ts
+        // for completeness.
+        var promptMessageTs = request.Container?.MessageTs ?? request.Message?.Ts;
         var senderId = request.User?.Id;
 
         if (string.IsNullOrWhiteSpace(channelId)
@@ -69,7 +76,8 @@ public sealed class SlackApprovalHandler : IAsyncBlockActionHandler
             callId,
             selectedKey,
             senderId,
-            requesterSenderId);
+            requesterSenderId,
+            !string.IsNullOrWhiteSpace(promptMessageTs) ? new SlackEventTs(promptMessageTs) : null);
 
         return respond();
     }

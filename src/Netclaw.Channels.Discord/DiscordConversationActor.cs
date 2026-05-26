@@ -210,7 +210,8 @@ internal sealed class DiscordConversationActor : ReceiveActor
             CallId: new Netclaw.Tools.ToolCallId(interaction.CallId),
             SelectedKey: interaction.SelectedKey,
             SenderId: interaction.SenderId,
-            RequesterSenderId: interaction.RequesterSenderId));
+            RequesterSenderId: interaction.RequesterSenderId,
+            PromptMessageId: interaction.PromptMessageId));
     }
 
     private void HandleTrustedSessionTurn(DeliverTrustedSessionTurn message)

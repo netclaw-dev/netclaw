@@ -17,6 +17,8 @@ using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
+using SlackNet.Blocks;
 
 namespace Netclaw.Channels.Slack;
 
@@ -1265,7 +1267,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
             _pendingApprovalRequests.RemoveAt(pendingIndex);
 
-            await TryResolveApprovalPromptAsync(pending, selectedKey, message.SenderId.Value);
+            await TryResolveApprovalPromptAsync(
+                pending.PromptMessageTs,
+                pending.Request,
+                pending.Request.CallId,
+                selectedKey,
+                message.SenderId.Value);
 
             _log.Info(
                 "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
@@ -1352,7 +1359,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             if (pending is not null)
             {
                 _pendingApprovalRequests.RemoveAt(pendingIndex);
-                await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
+                await TryResolveApprovalPromptAsync(
+                    pending.PromptMessageTs,
+                    pending.Request,
+                    message.CallId,
+                    message.SelectedKey,
+                    message.SenderId.Value);
 
                 _log.Info(
                     "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
@@ -1360,12 +1372,33 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     message.SenderId,
                     message.SelectedKey);
             }
+            else if (message.PromptMessageTs is { } payloadPromptTs)
+            {
+                // Cold-spawn path with a button payload: the binding has no original
+                // ToolInteractionRequest to drive the full resolved block, but Slack's
+                // BlockActionRequest envelope carries the prompt's message timestamp.
+                // Use it to redraw with a minimal "Resolved: <decision>" banner so the
+                // buttons clear. The full verb/location-aware block would require a
+                // round-trip to the session — out of scope for #939 button-click fix.
+                await TryResolveApprovalPromptAsync(
+                    payloadPromptTs,
+                    request: null,
+                    message.CallId,
+                    message.SelectedKey,
+                    message.SenderId.Value);
+
+                _log.Info(
+                    "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redrew prompt via payload messageTs={MessageTs}",
+                    message.CallId,
+                    payloadPromptTs);
+            }
             else
             {
-                // Cold-spawn path: binding has no original ToolInteractionRequest to drive
-                // the resolved-state redraw. The approval still routes; the button just
-                // stays in its pre-resolution form. Persisting requests across passivation
-                // is tracked separately by #939.
+                // Cold-spawn path without payload context (e.g. text-reply A-E in a
+                // thread whose binding has been passivated). Approval still routes;
+                // we can't redraw because we have neither the original request nor
+                // the prompt's message timestamp. Tracked as the remaining #939
+                // text-reply gap.
                 _log.Info(
                     "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redraw skipped",
                     message.CallId);
@@ -1492,21 +1525,44 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             $":warning: I couldn't post the approval prompt for `{request.ToolName}`. The action was automatically denied — please ask me to try again.");
     }
 
-    private async Task TryResolveApprovalPromptAsync(PendingApprovalRequest pending, string selectedKey, string senderId)
+    private async Task TryResolveApprovalPromptAsync(
+        SlackEventTs? promptMessageTs,
+        ToolInteractionRequest? request,
+        ToolCallId callId,
+        string selectedKey,
+        string senderId)
     {
-        if (pending.PromptMessageTs is not { } promptTs)
+        if (promptMessageTs is not { } promptTs)
             return;
 
         try
         {
-            var text = SlackApprovalBlockBuilder.BuildResolvedApprovalText(
-                pending.Request,
-                selectedKey,
-                senderId);
-            var blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocks(
-                pending.Request,
-                selectedKey,
-                senderId);
+            string text;
+            IReadOnlyList<Block> blocks;
+            if (request is not null)
+            {
+                // Hot path: binding still holds the original request, render the full
+                // resolved block with verb/location detail.
+                text = SlackApprovalBlockBuilder.BuildResolvedApprovalText(
+                    request,
+                    selectedKey,
+                    senderId);
+                blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocks(
+                    request,
+                    selectedKey,
+                    senderId);
+            }
+            else
+            {
+                // Cold-spawn path: only the payload-provided message TS is known.
+                // Strip the buttons; show a generic resolution banner.
+                text = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
+                    selectedKey,
+                    senderId);
+                blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocksWithoutRequest(
+                    selectedKey,
+                    senderId);
+            }
 
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UpdateThreadMessageAsync(
@@ -1521,8 +1577,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _log.Warning(
                 ex,
                 "Failed to update resolved approval prompt for call {CallId} messageTs={MessageTs}",
-                pending.Request.CallId,
-                pending.PromptMessageTs);
+                callId,
+                promptMessageTs);
         }
     }
 

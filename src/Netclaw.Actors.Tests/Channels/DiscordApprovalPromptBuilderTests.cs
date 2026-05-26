@@ -366,4 +366,38 @@ public sealed class DiscordApprovalPromptBuilderTests
 
         Assert.Contains("Saved for this chat: jsonlint config.json in /home/user/repos/foo", text);
     }
+
+    // Cold-spawn variant (#939): when the binding has lost its
+    // ToolInteractionRequest, we still need a resolved-state message that
+    // clears the action buttons.
+    [Fact]
+    public void Resolved_text_without_request_for_deny_uses_no_entry()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.Deny, "U123");
+
+        Assert.Contains(":no_entry:", text);
+        Assert.Contains("Denied", text);
+        Assert.Contains("<@U123>", text);
+    }
+
+    [Fact]
+    public void Resolved_text_without_request_for_approve_once_uses_checkmark()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123");
+
+        Assert.Contains(":white_check_mark:", text);
+        Assert.Contains("Approved (no save)", text);
+    }
+
+    [Theory]
+    [InlineData(ApprovalOptionKeys.ApproveAlways, "Saved: always here")]
+    [InlineData(ApprovalOptionKeys.ApproveEverywhere, "Saved: always anywhere")]
+    [InlineData(ApprovalOptionKeys.ApproveSession, "Saved for this chat")]
+    public void Resolved_text_without_request_uses_generic_resolution_phrasing(string selectedKey, string expectedFragment)
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(selectedKey, "U123");
+        Assert.Contains(expectedFragment, text);
+    }
 }

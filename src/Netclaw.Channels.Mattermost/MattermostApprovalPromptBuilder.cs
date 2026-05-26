@@ -109,6 +109,35 @@ internal static class MattermostApprovalPromptBuilder
             Text: resolvedText);
     }
 
+    /// <summary>
+    /// Builds a resolved-state attachment when the original
+    /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
+    /// binding actor was passivated between posting the prompt and the user
+    /// clicking a button. The callback payload still carries the prompt's
+    /// post ID, which is enough to redraw the post with a generic decision
+    /// banner and drop the action buttons. See issue #939.
+    /// </summary>
+    public static MattermostAttachment BuildResolvedAttachmentWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+        var decisionLabel = ApprovalOptionKeys.LabelFor(selectedKey);
+
+        var sb = new StringBuilder();
+        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        sb.Append("**Decision:** ").Append(decisionLabel);
+        sb.Append(" (by @").Append(senderId).Append(')');
+
+        var resolvedText = sb.ToString();
+        var color = selectedKey == ApprovalOptionKeys.Deny ? "#CC0000" : "#2EA44F";
+
+        return new MattermostAttachment(
+            Fallback: resolvedText,
+            Color: color,
+            Text: resolvedText);
+    }
+
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");

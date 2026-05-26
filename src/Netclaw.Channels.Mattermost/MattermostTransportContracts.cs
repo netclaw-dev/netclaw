@@ -42,6 +42,13 @@ public sealed record MattermostGatewayMessage(
 ///   issued for, captured at prompt-mint time. Used by the session actor's
 ///   <c>approval_wrong_requester</c> check.</param>
 /// <param name="ReceivedAt">Timestamp the daemon observed the click.</param>
+/// <param name="PromptPostId">Post ID of the message that contained the
+///   clicked button. Mattermost's action callback payload always carries
+///   <c>post_id</c>, so this survives passivation of the per-session
+///   binding actor — the binding can redraw the prompt to its resolved
+///   state even when its in-memory pending-approval entry is gone. Null
+///   when the action was synthesized from a non-button source. See
+///   issue #939.</param>
 public sealed record MattermostGatewayInteraction(
     MattermostChannelId ChannelId,
     MattermostRootPostId RootPostId,
@@ -49,7 +56,8 @@ public sealed record MattermostGatewayInteraction(
     string SelectedKey,
     MattermostUserId SenderId,
     MattermostUserId? RequesterSenderId,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    MattermostPostId? PromptPostId = null);
 
 public interface IMattermostGatewayClient
 {

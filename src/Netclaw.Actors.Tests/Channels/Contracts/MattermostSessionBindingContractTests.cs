@@ -201,4 +201,47 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             new MattermostRootPostId("root-test"),
             deps), name);
     }
+
+    // Regression for #939: cold-spawn redraw via the Mattermost action callback's
+    // post_id. When the binding has no in-memory pending approval (passivation),
+    // the binding must update the original prompt post using the payload-provided
+    // post ID so the buttons clear.
+    [Fact]
+    public async Task Cold_button_approval_response_redraws_prompt_via_payload_postId()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-mm-cold-redraw");
+
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        var payloadPostId = new MattermostPostId("post-from-callback-abc");
+        actor.Tell(new MattermostApprovalResponse(
+            ChannelId: new MattermostChannelId("ch-test"),
+            RootPostId: new MattermostRootPostId("root-test"),
+            CallId: new Netclaw.Tools.ToolCallId("call-mm-cold-redraw"),
+            SelectedKey: ApprovalOptionKeys.Deny,
+            SenderId: new MattermostUserId("user-1"),
+            RequesterSenderId: null,
+            PromptPostId: payloadPostId));
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-mm-cold-redraw", feedback[0].CallId.Value);
+
+            var update = Assert.Single(_replyClient.Updates);
+            Assert.Equal(payloadPostId, update.PostId);
+            Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
+            // Mattermost surfaces the decision via the option's label
+            // (`ApprovalOptionKeys.LabelFor`) rather than a separate "Denied"
+            // word — match the channel-specific style.
+            Assert.Contains(ApprovalOptionKeys.DenyLabel, update.Text, StringComparison.Ordinal);
+            // Attachment carries no actions on resolve.
+            Assert.NotNull(update.Attachments);
+            Assert.All(update.Attachments!, a => Assert.Null(a.Actions));
+        }, cancellationToken: ct);
+    }
 }

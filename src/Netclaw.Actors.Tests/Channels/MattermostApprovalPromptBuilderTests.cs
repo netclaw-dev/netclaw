@@ -232,6 +232,33 @@ public sealed class MattermostApprovalPromptBuilderTests
         Assert.Null(attachment.Actions);
     }
 
+    // Cold-spawn variant (#939): when the binding has lost its
+    // ToolInteractionRequest we still need a resolved-state attachment that
+    // clears the buttons. These tests pin its content and styling.
+    [Fact]
+    public void BuildResolvedAttachmentWithoutRequest_deny_uses_red_color_and_denied_label()
+    {
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.Deny, "user-99");
+
+        Assert.Equal("#CC0000", attachment.Color);
+        Assert.Contains(":no_entry:", attachment.Text!);
+        Assert.Contains("Deny", attachment.Text!);
+        Assert.Contains("user-99", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
+    [Fact]
+    public void BuildResolvedAttachmentWithoutRequest_approve_once_uses_green_color()
+    {
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "user-99");
+
+        Assert.Equal("#2EA44F", attachment.Color);
+        Assert.Contains(":white_check_mark:", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
     [Fact]
     public void BuildButtonPrompt_with_action_store_includes_action_token()
     {

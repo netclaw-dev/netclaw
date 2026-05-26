@@ -168,6 +168,62 @@ internal static class SlackApprovalBlockBuilder
     }
 
     /// <summary>
+    /// Builds a resolved-state message body when the original
+    /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
+    /// binding actor was passivated between posting the prompt and the user
+    /// clicking a button. The button payload still carries enough state to
+    /// redraw the prompt with a decision banner; we just can't reconstruct
+    /// the verb/location detail without the original request. Better than
+    /// leaving the buttons live indefinitely. See issue #939.
+    /// </summary>
+    public static string BuildResolvedApprovalTextWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+
+        return string.Join("\n", new[]
+        {
+            $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
+            $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*"
+        });
+    }
+
+    /// <summary>
+    /// Block-Kit variant of <see cref="BuildResolvedApprovalTextWithoutRequest"/>.
+    /// Renders without buttons so the prompt UI clears on the cold-spawn path.
+    /// </summary>
+    public static IReadOnlyList<Block> BuildResolvedApprovalBlocksWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+
+        return
+        [
+            new SectionBlock
+            {
+                Text = new Markdown($"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>")
+            },
+            new SectionBlock
+            {
+                Text = new Markdown($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*")
+            }
+        ];
+    }
+
+    private static string BuildGenericResolutionLine(string selectedKey)
+        => selectedKey switch
+        {
+            ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+            ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
+            ApprovalOptionKeys.ApproveSession => "Saved for this chat",
+            ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
+            ApprovalOptionKeys.Deny => "Denied",
+            _ => "Resolved"
+        };
+
+    /// <summary>
     /// Builds the prompt's header line. Single-verb invocations collapse the
     /// verb into the header (<c>Approve git status in ~/repos/foo/?</c>);
     /// multi-verb invocations use the generic <c>Approve in ~/repos/foo/?</c>

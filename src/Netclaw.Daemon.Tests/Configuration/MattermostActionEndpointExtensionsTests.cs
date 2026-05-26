@@ -70,6 +70,10 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, interaction.SelectedKey);
         Assert.Equal("requester-1", interaction.SenderId.Value);
         Assert.Equal("requester-1", interaction.RequesterSenderId!.Value.Value);
+        // #939: the prompt's post_id (from the callback payload) must be plumbed
+        // through so the binding can redraw even when its pending-approval state
+        // has been lost to passivation.
+        Assert.Equal("prompt-55", interaction.PromptPostId!.Value.Value);
     }
 
     [Fact]

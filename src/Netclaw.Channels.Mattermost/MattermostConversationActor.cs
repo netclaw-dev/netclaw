@@ -203,7 +203,8 @@ internal sealed class MattermostConversationActor : ReceiveActor
             CallId: new ToolCallId(interaction.CallId),
             SelectedKey: interaction.SelectedKey,
             SenderId: interaction.SenderId,
-            RequesterSenderId: interaction.RequesterSenderId));
+            RequesterSenderId: interaction.RequesterSenderId,
+            PromptPostId: interaction.PromptPostId));
     }
 
     private void HandleProactiveThread(StartMattermostProactiveThread message)

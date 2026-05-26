@@ -220,6 +220,11 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         var (channelId, _, threadOrMessageId) = ResolveChannelContext(
             component.Channel, component.Message.Id);
 
+        // The clicked message's ID is the prompt we need to update on resolution
+        // — survives passivation so we can redraw even on a cold-spawned binding.
+        // See issue #939.
+        var promptMessageId = new DiscordMessageId(component.Message.Id.ToString());
+
         var interaction = new DiscordGatewayInteraction(
             ChannelId: new DiscordChannelId(channelId),
             ThreadOrMessageId: new DiscordThreadOrMessageId(threadOrMessageId),
@@ -229,7 +234,8 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
             RequesterSenderId: requesterSenderId is not null
                 ? new DiscordUserId(requesterSenderId)
                 : null,
-            ReceivedAt: _timeProvider.GetUtcNow());
+            ReceivedAt: _timeProvider.GetUtcNow(),
+            PromptMessageId: promptMessageId);
 
         try
         {

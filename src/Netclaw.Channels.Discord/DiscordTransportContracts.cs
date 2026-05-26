@@ -27,6 +27,13 @@ public sealed record DiscordGatewayMessage(
 /// <summary>
 /// Normalized Discord interaction response payload emitted by the transport client.
 /// </summary>
+/// <remarks>
+/// <paramref name="PromptMessageId"/> is the ID of the message that contained
+/// the clicked button. Discord component interactions always carry the source
+/// message, so the binding actor can redraw the prompt to its resolved state
+/// even after passivation has dropped its in-memory pending-approval entry.
+/// Null for text-reply responses (no component payload). See issue #939.
+/// </remarks>
 public sealed record DiscordGatewayInteraction(
     DiscordChannelId ChannelId,
     DiscordThreadOrMessageId ThreadOrMessageId,
@@ -34,7 +41,8 @@ public sealed record DiscordGatewayInteraction(
     string SelectedKey,
     DiscordUserId SenderId,
     DiscordUserId? RequesterSenderId,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    DiscordMessageId? PromptMessageId = null);
 
 public interface IDiscordGatewayClient
 {

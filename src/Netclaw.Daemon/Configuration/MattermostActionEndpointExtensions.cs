@@ -139,7 +139,11 @@ public static class MattermostActionEndpointExtensions
                 RequesterSenderId: storedAction.RequesterSenderId is { Length: > 0 } requesterSenderId
                     ? new MattermostUserId(requesterSenderId)
                     : null,
-                ReceivedAt: timeProvider.GetUtcNow());
+                ReceivedAt: timeProvider.GetUtcNow(),
+                // payload.PostId is the post that contained the clicked button —
+                // survives passivation of the per-session binding so the binding
+                // can redraw the prompt on the cold-spawn path. See issue #939.
+                PromptPostId: new MattermostPostId(payload.PostId));
 
             try
             {

@@ -413,4 +413,42 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             return byCall(call);
         }
     }
+
+    // Regression for #939: cold-spawn redraw via the Discord button-interaction
+    // payload's message ID. When the binding has no in-memory pending approval
+    // (passivation), the binding must still update the prompt message using the
+    // payload-provided ID.
+    [Fact]
+    public async Task Cold_button_approval_response_redraws_prompt_via_payload_messageId()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-cold-redraw");
+
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        var payloadMessageId = new DiscordMessageId("987654321098765432");
+        actor.Tell(new DiscordApprovalResponse(
+            ChannelId: new DiscordChannelId("ch-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            CallId: new Netclaw.Tools.ToolCallId("call-discord-cold-redraw"),
+            SelectedKey: ApprovalOptionKeys.Deny,
+            SenderId: new DiscordUserId("user-1"),
+            RequesterSenderId: null,
+            PromptMessageId: payloadMessageId));
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-discord-cold-redraw", feedback[0].CallId.Value);
+
+            var update = Assert.Single(_replyClient.Updates);
+            Assert.Equal(payloadMessageId, update.MessageId);
+            Assert.True(update.RemoveComponents);
+            Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Denied", update.Text, StringComparison.Ordinal);
+        }, cancellationToken: ct);
+    }
 }
