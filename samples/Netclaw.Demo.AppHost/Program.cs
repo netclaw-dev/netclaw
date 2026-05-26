@@ -72,9 +72,12 @@ else
 
 // mattermost-preview ships DB + everything in a single image (no
 // separate Postgres needed). Deprecated upstream — documented in the
-// README as a future migration. Testing-mode env vars come from the
-// bootstrap library so the fixture and the demo share one source.
+// README as a future migration. The image is amd64-only; force that
+// platform so ARM hosts pull/run it under container-runtime emulation.
+// Testing-mode env vars come from the bootstrap library so the fixture
+// and the demo share one source.
 var mattermost = builder.AddContainer("mattermost", "mattermost/mattermost-preview")
+    .WithContainerRuntimeArgs("--platform", "linux/amd64")
     .WithHttpEndpoint(targetPort: 8065, name: "web");
 foreach (var (envName, envValue) in MattermostBootstrapper.DefaultEnvironmentVariables)
     mattermost = mattermost.WithEnvironment(envName, envValue);

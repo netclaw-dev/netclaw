@@ -306,7 +306,9 @@ production deployments. That's deferred — see
   full state tree. Wipe with
   `rm -rf samples/Netclaw.Demo.AppHost/.demo-home/` for a clean run.
 - **Mattermost image pull is slow** — `mattermost/mattermost-preview` is
-  ~1GB. One time only; subsequent runs reuse the image.
+  ~1GB and currently runs as `linux/amd64` on ARM hosts because upstream
+  does not publish an ARM64 manifest. One time only; subsequent runs reuse
+  the image.
 - **Model pull is slow or interrupted** — Aspire retries automatically.
   Once `qwen3.5:2b-q4_K_M` is in the named volume, subsequent runs skip the pull.
 - **You want the old richer demo even if it's slower** — run with
