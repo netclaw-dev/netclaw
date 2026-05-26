@@ -217,7 +217,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
             return;
         }
 
-        var (channelId, _, threadOrMessageId) = ResolveChannelContext(
+        var (channelId, replyChannelId, threadOrMessageId) = ResolveChannelContext(
             component.Channel, component.Message.Id);
 
         // The clicked message's ID is the prompt we need to update on resolution
@@ -235,7 +235,11 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
                 ? new DiscordUserId(requesterSenderId)
                 : null,
             ReceivedAt: _timeProvider.GetUtcNow(),
-            PromptMessageId: promptMessageId);
+            PromptMessageId: promptMessageId,
+            // Explicit reply channel ID. For top-level guild prompts the third
+            // tuple slot (ThreadOrMessageId) is the *message* ID, so it cannot
+            // double as a channel ID for chat.update. See issue #939.
+            ReplyChannelId: new DiscordReplyChannelId(replyChannelId));
 
         try
         {

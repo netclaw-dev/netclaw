@@ -451,4 +451,70 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Assert.Contains("Denied", update.Text, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
+
+    // Code-review regression (#939): a non-requester click on a cold-spawned
+    // binding MUST NOT redraw. Session WrongRequester nack surfaces the warning
+    // and leaves the prompt UI intact.
+    [Fact]
+    public async Task Cold_button_approval_response_skips_redraw_on_wrong_requester_nack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-cold-wrong-requester");
+
+        var pipeline = new RecordingSessionPipeline(_ => [])
+        {
+            ResponseFactory = (_, _) =>
+                Task.FromResult<ICommandReply>(CommandNack.For(sid, ApprovalNackReasons.WrongRequester))
+        };
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(new DiscordApprovalResponse(
+            ChannelId: new DiscordChannelId("ch-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            CallId: new Netclaw.Tools.ToolCallId("call-discord-cold-wrong-requester"),
+            SelectedKey: ApprovalOptionKeys.ApproveOnce,
+            SenderId: new DiscordUserId("attacker"),
+            RequesterSenderId: null,
+            PromptMessageId: new DiscordMessageId("987654321098765432")));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            Assert.Contains(_replyClient.Posts, p => p.Text.Contains("Only the requesting user", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        Assert.Empty(_replyClient.Updates);
+    }
+
+    // Code-review regression (#939): stale re-click after resolution.
+    [Fact]
+    public async Task Cold_button_approval_response_skips_redraw_on_stale_call_nack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-cold-stale");
+
+        var pipeline = new RecordingSessionPipeline(_ => [])
+        {
+            ResponseFactory = (_, _) =>
+                Task.FromResult<ICommandReply>(CommandNack.For(sid, "no_pending_call"))
+        };
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(new DiscordApprovalResponse(
+            ChannelId: new DiscordChannelId("ch-test"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("thread-test"),
+            CallId: new Netclaw.Tools.ToolCallId("call-discord-stale"),
+            SelectedKey: ApprovalOptionKeys.Deny,
+            SenderId: new DiscordUserId("user-1"),
+            RequesterSenderId: null,
+            PromptMessageId: new DiscordMessageId("987654321098765999")));
+
+        await AwaitAssertAsync(
+            () => Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()),
+            cancellationToken: ct);
+
+        Assert.Empty(_replyClient.Updates);
+    }
 }

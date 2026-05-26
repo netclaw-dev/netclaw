@@ -59,6 +59,34 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
     }
 
     /// <summary>
+    /// Records the actual prompt post ID against every outstanding token for the
+    /// given <paramref name="callId"/>. Called by the session binding actor after
+    /// <c>PostReplyAsync</c> returns, so the callback endpoint can verify that
+    /// any <c>payload.PostId</c> supplied by the client matches the prompt this
+    /// token was minted for — closing the forgery vector tracked under #939's
+    /// review (a token-holder rewriting <c>post_id</c> to target an unrelated
+    /// post the bot has edit permissions for).
+    /// </summary>
+    public void AssociatePromptPostId(string callId, string promptPostId)
+    {
+        if (string.IsNullOrWhiteSpace(callId) || string.IsNullOrWhiteSpace(promptPostId))
+            return;
+
+        foreach (var pair in _entries)
+        {
+            if (!string.Equals(pair.Value.CallId, callId, StringComparison.Ordinal))
+                continue;
+            if (pair.Value.PromptPostId is not null)
+                continue;
+
+            // ConcurrentDictionary.TryUpdate guards against concurrent eviction /
+            // consume; if the entry has been removed or already updated, skip.
+            var updated = pair.Value with { PromptPostId = promptPostId };
+            _entries.TryUpdate(pair.Key, updated, pair.Value);
+        }
+    }
+
+    /// <summary>
     /// Current count of outstanding (unconsumed, unexpired) actions. Exposed
     /// for diagnostics and tests; not used by the consume path.
     /// </summary>
@@ -86,7 +114,18 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
         string SelectedKey,
         string RootPostId,
         string? RequesterSenderId,
-        DateTimeOffset ExpiresAt);
+        DateTimeOffset ExpiresAt)
+    {
+        /// <summary>
+        /// The actual Mattermost post ID of the prompt that carries this token's
+        /// button. Populated by <see cref="MattermostCallbackActionStore.AssociatePromptPostId"/>
+        /// after the binding actor's <c>PostReplyAsync</c> returns. The callback
+        /// endpoint validates <c>payload.PostId</c> against this value — any
+        /// mismatch is a forgery attempt (the token holder rewrote <c>post_id</c>
+        /// to target an unrelated post). See issue #939.
+        /// </summary>
+        public string? PromptPostId { get; init; }
+    }
 
     private static string CreateToken()
     {

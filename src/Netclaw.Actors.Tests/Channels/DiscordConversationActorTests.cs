@@ -144,6 +144,47 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, approval.SelectedKey);
     }
 
+    // Regression for the #939 code-review finding: for top-level guild prompts
+    // (not threads, not DMs) the interaction's ThreadOrMessageId is the MESSAGE
+    // ID, not the channel ID. Cold-spawning a session binding by deriving the
+    // reply channel from ThreadOrMessageId would point chat.update at a message
+    // ID where a channel ID is required — the update 404s and the redraw fails.
+    // The interaction must explicitly carry ReplyChannelId; the conversation
+    // actor must use it.
+    [Fact]
+    public async Task Button_interaction_uses_explicit_ReplyChannelId_for_top_level_guild_prompts()
+    {
+        var capturedReplyChannelId = new TaskCompletionSource<DiscordReplyChannelId>();
+        var deps = CreateDependencies(
+            sessionPropsFactory: (_, _, replyChannelId, _, _, _) =>
+            {
+                capturedReplyChannelId.TrySetResult(replyChannelId);
+                return Props.Create(() => new ForwardActor(TestActor));
+            });
+
+        var conversation = Sys.ActorOf(
+            DiscordConversationActor.CreateProps(new DiscordChannelId("ch-1"), deps),
+            $"conv-replychannel-{Guid.NewGuid():N}");
+
+        // Top-level guild prompt: ThreadOrMessageId is the MESSAGE ID (per
+        // DiscordNetGatewayClient.ResolveChannelContext default branch), distinct
+        // from ChannelId / ReplyChannelId.
+        conversation.Tell(new DiscordGatewayInteraction(
+            ChannelId: new DiscordChannelId("ch-1"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("987654321098765432"),
+            CallId: "call-guild",
+            SelectedKey: ApprovalOptionKeys.ApproveOnce,
+            SenderId: new DiscordUserId("u-1"),
+            RequesterSenderId: new DiscordUserId("u-1"),
+            ReceivedAt: TimeProvider.System.GetUtcNow(),
+            PromptMessageId: new DiscordMessageId("987654321098765432"),
+            ReplyChannelId: new DiscordReplyChannelId("ch-1")));
+
+        var actual = await capturedReplyChannelId.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal("ch-1", actual.Value);
+    }
+
     [Fact]
     public async Task ACL_denied_messages_not_routed()
     {

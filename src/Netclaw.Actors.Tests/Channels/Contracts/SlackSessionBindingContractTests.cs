@@ -267,4 +267,78 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             Assert.Contains("git status", update.Text, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
+
+    // Code-review regression (#939): on the cold-spawn path, a non-requester
+    // click MUST NOT redraw the prompt. The session is the authority on whether
+    // the sender is allowed; the binding awaits the result before touching the
+    // UI. A CommandNack with WrongRequester surfaces the warning text but the
+    // buttons stay live for the legitimate requester.
+    [Fact]
+    public async Task Cold_button_approval_response_skips_redraw_on_wrong_requester_nack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-cold-wrong-requester");
+
+        var pipeline = new RecordingSessionPipeline(_ => [])
+        {
+            ResponseFactory = (_, _) =>
+                Task.FromResult<ICommandReply>(CommandNack.For(sid, ApprovalNackReasons.WrongRequester))
+        };
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(new SlackApprovalResponse(
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            CallId: new Netclaw.Tools.ToolCallId("call-cold-wrong-requester"),
+            SelectedKey: ApprovalOptionKeys.ApproveOnce,
+            SenderId: new SenderId("attacker"),
+            RequesterSenderId: null,
+            PromptMessageTs: new SlackEventTs("1234567890.000222")));
+
+        // Wait for the session interaction + the local wrong-requester warning post.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            // The wrong-requester warning is posted as a new thread reply.
+            Assert.Contains(_replyClient.Posts, p => p.Text.Contains("Only the requesting user", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        // Crucially: no UpdateThreadMessageAsync — the original prompt is untouched.
+        Assert.Empty(_replyClient.Updates);
+    }
+
+    // Code-review regression (#939): a stale re-click on an already-resolved
+    // prompt MUST NOT overwrite the resolution banner with a new (rejected)
+    // decision. Session Nack on any reason (not just WrongRequester) skips the
+    // redraw.
+    [Fact]
+    public async Task Cold_button_approval_response_skips_redraw_on_stale_call_nack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-cold-stale-click");
+
+        var pipeline = new RecordingSessionPipeline(_ => [])
+        {
+            ResponseFactory = (_, _) =>
+                Task.FromResult<ICommandReply>(CommandNack.For(sid, "no_pending_call"))
+        };
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(new SlackApprovalResponse(
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            CallId: new Netclaw.Tools.ToolCallId("call-stale"),
+            SelectedKey: ApprovalOptionKeys.Deny,
+            SenderId: new SenderId("user-1"),
+            RequesterSenderId: null,
+            PromptMessageTs: new SlackEventTs("1234567890.000333")));
+
+        await AwaitAssertAsync(
+            () => Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()),
+            cancellationToken: ct);
+
+        Assert.Empty(_replyClient.Updates);
+    }
 }

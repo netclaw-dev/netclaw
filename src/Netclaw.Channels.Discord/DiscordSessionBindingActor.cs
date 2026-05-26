@@ -815,19 +815,60 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
         }
 
-        await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+        // Wait for the session before redrawing. This is the security gate that
+        // prevents (a) a non-requester click destroying the prompt UI on the
+        // cold-spawn path, and (b) a stale re-click overwriting an already-resolved
+        // banner — both surfaced by the #939 code review. The session is the
+        // authority on whether the call is still pending and whether the sender is
+        // allowed. Only redraw on CommandAck.
+        ICommandReply feedbackResult;
+        try
         {
-            SessionId = _sessionId,
-            CallId = message.CallId,
-            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-            SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-        });
+            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
+                new ToolInteractionResponse
+                {
+                    SessionId = _sessionId,
+                    CallId = message.CallId,
+                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
+                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
+                }, feedbackCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to route Discord approval response for call {CallId}", message.CallId);
+            return;
+        }
+
+        switch (feedbackResult)
+        {
+            case CommandNack nack:
+                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
+                    await SafeReplyAsync(WrongRequesterWarning);
+                _log.Info(
+                    "Session rejected Discord approval response for call {CallId} reason={Reason}; skipping redraw",
+                    message.CallId,
+                    nack.Reason ?? "<none>");
+                return;
+
+            case CommandAck:
+                break;
+
+            default:
+                _log.Warning(
+                    "Discord approval response for call {CallId} returned unexpected feedback result {ResultType}",
+                    message.CallId,
+                    feedbackResult.GetType().Name);
+                return;
+        }
 
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
+            // Prefer captured message ID; fall back to payload ID when capture failed.
+            var promptMessageId = pending.PromptMessageId ?? message.PromptMessageId;
             await TryResolveApprovalPromptAsync(
-                pending.PromptMessageId,
+                promptMessageId,
                 pending.Request,
                 pending.CallId,
                 message.SelectedKey,
@@ -835,11 +876,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         else if (message.PromptMessageId is { } payloadPromptMessageId)
         {
-            // Cold-spawn path with a payload-provided message ID: the binding has no
-            // original ToolInteractionRequest to render the full resolved block, but
-            // Discord's component interaction always carries the source message ID.
-            // Use it to redraw with a generic "Resolved: <decision>" banner and clear
-            // the buttons. See issue #939.
+            // Cold-spawn redraw — session has accepted; redraw via payload ID.
             await TryResolveApprovalPromptAsync(
                 payloadPromptMessageId,
                 request: null,
@@ -854,9 +891,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         else
         {
-            // Cold-spawn path without payload context (e.g. text-reply A-E in a
-            // session whose binding has been passivated). Approval still routes;
-            // redraw is not possible. Remaining gap tracked under #939.
+            // Text-reply on a cold-spawned binding. Remaining #939 gap.
             _log.Info(
                 "Forwarded Discord approval response for call {0} to session without local pending entry; redraw skipped",
                 message.CallId);

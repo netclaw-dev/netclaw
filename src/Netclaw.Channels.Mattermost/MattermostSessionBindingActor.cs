@@ -840,8 +840,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
+            // Prefer captured post ID; fall back to payload-provided ID when capture
+            // failed (very narrow race window — see binding's TryPostButtonPromptAsync).
+            var promptPostId = pending.PromptPostId ?? message.PromptPostId;
             await TryResolveApprovalPromptAsync(
-                pending.PromptPostId,
+                promptPostId,
                 pending.Request,
                 pending.CallId,
                 message.SelectedKey,
@@ -1088,6 +1091,15 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
             ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "button_prompt");
+            // Bind the actual prompt post ID to the action tokens we just minted so
+            // the callback endpoint can verify payload.PostId on the way back in.
+            // Closes the forgery vector tracked under #939's review. The action
+            // store is null in text-only mode (no callback URL); this branch isn't
+            // reachable in that case.
+            if (result.PostId is { } postId && _dependencies.CallbackActionStore is { } store)
+            {
+                store.AssociatePromptPostId(request.CallId.Value, postId.Value);
+            }
             return result.PostId;
         }
         catch (Exception ex)

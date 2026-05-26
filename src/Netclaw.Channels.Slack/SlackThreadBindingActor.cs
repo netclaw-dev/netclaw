@@ -1334,9 +1334,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         // CanApprove fast-path: if the binding still holds the original request we can
         // post the wrong-requester warning locally without round-tripping through the
-        // session. When the binding has been cold-spawned (no local pending entry and
-        // no prior observation) the session re-runs CanApprove against its own
-        // pending-call state — see #979.
+        // session. When the binding has been cold-spawned (no local pending entry) the
+        // session re-runs CanApprove against its own pending-call state, and the wait
+        // below blocks the redraw until the session has actually accepted the click —
+        // see #939 + #979.
         if (pending is not null && !ApprovalButtonValueCodec.CanApprove(
                 pending.Request.RequesterPrincipal,
                 pending.Request.RequesterSenderId?.Value,
@@ -1346,67 +1347,103 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             return;
         }
 
+        // Wait for the session before redrawing. This is the security gate that
+        // prevents (a) a non-requester click destroying the prompt UI on the
+        // cold-spawn path, and (b) a stale re-click overwriting an
+        // already-resolved banner — both surfaced by the #939 code review. The
+        // session is the authority on whether the call is still pending and
+        // whether the sender is allowed. Only redraw on CommandAck.
+        ICommandReply feedbackResult;
         try
         {
-            await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = message.CallId,
-                SelectedKey = new Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-                SenderId = message.SenderId
-            });
-
-            if (pending is not null)
-            {
-                _pendingApprovalRequests.RemoveAt(pendingIndex);
-                await TryResolveApprovalPromptAsync(
-                    pending.PromptMessageTs,
-                    pending.Request,
-                    message.CallId,
-                    message.SelectedKey,
-                    message.SenderId.Value);
-
-                _log.Info(
-                    "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                    pending.Request.CallId,
-                    message.SenderId,
-                    message.SelectedKey);
-            }
-            else if (message.PromptMessageTs is { } payloadPromptTs)
-            {
-                // Cold-spawn path with a button payload: the binding has no original
-                // ToolInteractionRequest to drive the full resolved block, but Slack's
-                // BlockActionRequest envelope carries the prompt's message timestamp.
-                // Use it to redraw with a minimal "Resolved: <decision>" banner so the
-                // buttons clear. The full verb/location-aware block would require a
-                // round-trip to the session — out of scope for #939 button-click fix.
-                await TryResolveApprovalPromptAsync(
-                    payloadPromptTs,
-                    request: null,
-                    message.CallId,
-                    message.SelectedKey,
-                    message.SenderId.Value);
-
-                _log.Info(
-                    "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redrew prompt via payload messageTs={MessageTs}",
-                    message.CallId,
-                    payloadPromptTs);
-            }
-            else
-            {
-                // Cold-spawn path without payload context (e.g. text-reply A-E in a
-                // thread whose binding has been passivated). Approval still routes;
-                // we can't redraw because we have neither the original request nor
-                // the prompt's message timestamp. Tracked as the remaining #939
-                // text-reply gap.
-                _log.Info(
-                    "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redraw skipped",
-                    message.CallId);
-            }
+            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
+                new ToolInteractionResponse
+                {
+                    SessionId = _sessionId,
+                    CallId = message.CallId,
+                    SelectedKey = new Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
+                    SenderId = message.SenderId
+                }, feedbackCts.Token);
         }
         catch (Exception ex)
         {
             _log.Error(ex, "Failed to route Slack button approval response for call {CallId}", message.CallId);
+            return;
+        }
+
+        switch (feedbackResult)
+        {
+            case CommandNack nack:
+                // Session rejected (wrong requester, unknown call, stale resolution).
+                // For wrong-requester surface the warning; for any other reason just
+                // log and DO NOT redraw — the prompt UI must stay consistent with the
+                // session's authoritative state.
+                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
+                    await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
+                _log.Info(
+                    "Session rejected Slack approval response for call {CallId} reason={Reason}; skipping redraw",
+                    message.CallId,
+                    nack.Reason ?? "<none>");
+                return;
+
+            case CommandAck:
+                break;
+
+            default:
+                // ICommandReply is sealed-by-convention to Ack/Nack. Defensive guard.
+                _log.Warning(
+                    "Slack approval response for call {CallId} returned unexpected feedback result {ResultType}",
+                    message.CallId,
+                    feedbackResult.GetType().Name);
+                return;
+        }
+
+        if (pending is not null)
+        {
+            _pendingApprovalRequests.RemoveAt(pendingIndex);
+            // Prefer the captured TS, but fall back to the payload's TS when capture
+            // failed (post raced or returned an empty TS). The payload TS is reliable
+            // for a button click since Slack populates it in the envelope.
+            var promptTs = pending.PromptMessageTs ?? message.PromptMessageTs;
+            await TryResolveApprovalPromptAsync(
+                promptTs,
+                pending.Request,
+                message.CallId,
+                message.SelectedKey,
+                message.SenderId.Value);
+
+            _log.Info(
+                "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
+                pending.Request.CallId,
+                message.SenderId,
+                message.SelectedKey);
+        }
+        else if (message.PromptMessageTs is { } payloadPromptTs)
+        {
+            // Cold-spawn redraw — the binding has no original request but the click
+            // payload carries the prompt's message TS, and the session has now
+            // accepted the response. Render a generic banner that clears the buttons.
+            await TryResolveApprovalPromptAsync(
+                payloadPromptTs,
+                request: null,
+                message.CallId,
+                message.SelectedKey,
+                message.SenderId.Value);
+
+            _log.Info(
+                "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redrew prompt via payload messageTs={MessageTs}",
+                message.CallId,
+                payloadPromptTs);
+        }
+        else
+        {
+            // Text-reply on a cold-spawned binding: approval routed but no message
+            // TS is available, so the redraw is impossible. Remaining #939 gap.
+            _log.Info(
+                "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redraw skipped",
+                message.CallId);
+            ChannelTelemetry.For(ChannelType.Slack).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
         }
     }
 
