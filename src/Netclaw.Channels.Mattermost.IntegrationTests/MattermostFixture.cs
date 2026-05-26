@@ -59,8 +59,12 @@ public sealed class MattermostFixture : IAsyncLifetime
         {
             // Both the builder chain and StartAsync can surface a
             // Docker-unavailable error, so both run inside the try.
+            // mattermost-preview is amd64-only; ARM hosts need an explicit
+            // platform so Docker pulls the emulated image instead of failing
+            // manifest resolution.
             var builder = new ContainerBuilder()
                 .WithImage("mattermost/mattermost-preview")
+                .WithCreateParameterModifier(x => x.Platform = "linux/amd64")
                 .WithPortBinding(8065, true);
 
             foreach (var (name, value) in MattermostBootstrapper.DefaultEnvironmentVariables)
