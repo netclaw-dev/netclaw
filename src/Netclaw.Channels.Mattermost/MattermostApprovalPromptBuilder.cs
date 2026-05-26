@@ -23,6 +23,7 @@ internal static class MattermostApprovalPromptBuilder
         string callbackUrl,
         string channelId,
         string rootPostId,
+        string promptCorrelationId,
         MattermostCallbackActionStore? actionStore = null)
     {
         var sb = new StringBuilder();
@@ -38,6 +39,7 @@ internal static class MattermostApprovalPromptBuilder
                 var optionKey = option.Key.Value;
                 var actionToken = actionStore?.CreateAction(
                     channelId,
+                    promptCorrelationId,
                     request.CallId.Value,
                     optionKey,
                     rootPostId,

@@ -32,10 +32,12 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
     private readonly ConcurrentDictionary<string, StoredAction> _entries = new(StringComparer.Ordinal);
     private readonly ConcurrentQueue<string> _insertionOrder = new();
     private readonly Lock _cleanupLock = new();
+    private readonly Lock _mutationLock = new();
     private DateTimeOffset _nextCleanupAt = timeProvider.GetUtcNow().Add(CleanupInterval);
 
     public string CreateAction(
         string channelId,
+        string promptCorrelationId,
         string callId,
         string selectedKey,
         string rootPostId,
@@ -45,6 +47,7 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
         var now = timeProvider.GetUtcNow();
         var entry = new StoredAction(
             ChannelId: channelId,
+            PromptCorrelationId: promptCorrelationId,
             CallId: callId,
             SelectedKey: selectedKey,
             RootPostId: rootPostId,
@@ -60,21 +63,21 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
 
     /// <summary>
     /// Records the actual prompt post ID against every outstanding token for the
-    /// given <paramref name="callId"/>. Called by the session binding actor after
+    /// given <paramref name="promptCorrelationId"/>. Called by the session binding actor after
     /// <c>PostReplyAsync</c> returns, so the callback endpoint can verify that
     /// any <c>payload.PostId</c> supplied by the client matches the prompt this
     /// token was minted for — closing the forgery vector tracked under #939's
     /// review (a token-holder rewriting <c>post_id</c> to target an unrelated
     /// post the bot has edit permissions for).
     /// </summary>
-    public void AssociatePromptPostId(string callId, string promptPostId)
+    public void AssociatePromptPostId(string promptCorrelationId, string promptPostId)
     {
-        if (string.IsNullOrWhiteSpace(callId) || string.IsNullOrWhiteSpace(promptPostId))
+        if (string.IsNullOrWhiteSpace(promptCorrelationId) || string.IsNullOrWhiteSpace(promptPostId))
             return;
 
         foreach (var pair in _entries)
         {
-            if (!string.Equals(pair.Value.CallId, callId, StringComparison.Ordinal))
+            if (!string.Equals(pair.Value.PromptCorrelationId, promptCorrelationId, StringComparison.Ordinal))
                 continue;
             if (pair.Value.PromptPostId is not null)
                 continue;
@@ -92,6 +95,25 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
     /// </summary>
     internal int Count => _entries.Count;
 
+    public bool TryGet(string token, out StoredAction? action)
+    {
+        action = null;
+        var now = timeProvider.GetUtcNow();
+        CleanupExpired(now);
+
+        if (!_entries.TryGetValue(token, out var entry))
+            return false;
+
+        if (entry.ExpiresAt < now)
+        {
+            _entries.TryRemove(token, out _);
+            return false;
+        }
+
+        action = entry;
+        return true;
+    }
+
     public bool TryConsume(string token, out StoredAction? action)
     {
         action = null;
@@ -108,8 +130,39 @@ public sealed class MattermostCallbackActionStore(TimeProvider timeProvider)
         return true;
     }
 
+    public bool TryConsumeIf(string token, Func<StoredAction, bool> predicate, out StoredAction? action)
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+
+        action = null;
+        var now = timeProvider.GetUtcNow();
+        CleanupExpired(now);
+
+        lock (_mutationLock)
+        {
+            if (!_entries.TryGetValue(token, out var entry))
+                return false;
+
+            if (entry.ExpiresAt < now)
+            {
+                _entries.TryRemove(token, out _);
+                return false;
+            }
+
+            if (!predicate(entry))
+                return false;
+
+            if (!_entries.TryRemove(token, out var removed))
+                return false;
+
+            action = removed;
+            return true;
+        }
+    }
+
     public sealed record StoredAction(
         string ChannelId,
+        string PromptCorrelationId,
         string CallId,
         string SelectedKey,
         string RootPostId,

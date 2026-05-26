@@ -41,7 +41,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
         var recorder = new GatewayInteractionRecorder();
 
         await using var app = await CreateHostAsync(
@@ -88,9 +88,9 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
         // Simulate the binding registering the actual prompt post ID after PostReplyAsync.
-        actionStore.AssociatePromptPostId("call-1", "real-prompt-post");
+        actionStore.AssociatePromptPostId("prompt-1", "real-prompt-post");
 
         var recorder = new GatewayInteractionRecorder();
         await using var app = await CreateHostAsync(
@@ -115,12 +115,52 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     }
 
     [Fact]
+    public async Task Callback_with_mismatched_post_id_does_not_consume_real_token()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
+        var actionStore = new MattermostCallbackActionStore(time);
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        actionStore.AssociatePromptPostId("prompt-1", "real-prompt-post");
+
+        var recorder = new GatewayInteractionRecorder();
+        await using var app = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandAck.For(new SessionId("ch-1/root-1")),
+            recorder: recorder);
+        var client = app.GetTestClient();
+
+        var forged = await client.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "forged-post",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, forged.StatusCode);
+
+        var real = await client.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "real-prompt-post",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, real.StatusCode);
+        var interaction = await recorder.ReadAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("call-1", interaction.CallId);
+        Assert.Equal("real-prompt-post", interaction.PromptPostId!.Value.Value);
+    }
+
+    [Fact]
     public async Task Callback_with_matching_post_id_routes_after_AssociatePromptPostId()
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
-        actionStore.AssociatePromptPostId("call-1", "real-prompt-post");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        actionStore.AssociatePromptPostId("prompt-1", "real-prompt-post");
 
         var recorder = new GatewayInteractionRecorder();
         await using var app = await CreateHostAsync(
@@ -150,7 +190,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
         var recorder = new GatewayInteractionRecorder();
 
         await using var app = await CreateHostAsync(
@@ -185,7 +225,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
 
         await using var app = await CreateHostAsync(
             time,
@@ -212,7 +252,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
 
         await using var app = await CreateHostAsync(
             time,
@@ -239,7 +279,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
 
         await using var app = await CreateHostAsync(
             time,
@@ -330,7 +370,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
         // ACL on the resolved sender must run before any approval state change.
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
         var recorder = new GatewayInteractionRecorder();
 
         await using var app = await CreateHostAsync(
@@ -363,7 +403,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
         // there, not elsewhere.
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
         var recorder = new GatewayInteractionRecorder();
 
         await using var app = await CreateHostAsync(
@@ -395,7 +435,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
         // click.
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
 
         await using var app = await CreateHostAsync(
             time,
@@ -421,7 +461,7 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
     {
         var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
         var actionStore = new MattermostCallbackActionStore(time);
-        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        var token = actionStore.CreateAction("ch-1", "prompt-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
         var recorder = new GatewayInteractionRecorder();
 
         await using var app = await CreateHostAsync(

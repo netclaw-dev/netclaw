@@ -153,7 +153,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var request = CreateStandardRequest();
 
         var (text, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://localhost:5199/api/mattermost/actions", "ch-1", "root-post-1");
+            request, "http://localhost:5199/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1");
 
         Assert.Contains("Tool approval required", text);
         Assert.Contains("git_push", text);
@@ -172,7 +172,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var actionStore = new MattermostCallbackActionStore(TimeProvider.System);
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://callback:5199/api/mattermost/actions", "ch-1", "root-post-1", actionStore);
+            request, "http://callback:5199/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1", actionStore);
 
         var approveOnce = attachments[0].Actions![0];
         Assert.Equal("tool_approval_approve_once", approveOnce.Id);
@@ -188,7 +188,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var request = CreateStandardRequest();
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1");
+            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1");
 
         var denyButton = attachments[0].Actions!.Single(a => a.Id == "tool_approval_deny");
         Assert.Equal("danger", denyButton.Style);
@@ -200,7 +200,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var request = CreateStandardRequest();
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1");
+            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1");
 
         var approveOnce = attachments[0].Actions!.Single(a => a.Id == "tool_approval_approve_once");
         Assert.Equal("primary", approveOnce.Style);
@@ -266,7 +266,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var actionStore = new MattermostCallbackActionStore(TimeProvider.System);
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", actionStore);
+            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1", actionStore);
 
         foreach (var action in attachments[0].Actions!)
         {
@@ -281,7 +281,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var request = CreateStandardRequest();
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1");
+            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1");
 
         foreach (var action in attachments[0].Actions!)
         {
@@ -296,7 +296,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var actionStore = new MattermostCallbackActionStore(TimeProvider.System);
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", actionStore);
+            request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1", actionStore);
 
         var approveOnce = attachments[0].Actions![0];
         Assert.True(actionStore.TryConsume(approveOnce.Context["action_token"], out var stored));
@@ -352,7 +352,7 @@ public sealed class MattermostApprovalPromptBuilderTests
 
         var textPrompt = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
         var (buttonText, _) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, "https://callback.example/url", channelId: "ch-1", rootPostId: "root-1");
+            request, "https://callback.example/url", channelId: "ch-1", rootPostId: "root-1", promptCorrelationId: "prompt-corr-1");
 
         Assert.True(textPrompt.Length < 16_001, $"Text prompt length {textPrompt.Length} exceeded Mattermost's 16000-char cap");
         Assert.True(buttonText.Length < 16_001, $"Button prompt length {buttonText.Length} exceeded Mattermost's 16000-char cap");

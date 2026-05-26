@@ -153,3 +153,9 @@ public sealed record MessageSource
     /// </summary>
     public IActorRef? AckTarget { get; init; }
 }
+
+/// <summary>
+/// Child binding -> parent conversation signal used to suppress parent idle
+/// passivation while any child still has unresolved approval UI state.
+/// </summary>
+public sealed record PendingApprovalStateChanged(IActorRef Child, int PendingCount) : INoSerializationVerificationNeeded;

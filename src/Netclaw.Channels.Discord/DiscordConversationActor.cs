@@ -26,6 +26,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly string? _botMentionTag;
     private readonly ILoggingAdapter _log;
+    private readonly Dictionary<IActorRef, int> _childPendingApprovals = [];
 
     public DiscordConversationActor(DiscordChannelId channelId, DiscordGatewayDependencies dependencies)
     {
@@ -40,8 +41,22 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
         Receive<ReceiveTimeout>(_ =>
         {
+            if (_childPendingApprovals.Values.Any(count => count > 0))
+            {
+                _log.Info("Discord conversation idle but child approvals are still pending; deferring passivation");
+                return;
+            }
+
             _log.Info("Discord conversation idle for 2 hours, passivating");
             Context.Stop(Self);
+        });
+
+        Receive<PendingApprovalStateChanged>(message =>
+        {
+            if (message.PendingCount > 0)
+                _childPendingApprovals[message.Child] = message.PendingCount;
+            else
+                _childPendingApprovals.Remove(message.Child);
         });
 
         Receive<DiscordGatewayMessage>(HandleGatewayMessage);
@@ -289,6 +304,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
     private void HandleTerminated(Terminated msg)
     {
+        _childPendingApprovals.Remove(msg.ActorRef);
         _log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name);
     }
 

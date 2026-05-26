@@ -490,6 +490,26 @@ public sealed class MattermostConversationActorTests(ITestOutputHelper output) :
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Conversation_defers_passivation_while_child_has_pending_approvals()
+    {
+        var conversation = Sys.ActorOf(
+            MattermostConversationActor.CreateProps(new MattermostChannelId("ch-1"), CreateDependencies()),
+            $"mattermost-conv-passivation-{Guid.NewGuid():N}");
+        var watcher = CreateTestProbe("mattermost-passivation-watcher");
+        watcher.Watch(conversation);
+
+        conversation.Tell(new PendingApprovalStateChanged(TestActor, 1));
+        conversation.Tell(ReceiveTimeout.Instance);
+
+        await watcher.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250), TestContext.Current.CancellationToken);
+
+        conversation.Tell(new PendingApprovalStateChanged(TestActor, 0));
+        conversation.Tell(ReceiveTimeout.Instance);
+
+        await watcher.ExpectTerminatedAsync(conversation, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     private IActorRef CreateConversation(
         string channelId,
         Akka.TestKit.TestProbe sink,

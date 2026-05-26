@@ -244,4 +244,64 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             Assert.All(update.Attachments!, a => Assert.Null(a.Actions));
         }, cancellationToken: ct);
     }
+
+    [Fact]
+    public async Task Button_prompt_post_associates_returned_post_id_with_tokens_for_that_prompt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-mm-store-association");
+        var store = new MattermostCallbackActionStore(TimeProvider.System);
+
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-mm-association"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+                DisplayText = "git status",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        ResetReplyClient();
+        var options = new MattermostChannelOptions { CallbackUrl = "https://example.test/api/mattermost/actions" };
+        var deps = new MattermostGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            TimeProvider: TimeProvider.System,
+            Options: options,
+            DefaultChannelId: null,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            AudienceProfiles: TestMattermostGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
+            Paths: TestMattermostGatewayDeps.NewTestPaths(),
+            CallbackUrl: options.CallbackUrl,
+            PromptInjectionDetector: detector,
+            CallbackActionStore: store);
+
+        var actor = Sys.ActorOf(MattermostSessionBindingActor.CreateProps(
+            sid,
+            new MattermostChannelId("ch-test"),
+            new MattermostRootPostId("root-test"),
+            deps), $"mm-session-store-{Interlocked.Increment(ref _actorCounter)}");
+
+        await AwaitAssertAsync(() => Assert.Single(_replyClient.Posts), cancellationToken: ct);
+
+        var actions = _replyClient.Posts[0].Attachments![0].Actions!;
+        foreach (var action in actions)
+        {
+            Assert.True(store.TryGet(action.Context["action_token"], out var stored));
+            Assert.Equal("post-1", stored!.PromptPostId);
+            Assert.Equal("call-mm-association", stored.CallId);
+        }
+    }
 }

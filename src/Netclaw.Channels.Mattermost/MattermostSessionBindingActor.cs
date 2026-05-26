@@ -133,6 +133,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     protected override void PostStop()
     {
+        NotifyParentPendingApprovalStateChanged();
         _handle.Dispose();
         base.PostStop();
     }
@@ -724,6 +725,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
 
         _pendingApprovalRequests.Remove(pending!);
+        NotifyParentPendingApprovalStateChanged();
 
         await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
         {
@@ -840,6 +842,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
+            NotifyParentPendingApprovalStateChanged();
             // Prefer captured post ID; fall back to payload-provided ID when capture
             // failed (very narrow race window — see binding's TryPostButtonPromptAsync).
             var promptPostId = pending.PromptPostId ?? message.PromptPostId;
@@ -915,6 +918,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 postId.Value);
         }
     }
+
+    private void NotifyParentPendingApprovalStateChanged()
+        => Context.Parent.Tell(new PendingApprovalStateChanged(Self, _pendingApprovalRequests.Count));
 
     private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
     {
@@ -1028,6 +1034,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 _hasObservedApprovalRequest = true;
                 var pendingApproval = new PendingApprovalRequest(request);
                 _pendingApprovalRequests.Add(pendingApproval);
+                NotifyParentPendingApprovalStateChanged();
 
                 var promptPostId = await SafeReplyWithApprovalPromptAsync(request);
                 if (promptPostId is not null)
@@ -1037,6 +1044,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 else
                 {
                     _pendingApprovalRequests.Remove(pendingApproval);
+                    NotifyParentPendingApprovalStateChanged();
                 }
                 break;
 
@@ -1060,6 +1068,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
                 _turnNumber = completed.TurnNumber;
                 _pendingApprovalRequests.Clear();
+                NotifyParentPendingApprovalStateChanged();
                 _deliveredThisTurn = false;
                 break;
         }
@@ -1081,8 +1090,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         ToolInteractionRequest request,
         string callbackUrl)
     {
+        var promptCorrelationId = Guid.NewGuid().ToString("N");
         var (promptText, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, callbackUrl, _channelId.Value, _rootPostId.Value, _dependencies.CallbackActionStore);
+            request,
+            callbackUrl,
+            _channelId.Value,
+            _rootPostId.Value,
+            promptCorrelationId,
+            _dependencies.CallbackActionStore);
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
@@ -1098,7 +1113,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             // reachable in that case.
             if (result.PostId is { } postId && _dependencies.CallbackActionStore is { } store)
             {
-                store.AssociatePromptPostId(request.CallId.Value, postId.Value);
+                store.AssociatePromptPostId(promptCorrelationId, postId.Value);
             }
             return result.PostId;
         }

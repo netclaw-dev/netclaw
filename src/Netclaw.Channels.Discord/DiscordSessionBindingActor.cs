@@ -142,6 +142,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
     protected override void PostStop()
     {
+        NotifyParentPendingApprovalStateChanged();
         _handle.Dispose();
         base.PostStop();
     }
@@ -749,6 +750,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
 
         _pendingApprovalRequests.Remove(pending!);
+        NotifyParentPendingApprovalStateChanged();
 
         await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
         {
@@ -865,6 +867,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
+            NotifyParentPendingApprovalStateChanged();
             // Prefer captured message ID; fall back to payload ID when capture failed.
             var promptMessageId = pending.PromptMessageId ?? message.PromptMessageId;
             await TryResolveApprovalPromptAsync(
@@ -932,6 +935,9 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 messageId.Value);
         }
     }
+
+    private void NotifyParentPendingApprovalStateChanged()
+        => Context.Parent.Tell(new PendingApprovalStateChanged(Self, _pendingApprovalRequests.Count));
 
     private async Task HandleTrustedReminderAsync(DeliverTrustedSessionTurn message)
     {
@@ -1045,6 +1051,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 _hasObservedApprovalRequest = true;
                 var pendingApproval = new PendingApprovalRequest(request);
                 _pendingApprovalRequests.Add(pendingApproval);
+                NotifyParentPendingApprovalStateChanged();
 
                 var promptMessageId = await SafeReplyWithButtonsAsync(request);
                 if (promptMessageId is not null)
@@ -1054,6 +1061,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 else
                 {
                     _pendingApprovalRequests.Remove(pendingApproval);
+                    NotifyParentPendingApprovalStateChanged();
                 }
                 break;
 
@@ -1080,6 +1088,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
                 _turnNumber = completed.TurnNumber;
                 _pendingApprovalRequests.Clear();
+                NotifyParentPendingApprovalStateChanged();
                 _deliveredThisTurn = false;
                 break;
         }

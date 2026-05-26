@@ -123,6 +123,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     protected override void PostStop()
     {
+        NotifyParentPendingApprovalStateChanged();
         _handle.Dispose();
         base.PostStop();
     }
@@ -1165,6 +1166,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _hasObservedApprovalRequest = true;
                 var pendingApproval = new PendingApprovalRequest(interaction);
                 _pendingApprovalRequests.Add(pendingApproval);
+                NotifyParentPendingApprovalStateChanged();
                 var promptMessageTs = await HandleApprovalRequestAsync(interaction);
                 if (promptMessageTs is not null)
                 {
@@ -1176,6 +1178,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     // route a deny back to the session so the blocked tool task can
                     // unwind instead of waiting on the infinite-timeout TCS.
                     _pendingApprovalRequests.Remove(pendingApproval);
+                    NotifyParentPendingApprovalStateChanged();
                     await SendApprovalDenyOnFailureAsync(interaction);
                 }
                 break;
@@ -1222,6 +1225,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _uploadedFileThisTurn = false;
                 _lastFailedPost = null;
                 _pendingApprovalRequests.Clear();
+                NotifyParentPendingApprovalStateChanged();
 
                 break;
         }
@@ -1266,6 +1270,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             });
 
             _pendingApprovalRequests.RemoveAt(pendingIndex);
+            NotifyParentPendingApprovalStateChanged();
 
             await TryResolveApprovalPromptAsync(
                 pending.PromptMessageTs,
@@ -1287,6 +1292,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         return true;
     }
+
+    private void NotifyParentPendingApprovalStateChanged()
+        => Context.Parent.Tell(new PendingApprovalStateChanged(Self, _pendingApprovalRequests.Count));
 
     private async Task<bool> TryHandleColdTextApprovalResponseAsync(SlackThreadInbound message)
     {
