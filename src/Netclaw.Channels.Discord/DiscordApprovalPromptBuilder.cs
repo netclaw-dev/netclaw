@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels;
 
 namespace Netclaw.Channels.Discord;
 
@@ -12,12 +13,20 @@ internal static class DiscordApprovalPromptBuilder
 {
     private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
 
+    /// <summary>
+    /// Display-text budget chosen to keep the assembled prompt under
+    /// Discord's hard 2000-char per-message cap once scaffolding is added.
+    /// Exceeding the cap causes the post to fail and the binding to
+    /// auto-deny, which the model misreads as a user decline.
+    /// </summary>
+    internal const int MaxDisplayTextChars = 1700;
+
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Netclaw approval required:");
         sb.Append("Tool: ").AppendLine(request.ToolName.Value);
-        sb.Append("Action: ").AppendLine(request.DisplayText);
+        sb.Append("Action: ").AppendLine(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars));
         sb.AppendLine(BuildApproveHeader(request));
 
         var verbs = ResolveDisplayVerbs(request);
@@ -79,7 +88,7 @@ internal static class DiscordApprovalPromptBuilder
         var sb = new StringBuilder();
         sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildResolutionLine(request, selectedKey)).Append("**");
         sb.Append(" (by <@").Append(senderId).Append(">)");
 
@@ -128,7 +137,7 @@ internal static class DiscordApprovalPromptBuilder
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildApproveHeader(request)).AppendLine("**");
 
         var verbs = ResolveDisplayVerbs(request);

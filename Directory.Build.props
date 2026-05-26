@@ -8,16 +8,46 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.20.2</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.20.2 — Outbound HTTP identity headers and MCP approval grant lookup fix
+    <VersionPrefix>0.20.3</VersionPrefix>
+    <PackageReleaseNotes>Netclaw v0.20.3 — KV cache stability overhaul, vLLM compatibility, OpenAPI support, and MCP tool-name robustness
 
 **Features**
 
-* **Outbound HTTP identity headers** — every outbound HTTP request now carries a `User-Agent: Netclaw/{version}` header and an `X-Netclaw-Component` header identifying the subsystem making the call (`mcp`, `webhook`, `skill-sync`, `provider-oauth`, etc.), making Netclaw traffic identifiable to remote services and MCP server operators. `MCP clientInfo` now also reports the correct version instead of the stale `0.1.0` placeholder. ([#1145](https://github.com/netclaw-dev/netclaw/pull/1145))
+* **OpenAPI support for the HTTP API** — the Netclaw daemon now publishes an OpenAPI document for its minimal API endpoints, enabling discovery and integration via standard OpenAPI tooling. The spec is auth-gated so it is not exposed unauthenticated. ([#1146](https://github.com/netclaw-dev/netclaw/pull/1146))
+
+* **Aspire end-to-end demo** — a new `samples/Netclaw.Demo.AppHost` project provides a self-contained .NET Aspire demo that boots the daemon alongside a Mattermost container and an Ollama container, wires the bot automatically, and includes integration tests that validate the full message-routing path. A good starting point for local exploration and contributor onboarding. ([#1135](https://github.com/netclaw-dev/netclaw/pull/1135))
+
+**KV Cache Improvements**
+
+* **Major KV cache hit-rate improvements** — a series of fixes dramatically improves prompt-prefix cache utilization across llama.cpp, vLLM, and other OpenAI-compatible backends. Simple conversations now achieve ~94% cache hit rates (up from ~75%), memory-recall sessions ~93% (up from ~62%), and tool-heavy sessions ~98% (up from ~94%). The root cause was `NormalizeMessages` merging volatile per-turn content (memory recall, current time, working context) into the static leading system prompt, busting the cache prefix from token 0 on every turn. ([#1171](https://github.com/netclaw-dev/netclaw/pull/1171), [#1174](https://github.com/netclaw-dev/netclaw/pull/1174), [#1178](https://github.com/netclaw-dev/netclaw/pull/1178))
+
+* **vLLM system-message placement compatibility** — vLLM (and other strict OpenAI-compatible servers using Qwen/Llama chat templates) rejected requests with a non-leading System message, causing HTTP 400 errors on every turn after the KV cache fix in 0.20.2. The volatile context block is now embedded in the last User-role message instead, satisfying the `System message must be at the beginning` constraint while preserving cache-prefix stability and avoiding spurious compaction loops. ([#1176](https://github.com/netclaw-dev/netclaw/pull/1176))
+
+* **SetSystemPrompt is now idempotent** — the system prompt is only replaced when its content actually changes, preventing unnecessary mid-session cache prefix rebuilds that caused partial cache drops between turns when identity files were unchanged. ([#1174](https://github.com/netclaw-dev/netclaw/pull/1174))
+
+* **Per-turn KV prefix diagnostics** — the daemon now emits per-turn SHA-256 prefix hashes for the system message, conversation history, and tools array to make future cache regressions immediately identifiable in logs. ([#1174](https://github.com/netclaw-dev/netclaw/pull/1174))
 
 **Bug Fixes**
 
-* **MCP approval grant lookup by canonical tool name** — approval grants recorded under the canonical tool name (e.g., `notion/notion-create-pages`) were not found when the lookup used the Anthropic-safe sanitized alias (e.g., `notion__notion-create-pages`), causing repeated approval prompts even after the user had approved the session. The lookup now uses the canonical name consistently, resolving the infinite re-approval loop. ([#1147](https://github.com/netclaw-dev/netclaw/pull/1147))</PackageReleaseNotes>
+* **vLLM modality auto-detection at startup** — vision-capable models served via vLLM (e.g., `Qwen/Qwen3.6-35B-A3B-FP8`) were incorrectly detected as text-only at daemon startup because the startup capability detection returned early on vLLM's partial response, never querying HuggingFace for modality data. Modality is now resolved through the same composite resolver used at runtime, and HuggingFace is consulted unconditionally as an oracle to fill null modality fields. ([#1158](https://github.com/netclaw-dev/netclaw/pull/1158))
+
+* **Copilot OAuth restored** — the GitHub Copilot provider's OAuth exchange was rejected with HTTP 403 after PR #1075 switched to a Netclaw-owned GitHub App; the `/copilot_internal/v2/token` endpoint is gated to a specific allowlist of OAuth Apps. The exchange now uses the Neovim Copilot OAuth App client ID (the same approach taken by avante.nvim, copilot.lua, and CodeAlta), adds the required `Copilot-Integration-Id` header, and switches the `Authorization` scheme to `Bearer` to match VS Code and other reference implementations. ([#1159](https://github.com/netclaw-dev/netclaw/pull/1159))
+
+* **LLM failure detail now surfaced to users** — transport failures (connection refused, DNS failure, TLS errors) and HTTP errors (401/403, 429, 5xx) that were previously collapsed into the generic "I encountered an error" message are now reported with the relevant context (rate-limited, re-auth required, server error, or transport message). Raw response bodies and tokens are never forwarded. ([#1159](https://github.com/netclaw-dev/netclaw/pull/1159))
+
+* **Approval controls remain visible for long shell prompts** — long `shell_execute` approval bodies in `netclaw chat` previously pushed the confirmation controls off-screen inside the Input panel, leaving the user unable to respond. The body is now rendered as a one-line summary with a `[Ctrl+V to view full]` affordance; Ctrl+V expands the body while keeping all selection options on-screen. The layout scales dynamically with terminal size and reacts to resize events. ([#1156](https://github.com/netclaw-dev/netclaw/pull/1156))
+
+* **Normal chat no longer consumed by stale approval path** — short replies like `yes`, `a`, or `1` were matched as potential approval responses by the cold-text-approval path even when no pending approval existed, consuming the message and emitting a spurious "approval prompt expired" notice. The path now checks for actual approval history before claiming the message. ([#1165](https://github.com/netclaw-dev/netclaw/pull/1165))
+
+* **MCP tool-name forms accepted in config, CLI, and doctor** — operators who wrote the LLM-facing alias (`notion__notion-create-pages`) in `ToolOverrides`, `netclaw approvals revoke --tool`, or `netclaw doctor` instead of the canonical form (`notion/notion-create-pages`) saw their entries silently ignored. All three surfaces now accept either form and resolve to the canonical name. ([#1154](https://github.com/netclaw-dev/netclaw/pull/1154))
+
+**Security**
+
+* **CodeQL code-scanning alerts resolved** — four open alerts addressed: CI workflows now request only the minimum required `contents: read` permission; webhook route IDs are sanitized before logging to prevent log-injection; daemon lifecycle shutdown/crash reason strings are sanitized and length-capped; and the reminder store's file-path resolver now enforces explicit base-directory containment to prevent path traversal. ([#1152](https://github.com/netclaw-dev/netclaw/pull/1152))
+
+**Dependency Updates**
+
+* Bumped Mattermost.NET from 4.x to 5.0, removing a hand-rolled HTTP bypass shim with six duplicate DTOs that the SDK has natively supported since 4.0.4. ([#1163](https://github.com/netclaw-dev/netclaw/pull/1163))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>

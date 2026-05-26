@@ -221,4 +221,23 @@ public sealed class SlackApprovalBlockBuilderTests
         Assert.NotEmpty(blocks);
         Assert.DoesNotContain(blocks, b => b is ActionsBlock);
     }
+
+    [Fact]
+    public void Oversized_command_keeps_every_block_under_Slack_cap()
+    {
+        // Regression for the auto-deny-on-Slack-failure bug: a multi-KB
+        // `gh issue create --body '...'` blew past Slack's 3000-char per
+        // SectionBlock text cap and the API returned invalid_blocks. See
+        // session D0AC6CKBK5K/1779811366.695739.
+        var oversized = new string('x', 10_000);
+        var request = Request(oversized, ["gh issue create"], "/home/user/repos/foo", FullButtonRow());
+
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+
+        foreach (var block in blocks)
+        {
+            if (block is SectionBlock { Text: Markdown md })
+                Assert.True(md.Text.Length < 3001, $"SectionBlock text length {md.Text.Length} exceeded Slack's 3000-char cap");
+        }
+    }
 }

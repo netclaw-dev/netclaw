@@ -14,12 +14,21 @@ internal static class SlackApprovalBlockBuilder
 
     private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
 
+    /// <summary>
+    /// Display-text budget sized to stay under Slack's hard 3000-char
+    /// SectionBlock text cap after accounting for the surrounding markdown
+    /// scaffolding. Exceeding the cap causes Slack to reject the post with
+    /// <c>invalid_blocks</c>, which today triggers an auto-deny the model
+    /// misreads as the user declining.
+    /// </summary>
+    internal const int MaxDisplayTextChars = 2500;
+
     public static string BuildApprovalText(ToolInteractionRequest request)
     {
         var lines = new List<string>
         {
             ":lock: *Tool approval required*",
-            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
             BuildApproveHeader(request)
         };
 
@@ -53,7 +62,7 @@ internal static class SlackApprovalBlockBuilder
             },
             new SectionBlock
             {
-                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n*Request:* `{EscapeMarkdown(request.DisplayText)}`"),
+                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`"),
                 Expand = true
             },
             new SectionBlock
@@ -125,7 +134,7 @@ internal static class SlackApprovalBlockBuilder
         return string.Join("\n", new[]
         {
             $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
-            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
             BuildResolutionLine(request, selectedKey)
         });
     }
@@ -150,7 +159,7 @@ internal static class SlackApprovalBlockBuilder
             {
                 Text = new Markdown(
                     $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
-                    + $"*Request:* `{EscapeMarkdown(request.DisplayText)}`\n"
+                    + $"*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`\n"
                     + $"*{EscapeMarkdown(resolutionLine)}*"),
                 Expand = true
             }

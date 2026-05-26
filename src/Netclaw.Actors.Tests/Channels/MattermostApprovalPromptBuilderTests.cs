@@ -327,4 +327,34 @@ public sealed class MattermostApprovalPromptBuilderTests
                 new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
             ]
         };
+
+    [Fact]
+    public void Oversized_command_keeps_prompt_under_Mattermost_cap()
+    {
+        // Mattermost's hard message cap is 16K, but approval prompts
+        // bypass ChunkMessage. Without truncation the post fails outright
+        // and the binding auto-denies, misreported to the model.
+        var oversized = new string('z', 30_000);
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-big-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = oversized,
+            RequesterSenderId = new SenderId("requester-1"),
+            Patterns = ["gh issue create"],
+            Options = [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
+        var textPrompt = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonText, _) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "https://callback.example/url", channelId: "ch-1", rootPostId: "root-1");
+
+        Assert.True(textPrompt.Length < 16_001, $"Text prompt length {textPrompt.Length} exceeded Mattermost's 16000-char cap");
+        Assert.True(buttonText.Length < 16_001, $"Button prompt length {buttonText.Length} exceeded Mattermost's 16000-char cap");
+    }
 }

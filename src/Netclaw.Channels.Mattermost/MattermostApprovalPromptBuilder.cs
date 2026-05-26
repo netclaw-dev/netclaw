@@ -5,11 +5,19 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels;
 
 namespace Netclaw.Channels.Mattermost;
 
 internal static class MattermostApprovalPromptBuilder
 {
+    /// <summary>
+    /// Display-text budget. Mattermost's hard message cap is 16000 chars,
+    /// but approval prompts bypass the regular chunking path in
+    /// <c>MattermostSessionBindingActor</c> — so an oversized command
+    /// would be rejected outright and trigger an auto-deny.
+    /// </summary>
+    internal const int MaxDisplayTextChars = 12000;
     public static (string Text, IReadOnlyList<MattermostAttachment> Attachments) BuildButtonPrompt(
         ToolInteractionRequest request,
         string callbackUrl,
@@ -141,7 +149,7 @@ internal static class MattermostApprovalPromptBuilder
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
 
         if (request.Patterns.Count > 0)
         {

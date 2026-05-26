@@ -400,4 +400,21 @@ public sealed class DiscordApprovalPromptBuilderTests
         var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(selectedKey, "U123");
         Assert.Contains(expectedFragment, text);
     }
+
+    [Fact]
+    public void Oversized_command_keeps_prompt_under_Discord_cap()
+    {
+        // Discord rejects messages over 2000 chars; without truncation
+        // the binding's auto-deny fallback misreports as a user decline.
+        // Same failure shape as the Slack regression — see session
+        // D0AC6CKBK5K/1779811366.695739.
+        var oversized = new string('y', 10_000);
+        var request = V2Request(oversized, ["gh issue create"], "/home/user/repos/foo", FullButtonRow());
+
+        var textPrompt = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonPromptText, _) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.True(textPrompt.Length < 2001, $"Text prompt length {textPrompt.Length} exceeded Discord's 2000-char cap");
+        Assert.True(buttonPromptText.Length < 2001, $"Button prompt length {buttonPromptText.Length} exceeded Discord's 2000-char cap");
+    }
 }

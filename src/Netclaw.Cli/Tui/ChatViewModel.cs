@@ -20,6 +20,13 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public partial class ChatViewModel : ReactiveViewModel
 {
+    /// <summary>
+    /// Cap on the approval body shown in the expanded (Ctrl+V) view.
+    /// Without it, a multi-KB command handed verbatim to a TextNode can
+    /// break the terminal renderer.
+    /// </summary>
+    internal const int MaxExpandedApprovalBodyChars = 8000;
+
     private readonly DaemonClient _daemonClient;
     private readonly TimeProvider _timeProvider;
     private readonly ModelCapabilities _modelCapabilities;
@@ -304,7 +311,7 @@ public partial class ChatViewModel : ReactiveViewModel
         var fullBody = $"{interaction.DisplayText}{patterns}";
 
         if (IsApprovalDetailVisible.Value)
-            return fullBody;
+            return Netclaw.Channels.ApprovalDisplayTextFormatter.Truncate(fullBody, MaxExpandedApprovalBodyChars);
 
         // Collapse to one line: any embedded newlines would also push the
         // selection list past the panel cap, not just length.
