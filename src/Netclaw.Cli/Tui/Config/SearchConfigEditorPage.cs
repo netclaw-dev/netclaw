@@ -17,6 +17,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 {
     private SelectionListNode<string>? _dialogList;
     private TextInputNode? _textInput;
+    private string? _textInputFieldPath;
     private DynamicLayoutNode? _contentNode;
     private readonly CompositeDisposable _contentSubscriptions = [];
     private SearchFocusTarget _focusTarget = SearchFocusTarget.ProviderList;
@@ -59,7 +60,6 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         {
             _contentSubscriptions.Clear();
             _dialogList = null;
-            _textInput = null;
 
             if (ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.ProbeWarning)
                 return BuildProbeWarningDialog();
@@ -145,11 +145,15 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         var content = Layouts.Vertical()
             .WithSpacing(1)
             .WithChild(new TextNode($"  {field.Label}:").WithForeground(Color.White))
-            .WithChild(new TextNode($"  {displayValue}").WithForeground(valueColor))
-            .WithChild(new TextNode("  Press Enter to edit.").WithForeground(Color.Gray));
+            .WithChild(new TextNode($"  {displayValue}").WithForeground(valueColor));
+
+        if (field.Widget == ConfigFieldWidget.PasswordInput && ViewModel.HasPersistedSecret(field.Path))
+            content.WithChild(new TextNode("  Press Enter to replace the stored key.").WithForeground(Color.Gray));
+        else
+            content.WithChild(new TextNode("  Press Enter to edit.").WithForeground(Color.Gray));
 
         var supportText = ViewModel.GetCurrentProviderSupportText();
-        if (!string.IsNullOrWhiteSpace(supportText))
+        if (!string.IsNullOrWhiteSpace(supportText) && field.Widget != ConfigFieldWidget.PasswordInput)
             content.WithChild(new TextNode($"  {supportText}").WithForeground(Color.Gray));
 
         return content;
@@ -161,17 +165,11 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             .WithSpacing(1)
             .WithChild(new TextNode($"  {field.Label}:").WithForeground(Color.White));
 
-        _textInput = new TextInputNode();
-        if (field.Widget == ConfigFieldWidget.PasswordInput)
-            _textInput.AsPassword();
-        if (!string.IsNullOrWhiteSpace(field.Placeholder))
-            _textInput.WithPlaceholder(field.Placeholder);
-
-        _textInput.Text = ViewModel.GetEditorSeed(field);
+        var textInput = EnsureEditingTextInput(field);
         if (_focusTarget == SearchFocusTarget.FieldInput)
-            _textInput.OnFocused();
+            textInput.OnFocused();
 
-        _textInput.Submitted
+        textInput.Submitted
             .Subscribe(text =>
             {
                 var result = ViewModel.CommitField(field.Path, text);
@@ -189,12 +187,8 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             })
             .DisposeWith(_contentSubscriptions);
 
-        content.WithChild(NetclawTuiChrome.BuildTextInputPanel(_textInput, field.Label));
-        content.WithChild(new TextNode("  Press Enter to apply or Esc to cancel edit.").WithForeground(Color.Gray));
-
-        var supportText = ViewModel.GetCurrentProviderSupportText();
-        if (!string.IsNullOrWhiteSpace(supportText))
-            content.WithChild(new TextNode($"  {supportText}").WithForeground(Color.Gray));
+        content.WithChild(NetclawTuiChrome.BuildTextInputPanel(textInput, field.Label));
+        content.WithChild(new TextNode(GetEditHint(field)).WithForeground(Color.Gray));
 
         return content;
     }
@@ -203,8 +197,9 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
     {
         var children = Layouts.Vertical().WithSpacing(1);
         var hasState = false;
+        var currentProviderHasIssues = ViewModel.GetCurrentProviderIssues().Count > 0;
 
-        if (ViewModel.GetSummaryStateTone() == ConfigStatusTone.Warning)
+        if (!currentProviderHasIssues && ViewModel.GetSummaryStateTone() == ConfigStatusTone.Warning)
         {
             children.WithChild(new TextNode($"  {ViewModel.GetSummaryStateText()}").WithForeground(Color.Yellow));
             hasState = true;
@@ -418,6 +413,8 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         _editingFieldPath = field.Path;
         _editSeed = ViewModel.GetEditorSeed(field);
+        _textInput = null;
+        _textInputFieldPath = null;
         _focusTarget = SearchFocusTarget.FieldInput;
         _contentNode?.Invalidate();
         ViewModel.RequestRedraw();
@@ -434,10 +431,34 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         _editingFieldPath = null;
         _editSeed = string.Empty;
+        _textInput = null;
+        _textInputFieldPath = null;
         _focusTarget = SearchFocusTarget.ProviderList;
         _contentNode?.Invalidate();
         ViewModel.RequestRedraw();
     }
+
+    private TextInputNode EnsureEditingTextInput(ProjectedConfigField field)
+    {
+        if (_textInput is not null && string.Equals(_textInputFieldPath, field.Path, StringComparison.Ordinal))
+            return _textInput;
+
+        _textInput = new TextInputNode();
+        _textInputFieldPath = field.Path;
+
+        if (field.Widget == ConfigFieldWidget.PasswordInput)
+            _textInput.AsPassword();
+        if (!string.IsNullOrWhiteSpace(field.Placeholder))
+            _textInput.WithPlaceholder(field.Placeholder);
+
+        _textInput.Text = ViewModel.GetEditorSeed(field);
+        return _textInput;
+    }
+
+    private string GetEditHint(ProjectedConfigField field)
+        => field.Widget == ConfigFieldWidget.PasswordInput && ViewModel.HasPersistedSecret(field.Path)
+            ? "  Enter a replacement key, then press Enter to apply or Esc to cancel."
+            : "  Press Enter to apply or Esc to cancel edit.";
 
     private static string GetProviderRequirementText(string backend)
         => backend switch
