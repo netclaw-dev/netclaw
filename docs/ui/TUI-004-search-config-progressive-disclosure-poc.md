@@ -34,6 +34,7 @@ that matter, test it, save it, go back.
 2. Only show fields that matter for the chosen backend.
 3. Keep the primary action obvious at every step.
 4. Treat testing and save as the end of the flow, not a third parallel panel.
+5. Keep quiet states quiet.
 
 ## Recommended interaction model
 
@@ -47,9 +48,11 @@ test, or leave Search alone.
 Show only:
 
 - current backend
-- whether a secret is already configured
-- whether the current draft looks ready
+- only backend-specific state that is actually meaningful
 - three actions: `Change provider`, `Test current config`, `Back`
+
+Do not show filler copy like `Secret status: Not required` or `Last check: Ready`
+for a quiet/default state.
 
 ### Stage 2: Choose provider
 
@@ -74,6 +77,9 @@ Behavior by backend:
 - SearXNG: endpoint URL field only
 
 Show validation only when relevant.
+
+There is no standalone credential-management screen. Credential input only
+appears inline on the provider form for backends that actually use one.
 
 Actions live at the bottom of this form:
 
@@ -149,8 +155,7 @@ Persist on save:
 │  Configure how Netclaw performs web search and URL fetch.   │
 │                                                             │
 │  Current provider: DuckDuckGo                               │
-│  Secret status: Not required                                │
-│  Last check: Ready                                          │
+│  No additional setup required.                              │
 │                                                             │
 │  ▸ Change provider                                          │
 │    Test current configuration                               │
@@ -165,6 +170,25 @@ Why this is better:
 - no editing surface until the operator asks to edit
 - no dead-looking action panel
 - summary is readable in under five seconds
+
+### Screen A2: Search summary with meaningful state
+
+```text
+╭─ Search ─────────────────────────────────────────────────────╮
+│                                                             │
+│  Current provider: Brave                                    │
+│  API key configured.                                        │
+│                                                             │
+│  ▸ Change provider                                          │
+│    Test current configuration                               │
+│    Back to dashboard                                        │
+│                                                             │
+│ ↑/↓ navigate · Enter select · Esc back                      │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+If the current state is not meaningful, do not surface it. If it matters,
+surface it in one short line.
 
 ### Screen B: Choose provider
 
@@ -209,6 +233,9 @@ Why this is better:
 │ Tab next · Enter activate · Esc back                        │
 ╰─────────────────────────────────────────────────────────────╯
 ```
+
+If no Brave credential is currently stored, omit the `Existing key is
+configured` helper line entirely.
 
 ### Screen C2: Configure SearXNG
 
@@ -279,6 +306,24 @@ Never keep a persistent side-panel of commands on screen. `Test`, `Save`, and
 Prefer `Current provider`, `Existing key is configured`, and `No extra settings
 required` over exposing raw field architecture like `Fields`, `Selected Field`,
 or `Inactive for current backend`.
+
+### 4. No null-state metadata
+
+Do not render rows that only describe the absence of state. If a backend has no
+credential concept, do not mention credentials. If there is no meaningful test
+history or warning, do not render status copy.
+
+## Conditional rendering rules
+
+- DuckDuckGo summary should not mention credentials.
+- DuckDuckGo form should not mention secret status.
+- Brave summary may show `API key configured` or `API key required` when that is
+  materially useful.
+- Brave form should only show `Leave blank to keep it` when a stored secret
+  already exists.
+- SearXNG should never show secret-management copy.
+- `Last check` or similar status copy should only appear after an explicit test
+  result or when surfacing a warning/error worth operator attention.
 
 ## Implementation notes for the next POC
 
