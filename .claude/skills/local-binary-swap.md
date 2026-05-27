@@ -13,6 +13,9 @@ user's local `~/.netclaw/bin/` install for live testing.
 1. **Stop the daemon first** — never overwrite a running binary
 2. **Back up originals** — always create `.bak` copies before overwriting
 3. **Confirm with user** before swapping if unsure about their intent
+4. **Always re-launch the daemon after swap** — the swap procedure leaves the
+   daemon stopped. Channels, webhooks, and the doctor's MCP/daemon-connectivity
+   checks all stay broken until you start it again. This step is not optional.
 
 ## Procedure
 
@@ -90,6 +93,21 @@ netclaw --version   # should show dev version with current commit hash
 netclaw doctor      # should not show SQLite failures
 ```
 
+### 7. Re-launch the daemon
+
+The swap procedure stops the daemon in step 1 and never restarts it. You MUST
+start it again before the install is usable — channels, webhooks, and the
+doctor's daemon/MCP-connectivity checks all stay broken until the daemon is up.
+
+```bash
+netclaw daemon start
+netclaw daemon status   # confirm it came up cleanly
+```
+
+If `daemon status` shows a crash or the PID never appears, check
+`~/.netclaw/logs/crash-*.log` — a missing `IncludeNativeLibrariesForSelfExtract`
+flag in step 3 is the most common cause.
+
 ## Restore Procedure
 
 To revert to the original binaries:
@@ -98,6 +116,7 @@ To revert to the original binaries:
 netclaw daemon stop 2>&1 || true
 cp ~/.netclaw/bin/netclaw.bak ~/.netclaw/bin/netclaw
 cp ~/.netclaw/bin/netclawd.bak ~/.netclaw/bin/netclawd
+netclaw daemon start
 ```
 
 ## Platform-Specific RIDs
@@ -118,3 +137,4 @@ cp ~/.netclaw/bin/netclawd.bak ~/.netclaw/bin/netclawd
 | Forgot to stop daemon before swap | Binary overwrite fails or daemon crashes | Always `netclaw daemon stop` first |
 | Forgot to copy system skills | New/updated skills not available | Copy from `feeds/skills/.system/files/` |
 | Used `-p:` instead of `/p:` | May work but inconsistent with CI | Use `/p:` to match production |
+| Forgot to re-launch daemon after swap | Channels offline, webhooks dead, doctor reports daemon unreachable | `netclaw daemon start` — swap leaves daemon stopped from step 1 |
