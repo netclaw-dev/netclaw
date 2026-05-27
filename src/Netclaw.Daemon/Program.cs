@@ -386,9 +386,9 @@ static void ConfigureDaemonServices(
     // / LoggerFactory needed, and per-resolver Debug output is visible. The
     // factory is invoked eagerly after Build() (see RunDaemonAsync) so timing
     // matches a startup-bound resolution rather than first-session lazy hit.
-    var providers = configuration.GetSection("Providers")
-        .Get<Dictionary<string, ProviderEntry>>()
-        ?? new() { ["local-ollama"] = new ProviderEntry() };
+    var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+    if (providers.Count == 0)
+        providers = new() { ["local-ollama"] = new ProviderEntry() };
     var mainProviderType = providers.TryGetValue(models.Main.Provider, out var mainProvider)
         ? mainProvider.Type
         : null;
