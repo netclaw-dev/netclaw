@@ -51,7 +51,12 @@ if (useHostOllama)
 }
 else
 {
-    var ollama = builder.AddOllama("ollama").WithDataVolume();
+    // 0.13.0 (default in CommunityToolkit.Aspire.Hosting.Ollama) doesn't
+    // understand the qwen3.5 model manifest — bump to 0.24.0 (the first
+    // stable release that supports it).
+    var ollama = builder.AddOllama("ollama")
+        .WithImageTag("0.24.0")
+        .WithDataVolume();
     if (demoProfile == DemoProfile.Fast)
     {
         ollama = ollama
