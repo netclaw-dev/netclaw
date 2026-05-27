@@ -60,15 +60,45 @@ public sealed record StartProactiveThread(
 /// </summary>
 public sealed record ProactiveThreadAck(SessionId SessionId) : INoSerializationVerificationNeeded;
 
-internal sealed class PendingApprovalRequest(ToolInteractionRequest request)
+internal sealed class PendingApprovalRequest
 {
-    public ToolInteractionRequest Request { get; } = request;
-    public ToolCallId CallId => Request.CallId;
+    public PendingApprovalRequest(ToolInteractionRequest request)
+    {
+        Request = request;
+        CallId = request.CallId;
+        RequesterSenderId = request.RequesterSenderId is { } requesterSenderId
+            ? requesterSenderId.Value
+            : null;
+        RequesterPrincipal = request.RequesterPrincipal;
+        Options = request.Options;
+        OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
+    }
 
-    public DiscordUserId? RequesterSenderId { get; } =
-        request.RequesterSenderId is not null ? new DiscordUserId(request.RequesterSenderId.Value.Value) : null;
+    public PendingApprovalRequest(
+        ToolCallId callId,
+        string? requesterSenderId,
+        PrincipalClassification? requesterPrincipal,
+        IReadOnlyList<string> optionKeys,
+        DiscordMessageId? promptMessageId)
+    {
+        Request = null;
+        CallId = callId;
+        RequesterSenderId = requesterSenderId;
+        RequesterPrincipal = requesterPrincipal;
+        OptionKeys = [.. optionKeys];
+        Options = OptionKeys
+            .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
+            .ToArray();
+        PromptMessageId = promptMessageId;
+    }
 
-    public PrincipalClassification? RequesterPrincipal => Request.RequesterPrincipal;
+    public ToolInteractionRequest? Request { get; }
+    public ToolCallId CallId { get; }
+
+    public string? RequesterSenderId { get; }
+
+    public PrincipalClassification? RequesterPrincipal { get; }
+    public IReadOnlyList<ToolInteractionOption> Options { get; }
+    public IReadOnlyList<string> OptionKeys { get; }
     public DiscordMessageId? PromptMessageId { get; set; }
 }
-

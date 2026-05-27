@@ -268,6 +268,58 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
         }, cancellationToken: ct);
     }
 
+    [Fact]
+    public async Task Recovered_text_approval_response_redraws_prompt_via_persisted_messageTs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-recovered-text-redraw");
+
+        var initialPipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-recovered-text-redraw"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+                DisplayText = "git status",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var firstActor = CreateBindingActor(sid, initialPipeline, detector);
+        await AwaitAssertAsync(() => Assert.Single(_replyClient.Posts), cancellationToken: ct);
+
+        var stopProbe = CreateTestProbe("slack-recovered-text-stop");
+        stopProbe.Watch(firstActor);
+        Sys.Stop(firstActor);
+        await stopProbe.ExpectTerminatedAsync(firstActor, cancellationToken: ct);
+
+        var recoveryPipeline = new RecordingSessionPipeline(_ => []);
+        var recoveredActor = CreateBindingActor(sid, recoveryPipeline, detector);
+        recoveredActor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = recoveryPipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-recovered-text-redraw", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
+
+            var update = Assert.Single(_replyClient.Updates);
+            Assert.Equal(new SlackEventTs("fake.ts"), update.MessageTs);
+            Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.NotNull(update.Blocks);
+            Assert.DoesNotContain(update.Blocks!, block => block is SlackNet.Blocks.ActionsBlock);
+        }, cancellationToken: ct);
+    }
+
     // Code-review regression (#939): on the cold-spawn path, a non-requester
     // click MUST NOT redraw the prompt. The session is the authority on whether
     // the sender is allowed; the binding awaits the result before touching the
