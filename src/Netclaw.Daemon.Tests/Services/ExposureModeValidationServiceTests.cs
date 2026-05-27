@@ -160,10 +160,12 @@ public sealed class ExposureModeValidationServiceTests
             ExposureMode = mode,
             SkipTunnelProcessCheck = true
         };
+        // DeviceToken scheme IS wired (production reality), but no devices and no
+        // alternative scheme → "no usable remote auth path", not a wiring error.
         var sut = BuildService(
             config,
             _ => false,
-            remoteAuthSchemes: [],
+            remoteAuthSchemes: [new FakeRemoteAuthScheme(DeviceTokenAuthenticationHandler.SchemeName)],
             deviceCount: 0);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -187,14 +189,14 @@ public sealed class ExposureModeValidationServiceTests
     // ── Remote auth guard: non-local + no devices + no scheme ────────────────
 
     [Fact]
-    public async Task NonLocal_NoRemoteAuthScheme_NoPairedDevices_Throws()
+    public async Task NonLocal_NoAltScheme_NoPairedDevices_Throws()
     {
         var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
-        // Process is running, but no auth scheme and no devices → must fail.
+        // DeviceToken wired (production reality), no devices, no alt scheme → must fail.
         var sut = BuildService(
             config,
             name => name == "tailscaled",
-            remoteAuthSchemes: [],
+            remoteAuthSchemes: [new FakeRemoteAuthScheme(DeviceTokenAuthenticationHandler.SchemeName)],
             deviceCount: 0);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -204,14 +206,14 @@ public sealed class ExposureModeValidationServiceTests
     }
 
     [Fact]
-    public async Task NonLocal_NoRemoteAuthScheme_NoPairedDevices_WithBootstrapSeeder_StartSucceeds()
+    public async Task NonLocal_NoAltScheme_NoPairedDevices_WithBootstrapSeeder_StartSucceeds()
     {
         var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
         var (bootstrapSeeder, deviceCounter) = BuildBootstrapSeeder();
         var sut = BuildService(
             config,
             name => name == "tailscaled",
-            remoteAuthSchemes: [],
+            remoteAuthSchemes: [new FakeRemoteAuthScheme(DeviceTokenAuthenticationHandler.SchemeName)],
             deviceCounter: deviceCounter,
             bootstrapDeviceSeeder: bootstrapSeeder);
 
@@ -219,17 +221,95 @@ public sealed class ExposureModeValidationServiceTests
     }
 
     [Fact]
-    public async Task NonLocal_NoRemoteAuthScheme_WithPairedDevices_StartSucceeds()
+    public async Task NonLocal_NoAltScheme_WithPairedDevices_StartSucceeds()
     {
-        // Devices exist → remote clients CAN authenticate, even without a registered scheme.
+        // DeviceToken scheme registered (production reality) + paired device → remote
+        // clients CAN authenticate.
         var config = new DaemonConfig { ExposureMode = ExposureMode.TailscaleServe };
         var sut = BuildService(
             config,
             name => name == "tailscaled",
-            remoteAuthSchemes: [],
+            remoteAuthSchemes: [new FakeRemoteAuthScheme(DeviceTokenAuthenticationHandler.SchemeName)],
             deviceCount: 1);
 
         await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    // ── Wiring-integrity check (audit finding #25 companion) ─────────────────
+
+    [Theory]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task TunnelModes_WithDeviceTokenSchemeUnregistered_ThrowsWiringError(ExposureMode mode)
+    {
+        // Simulates a broken DI wiring where the DeviceToken authentication scheme
+        // is missing despite the daemon running in a tunnel exposure mode. Post-#24
+        // (loopback bypass removed) this is the only legitimate remote-auth path for
+        // tunnel modes, so a missing scheme must abort startup loudly rather than
+        // serve an unauthenticatable surface.
+        var config = new DaemonConfig
+        {
+            ExposureMode = mode,
+            SkipTunnelProcessCheck = true,
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("device-bearer authentication scheme", ex.Message);
+        Assert.Contains("DeviceToken", ex.Message);
+    }
+
+    [Fact]
+    public async Task TunnelMode_WithAlternativeSchemeOnly_BypassesWiringCheck()
+    {
+        // An alternative remote-auth scheme is registered, so the DeviceToken scheme
+        // is no longer the ONLY path; the wiring check tolerates a missing DeviceToken
+        // in that case (the alternative scheme handles remote auth).
+        var config = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.TailscaleServe,
+            SkipTunnelProcessCheck = true,
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [new FakeRemoteAuthScheme("OtherScheme")],
+            deviceCount: 0);
+
+        await sut.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ReverseProxy_WithDeviceTokenSchemeUnregistered_DoesNotTriggerTunnelWiringCheck()
+    {
+        // ReverseProxy mode has its own auth topology (forwarded headers + TrustedProxies)
+        // and is intentionally excluded from the tunnel wiring assertion. It should not
+        // throw the device-bearer wiring error — it will throw the existing
+        // "no remote authentication available" message instead.
+        var config = new DaemonConfig
+        {
+            ExposureMode = ExposureMode.ReverseProxy,
+            Host = "10.0.0.10",
+            TrustedProxies = ["10.0.0.5"],
+        };
+        var sut = BuildService(
+            config,
+            _ => false,
+            remoteAuthSchemes: [],
+            deviceCount: 0);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain("device-bearer authentication scheme", ex.Message);
+        Assert.Contains("No remote authentication available", ex.Message);
     }
 
     [Fact]

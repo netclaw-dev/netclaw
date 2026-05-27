@@ -194,7 +194,13 @@ internal sealed class DiscordConversationActor : ReceiveActor
         // everything needed to address the session deterministically; a passivated/cold
         // child must not silently drop the response. See issue #979 for the production
         // passivation incident (symmetric with Slack's conversation/thread tree).
-        var replyChannelId = new DiscordReplyChannelId(interaction.ThreadOrMessageId.Value);
+        //
+        // Prefer the explicit ReplyChannelId carried on the interaction. For top-level
+        // guild prompts ThreadOrMessageId is the prompt's *message* ID, not a channel
+        // ID, so deriving the reply channel from it silently broke chat.update on the
+        // cold-spawn redraw path. See issue #939.
+        var replyChannelId = interaction.ReplyChannelId
+            ?? new DiscordReplyChannelId(interaction.ThreadOrMessageId.Value);
         var sessionId = new SessionId($"{_channelId.Value}/{interaction.ThreadOrMessageId.Value}");
         var sessionBinding = GetOrCreateSessionBinding(
             sessionId,
@@ -210,7 +216,8 @@ internal sealed class DiscordConversationActor : ReceiveActor
             CallId: new Netclaw.Tools.ToolCallId(interaction.CallId),
             SelectedKey: interaction.SelectedKey,
             SenderId: interaction.SenderId,
-            RequesterSenderId: interaction.RequesterSenderId));
+            RequesterSenderId: interaction.RequesterSenderId,
+            PromptMessageId: interaction.PromptMessageId));
     }
 
     private void HandleTrustedSessionTurn(DeliverTrustedSessionTurn message)

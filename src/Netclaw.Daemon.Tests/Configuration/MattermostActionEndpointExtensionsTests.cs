@@ -70,6 +70,79 @@ public sealed class MattermostActionEndpointExtensionsTests(ITestOutputHelper ou
         Assert.Equal(ApprovalOptionKeys.ApproveOnce, interaction.SelectedKey);
         Assert.Equal("requester-1", interaction.SenderId.Value);
         Assert.Equal("requester-1", interaction.RequesterSenderId!.Value.Value);
+        // #939: the prompt's post_id (from the callback payload) must be plumbed
+        // through so the binding can redraw even when its pending-approval state
+        // has been lost to passivation.
+        Assert.Equal("prompt-55", interaction.PromptPostId!.Value.Value);
+    }
+
+    // Regression for the #939 code-review finding: the action token is minted
+    // BEFORE the prompt post is created, so the prompt's actual post_id only
+    // becomes known after PostReplyAsync returns. The binding actor calls
+    // AssociatePromptPostId on the store; the endpoint then validates that the
+    // client-supplied payload.PostId matches. A mismatch is a forgery attempt
+    // (a token holder rewriting post_id to redirect the bot's edit) and must
+    // be rejected.
+    [Fact]
+    public async Task Callback_with_mismatched_post_id_is_rejected_as_forge()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
+        var actionStore = new MattermostCallbackActionStore(time);
+        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        // Simulate the binding registering the actual prompt post ID after PostReplyAsync.
+        actionStore.AssociatePromptPostId("call-1", "real-prompt-post");
+
+        var recorder = new GatewayInteractionRecorder();
+        await using var app = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandAck.For(new SessionId("ch-1/root-1")),
+            recorder: recorder);
+        var client = app.GetTestClient();
+
+        // Attacker rewrites post_id to target a different post in the channel.
+        var response = await client.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "some-other-post-the-bot-can-edit",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        // Interaction must NOT have been routed to the gateway.
+        Assert.False(recorder.HasPendingInteraction);
+    }
+
+    [Fact]
+    public async Task Callback_with_matching_post_id_routes_after_AssociatePromptPostId()
+    {
+        var time = new FakeTimeProvider(DateTimeOffset.Parse("2026-05-20T12:00:00Z"));
+        var actionStore = new MattermostCallbackActionStore(time);
+        var token = actionStore.CreateAction("ch-1", "call-1", ApprovalOptionKeys.ApproveOnce, "root-1", "requester-1");
+        actionStore.AssociatePromptPostId("call-1", "real-prompt-post");
+
+        var recorder = new GatewayInteractionRecorder();
+        await using var app = await CreateHostAsync(
+            time,
+            actionStore,
+            gatewayResponseFactory: _ => CommandAck.For(new SessionId("ch-1/root-1")),
+            recorder: recorder);
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsJsonAsync("/api/mattermost/actions", new
+        {
+            user_id = "requester-1",
+            post_id = "real-prompt-post",
+            channel_id = "ch-1",
+            context = new Dictionary<string, string> { ["action_token"] = token }
+        }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var interaction = await recorder.ReadAsync(TestContext.Current.CancellationToken);
+        // PromptPostId in the routed interaction comes from the store (trusted),
+        // not from the payload — the two happen to be equal here.
+        Assert.Equal("real-prompt-post", interaction.PromptPostId!.Value.Value);
     }
 
     [Fact]

@@ -117,7 +117,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         string callId,
         string selectedKey,
         string senderId,
-        string? requesterSenderId)
+        string? requesterSenderId,
+        SlackEventTs? promptMessageTs = null)
     {
         _gateway?.Tell(new SlackApprovalResponse(
             channelId,
@@ -125,7 +126,8 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             new Netclaw.Tools.ToolCallId(callId),
             selectedKey,
             new Netclaw.Actors.Protocol.SenderId(senderId),
-            requesterSenderId is { } rsid ? new Netclaw.Actors.Protocol.SenderId(rsid) : null));
+            requesterSenderId is { } rsid ? new Netclaw.Actors.Protocol.SenderId(rsid) : null,
+            promptMessageTs));
     }
 
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)

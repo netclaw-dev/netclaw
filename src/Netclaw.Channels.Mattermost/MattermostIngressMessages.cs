@@ -36,7 +36,8 @@ public sealed record MattermostApprovalResponse(
     ToolCallId CallId,
     string SelectedKey,
     MattermostUserId SenderId,
-    MattermostUserId? RequesterSenderId = null);
+    MattermostUserId? RequesterSenderId = null,
+    MattermostPostId? PromptPostId = null);
 
 public sealed record StartMattermostProactiveThread(
     MattermostChannelId ChannelId,

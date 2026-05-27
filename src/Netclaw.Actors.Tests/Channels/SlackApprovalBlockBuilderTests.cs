@@ -177,4 +177,67 @@ public sealed class SlackApprovalBlockBuilderTests
 
         Assert.Contains("Denied", text);
     }
+
+    // Cold-spawn variant (#939): when the binding has lost its
+    // ToolInteractionRequest we still need a resolved-state message so the
+    // buttons clear. These tests pin the wire content of the minimal banner.
+    [Fact]
+    public void Resolved_text_without_request_for_deny_uses_Denied()
+    {
+        var text = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
+            ApprovalOptionKeys.Deny, "U123");
+
+        Assert.Contains(":no_entry:", text);
+        Assert.Contains("Denied", text);
+        Assert.Contains("U123", text);
+    }
+
+    [Fact]
+    public void Resolved_text_without_request_for_approve_once_uses_checkmark()
+    {
+        var text = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123");
+
+        Assert.Contains(":white_check_mark:", text);
+        Assert.Contains("Approved (no save)", text);
+    }
+
+    [Theory]
+    [InlineData(ApprovalOptionKeys.ApproveAlways, "Saved: always here")]
+    [InlineData(ApprovalOptionKeys.ApproveEverywhere, "Saved: always anywhere")]
+    [InlineData(ApprovalOptionKeys.ApproveSession, "Saved for this chat")]
+    public void Resolved_text_without_request_uses_generic_resolution_phrasing(string selectedKey, string expectedFragment)
+    {
+        var text = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(selectedKey, "U123");
+        Assert.Contains(expectedFragment, text);
+    }
+
+    [Fact]
+    public void Resolved_blocks_without_request_have_no_action_buttons()
+    {
+        var blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocksWithoutRequest(
+            ApprovalOptionKeys.Deny, "U123");
+
+        Assert.NotEmpty(blocks);
+        Assert.DoesNotContain(blocks, b => b is ActionsBlock);
+    }
+
+    [Fact]
+    public void Oversized_command_keeps_every_block_under_Slack_cap()
+    {
+        // Regression for the auto-deny-on-Slack-failure bug: a multi-KB
+        // `gh issue create --body '...'` blew past Slack's 3000-char per
+        // SectionBlock text cap and the API returned invalid_blocks. See
+        // session D0AC6CKBK5K/1779811366.695739.
+        var oversized = new string('x', 10_000);
+        var request = Request(oversized, ["gh issue create"], "/home/user/repos/foo", FullButtonRow());
+
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+
+        foreach (var block in blocks)
+        {
+            if (block is SectionBlock { Text: Markdown md })
+                Assert.True(md.Text.Length < 3001, $"SectionBlock text length {md.Text.Length} exceeded Slack's 3000-char cap");
+        }
+    }
 }

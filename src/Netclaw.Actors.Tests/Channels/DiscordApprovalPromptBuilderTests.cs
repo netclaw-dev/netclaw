@@ -366,4 +366,55 @@ public sealed class DiscordApprovalPromptBuilderTests
 
         Assert.Contains("Saved for this chat: jsonlint config.json in /home/user/repos/foo", text);
     }
+
+    // Cold-spawn variant (#939): when the binding has lost its
+    // ToolInteractionRequest, we still need a resolved-state message that
+    // clears the action buttons.
+    [Fact]
+    public void Resolved_text_without_request_for_deny_uses_no_entry()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.Deny, "U123");
+
+        Assert.Contains(":no_entry:", text);
+        Assert.Contains("Denied", text);
+        Assert.Contains("<@U123>", text);
+    }
+
+    [Fact]
+    public void Resolved_text_without_request_for_approve_once_uses_checkmark()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123");
+
+        Assert.Contains(":white_check_mark:", text);
+        Assert.Contains("Approved (no save)", text);
+    }
+
+    [Theory]
+    [InlineData(ApprovalOptionKeys.ApproveAlways, "Saved: always here")]
+    [InlineData(ApprovalOptionKeys.ApproveEverywhere, "Saved: always anywhere")]
+    [InlineData(ApprovalOptionKeys.ApproveSession, "Saved for this chat")]
+    public void Resolved_text_without_request_uses_generic_resolution_phrasing(string selectedKey, string expectedFragment)
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(selectedKey, "U123");
+        Assert.Contains(expectedFragment, text);
+    }
+
+    [Fact]
+    public void Oversized_command_keeps_prompt_under_Discord_cap()
+    {
+        // Discord rejects messages over 2000 chars; without truncation
+        // the binding's auto-deny fallback misreports as a user decline.
+        // Same failure shape as the Slack regression — see session
+        // D0AC6CKBK5K/1779811366.695739.
+        var oversized = new string('y', 10_000);
+        var request = V2Request(oversized, ["gh issue create"], "/home/user/repos/foo", FullButtonRow());
+
+        var textPrompt = DiscordApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonPromptText, _) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+
+        Assert.True(textPrompt.Length < 2001, $"Text prompt length {textPrompt.Length} exceeded Discord's 2000-char cap");
+        Assert.True(buttonPromptText.Length < 2001, $"Button prompt length {buttonPromptText.Length} exceeded Discord's 2000-char cap");
+    }
 }

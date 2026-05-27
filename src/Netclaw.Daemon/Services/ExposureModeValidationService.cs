@@ -127,6 +127,34 @@ internal sealed class ExposureModeValidationService : IHostedService
                 : 0;
 
             hasRemoteAuthenticationPath = hasAlternativeRemoteAuthScheme || deviceCount > 0;
+
+            var hasDeviceTokenScheme = _remoteAuthSchemes.Any(s => string.Equals(
+                s.SchemeName,
+                DeviceTokenAuthenticationHandler.SchemeName,
+                StringComparison.Ordinal));
+
+            // Wiring-integrity check for tunnel modes.
+            //
+            // Once LoopbackAuthenticationHandler is gated on RequiresRemoteAuthentication()
+            // (audit finding 24), the device-bearer scheme is the ONLY path a remote
+            // tunnel client can use to authenticate. If neither an alternative scheme nor
+            // the device-bearer scheme is registered, the daemon would start cleanly but
+            // be unreachable to any legitimate remote caller — fail loudly at startup
+            // with an actionable wiring error rather than silently serving an
+            // unauthenticatable surface.
+            if (_config.ExposureMode.IsTunnelMode()
+                && !hasAlternativeRemoteAuthScheme
+                && !hasDeviceTokenScheme)
+            {
+                const string msg = "Tunnel exposure mode requires the device-bearer authentication scheme to be registered.";
+                const string remediation = "This is an internal wiring error — the DeviceToken authentication scheme must be registered in DI for tunnel exposure modes (tailscale-serve, tailscale-funnel, cloudflare-tunnel).";
+                _logger.LogCritical(
+                    "Daemon startup aborted: {Message} Remediation: {Remediation}",
+                    msg,
+                    remediation);
+
+                throw new InvalidOperationException($"{msg} {remediation}");
+            }
         }
 
         foreach (var issue in DaemonExposureValidator.Validate(_config, hasRemoteAuthenticationPath)

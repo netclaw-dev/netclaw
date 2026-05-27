@@ -27,6 +27,23 @@ public sealed record DiscordGatewayMessage(
 /// <summary>
 /// Normalized Discord interaction response payload emitted by the transport client.
 /// </summary>
+/// <remarks>
+/// <paramref name="PromptMessageId"/> is the ID of the message that contained
+/// the clicked button. Discord component interactions always carry the source
+/// message, so the binding actor can redraw the prompt to its resolved state
+/// even after passivation has dropped its in-memory pending-approval entry.
+/// Null for text-reply responses (no component payload). See issue #939.
+///
+/// <paramref name="ReplyChannelId"/> is the actual Discord channel ID where
+/// the prompt lives (the channel that the cold-spawned binding should target
+/// for <c>chat.update</c>). It is distinct from <paramref name="ThreadOrMessageId"/>,
+/// which for top-level guild prompts is the prompt's *message* ID, not its
+/// channel ID. Older code derived the binding's reply channel from
+/// <paramref name="ThreadOrMessageId"/>, which silently broke the cold-spawn
+/// redraw for top-level guild prompts. Null in legacy paths that haven't
+/// adopted the explicit field; consumers must fall back to <paramref name="ChannelId"/>
+/// when null. See issue #939.
+/// </remarks>
 public sealed record DiscordGatewayInteraction(
     DiscordChannelId ChannelId,
     DiscordThreadOrMessageId ThreadOrMessageId,
@@ -34,7 +51,9 @@ public sealed record DiscordGatewayInteraction(
     string SelectedKey,
     DiscordUserId SenderId,
     DiscordUserId? RequesterSenderId,
-    DateTimeOffset ReceivedAt);
+    DateTimeOffset ReceivedAt,
+    DiscordMessageId? PromptMessageId = null,
+    DiscordReplyChannelId? ReplyChannelId = null);
 
 public interface IDiscordGatewayClient
 {

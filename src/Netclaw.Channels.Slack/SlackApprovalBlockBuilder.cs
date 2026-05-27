@@ -14,12 +14,21 @@ internal static class SlackApprovalBlockBuilder
 
     private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
 
+    /// <summary>
+    /// Display-text budget sized to stay under Slack's hard 3000-char
+    /// SectionBlock text cap after accounting for the surrounding markdown
+    /// scaffolding. Exceeding the cap causes Slack to reject the post with
+    /// <c>invalid_blocks</c>, which today triggers an auto-deny the model
+    /// misreads as the user declining.
+    /// </summary>
+    internal const int MaxDisplayTextChars = 2500;
+
     public static string BuildApprovalText(ToolInteractionRequest request)
     {
         var lines = new List<string>
         {
             ":lock: *Tool approval required*",
-            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
             BuildApproveHeader(request)
         };
 
@@ -53,7 +62,7 @@ internal static class SlackApprovalBlockBuilder
             },
             new SectionBlock
             {
-                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n*Request:* `{EscapeMarkdown(request.DisplayText)}`"),
+                Text = new Markdown($"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`"),
                 Expand = true
             },
             new SectionBlock
@@ -125,7 +134,7 @@ internal static class SlackApprovalBlockBuilder
         return string.Join("\n", new[]
         {
             $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
-            $"> `{request.ToolName}`: `{request.DisplayText}`",
+            $"> `{request.ToolName}`: `{ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)}`",
             BuildResolutionLine(request, selectedKey)
         });
     }
@@ -150,7 +159,7 @@ internal static class SlackApprovalBlockBuilder
             {
                 Text = new Markdown(
                     $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
-                    + $"*Request:* `{EscapeMarkdown(request.DisplayText)}`\n"
+                    + $"*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`\n"
                     + $"*{EscapeMarkdown(resolutionLine)}*"),
                 Expand = true
             }
@@ -166,6 +175,62 @@ internal static class SlackApprovalBlockBuilder
 
         return blocks;
     }
+
+    /// <summary>
+    /// Builds a resolved-state message body when the original
+    /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
+    /// binding actor was passivated between posting the prompt and the user
+    /// clicking a button. The button payload still carries enough state to
+    /// redraw the prompt with a decision banner; we just can't reconstruct
+    /// the verb/location detail without the original request. Better than
+    /// leaving the buttons live indefinitely. See issue #939.
+    /// </summary>
+    public static string BuildResolvedApprovalTextWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+
+        return string.Join("\n", new[]
+        {
+            $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
+            $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*"
+        });
+    }
+
+    /// <summary>
+    /// Block-Kit variant of <see cref="BuildResolvedApprovalTextWithoutRequest"/>.
+    /// Renders without buttons so the prompt UI clears on the cold-spawn path.
+    /// </summary>
+    public static IReadOnlyList<Block> BuildResolvedApprovalBlocksWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+
+        return
+        [
+            new SectionBlock
+            {
+                Text = new Markdown($"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>")
+            },
+            new SectionBlock
+            {
+                Text = new Markdown($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*")
+            }
+        ];
+    }
+
+    private static string BuildGenericResolutionLine(string selectedKey)
+        => selectedKey switch
+        {
+            ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+            ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
+            ApprovalOptionKeys.ApproveSession => "Saved for this chat",
+            ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
+            ApprovalOptionKeys.Deny => "Denied",
+            _ => "Resolved"
+        };
 
     /// <summary>
     /// Builds the prompt's header line. Single-verb invocations collapse the

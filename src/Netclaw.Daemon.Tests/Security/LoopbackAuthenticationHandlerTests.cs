@@ -108,4 +108,49 @@ public sealed class LoopbackAuthenticationHandlerTests
         Assert.Null(result.Failure);
         Assert.Null(result.Principal);
     }
+
+    // Tunnel agents (tailscaled, cloudflared) forward public traffic over the
+    // loopback socket, so every external request arrives with RemoteIpAddress
+    // == 127.0.0.1 / ::1. A handler that auto-promotes loopback to Operator
+    // under those modes hands an unauthenticated internet caller full local
+    // operator trust (audit finding #24). Loopback auto-auth must be reserved
+    // for ExposureMode.Local; under tunnel modes remote callers must go
+    // through the device bearer scheme. Both address families are exercised
+    // because the bug is symmetric across IPv4 and IPv6.
+    public static TheoryData<ExposureMode, string> TunnelModesWithLoopbackIps()
+    {
+        var data = new TheoryData<ExposureMode, string>();
+        foreach (var mode in new[]
+                 {
+                     ExposureMode.CloudflareTunnel,
+                     ExposureMode.TailscaleFunnel,
+                     ExposureMode.TailscaleServe,
+                 })
+        {
+            data.Add(mode, "127.0.0.1");
+            data.Add(mode, "::1");
+        }
+
+        return data;
+    }
+
+    [Theory]
+    [MemberData(nameof(TunnelModesWithLoopbackIps))]
+    public async Task Tunnel_modes_return_no_result_for_loopback_ip(
+        ExposureMode tunnelMode,
+        string loopbackIp)
+    {
+        var (sp, authService) = BuildAuthService(new DaemonConfig { ExposureMode = tunnelMode });
+        var ctx = BuildContext(IPAddress.Parse(loopbackIp), sp);
+
+        var result = await authService.AuthenticateAsync(ctx, LoopbackAuthenticationHandler.SchemeName);
+
+        Assert.False(
+            result.Succeeded,
+            $"ExposureMode={tunnelMode} with RemoteIpAddress={loopbackIp} must not auto-authenticate the caller as Operator. " +
+            "Loopback auto-auth is reserved for ExposureMode.Local; under tunnel modes the " +
+            "loopback peer is the tunnel agent forwarding remote traffic.");
+        Assert.Null(result.Failure);
+        Assert.Null(result.Principal);
+    }
 }

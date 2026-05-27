@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels;
 
 namespace Netclaw.Channels.Discord;
 
@@ -12,12 +13,20 @@ internal static class DiscordApprovalPromptBuilder
 {
     private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
 
+    /// <summary>
+    /// Display-text budget chosen to keep the assembled prompt under
+    /// Discord's hard 2000-char per-message cap once scaffolding is added.
+    /// Exceeding the cap causes the post to fail and the binding to
+    /// auto-deny, which the model misreads as a user decline.
+    /// </summary>
+    internal const int MaxDisplayTextChars = 1700;
+
     public static string BuildTextPrompt(ToolInteractionRequest request)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Netclaw approval required:");
         sb.Append("Tool: ").AppendLine(request.ToolName.Value);
-        sb.Append("Action: ").AppendLine(request.DisplayText);
+        sb.Append("Action: ").AppendLine(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars));
         sb.AppendLine(BuildApproveHeader(request));
 
         var verbs = ResolveDisplayVerbs(request);
@@ -79,7 +88,7 @@ internal static class DiscordApprovalPromptBuilder
         var sb = new StringBuilder();
         sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildResolutionLine(request, selectedKey)).Append("**");
         sb.Append(" (by <@").Append(senderId).Append(">)");
 
@@ -93,10 +102,42 @@ internal static class DiscordApprovalPromptBuilder
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Builds a resolved-state message body when the original
+    /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
+    /// binding actor was passivated between posting the prompt and the user
+    /// clicking a button. Sender's component payload still carries enough
+    /// state (message ID + decision) to clear the buttons. See issue #939.
+    /// </summary>
+    public static string BuildResolvedPromptTextWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+
+        var sb = new StringBuilder();
+        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        sb.Append("**").Append(BuildGenericResolutionLine(selectedKey)).Append("**");
+        sb.Append(" (by <@").Append(senderId).Append(">)");
+
+        return sb.ToString();
+    }
+
+    private static string BuildGenericResolutionLine(string selectedKey)
+        => selectedKey switch
+        {
+            ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+            ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
+            ApprovalOptionKeys.ApproveSession => "Saved for this chat",
+            ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
+            ApprovalOptionKeys.Deny => "Denied",
+            _ => "Resolved"
+        };
+
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
         sb.Append("**").Append(BuildApproveHeader(request)).AppendLine("**");
 
         var verbs = ResolveDisplayVerbs(request);

@@ -359,9 +359,13 @@ public sealed class SessionHubAuthorizationTests : IDisposable
     [Fact]
     public void IsDirectLocalControlPlaneConnection_ReturnsTrue_WhenRemoteMatchesLocal()
     {
+        // Non-loopback equality between remote and local IPs indicates an on-host
+        // connection; exposure mode does not affect this branch (governed by
+        // UseForwardedHeaders wiring elsewhere).
         Assert.True(SessionHub.IsDirectLocalControlPlaneConnection(
             IPAddress.Parse("10.0.0.10"),
-            IPAddress.Parse("10.0.0.10")));
+            IPAddress.Parse("10.0.0.10"),
+            ExposureMode.ReverseProxy));
     }
 
     [Fact]
@@ -369,10 +373,80 @@ public sealed class SessionHubAuthorizationTests : IDisposable
     {
         Assert.False(SessionHub.IsDirectLocalControlPlaneConnection(
             IPAddress.Parse("198.51.100.26"),
-            IPAddress.Parse("10.0.0.10")));
+            IPAddress.Parse("10.0.0.10"),
+            ExposureMode.ReverseProxy));
     }
 
-    private SessionHub CreateSessionHub(IPAddress remoteIp, string transport, bool isBootstrapDevice, IPAddress? localIp = null)
+    [Theory]
+    [InlineData("127.0.0.1")]
+    [InlineData("::1")]
+    public void IsDirectLocalControlPlaneConnection_Loopback_LocalMode_ReturnsTrue(string loopbackIp)
+    {
+        // ExposureMode.Local is the only mode that treats loopback as proof of a
+        // same-host caller; tunnel / reverse-proxy modes forward remote traffic
+        // over loopback.
+        Assert.True(SessionHub.IsDirectLocalControlPlaneConnection(
+            IPAddress.Parse(loopbackIp),
+            IPAddress.None,
+            ExposureMode.Local));
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.ReverseProxy, "127.0.0.1")]
+    [InlineData(ExposureMode.ReverseProxy, "::1")]
+    [InlineData(ExposureMode.TailscaleServe, "127.0.0.1")]
+    [InlineData(ExposureMode.TailscaleServe, "::1")]
+    [InlineData(ExposureMode.TailscaleFunnel, "127.0.0.1")]
+    [InlineData(ExposureMode.TailscaleFunnel, "::1")]
+    [InlineData(ExposureMode.CloudflareTunnel, "127.0.0.1")]
+    [InlineData(ExposureMode.CloudflareTunnel, "::1")]
+    public void IsDirectLocalControlPlaneConnection_Loopback_NonLocalMode_ReturnsFalse(
+        ExposureMode mode, string loopbackIp)
+    {
+        // Under any exposure mode that accepts remote traffic, a loopback remote IP
+        // is the local tunnel agent or reverse-proxy peer, NOT a direct on-host
+        // operator. Verifies the audit #24 follow-up: a paired (Verified) remote
+        // device whose connection arrives over loopback must not satisfy the
+        // "direct local control plane" predicate that gates GeneratePairingCode.
+        Assert.False(SessionHub.IsDirectLocalControlPlaneConnection(
+            IPAddress.Parse(loopbackIp),
+            IPAddress.None,
+            mode));
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task Tunnel_mode_verified_bearer_token_over_loopback_cannot_invoke_daemon_pair(
+        ExposureMode mode)
+    {
+        // Post-#24 the loopback handler no longer auto-issues LocalProcess for
+        // tunnel modes, but a paired (Verified) device's connection still arrives
+        // at the daemon over loopback (via tailscaled/cloudflared). The pairing
+        // gate must not treat that loopback peer as "direct local control plane"
+        // or paired remote devices could mint additional pairing codes through
+        // the tunnel — defeating the documented "remote paired devices cannot
+        // mint new codes" rule.
+        var hub = CreateSessionHub(
+            remoteIp: IPAddress.Loopback,
+            transport: nameof(TransportAuthenticity.Verified),
+            isBootstrapDevice: false,
+            exposureMode: mode);
+
+        var ex = await Assert.ThrowsAsync<HubException>(() => hub.GeneratePairingCode());
+
+        Assert.Equal(
+            "GeneratePairingCode requires a daemon-host local operator connection or direct authenticated local control-plane access.",
+            ex.Message);
+    }
+
+    private SessionHub CreateSessionHub(
+        IPAddress remoteIp,
+        string transport,
+        bool isBootstrapDevice,
+        IPAddress? localIp = null,
+        ExposureMode exposureMode = ExposureMode.Local)
     {
         var pairingCodeService = new PairingCodeService(_time);
         var claims = new List<Claim>
@@ -384,6 +458,7 @@ public sealed class SessionHubAuthorizationTests : IDisposable
         var hub = new SessionHub(
             registry: null!,
             pairingCodeService,
+            new DaemonConfig { ExposureMode = exposureMode },
             NullLogger<SessionHub>.Instance)
         {
             Context = new TestHubCallerContext(new ClaimsPrincipal(new ClaimsIdentity(claims, "test")), remoteIp, localIp)

@@ -447,3 +447,6 @@ samples/Netclaw.Demo.AppHost/.demo-home/
 # Playwright MCP working cache + ad-hoc session screenshots
 .playwright-mcp/
 phase*-mattermost-*.png
+
+# macOS Finder metadata
+.DS_Store

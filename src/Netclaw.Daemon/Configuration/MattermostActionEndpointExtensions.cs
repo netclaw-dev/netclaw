@@ -113,6 +113,22 @@ public static class MattermostActionEndpointExtensions
                 return TypedResults.BadRequest("Callback routing data did not match the issued action.");
             }
 
+            // Forgery defence (#939): the action token is minted before the prompt
+            // is posted, so we only know the prompt's actual post_id after
+            // PostReplyAsync. The binding registers it via AssociatePromptPostId.
+            // Reject any callback whose post_id doesn't match the post the token
+            // was minted for — otherwise a token holder could rewrite post_id and
+            // redirect the bot's chat.update to an unrelated post in the channel.
+            if (storedAction.PromptPostId is { Length: > 0 } expectedPostId
+                && !string.Equals(payload.PostId, expectedPostId, StringComparison.Ordinal))
+            {
+                logger.LogWarning(
+                    "Rejected Mattermost action callback with mismatched post_id channel={ChannelId} callId={CallId}",
+                    payload.ChannelId,
+                    storedAction.CallId);
+                return TypedResults.BadRequest("Callback routing data did not match the issued action.");
+            }
+
             // Bound the actor-resolution wait so a daemon still mid-startup
             // returns 503 fast instead of letting the HTTP request hang behind
             // an actor system that's not yet ready.
@@ -130,6 +146,17 @@ public static class MattermostActionEndpointExtensions
                 return TypedResults.StatusCode(StatusCodes.Status503ServiceUnavailable);
             }
 
+            // Use the server-stored prompt post ID when available (post-`AssociatePromptPostId`),
+            // otherwise fall back to the client-supplied payload.PostId. The forgery
+            // gate above guarantees payload.PostId matches storedAction.PromptPostId
+            // when the latter is set; the fallback only fires in the narrow window
+            // where the prompt was posted but `AssociatePromptPostId` hadn't run yet
+            // (impossible in practice — the binding awaits PostReplyAsync before
+            // returning — but defensive).
+            var promptPostIdForRedraw = storedAction.PromptPostId is { Length: > 0 } trustedPostId
+                ? trustedPostId
+                : payload.PostId;
+
             var interaction = new MattermostGatewayInteraction(
                 ChannelId: new MattermostChannelId(storedAction.ChannelId),
                 RootPostId: new MattermostRootPostId(storedAction.RootPostId),
@@ -139,7 +166,11 @@ public static class MattermostActionEndpointExtensions
                 RequesterSenderId: storedAction.RequesterSenderId is { Length: > 0 } requesterSenderId
                     ? new MattermostUserId(requesterSenderId)
                     : null,
-                ReceivedAt: timeProvider.GetUtcNow());
+                ReceivedAt: timeProvider.GetUtcNow(),
+                // Trusted post ID (see comment above) — survives passivation of the
+                // per-session binding so the binding can redraw the prompt on the
+                // cold-spawn path. See issue #939.
+                PromptPostId: new MattermostPostId(promptPostIdForRedraw));
 
             try
             {

@@ -171,4 +171,174 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             new SlackThreadTs("1000.1"),
             deps), name);
     }
+
+    // Regression for #939: when the binding has no in-memory pending approval
+    // (passivation between prompt and click) the Slack button payload still
+    // carries the prompt's message TS. The binding must use it to redraw the
+    // original message — otherwise the buttons stay live forever.
+    [Fact]
+    public async Task Cold_button_approval_response_redraws_prompt_via_payload_messageTs()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-cold-redraw-via-payload");
+
+        // No ToolInteractionRequest emitted, so _pendingApprovalRequests stays empty.
+        var pipeline = new RecordingSessionPipeline(_ => []);
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        var payloadTs = new SlackEventTs("1234567890.000111");
+        actor.Tell(new SlackApprovalResponse(
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            CallId: new Netclaw.Tools.ToolCallId("call-cold-redraw"),
+            SelectedKey: ApprovalOptionKeys.Deny,
+            SenderId: new SenderId("user-1"),
+            RequesterSenderId: null,
+            PromptMessageTs: payloadTs));
+
+        await AwaitAssertAsync(() =>
+        {
+            // Approval routed to session.
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-cold-redraw", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.Deny, feedback[0].SelectedKey.Value);
+
+            // Prompt redrawn using the payload-provided TS, with no action buttons.
+            var update = Assert.Single(_replyClient.Updates);
+            Assert.Equal(payloadTs, update.MessageTs);
+            Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Denied", update.Text, StringComparison.Ordinal);
+            Assert.NotNull(update.Blocks);
+            Assert.DoesNotContain(update.Blocks!, b => b is SlackNet.Blocks.ActionsBlock);
+        }, cancellationToken: ct);
+    }
+
+    // Hot-path regression: when the binding still holds the original request,
+    // the redraw uses the captured PromptMessageTs (not the payload), and the
+    // resolved block includes verb/location detail from the request.
+    [Fact]
+    public async Task Hot_button_approval_response_redraws_prompt_via_pending_state()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-hot-redraw");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-hot-redraw"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+                DisplayText = "git status",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        // Wait until the prompt has been posted (and PromptMessageTs is captured).
+        await AwaitAssertAsync(() => Assert.Single(_replyClient.Posts), cancellationToken: ct);
+
+        // Send a button click WITHOUT a payload TS — must still redraw because the
+        // binding has captured the TS in _pendingApprovalRequests.
+        actor.Tell(new SlackApprovalResponse(
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            CallId: new Netclaw.Tools.ToolCallId("call-hot-redraw"),
+            SelectedKey: ApprovalOptionKeys.ApproveOnce,
+            SenderId: new SenderId("user-1"),
+            RequesterSenderId: null,
+            PromptMessageTs: null));
+
+        await AwaitAssertAsync(() =>
+        {
+            var update = Assert.Single(_replyClient.Updates);
+            // RecordingSlackReplyClient's PostThreadReplyWithTsAsync returns "fake.ts".
+            Assert.Equal(new SlackEventTs("fake.ts"), update.MessageTs);
+            // Full resolved block: includes the verb and tool name from the request.
+            Assert.Contains("shell_execute", update.Text, StringComparison.Ordinal);
+            Assert.Contains("git status", update.Text, StringComparison.Ordinal);
+        }, cancellationToken: ct);
+    }
+
+    // Code-review regression (#939): on the cold-spawn path, a non-requester
+    // click MUST NOT redraw the prompt. The session is the authority on whether
+    // the sender is allowed; the binding awaits the result before touching the
+    // UI. A CommandNack with WrongRequester surfaces the warning text but the
+    // buttons stay live for the legitimate requester.
+    [Fact]
+    public async Task Cold_button_approval_response_skips_redraw_on_wrong_requester_nack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-cold-wrong-requester");
+
+        var pipeline = new RecordingSessionPipeline(_ => [])
+        {
+            ResponseFactory = (_, _) =>
+                Task.FromResult<ICommandReply>(CommandNack.For(sid, ApprovalNackReasons.WrongRequester))
+        };
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(new SlackApprovalResponse(
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            CallId: new Netclaw.Tools.ToolCallId("call-cold-wrong-requester"),
+            SelectedKey: ApprovalOptionKeys.ApproveOnce,
+            SenderId: new SenderId("attacker"),
+            RequesterSenderId: null,
+            PromptMessageTs: new SlackEventTs("1234567890.000222")));
+
+        // Wait for the session interaction + the local wrong-requester warning post.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>());
+            // The wrong-requester warning is posted as a new thread reply.
+            Assert.Contains(_replyClient.Posts, p => p.Text.Contains("Only the requesting user", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        // Crucially: no UpdateThreadMessageAsync — the original prompt is untouched.
+        Assert.Empty(_replyClient.Updates);
+    }
+
+    // Code-review regression (#939): a stale re-click on an already-resolved
+    // prompt MUST NOT overwrite the resolution banner with a new (rejected)
+    // decision. Session Nack on any reason (not just WrongRequester) skips the
+    // redraw.
+    [Fact]
+    public async Task Cold_button_approval_response_skips_redraw_on_stale_call_nack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-cold-stale-click");
+
+        var pipeline = new RecordingSessionPipeline(_ => [])
+        {
+            ResponseFactory = (_, _) =>
+                Task.FromResult<ICommandReply>(CommandNack.For(sid, "no_pending_call"))
+        };
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        actor.Tell(new SlackApprovalResponse(
+            ChannelId: new SlackChannelId("C-test"),
+            ThreadTs: new SlackThreadTs("1000.1"),
+            CallId: new Netclaw.Tools.ToolCallId("call-stale"),
+            SelectedKey: ApprovalOptionKeys.Deny,
+            SenderId: new SenderId("user-1"),
+            RequesterSenderId: null,
+            PromptMessageTs: new SlackEventTs("1234567890.000333")));
+
+        await AwaitAssertAsync(
+            () => Assert.Single(pipeline.RecordedFeedback.OfType<ToolInteractionResponse>()),
+            cancellationToken: ct);
+
+        Assert.Empty(_replyClient.Updates);
+    }
 }

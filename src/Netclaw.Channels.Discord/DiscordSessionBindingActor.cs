@@ -758,7 +758,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
         });
 
-        await TryResolveApprovalPromptAsync(pending!, selectedKey, message.SenderId.Value);
+        await TryResolveApprovalPromptAsync(
+            pending!.PromptMessageId,
+            pending!.Request,
+            pending!.CallId,
+            selectedKey,
+            message.SenderId.Value);
         return true;
     }
 
@@ -810,25 +815,83 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
         }
 
-        await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+        // Wait for the session before redrawing. This is the security gate that
+        // prevents (a) a non-requester click destroying the prompt UI on the
+        // cold-spawn path, and (b) a stale re-click overwriting an already-resolved
+        // banner — both surfaced by the #939 code review. The session is the
+        // authority on whether the call is still pending and whether the sender is
+        // allowed. Only redraw on CommandAck.
+        ICommandReply feedbackResult;
+        try
         {
-            SessionId = _sessionId,
-            CallId = message.CallId,
-            SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-            SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-        });
+            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
+                new ToolInteractionResponse
+                {
+                    SessionId = _sessionId,
+                    CallId = message.CallId,
+                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
+                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
+                }, feedbackCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to route Discord approval response for call {CallId}", message.CallId);
+            return;
+        }
+
+        switch (feedbackResult)
+        {
+            case CommandNack nack:
+                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
+                    await SafeReplyAsync(WrongRequesterWarning);
+                _log.Info(
+                    "Session rejected Discord approval response for call {CallId} reason={Reason}; skipping redraw",
+                    message.CallId,
+                    nack.Reason ?? "<none>");
+                return;
+
+            case CommandAck:
+                break;
+
+            default:
+                _log.Warning(
+                    "Discord approval response for call {CallId} returned unexpected feedback result {ResultType}",
+                    message.CallId,
+                    feedbackResult.GetType().Name);
+                return;
+        }
 
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
-            await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
+            // Prefer captured message ID; fall back to payload ID when capture failed.
+            var promptMessageId = pending.PromptMessageId ?? message.PromptMessageId;
+            await TryResolveApprovalPromptAsync(
+                promptMessageId,
+                pending.Request,
+                pending.CallId,
+                message.SelectedKey,
+                message.SenderId.Value);
+        }
+        else if (message.PromptMessageId is { } payloadPromptMessageId)
+        {
+            // Cold-spawn redraw — session has accepted; redraw via payload ID.
+            await TryResolveApprovalPromptAsync(
+                payloadPromptMessageId,
+                request: null,
+                message.CallId,
+                message.SelectedKey,
+                message.SenderId.Value);
+
+            _log.Info(
+                "Forwarded Discord approval response for call {0} to session without local pending entry; redrew prompt via payload messageId={1}",
+                message.CallId,
+                payloadPromptMessageId.Value);
         }
         else
         {
-            // Cold-spawn path (#979): binding has no original ToolInteractionRequest to
-            // drive the resolved-state redraw. The approval still routes; the message
-            // just stays in its pre-resolution form. Persistence across daemon restart
-            // is tracked separately by #939.
+            // Text-reply on a cold-spawned binding. Remaining #939 gap.
             _log.Info(
                 "Forwarded Discord approval response for call {0} to session without local pending entry; redraw skipped",
                 message.CallId);
@@ -837,24 +900,25 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     }
 
     private async Task TryResolveApprovalPromptAsync(
-        PendingApprovalRequest pending,
+        DiscordMessageId? promptMessageId,
+        ToolInteractionRequest? request,
+        Netclaw.Tools.ToolCallId callId,
         string selectedKey,
         string senderId)
     {
-        if (pending.PromptMessageId is not { } promptMessageId)
+        if (promptMessageId is not { } messageId)
             return;
 
         try
         {
-            var resolvedText = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
-                pending.Request,
-                selectedKey,
-                senderId);
+            var resolvedText = request is not null
+                ? DiscordApprovalPromptBuilder.BuildResolvedPromptText(request, selectedKey, senderId)
+                : DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(selectedKey, senderId);
 
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UpdateMessageAsync(
                 _replyChannelId,
-                promptMessageId,
+                messageId,
                 resolvedText,
                 removeComponents: true,
                 cts.Token);
@@ -864,8 +928,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _log.Warning(
                 ex,
                 "Failed to update resolved approval prompt for call {CallId} messageId={MessageId}",
-                pending.CallId,
-                promptMessageId.Value);
+                callId,
+                messageId.Value);
         }
     }
 

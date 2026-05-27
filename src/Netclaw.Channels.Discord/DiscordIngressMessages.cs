@@ -38,7 +38,8 @@ public sealed record DiscordApprovalResponse(
     ToolCallId CallId,
     string SelectedKey,
     DiscordUserId SenderId,
-    DiscordUserId? RequesterSenderId = null);
+    DiscordUserId? RequesterSenderId = null,
+    DiscordMessageId? PromptMessageId = null);
 
 /// <summary>
 /// Sent to the gateway to wire up the actor hierarchy for a proactively-created

@@ -70,6 +70,20 @@ public static class ExposureModeExtensions
         ExposureMode.ReverseProxy or ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel or ExposureMode.CloudflareTunnel => true,
         _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
     };
+
+    /// <summary>
+    /// Returns <c>true</c> for the three tunnel modes (TailscaleServe / TailscaleFunnel /
+    /// CloudflareTunnel), where the local tunnel agent forwards remote traffic over loopback
+    /// and the daemon cannot distinguish a same-host caller from a remote one at the socket
+    /// level. ReverseProxy is excluded — it has its own auth topology (forwarded headers +
+    /// non-loopback bind + TrustedProxies). Local is excluded — no tunnel involved.
+    /// </summary>
+    public static bool IsTunnelMode(this ExposureMode mode) => mode switch
+    {
+        ExposureMode.Local or ExposureMode.ReverseProxy => false,
+        ExposureMode.TailscaleServe or ExposureMode.TailscaleFunnel or ExposureMode.CloudflareTunnel => true,
+        _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, $"Unknown ExposureMode value: {mode}")
+    };
 }
 
 /// <summary>

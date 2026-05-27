@@ -40,15 +40,18 @@ public sealed class SessionHub : Hub<ISessionHubClient>
 {
     private readonly SessionRegistry _registry;
     private readonly PairingCodeService _pairingCodeService;
+    private readonly DaemonConfig _daemonConfig;
     private readonly ILogger<SessionHub> _logger;
 
     public SessionHub(
         SessionRegistry registry,
         PairingCodeService pairingCodeService,
+        DaemonConfig daemonConfig,
         ILogger<SessionHub> logger)
     {
         _registry = registry;
         _pairingCodeService = pairingCodeService;
+        _daemonConfig = daemonConfig;
         _logger = logger;
     }
 
@@ -95,7 +98,8 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         var remoteIp = NormalizeIp(Context.GetHttpContext()?.Connection.RemoteIpAddress);
         var localIp = NormalizeIp(Context.GetHttpContext()?.Connection.LocalIpAddress);
         var transport = Context.User?.FindFirst(NetclawClaimTypes.TransportAuthenticity)?.Value;
-        var isDirectLocalControlPlaneConnection = IsDirectLocalControlPlaneConnection(remoteIp, localIp);
+        var isDirectLocalControlPlaneConnection = IsDirectLocalControlPlaneConnection(
+            remoteIp, localIp, _daemonConfig.ExposureMode);
 
         if (transport != nameof(TransportAuthenticity.LocalProcess)
             && (transport != nameof(TransportAuthenticity.Verified) || !isDirectLocalControlPlaneConnection))
@@ -114,11 +118,26 @@ public sealed class SessionHub : Hub<ISessionHubClient>
         return Task.FromResult(new PairingCodeResultDto(formattedCode, expiresAt));
     }
 
-    internal static bool IsDirectLocalControlPlaneConnection(IPAddress remoteIp, IPAddress localIp)
+    internal static bool IsDirectLocalControlPlaneConnection(
+        IPAddress remoteIp,
+        IPAddress localIp,
+        ExposureMode exposureMode)
     {
+        // Under any exposure mode that accepts remote traffic (reverse proxy or
+        // any tunnel agent), a loopback RemoteIpAddress is the local forwarder,
+        // NOT a same-host operator process. Only ExposureMode.Local can treat
+        // loopback as proof of a direct local control-plane caller — mirrors
+        // the LoopbackAuthenticationHandler trust rule and prevents an
+        // authenticated remote device from minting additional pairing codes via
+        // a tunnel (audit finding #24 follow-up).
         if (IPAddress.IsLoopback(remoteIp))
-            return true;
+            return exposureMode == ExposureMode.Local;
 
+        // Non-loopback equality with the local interface address still indicates
+        // a direct on-host connection (e.g., a process binding to the daemon's
+        // public address from the same machine). This path is unchanged and
+        // governed separately by UseForwardedHeaders being wired only for
+        // ReverseProxy mode.
         return localIp != IPAddress.None && remoteIp.Equals(localIp);
     }
 

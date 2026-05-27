@@ -34,6 +34,13 @@ internal static class TestStreamingHelpers
         string text,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        // Compiler needs at least one await for async IAsyncEnumerable. Using
+        // Task.CompletedTask here rather than Task.Yield() between updates —
+        // Task.Yield() bounces every iteration through ThreadPool.QueueUserWorkItem,
+        // which under Windows CI thread-pool contention can take >1s per round-trip
+        // and starve callers with tight FirstTokenTimeout watchdogs.
+        await Task.CompletedTask;
+
         var response = new ChatResponse(new ChatMessage(
             ChatRole.Assistant,
             [new TextContent(text)]));
@@ -42,7 +49,6 @@ internal static class TestStreamingHelpers
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return update;
-            await Task.Yield();
         }
     }
 }

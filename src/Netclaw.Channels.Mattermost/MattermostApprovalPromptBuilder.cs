@@ -5,11 +5,19 @@
 // -----------------------------------------------------------------------
 using System.Text;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels;
 
 namespace Netclaw.Channels.Mattermost;
 
 internal static class MattermostApprovalPromptBuilder
 {
+    /// <summary>
+    /// Display-text budget. Mattermost's hard message cap is 16000 chars,
+    /// but approval prompts bypass the regular chunking path in
+    /// <c>MattermostSessionBindingActor</c> — so an oversized command
+    /// would be rejected outright and trigger an auto-deny.
+    /// </summary>
+    internal const int MaxDisplayTextChars = 12000;
     public static (string Text, IReadOnlyList<MattermostAttachment> Attachments) BuildButtonPrompt(
         ToolInteractionRequest request,
         string callbackUrl,
@@ -109,10 +117,39 @@ internal static class MattermostApprovalPromptBuilder
             Text: resolvedText);
     }
 
+    /// <summary>
+    /// Builds a resolved-state attachment when the original
+    /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
+    /// binding actor was passivated between posting the prompt and the user
+    /// clicking a button. The callback payload still carries the prompt's
+    /// post ID, which is enough to redraw the post with a generic decision
+    /// banner and drop the action buttons. See issue #939.
+    /// </summary>
+    public static MattermostAttachment BuildResolvedAttachmentWithoutRequest(string selectedKey, string senderId)
+    {
+        var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
+            ? ":no_entry:"
+            : ":white_check_mark:";
+        var decisionLabel = ApprovalOptionKeys.LabelFor(selectedKey);
+
+        var sb = new StringBuilder();
+        sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+        sb.Append("**Decision:** ").Append(decisionLabel);
+        sb.Append(" (by @").Append(senderId).Append(')');
+
+        var resolvedText = sb.ToString();
+        var color = selectedKey == ApprovalOptionKeys.Deny ? "#CC0000" : "#2EA44F";
+
+        return new MattermostAttachment(
+            Fallback: resolvedText,
+            Color: color,
+            Text: resolvedText);
+    }
+
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
         sb.Append("**Tool:** `").Append(request.ToolName).AppendLine("`");
-        sb.Append("**Action:** `").Append(request.DisplayText).AppendLine("`");
+        sb.Append("**Action:** `").Append(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars)).AppendLine("`");
 
         if (request.Patterns.Count > 0)
         {

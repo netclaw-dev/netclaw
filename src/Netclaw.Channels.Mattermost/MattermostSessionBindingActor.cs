@@ -733,7 +733,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             SenderId = new SenderId(message.SenderId.Value)
         });
 
-        await TryResolveApprovalPromptAsync(pending!, selectedKey, message.SenderId.Value);
+        await TryResolveApprovalPromptAsync(
+            pending!.PromptPostId,
+            pending!.Request,
+            pending!.CallId,
+            selectedKey,
+            message.SenderId.Value);
         return true;
     }
 
@@ -835,14 +840,40 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
-            await TryResolveApprovalPromptAsync(pending, message.SelectedKey, message.SenderId.Value);
+            // Prefer captured post ID; fall back to payload-provided ID when capture
+            // failed (very narrow race window — see binding's TryPostButtonPromptAsync).
+            var promptPostId = pending.PromptPostId ?? message.PromptPostId;
+            await TryResolveApprovalPromptAsync(
+                promptPostId,
+                pending.Request,
+                pending.CallId,
+                message.SelectedKey,
+                message.SenderId.Value);
+        }
+        else if (message.PromptPostId is { } payloadPromptPostId)
+        {
+            // Cold-spawn path with a payload-provided post ID: the binding has no
+            // original ToolInteractionRequest to render the full resolved attachment,
+            // but the Mattermost action callback always carries the prompt's post_id.
+            // Use it to redraw with a generic "Resolved: <decision>" banner and drop
+            // the buttons. See issue #939.
+            await TryResolveApprovalPromptAsync(
+                payloadPromptPostId,
+                request: null,
+                message.CallId,
+                message.SelectedKey,
+                message.SenderId.Value);
+
+            _log.Info(
+                "Forwarded Mattermost approval response for call {0} to session without local pending entry; redrew prompt via payload postId={1}",
+                message.CallId,
+                payloadPromptPostId.Value);
         }
         else
         {
-            // Cold-spawn path (#979): the binding was re-spawned after passivation
-            // and never observed the original ToolInteractionRequest. The approval
-            // still routes by session identity to the session actor; only the
-            // prompt redraw is skipped because there is no local prompt post.
+            // Cold-spawn path without payload context (e.g. text-reply A-E in a
+            // thread whose binding has been passivated). Approval still routes;
+            // redraw is not possible. Remaining gap tracked under #939.
             _log.Info(
                 "Forwarded Mattermost approval response for call {0} to session without local pending entry; redraw skipped",
                 message.CallId);
@@ -853,23 +884,24 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     }
 
     private async Task TryResolveApprovalPromptAsync(
-        PendingApprovalRequest pending,
+        MattermostPostId? promptPostId,
+        ToolInteractionRequest? request,
+        Netclaw.Tools.ToolCallId callId,
         string selectedKey,
         string senderId)
     {
-        if (pending.PromptPostId is not { } promptPostId)
+        if (promptPostId is not { } postId)
             return;
 
         try
         {
-            var resolvedAttachment = MattermostApprovalPromptBuilder.BuildResolvedAttachment(
-                pending.Request,
-                selectedKey,
-                senderId);
+            var resolvedAttachment = request is not null
+                ? MattermostApprovalPromptBuilder.BuildResolvedAttachment(request, selectedKey, senderId)
+                : MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(selectedKey, senderId);
 
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UpdatePostAsync(
-                promptPostId,
+                postId,
                 resolvedAttachment.Text ?? string.Empty,
                 [resolvedAttachment],
                 cts.Token);
@@ -879,8 +911,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _log.Warning(
                 ex,
                 "Failed to update resolved approval prompt for call {CallId} postId={PostId}",
-                pending.CallId,
-                promptPostId.Value);
+                callId,
+                postId.Value);
         }
     }
 
@@ -1059,6 +1091,15 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
             ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "button_prompt");
+            // Bind the actual prompt post ID to the action tokens we just minted so
+            // the callback endpoint can verify payload.PostId on the way back in.
+            // Closes the forgery vector tracked under #939's review. The action
+            // store is null in text-only mode (no callback URL); this branch isn't
+            // reachable in that case.
+            if (result.PostId is { } postId && _dependencies.CallbackActionStore is { } store)
+            {
+                store.AssociatePromptPostId(request.CallId.Value, postId.Value);
+            }
             return result.PostId;
         }
         catch (Exception ex)

@@ -232,6 +232,33 @@ public sealed class MattermostApprovalPromptBuilderTests
         Assert.Null(attachment.Actions);
     }
 
+    // Cold-spawn variant (#939): when the binding has lost its
+    // ToolInteractionRequest we still need a resolved-state attachment that
+    // clears the buttons. These tests pin its content and styling.
+    [Fact]
+    public void BuildResolvedAttachmentWithoutRequest_deny_uses_red_color_and_denied_label()
+    {
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.Deny, "user-99");
+
+        Assert.Equal("#CC0000", attachment.Color);
+        Assert.Contains(":no_entry:", attachment.Text!);
+        Assert.Contains("Deny", attachment.Text!);
+        Assert.Contains("user-99", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
+    [Fact]
+    public void BuildResolvedAttachmentWithoutRequest_approve_once_uses_green_color()
+    {
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "user-99");
+
+        Assert.Equal("#2EA44F", attachment.Color);
+        Assert.Contains(":white_check_mark:", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
     [Fact]
     public void BuildButtonPrompt_with_action_store_includes_action_token()
     {
@@ -300,4 +327,34 @@ public sealed class MattermostApprovalPromptBuilderTests
                 new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
             ]
         };
+
+    [Fact]
+    public void Oversized_command_keeps_prompt_under_Mattermost_cap()
+    {
+        // Mattermost's hard message cap is 16K, but approval prompts
+        // bypass ChunkMessage. Without truncation the post fails outright
+        // and the binding auto-denies, misreported to the model.
+        var oversized = new string('z', 30_000);
+        var request = new ToolInteractionRequest
+        {
+            SessionId = new SessionId("test/session"),
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId("call-big-1"),
+            ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+            DisplayText = oversized,
+            RequesterSenderId = new SenderId("requester-1"),
+            Patterns = ["gh issue create"],
+            Options = [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
+        var textPrompt = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonText, _) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "https://callback.example/url", channelId: "ch-1", rootPostId: "root-1");
+
+        Assert.True(textPrompt.Length < 16_001, $"Text prompt length {textPrompt.Length} exceeded Mattermost's 16000-char cap");
+        Assert.True(buttonText.Length < 16_001, $"Button prompt length {buttonText.Length} exceeded Mattermost's 16000-char cap");
+    }
 }

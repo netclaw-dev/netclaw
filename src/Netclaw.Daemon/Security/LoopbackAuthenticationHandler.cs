@@ -39,10 +39,14 @@ public sealed class LoopbackAuthenticationHandler : AuthenticationHandler<Authen
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        // Reverse-proxy mode must never inherit loopback operator trust from the
-        // final hop. Even a same-host proxy forwarding over 127.0.0.1/::1 has to
-        // flow through a remote-authenticated scheme instead.
-        if (_daemonConfig.ExposureMode == ExposureMode.ReverseProxy)
+        // Any exposure mode that accepts remote traffic must never inherit
+        // loopback operator trust. Tunnel agents (tailscaled, cloudflared) and
+        // reverse proxies all forward remote connections over the loopback
+        // socket, so a loopback source address is NOT proof of a same-host
+        // caller in those modes. Remote traffic must flow through a
+        // remote-authenticated scheme (the device bearer token) instead — fail
+        // closed here. Only ExposureMode.Local treats loopback as truly local.
+        if (_daemonConfig.ExposureMode.RequiresRemoteAuthentication())
             return Task.FromResult(AuthenticateResult.NoResult());
 
         var remoteIp = Context.Connection.RemoteIpAddress;
