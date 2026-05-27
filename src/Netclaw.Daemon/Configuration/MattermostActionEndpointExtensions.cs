@@ -86,7 +86,7 @@ public static class MattermostActionEndpointExtensions
                 return TypedResults.BadRequest("Missing required context field: action_token.");
             }
 
-            if (!actionStore.TryConsume(actionToken, out var storedAction)
+            if (!actionStore.TryGet(actionToken, out var storedAction)
                 || storedAction is null)
             {
                 logger.LogWarning("Rejected Mattermost action callback with invalid, expired, or replayed action token");
@@ -127,6 +127,25 @@ public static class MattermostActionEndpointExtensions
                     payload.ChannelId,
                     storedAction.CallId);
                 return TypedResults.BadRequest("Callback routing data did not match the issued action.");
+            }
+
+            // Consume only after routing validation. Otherwise a forged callback
+            // can burn the one-time token before the legitimate user clicks it.
+            if (!actionStore.TryConsumeIf(
+                    actionToken,
+                    action => string.Equals(action.ChannelId, payload.ChannelId, StringComparison.Ordinal)
+                              && (!(action.PromptPostId is { Length: > 0 } promptPostId)
+                                  || string.Equals(payload.PostId, promptPostId, StringComparison.Ordinal)),
+                    out storedAction)
+                || storedAction is null)
+            {
+                logger.LogWarning(
+                    "Rejected Mattermost action callback with token that could not be consumed after validation channel={ChannelId}",
+                    payload.ChannelId);
+                return TypedResults.Json(new ActionCallbackResponse
+                {
+                    EphemeralText = "That approval button is no longer valid. Please re-issue the request and try again."
+                }, JsonOptions);
             }
 
             // Bound the actor-resolution wait so a daemon still mid-startup

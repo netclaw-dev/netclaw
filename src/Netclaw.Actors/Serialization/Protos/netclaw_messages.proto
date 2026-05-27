@@ -277,6 +277,18 @@ message CursorAdvancedProto {
   string cursor = 1;
 }
 
+message PendingApprovalPromptTrackedProto {
+  string call_id = 1;
+  optional string requester_sender_id = 2;
+  optional int32 requester_principal = 3;
+  repeated string option_keys = 4;
+  string prompt_id = 5;
+}
+
+message PendingApprovalPromptClearedProto {
+  string call_id = 1;
+}
+
 // ── Memory observer events ──
 
 // Journaled by SessionMemoryObserverActor when a distillation completes.

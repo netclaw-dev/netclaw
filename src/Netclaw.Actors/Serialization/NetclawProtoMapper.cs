@@ -41,6 +41,8 @@ internal static class NetclawProtoMapper
         ReminderPayload v => ToProto(v),
         AdoptedContextRecorded v => ToProto(v),
         CursorAdvanced v => ToProto(v),
+        PendingApprovalPromptTracked v => ToProto(v),
+        PendingApprovalPromptCleared v => ToProto(v),
         MemoriesDistilledV2 v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
@@ -633,6 +635,42 @@ internal static class NetclawProtoMapper
 
     internal static Proto.CursorAdvancedProto ToProto(CursorAdvanced ca) => new() { Cursor = ca.Cursor };
     internal static CursorAdvanced FromProto(Proto.CursorAdvancedProto proto) => new(proto.Cursor);
+
+    internal static Proto.PendingApprovalPromptTrackedProto ToProto(PendingApprovalPromptTracked evt)
+    {
+        var proto = new Proto.PendingApprovalPromptTrackedProto
+        {
+            CallId = evt.CallId,
+            PromptId = evt.PromptId
+        };
+        if (evt.RequesterSenderId is not null)
+            proto.RequesterSenderId = evt.RequesterSenderId;
+        if (evt.RequesterPrincipal is not null)
+            proto.RequesterPrincipal = (int)evt.RequesterPrincipal.Value;
+        proto.OptionKeys.AddRange(evt.OptionKeys);
+        return proto;
+    }
+
+    internal static PendingApprovalPromptTracked FromProto(Proto.PendingApprovalPromptTrackedProto proto) => new()
+    {
+        CallId = proto.CallId,
+        RequesterSenderId = proto.HasRequesterSenderId ? proto.RequesterSenderId : null,
+        RequesterPrincipal = proto.HasRequesterPrincipal
+            ? (Configuration.PrincipalClassification)proto.RequesterPrincipal
+            : null,
+        OptionKeys = proto.OptionKeys.ToArray(),
+        PromptId = proto.PromptId
+    };
+
+    internal static Proto.PendingApprovalPromptClearedProto ToProto(PendingApprovalPromptCleared evt) => new()
+    {
+        CallId = evt.CallId
+    };
+
+    internal static PendingApprovalPromptCleared FromProto(Proto.PendingApprovalPromptClearedProto proto) => new()
+    {
+        CallId = proto.CallId
+    };
 
     // ── MemoriesDistilledV2 / ProposedMemoryContext ──
 

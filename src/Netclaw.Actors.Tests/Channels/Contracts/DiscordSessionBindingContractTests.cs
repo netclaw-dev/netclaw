@@ -452,6 +452,57 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
         }, cancellationToken: ct);
     }
 
+    [Fact]
+    public async Task Recovered_text_approval_response_redraws_prompt_via_persisted_messageId()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-discord-recovered-text-redraw");
+
+        var initialPipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ToolInteractionRequest
+            {
+                SessionId = sid,
+                Kind = "approval",
+                CallId = new Netclaw.Tools.ToolCallId("call-discord-recovered-text-redraw"),
+                ToolName = new Netclaw.Tools.ToolName("shell_execute"),
+                DisplayText = "git status",
+                RequesterSenderId = new SenderId("user-1"),
+                Options =
+                [
+                    new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            }
+        ]);
+
+        var firstActor = CreateBindingActor(sid, initialPipeline, detector);
+        await AwaitAssertAsync(() => Assert.Single(_replyClient.Posts), cancellationToken: ct);
+
+        var stopProbe = CreateTestProbe("discord-recovered-text-stop");
+        stopProbe.Watch(firstActor);
+        Sys.Stop(firstActor);
+        await stopProbe.ExpectTerminatedAsync(firstActor, cancellationToken: ct);
+
+        var recoveryPipeline = new RecordingSessionPipeline(_ => []);
+        var recoveredActor = CreateBindingActor(sid, recoveryPipeline, detector);
+        recoveredActor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = recoveryPipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-discord-recovered-text-redraw", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
+
+            var update = Assert.Single(_replyClient.Updates);
+            Assert.Equal(new DiscordMessageId("msg-1"), update.MessageId);
+            Assert.True(update.RemoveComponents);
+            Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
+        }, cancellationToken: ct);
+    }
+
     // Code-review regression (#939): a non-requester click on a cold-spawned
     // binding MUST NOT redraw. Session WrongRequester nack surfaces the warning
     // and leaves the prompt UI intact.

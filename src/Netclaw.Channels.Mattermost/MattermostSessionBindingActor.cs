@@ -103,6 +103,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "mattermost-session");
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
+        Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
+        Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
         // After journal replay completes, queue a one-shot hydration. The
         // self-tell lands in the mailbox after InitializePipeline (from
         // PreStart), so the actor finishes pipeline init first, then
@@ -716,22 +718,55 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         if (!ToolInteractionResponseParser.TryParseApprovalResponse(
                 message.Text ?? string.Empty,
-                pending!.Request.Options,
+                pending!.Options,
                 out var selectedKey)
             || selectedKey is null)
         {
             return false;
         }
 
-        _pendingApprovalRequests.Remove(pending!);
-
-        await _dependencies.Pipeline.SendFeedbackAsync(new ToolInteractionResponse
+        ICommandReply feedbackResult;
+        try
         {
-            SessionId = _sessionId,
-            CallId = pending!.CallId,
-            SelectedKey = new ApprovalOptionKey(selectedKey),
-            SenderId = new SenderId(message.SenderId.Value)
-        });
+            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
+            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionResponse
+            {
+                SessionId = _sessionId,
+                CallId = pending!.CallId,
+                SelectedKey = new ApprovalOptionKey(selectedKey),
+                SenderId = new SenderId(message.SenderId.Value)
+            }, feedbackCts.Token);
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Failed to route Mattermost text approval response for call {CallId}", pending!.CallId);
+            return true;
+        }
+
+        switch (feedbackResult)
+        {
+            case CommandNack nack:
+                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
+                    await SafeReplyAsync(WrongRequesterWarning);
+                _log.Info(
+                    "Session rejected Mattermost text approval response for call {CallId} reason={Reason}; skipping redraw",
+                    pending!.CallId,
+                    nack.Reason ?? "<none>");
+                return true;
+
+            case not CommandAck:
+                _log.Warning(
+                    "Mattermost text approval response for call {CallId} returned unexpected feedback result {ResultType}",
+                    pending!.CallId,
+                    feedbackResult.GetType().Name);
+                return true;
+        }
+
+        _pendingApprovalRequests.Remove(pending!);
+        Persist(new PendingApprovalPromptCleared
+        {
+            CallId = pending.CallId.Value
+        }, ApplyPendingApprovalPromptCleared);
 
         await TryResolveApprovalPromptAsync(
             pending!.PromptPostId,
@@ -840,6 +875,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (pending is not null)
         {
             _pendingApprovalRequests.Remove(pending);
+            Persist(new PendingApprovalPromptCleared
+            {
+                CallId = pending.CallId.Value
+            }, ApplyPendingApprovalPromptCleared);
             // Prefer captured post ID; fall back to payload-provided ID when capture
             // failed (very narrow race window — see binding's TryPostButtonPromptAsync).
             var promptPostId = pending.PromptPostId ?? message.PromptPostId;
@@ -990,7 +1029,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 p.CallId == resolvedCallId);
             if (byCallId is null)
                 return (ApprovalLookupResult.NotFound, null);
-            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId?.Value, senderId.Value))
+            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId, senderId.Value))
                 return (ApprovalLookupResult.WrongRequester, null);
             return (ApprovalLookupResult.Matched, byCallId);
         }
@@ -999,7 +1038,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return (ApprovalLookupResult.NotFound, null);
 
         var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId?.Value, senderId.Value));
+            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId, senderId.Value));
         return bySender is not null
             ? (ApprovalLookupResult.Matched, bySender)
             : (ApprovalLookupResult.WrongRequester, null);
@@ -1033,6 +1072,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 if (promptPostId is not null)
                 {
                     pendingApproval.PromptPostId = promptPostId;
+                    Persist(new PendingApprovalPromptTracked
+                    {
+                        CallId = pendingApproval.CallId.Value,
+                        RequesterSenderId = pendingApproval.RequesterSenderId,
+                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
+                        OptionKeys = pendingApproval.OptionKeys,
+                        PromptId = promptPostId.Value.Value
+                    }, ApplyPendingApprovalPromptTracked);
                 }
                 else
                 {
@@ -1059,6 +1106,18 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     await SafeReplyAsync(EmptyTurnFallbackText);
 
                 _turnNumber = completed.TurnNumber;
+                var clearedPrompts = _pendingApprovalRequests
+                    .Select(pending => new PendingApprovalPromptCleared
+                    {
+                        CallId = pending.CallId.Value
+                    })
+                    .ToArray();
+                if (clearedPrompts.Length > 0)
+                {
+                    PersistAll(
+                        clearedPrompts,
+                        cleared => ApplyPendingApprovalPromptCleared(cleared));
+                }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
                 break;
@@ -1081,8 +1140,14 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         ToolInteractionRequest request,
         string callbackUrl)
     {
+        var promptCorrelationId = Guid.NewGuid().ToString("N");
         var (promptText, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
-            request, callbackUrl, _channelId.Value, _rootPostId.Value, _dependencies.CallbackActionStore);
+            request,
+            callbackUrl,
+            _channelId.Value,
+            _rootPostId.Value,
+            promptCorrelationId,
+            _dependencies.CallbackActionStore);
         var startedAt = _dependencies.TimeProvider.GetTimestamp();
         try
         {
@@ -1098,7 +1163,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             // reachable in that case.
             if (result.PostId is { } postId && _dependencies.CallbackActionStore is { } store)
             {
-                store.AssociatePromptPostId(request.CallId.Value, postId.Value);
+                store.AssociatePromptPostId(promptCorrelationId, postId.Value);
             }
             return result.PostId;
         }
@@ -1533,6 +1598,28 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
             DeleteMessages(LastSequenceNr - 1);
     }
+
+    private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
+    {
+        _hasObservedApprovalRequest = true;
+
+        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
+        if (existing is not null)
+        {
+            existing.PromptPostId = new MattermostPostId(tracked.PromptId);
+            return;
+        }
+
+        _pendingApprovalRequests.Add(new PendingApprovalRequest(
+            new ToolCallId(tracked.CallId),
+            tracked.RequesterSenderId,
+            tracked.RequesterPrincipal,
+            tracked.OptionKeys,
+            new MattermostPostId(tracked.PromptId)));
+    }
+
+    private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
+        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
 
     private sealed record InitializePipeline
     {

@@ -21,40 +21,15 @@ public static class ProviderConfigurationLoader
 
         foreach (var providerSection in section.GetChildren())
         {
-            var entry = BindProviderEntry(providerSection);
+            // Typed binding invokes SensitiveStringTypeConverter on ApiKey / OAuth tokens,
+            // which decrypts ENC: ciphertext from secrets.json. VendorOptions is excluded
+            // from binding via its internal setter (see ProviderEntry) and populated here.
+            var entry = providerSection.Get<ProviderEntry>() ?? new ProviderEntry();
             entry.VendorOptions = BindVendorOptions(providerSection.GetSection(nameof(ProviderEntry.VendorOptions)));
             providers[providerSection.Key] = entry;
         }
 
         return providers;
-    }
-
-    private static ProviderEntry BindProviderEntry(IConfigurationSection section)
-    {
-        var entry = new ProviderEntry
-        {
-            Type = section[nameof(ProviderEntry.Type)] ?? "ollama",
-            Endpoint = section[nameof(ProviderEntry.Endpoint)] ?? string.Empty,
-            AuthMethod = ParseEnum(section[nameof(ProviderEntry.AuthMethod)], AuthMethod.None)
-        };
-
-        var apiKey = section[nameof(ProviderEntry.ApiKey)];
-        if (!string.IsNullOrWhiteSpace(apiKey))
-            entry.ApiKey = new SensitiveString(apiKey);
-
-        var oauthAccessToken = section[nameof(ProviderEntry.OAuthAccessToken)];
-        if (!string.IsNullOrWhiteSpace(oauthAccessToken))
-            entry.OAuthAccessToken = new SensitiveString(oauthAccessToken);
-
-        var oauthRefreshToken = section[nameof(ProviderEntry.OAuthRefreshToken)];
-        if (!string.IsNullOrWhiteSpace(oauthRefreshToken))
-            entry.OAuthRefreshToken = new SensitiveString(oauthRefreshToken);
-
-        var oauthTokenExpiry = section[nameof(ProviderEntry.OAuthTokenExpiry)];
-        if (!string.IsNullOrWhiteSpace(oauthTokenExpiry))
-            entry.OAuthTokenExpiry = DateTimeOffset.Parse(oauthTokenExpiry, CultureInfo.InvariantCulture);
-
-        return entry;
     }
 
     private static JsonObject? BindVendorOptions(IConfigurationSection section)
@@ -102,14 +77,5 @@ public static class ProviderConfigurationLoader
             return JsonValue.Create(decimalValue);
 
         return JsonValue.Create(value);
-    }
-
-    private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback)
-        where TEnum : struct, Enum
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return fallback;
-
-        return Enum.Parse<TEnum>(value, ignoreCase: true);
     }
 }
