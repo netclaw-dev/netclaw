@@ -1,3 +1,39 @@
+#### 0.21.0 2026-05-27 ####
+
+Netclaw v0.21.0 — Venice.ai provider, security hardening, approval prompt reliability, and ARM support
+
+**Features**
+
+* **Venice.ai provider support** — full end-to-end integration for the Venice.ai chat client. Venice is now discoverable in the provider picker and callable through the daemon. ([#1197](https://github.com/netclaw-dev/netclaw/pull/1197))
+
+* **Venice.ai system-prompt override** — by default, Venice silently prepends their own system prompt which breaks Netclaw identity grounding. This release forces `include_venice_system_prompt = false` to keep SOUL.md / AGENTS.md as the first system message. Operators can opt in to Venice's default prefix via `VendorOptions:IncludeVeniceSystemPrompt = true`. ([#1197](https://github.com/netclaw-dev/netclaw/pull/1197))
+
+* **Mattermost container ARM support** — the Mattermost Docker container now correctly pulls and runs on ARM hosts (e.g., Apple Silicon Macs) with explicit `--platform linux/amd64` specification. ([#1182](https://github.com/netclaw-dev/netclaw/pull/1182))
+
+**Security**
+
+* **Closed tunnel loopback auth bypass (SEC-005)** — the loopback authentication handler previously auto-issued Operator tickets to anyone on loopback in tunnel modes (tailscale-serve, tailscale-funnel, cloudflare-tunnel), allowing remote attackers to bypass authentication. The handler now requires remote authentication in all tunnel modes. Additionally, session pairing codes are now rejected from loopback connections in tunnel modes to prevent the local tunnel forwarder from minting new pairing codes. ([#1185](https://github.com/netclaw-dev/netclaw/pull/1185))
+
+**Bug Fixes**
+
+* **Provider secrets decryption restored** — provider API keys saved to secrets.json were previously sent scrambled to LLM providers, causing 401 errors across OpenRouter, Anthropic, and OpenAI. Keys are now properly decrypted before use. ([#1195](https://github.com/netclaw-dev/netclaw/pull/1195))
+
+* **Approval prompts redraw after passivation** — when channel binding actors passivated between posting an approval prompt and the user clicking a button, the in-memory pending-approval state was lost and buttons stayed live indefinitely. Prompts now correctly redraw (clearing to "resolved") using the prompt message identifier from the interaction payload. ([#939](https://github.com/netclaw-dev/netclaw/pull/1187))
+
+* **Approval callbacks hardened against forgery** — Mattermost callbacks now verify the post ID against the actual prompt post, preventing token holders from redirecting the bot's edit to any post they had permissions to modify. ([#1193](https://github.com/netclaw-dev/netclaw/pull/1193))
+
+* **Oversized approval prompts truncated** — multi-KB shell commands (like `gh issue create` with embedded reports) previously blew past Slack's 3000-char, Discord's 2000-char, and Mattermost's caps, causing auto-deny fallbacks. Prompts are now truncated per-platform budget (Slack 2500, Discord 1700, Mattermost 12000) so the user can see and approve them. ([#1186](https://github.com/netclaw-dev/netclaw/pull/1186))
+
+**Improvements**
+
+* **Ollama sample pinned to 0.24.0** — the Aspire demo now pins Ollama to 0.24.0 (was 0.13.0) to support qwen3.5 models, which require a newer manifest format. ([#1194](https://github.com/netclaw-dev/netclaw/pull/1194))
+
+* **Unified provider config loading** — the daemon's capability-resolver startup probe now uses the same `ProviderConfigurationLoader` as the main config path, removing an asymmetry that hid the #1195 regression. ([#1196](https://github.com/netclaw-dev/netclaw/pull/1196))
+
+**Documentation**
+
+* **Local binary swap skill updated** — the local-binary-swap skill now explicitly requires a daemon re-launch after the binary swap to prevent leaving the install in a broken state. ([#1192](https://github.com/netclaw-dev/netclaw/pull/1192))
+
 #### 0.20.3 2026-05-26 ####
 
 Netclaw v0.20.3 — KV cache stability overhaul, vLLM compatibility, OpenAPI support, and MCP tool-name robustness
