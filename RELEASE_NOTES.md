@@ -1,3 +1,13 @@
+#### 0.21.1 2026-05-27 ####
+
+Netclaw v0.21.1 — Bug fixes for 0.21.0 regressions
+
+**Bug Fixes**
+
+* **Cold-recovered tool calls no longer blocked** — when a restart landed mid-turn and the user clicked Approve on a parked tool prompt, the recovered session would correctly run that one tool, then silently block every continuation with `tool_not_allowed_for_audience_profile`. The redrive path now rehydrates the original audience and trust context so recovered turns inherit the correct permissions. ([#1201](https://github.com/netclaw-dev/netclaw/pull/1201))
+
+* **Approval prompt redraws now retain tool detail** — if the channel binding actor passivated between posting a prompt and the user clicking, the redraw previously showed only a generic "Saved for this chat" banner. All three adapters (Slack, Discord, Mattermost) now correctly show the tool name and request detail across passivation. ([#1201](https://github.com/netclaw-dev/netclaw/pull/1201))
+
 #### 0.21.0 2026-05-27 ####
 
 Netclaw v0.21.0 — Venice.ai provider, security hardening, approval prompt reliability, and ARM support
