@@ -52,9 +52,11 @@ Down 2
 Enter
 Wait+Screen@10s /validated and saved/
 Escape
-Wait+Screen@10s /Settings Areas/
+Wait+Screen@10s /Choose the backend Netclaw uses for web search/
 
 # ─── Back out to shell ────────────────────────────────────────────────────
+Escape
+Wait+Screen@10s /Settings Areas/
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/
 

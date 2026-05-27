@@ -94,6 +94,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             .WithSpacing(1)
             .WithChild(new TextNode("  Choose the backend Netclaw uses for web search.").WithForeground(Color.White))
             .WithChild(BuildProviderList())
+            .WithChild(new TextNode("  (*) active backend   ✓ backend has saved setup").WithForeground(Color.Gray))
             .WithChild(new TextNode($"  {GetProviderDescription(ViewModel.BackendOptions[_providerIndex].Value)}").WithForeground(Color.Gray));
     }
 
@@ -136,7 +137,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         => Layouts.Vertical()
             .WithSpacing(1)
             .WithChild(new TextNode($"  \u2714 {ViewModel.CurrentBackendLabel} validated and saved.").WithForeground(Color.Green))
-            .WithChild(new TextNode("  Press Esc to return to Settings Areas or Up/Down to review providers.")
+            .WithChild(new TextNode("  Press Esc to return to Search backends or Up/Down to review providers.")
                 .WithForeground(Color.Gray));
 
     private ILayoutNode BuildProviderList()
@@ -238,9 +239,6 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
     public override bool HandlePageInput(ConsoleKeyInfo keyInfo)
     {
-        if (base.HandlePageInput(keyInfo))
-            return true;
-
         if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             ViewModel.RequestQuit();
@@ -262,9 +260,18 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 return true;
             }
 
+            if (ViewModel.CurrentScreen.Value == SearchConfigEditorScreen.Saved)
+            {
+                BeginProviderSelection();
+                return true;
+            }
+
             ViewModel.NavigateBack();
             return true;
         }
+
+        if (base.HandlePageInput(keyInfo))
+            return true;
 
         if (ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.ProbeWarning)
         {
