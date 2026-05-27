@@ -1,11 +1,11 @@
-# config-search.tape — drive `netclaw config` into the redesigned Search flow.
+# config-search.tape — drive `netclaw config` into the Search workflow.
 #
 # Covers:
-#   - dashboard -> Search provider matrix
-#   - provider selection happens directly from arrow navigation
-#   - invalid save blocked on missing Brave API key
-#   - provider switch back to DuckDuckGo from the same screen
-#   - exit Search, re-enter it, and confirm test + SearXNG entry still work
+#   - dashboard -> Search launcher workflow
+#   - provider selection -> entry state
+#   - static validation failure preserves typed input
+#   - dynamic validation failure opens explicit override flow
+#   - save-anyway persists and returns cleanly
 #
 # Post-tape assertion validates the Search section persisted to netclaw.json.
 
@@ -27,39 +27,30 @@ Wait+Screen@10s /Settings Areas/
 Down 5
 Enter
 
-# ─── Search provider matrix ───────────────────────────────────────────────
-Wait+Screen@10s /Providers/
-Wait+Screen@5s /No additional setup required/
+# ─── Search provider selection ────────────────────────────────────────────
+Wait+Screen@10s /Search/
+Wait+Screen@5s /DuckDuckGo works without setup/
 
-# ─── Select Brave in-place and confirm invalid save stays inline ──────────
+# ─── Select Brave and confirm static validation blocks progression ─────────
 Down
-Wait+Screen@10s /Brave API key/
-Wait+Screen@5s /Brave API key/
-Type "s"
+Enter
+Wait+Screen@10s /Brave Search requires an API key/
+Wait+Screen@5s /Stored in secrets.json/
+Enter
 Wait+Screen@10s /Brave requires an API key/
-
-# ─── Switch provider back to DuckDuckGo ───────────────────────────────────
-Up
-Wait+Screen@10s /\(\*\) DuckDuckGo/
-
-# ─── Leave Search, then re-enter to validate preserved-page lifecycle ─────
 Escape
-Wait+Screen@10s /Settings Areas/
-Down 5
+
+# ─── Select SearXNG and complete happy path ───────────────────────────────
+Down
 Enter
-Wait+Screen@10s /\(\*\) DuckDuckGo/
-Type "t"
-Wait+Screen@10s /Last test:/
-Down 2
-Wait+Screen@10s /SearXng instance URL/
-Wait+Screen@5s /Enter the base URL of your SearXNG instance/
-Enter
-Wait+Screen@10s /Press Enter to apply or Esc to cancel edit\./
+Wait+Screen@10s /Enter the base URL of your SearXNG instance/
 Type "https://search.test.local"
 Enter
-Wait+Screen@10s /https:\/\/search.test.local/
-Escape
-Wait+Screen@10s /Unsaved changes\./
+Wait+Screen@10s /Validating Search configuration/
+Wait+Screen@10s /Search Validation Warning/
+Down 2
+Enter
+Wait+Screen@10s /validated and saved/
 Escape
 Wait+Screen@10s /Settings Areas/
 

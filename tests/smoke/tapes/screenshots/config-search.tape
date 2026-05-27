@@ -1,9 +1,9 @@
-# config-search.tape (screenshot) — capture the redesigned Search flow screens.
+# config-search.tape (screenshot) — capture the Search workflow screens.
 #
 # Frames captured:
-#   shot-config-search-matrix
-#   shot-config-search-brave
-#   shot-config-search-searxng-edit
+#   shot-config-search-selection
+#   shot-config-search-brave-entry
+#   shot-config-search-saved
 
 Output "/tmp/tape-shot-config-search.gif"
 
@@ -21,26 +21,33 @@ Wait+Screen@10s /Settings Areas/
 Down 5
 Enter
 
-# ─── Frame 1: Default provider matrix ──────────────────────────────────────
-Wait+Screen@10s /\(\*\) DuckDuckGo/
+# ─── Frame 1: Provider selection ───────────────────────────────────────────
+Wait+Screen@10s /Choose the backend Netclaw uses for web search/
 Sleep 1s
-Screenshot "/tmp/shot-config-search-matrix.png"
-Sleep 1s
-
-# ─── Frame 2: Brave selected in matrix ─────────────────────────────────────
-Down
-Wait+Screen@10s /Brave API key/
-Sleep 1s
-Screenshot "/tmp/shot-config-search-brave.png"
+Screenshot "/tmp/shot-config-search-selection.png"
 Sleep 1s
 
-# ─── Frame 3: SearXNG inline edit mode ─────────────────────────────────────
+# ─── Frame 2: Brave entry state ────────────────────────────────────────────
 Down
-Wait+Screen@10s /SearXng instance URL/
 Enter
-Wait+Screen@10s /Press Enter to apply or Esc to cancel edit\./
+Wait+Screen@10s /Brave Search requires an API key/
 Sleep 1s
-Screenshot "/tmp/shot-config-search-searxng-edit.png"
+Screenshot "/tmp/shot-config-search-brave-entry.png"
+Sleep 1s
+
+# ─── Frame 3: Saved state ──────────────────────────────────────────────────
+Escape
+Down
+Enter
+Wait+Screen@10s /Enter the base URL of your SearXNG instance/
+Type "https://search.test.local"
+Enter
+Wait+Screen@10s /Search Validation Warning/
+Down 2
+Enter
+Wait+Screen@10s /validated and saved/
+Sleep 1s
+Screenshot "/tmp/shot-config-search-saved.png"
 Sleep 1s
 
 Ctrl+Q

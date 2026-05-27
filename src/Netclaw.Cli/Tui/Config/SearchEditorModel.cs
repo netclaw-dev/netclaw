@@ -101,10 +101,8 @@ internal sealed class SearchEditorPersistenceMapper
 
         ConfigFileHelper.SetPathValue(config, "Search.Backend", model.Backend.ToWireValue());
 
-        if (model.Backend == SearchBackend.SearXng && !string.IsNullOrWhiteSpace(model.SearXng.Endpoint))
+        if (!string.IsNullOrWhiteSpace(model.SearXng.Endpoint))
             ConfigFileHelper.SetPathValue(config, "Search.SearXngEndpoint", model.SearXng.Endpoint);
-        else
-            ConfigFileHelper.RemovePath(config, "Search.SearXngEndpoint");
 
         if (model.Backend == SearchBackend.Brave && !string.IsNullOrWhiteSpace(model.Brave.ApiKeyDraft))
             ConfigFileHelper.SetPathValue(secrets, "Search.BraveApiKey", model.Brave.ApiKeyDraft);

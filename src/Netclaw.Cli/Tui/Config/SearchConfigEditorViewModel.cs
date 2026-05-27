@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http;
+using System.Threading;
+using Netclaw.Cli.Config;
 using Netclaw.Configuration;
 using Netclaw.Search;
 using R3;
@@ -19,7 +21,10 @@ internal enum SearchConfigEditorDialog
 
 internal enum SearchConfigEditorScreen
 {
-    Summary,
+    ProviderSelection,
+    Entry,
+    Validating,
+    Saved,
 }
 
 internal sealed record SearchProbeResult(bool Success, string Message, ConfigStatusTone Tone);
@@ -42,6 +47,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private SearchEditorModel _model;
     private SearchEditorValidationResult _validation = SearchEditorValidationResult.Empty;
     private SearchProbeResult? _lastProbeResult;
+    private CancellationTokenSource? _validationSpinnerCts;
 
     public IReadOnlyList<ProjectedConfigField> Fields { get; } =
     [
@@ -95,7 +101,8 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         ValidationSummary = new ReactiveProperty<ConfigValidationSummary>(ConfigValidationSummary.Empty);
         ActiveDialog = new ReactiveProperty<SearchConfigEditorDialog>(SearchConfigEditorDialog.None);
-        CurrentScreen = new ReactiveProperty<SearchConfigEditorScreen>(SearchConfigEditorScreen.Summary);
+        CurrentScreen = new ReactiveProperty<SearchConfigEditorScreen>(SearchConfigEditorScreen.ProviderSelection);
+        ValidationSpinnerTick = new ReactiveProperty<int>(0);
         Revalidate();
     }
 
@@ -103,6 +110,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public ReactiveProperty<ConfigValidationSummary> ValidationSummary { get; }
     public ReactiveProperty<SearchConfigEditorDialog> ActiveDialog { get; }
     public ReactiveProperty<SearchConfigEditorScreen> CurrentScreen { get; }
+    public ReactiveProperty<int> ValidationSpinnerTick { get; }
 
     public bool IsDirty => ComputeIsDirty();
     public SearchProbeResult? LastProbeResult => _lastProbeResult;
@@ -128,8 +136,16 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         _ => null,
     };
 
+    public bool IsCurrentBackendConfigured => _model.Backend switch
+    {
+        SearchBackend.Brave => HasEffectiveBraveKey(),
+        SearchBackend.SearXng => !string.IsNullOrWhiteSpace(_model.SearXng.Endpoint),
+        _ => true,
+    };
+
     public override void Dispose()
     {
+        CancelValidationSpinner();
         foreach (var value in FieldValues.Values)
             value.Dispose();
 
@@ -137,17 +153,19 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         ValidationSummary.Dispose();
         ActiveDialog.Dispose();
         CurrentScreen.Dispose();
+        ValidationSpinnerTick.Dispose();
         base.Dispose();
     }
 
     public SearchFieldCommitResult CommitField(string path, string? value)
     {
-        ApplyFieldValue(path, value);
-        SyncFieldValue(path);
-        ClearTransientProbeState();
-        Revalidate();
+        StageFieldValue(path, value);
+        var candidate = CloneModel(_model);
+        ApplyFieldValue(candidate, path, value);
 
-        var issues = _validation.IssuesFor(path);
+        var candidateValidation = _validator.Validate(candidate);
+        var issues = candidateValidation.IssuesFor(path);
+
         if (issues.Count > 0)
         {
             Status.Value = new ConfigStatusMessage(issues[0].Message, ConfigStatusTone.Error);
@@ -155,6 +173,10 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
             return SearchFieldCommitResult.Invalid(issues);
         }
 
+        _model = candidate;
+        SyncFieldValue(path);
+        ClearTransientProbeState();
+        Revalidate();
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RequestRedraw();
         return SearchFieldCommitResult.Ok;
@@ -170,7 +192,9 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         };
 
     public string GetEditorSeed(ProjectedConfigField field)
-        => GetCurrentFieldValue(field.Path);
+        => FieldValues.TryGetValue(field.Path, out var property)
+            ? property.Value
+            : GetCurrentFieldValue(field.Path);
 
     public IReadOnlyList<ConfigValidationIssue> GetIssues(ProjectedConfigField field)
         => ValidationSummary.Value.IssuesFor(field.Path);
@@ -232,27 +256,60 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void BeginBackendSelection()
     {
-        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        CancelValidationSpinner();
+        ActiveDialog.Value = SearchConfigEditorDialog.None;
+        CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RequestRedraw();
     }
 
     public void SelectBackendForEditing(string backend)
     {
         CommitField("Search.Backend", backend);
-        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        ActiveDialog.Value = SearchConfigEditorDialog.None;
+        CurrentScreen.Value = SearchConfigEditorScreen.Entry;
         RequestRedraw();
     }
 
     public void ReturnToSummary()
     {
-        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        BeginBackendSelection();
         RequestRedraw();
     }
 
     public void DismissDialog()
     {
         ActiveDialog.Value = SearchConfigEditorDialog.None;
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RequestRedraw();
+    }
+
+    public async Task<bool> SubmitCurrentConfigurationAsync(CancellationToken ct = default)
+    {
+        if (CurrentProviderField is { } field)
+        {
+            var result = CommitField(field.Path, FieldValues[field.Path].Value);
+            if (!result.Success)
+            {
+                CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+                RequestRedraw();
+                return false;
+            }
+        }
+        else
+        {
+            ClearTransientProbeState();
+            Revalidate();
+            if (_validation.HasErrors)
+            {
+                Status.Value = BuildValidationErrorStatus("Fix structural validation errors before continuing.");
+                CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+                RequestRedraw();
+                return false;
+            }
+        }
+
+        return await RunDynamicValidationAsync(persistOnSuccess: true, ct);
     }
 
     public async Task TestCurrentConfigurationAsync(CancellationToken ct = default)
@@ -260,72 +317,49 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Revalidate();
         if (_validation.HasErrors)
         {
-            Status.Value = new ConfigStatusMessage(
-                "Fix structural validation errors before testing this search configuration.",
-                ConfigStatusTone.Error);
+            Status.Value = BuildValidationErrorStatus(
+                "Fix structural validation errors before testing this search configuration.");
+            CurrentScreen.Value = SearchConfigEditorScreen.Entry;
             RequestRedraw();
             return;
         }
 
-        _lastProbeResult = await ProbeAsync(ct);
-        Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, _lastProbeResult.Tone);
-        RequestRedraw();
+        await RunDynamicValidationAsync(persistOnSuccess: false, ct);
     }
 
     public async Task SaveAsync(CancellationToken ct = default)
-    {
-        Revalidate();
-        if (_validation.HasErrors)
-        {
-            Status.Value = new ConfigStatusMessage(
-                "Fix structural validation errors before saving.",
-                ConfigStatusTone.Error);
-            RequestRedraw();
-            return;
-        }
-
-        _lastProbeResult = await ProbeAsync(ct);
-        if (!_lastProbeResult.Success)
-        {
-            Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, ConfigStatusTone.Warning);
-            ActiveDialog.Value = SearchConfigEditorDialog.ProbeWarning;
-            RequestRedraw();
-            return;
-        }
-
-        SaveWithoutProbeOverride();
-    }
+        => await SubmitCurrentConfigurationAsync(ct);
 
     public void SaveWithoutProbeOverride()
     {
+        CancelValidationSpinner();
         _mapper.Save(_paths, _model);
-        _model = _mapper.Load(_paths);
-        SyncAllFieldValues();
-        Revalidate();
+        ReloadPersistedDraft();
         ActiveDialog.Value = SearchConfigEditorDialog.None;
-        CurrentScreen.Value = SearchConfigEditorScreen.Summary;
+        CurrentScreen.Value = SearchConfigEditorScreen.Saved;
         Status.Value = new ConfigStatusMessage("Saved Search settings.", ConfigStatusTone.Success);
         RequestRedraw();
     }
 
     public void ResetDraft()
     {
-        _model = _mapper.Load(_paths);
-        SyncAllFieldValues();
-        _lastProbeResult = null;
-        Revalidate();
+        ReloadPersistedDraft();
         Status.Value = new ConfigStatusMessage("Reverted unsaved Search edits.", ConfigStatusTone.Neutral);
         RequestRedraw();
     }
 
     public void NavigateBack()
     {
+        CancelValidationSpinner();
+        ReloadPersistedDraft();
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RouteRequested?.Invoke("/config");
         Navigate?.Invoke("/config");
     }
 
     public void RequestQuit()
     {
+        CancelValidationSpinner();
         ShutdownRequestedForTest = true;
         Shutdown();
     }
@@ -343,18 +377,31 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
     }
 
-    private void ApplyFieldValue(string path, string? value)
+    private static SearchEditorModel CloneModel(SearchEditorModel source)
+    {
+        var clone = new SearchEditorModel
+        {
+            Backend = source.Backend,
+        };
+
+        clone.Brave.ApiKeyDraft = source.Brave.ApiKeyDraft;
+        clone.Brave.HasPersistedApiKey = source.Brave.HasPersistedApiKey;
+        clone.SearXng.Endpoint = source.SearXng.Endpoint;
+        return clone;
+    }
+
+    private static void ApplyFieldValue(SearchEditorModel model, string path, string? value)
     {
         switch (path)
         {
             case "Search.Backend":
-                _model.Backend = ParseBackend(value);
+                model.Backend = ParseBackend(value);
                 break;
             case "Search.BraveApiKey":
-                _model.Brave.ApiKeyDraft = Normalize(value);
+                model.Brave.ApiKeyDraft = Normalize(value);
                 break;
             case "Search.SearXngEndpoint":
-                _model.SearXng.Endpoint = Normalize(value);
+                model.SearXng.Endpoint = Normalize(value);
                 break;
             default:
                 throw new InvalidOperationException($"Unknown search config field '{path}'.");
@@ -382,6 +429,79 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
             SyncFieldValue(field.Path);
     }
 
+    private void ReloadPersistedDraft()
+    {
+        CancelValidationSpinner();
+        _model = _mapper.Load(_paths);
+        SyncAllFieldValues();
+        _lastProbeResult = null;
+        Revalidate();
+        ActiveDialog.Value = SearchConfigEditorDialog.None;
+        CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
+    }
+
+    private async Task<bool> RunDynamicValidationAsync(bool persistOnSuccess, CancellationToken ct)
+    {
+        ActiveDialog.Value = SearchConfigEditorDialog.None;
+        CurrentScreen.Value = SearchConfigEditorScreen.Validating;
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
+        StartValidationSpinner(ct);
+        RequestRedraw();
+
+        _lastProbeResult = await ProbeAsync(ct);
+        if (!_lastProbeResult.Success)
+        {
+            CancelValidationSpinner();
+            CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+            Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, ConfigStatusTone.Warning);
+            ActiveDialog.Value = SearchConfigEditorDialog.ProbeWarning;
+            RequestRedraw();
+            return false;
+        }
+
+        CancelValidationSpinner();
+        if (persistOnSuccess)
+        {
+            SaveWithoutProbeOverride();
+            return true;
+        }
+
+        CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+        Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, _lastProbeResult.Tone);
+        RequestRedraw();
+        return true;
+    }
+
+    private void StartValidationSpinner(CancellationToken ct)
+    {
+        CancelValidationSpinner();
+        ValidationSpinnerTick.Value = 0;
+        _validationSpinnerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ = RunValidationSpinnerAsync(_validationSpinnerCts.Token);
+    }
+
+    private void CancelValidationSpinner()
+    {
+        _validationSpinnerCts?.Cancel();
+        _validationSpinnerCts?.Dispose();
+        _validationSpinnerCts = null;
+        ValidationSpinnerTick.Value = 0;
+    }
+
+    private async Task RunValidationSpinnerAsync(CancellationToken ct)
+    {
+        var tick = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            try { await Task.Delay(120, ct); }
+            catch (OperationCanceledException) { return; }
+
+            tick++;
+            ValidationSpinnerTick.Value = tick;
+            RequestRedraw();
+        }
+    }
+
     private async Task<SearchProbeResult> ProbeAsync(CancellationToken ct)
     {
         try
@@ -389,7 +509,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
             ISearchBackend searchBackend = _model.Backend switch
             {
                 SearchBackend.Brave => new BraveSearchBackend(
-                    _model.Brave.ApiKeyDraft ?? string.Empty,
+                    GetEffectiveBraveApiKey(),
                     CreateHttpClient(),
                     _timeProvider),
                 SearchBackend.SearXng => new SearXngBackend(
@@ -416,6 +536,17 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private HttpClient CreateHttpClient()
         => _httpClientFactory?.CreateClient(string.Empty) ?? new HttpClient();
 
+    private string GetEffectiveBraveApiKey()
+    {
+        if (!string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft))
+            return _model.Brave.ApiKeyDraft;
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        return ConfigFileHelper.TryGetPathValue(secrets, "Search.BraveApiKey", out var braveRaw)
+            ? ConfigFileHelper.DecryptIfEncrypted(_paths, braveRaw?.ToString()) ?? string.Empty
+            : string.Empty;
+    }
+
     private bool HasEffectiveBraveKey()
         => !string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft) || _model.Brave.HasPersistedApiKey;
 
@@ -425,6 +556,15 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         return persisted.Backend != _model.Backend
             || !string.Equals(persisted.SearXng.Endpoint, _model.SearXng.Endpoint, StringComparison.Ordinal)
             || !string.IsNullOrWhiteSpace(_model.Brave.ApiKeyDraft);
+    }
+
+    private ConfigStatusMessage BuildValidationErrorStatus(string fallbackMessage)
+    {
+        var issue = GetCurrentProviderIssues().FirstOrDefault()
+            ?? ValidationSummary.Value.Issues.FirstOrDefault();
+        return issue is null
+            ? new ConfigStatusMessage(fallbackMessage, ConfigStatusTone.Error)
+            : new ConfigStatusMessage(issue.Message, ConfigStatusTone.Error);
     }
 
     private static SearchBackend ParseBackend(string? value)

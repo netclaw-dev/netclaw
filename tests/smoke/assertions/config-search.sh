@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # config-search.tape post-tape assertion.
 #
-# Validates the redesigned Search flow persisted the expected DuckDuckGo
-# backend back into netclaw.json and that no Brave API key leaked into the
-# main config file.
+# Validates the Search workflow persisted the expected SearXNG backend after
+# dynamic validation failed and the operator chose save anyway, and that no
+# Brave API key leaked into the main config file.
 
 set -euo pipefail
 
@@ -19,7 +19,8 @@ fi
 
 config_json="$(read_config_json)"
 
-assert_field '.Search.Backend' 'duckduckgo' "$config_json" || :
+assert_field '.Search.Backend' 'searxng' "$config_json" || :
+assert_field '.Search.SearXngEndpoint' 'https://search.test.local' "$config_json" || :
 assert_field '(.Search | has("BraveApiKey"))' 'false' "$config_json" || :
 
 if (( assert_fail )); then

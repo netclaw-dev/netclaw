@@ -57,44 +57,42 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Starts_on_summary_screen()
+    public void Starts_on_provider_selection_screen()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);
 
-        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal(SearchConfigEditorScreen.ProviderSelection, vm.CurrentScreen.Value);
         Assert.Equal("duckduckgo", vm.CurrentBackendValue);
-        Assert.Equal("No additional setup required.", vm.GetSummaryStateText());
+        Assert.Null(vm.CurrentProviderField);
     }
 
     [Fact]
-    public void Selecting_brave_keeps_single_screen_matrix_active()
+    public void Selecting_brave_moves_to_entry_state()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);
 
         vm.BeginBackendSelection();
         vm.SelectBackendForEditing("brave");
 
-        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
         Assert.Equal("brave", vm.CurrentBackendValue);
-        Assert.Equal("API key required.", vm.GetSummaryStateText());
         Assert.Equal("Search.BraveApiKey", vm.CurrentProviderField?.Path);
     }
 
     [Fact]
-    public void Selecting_duckduckgo_has_no_provider_specific_field()
+    public void Selecting_duckduckgo_enters_zero_config_workflow_state()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);
 
         vm.BeginBackendSelection();
         vm.SelectBackendForEditing("duckduckgo");
 
-        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
         Assert.Null(vm.CurrentProviderField);
-        Assert.Equal("No additional setup required.", vm.GetSummaryStateText());
     }
 
     [Fact]
-    public void Selecting_zero_config_provider_keeps_summary_quiet_when_effective_value_is_unchanged()
+    public void Selecting_zero_config_provider_keeps_workflow_clean_when_effective_value_is_unchanged()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);
 
@@ -103,7 +101,7 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         vm.BeginBackendSelection();
         vm.SelectBackendForEditing("duckduckgo");
 
-        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
         Assert.False(vm.IsDirty);
         Assert.Equal("duckduckgo", vm.CurrentBackendValue);
     }
@@ -114,12 +112,13 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         using var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>
             new HttpResponseMessage(HttpStatusCode.Unauthorized)));
 
-        vm.SetFieldValue("Search.Backend", "brave");
-        vm.SetFieldValue("Search.BraveApiKey", "bad-key");
+        vm.SelectBackendForEditing("brave");
+        vm.StageFieldValue("Search.BraveApiKey", "bad-key");
 
-        await vm.SaveAsync(TestContext.Current.CancellationToken);
+        await vm.SubmitCurrentConfigurationAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SearchConfigEditorDialog.ProbeWarning, vm.ActiveDialog.Value);
+        Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
         Assert.Contains("authentication failed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -176,6 +175,32 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Switching_to_duckduckgo_preserves_inactive_searxng_endpoint()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+            {
+              "configVersion": 1,
+              "Search": {
+                "Backend": "searxng",
+                "SearXngEndpoint": "https://search.example.com"
+              }
+            }
+            """);
+
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.SelectBackendForEditing("duckduckgo");
+        vm.SaveWithoutProbeOverride();
+
+        var reloaded = new SearchConfigEditorViewModel(_paths);
+        var config = File.ReadAllText(_paths.NetclawConfigPath);
+
+        Assert.Contains("\"Backend\": \"duckduckgo\"", config, StringComparison.Ordinal);
+        Assert.Contains("\"SearXngEndpoint\": \"https://search.example.com\"", config, StringComparison.Ordinal);
+        Assert.Equal("https://search.example.com", reloaded.FieldValues["Search.SearXngEndpoint"].Value);
+    }
+
+    [Fact]
     public async Task Successful_probe_allows_save_without_dialog()
     {
         using var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>
@@ -184,13 +209,13 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
                 Content = new StringContent("{\"web\":{\"results\":[]}}", Encoding.UTF8, "application/json"),
             }));
 
-        vm.SetFieldValue("Search.Backend", "brave");
-        vm.SetFieldValue("Search.BraveApiKey", "good-key");
+        vm.SelectBackendForEditing("brave");
+        vm.StageFieldValue("Search.BraveApiKey", "good-key");
 
-        await vm.SaveAsync(TestContext.Current.CancellationToken);
+        await vm.SubmitCurrentConfigurationAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(SearchConfigEditorDialog.None, vm.ActiveDialog.Value);
-        Assert.Equal(SearchConfigEditorScreen.Summary, vm.CurrentScreen.Value);
+        Assert.Equal(SearchConfigEditorScreen.Saved, vm.CurrentScreen.Value);
         Assert.Contains("Saved Search settings", vm.Status.Value.Text, StringComparison.Ordinal);
     }
 
@@ -219,6 +244,21 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
 
         Assert.Equal("searxng", vm.FieldValues["Search.Backend"].Value);
         Assert.Equal("https://search.example.com", vm.FieldValues["Search.SearXngEndpoint"].Value);
+    }
+
+    [Fact]
+    public void Invalid_endpoint_submission_keeps_typed_draft_without_mutating_accepted_value()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.SelectBackendForEditing("searxng");
+        var field = Assert.IsType<ProjectedConfigField>(vm.CurrentProviderField);
+
+        var result = vm.CommitField(field.Path, "search.local");
+
+        Assert.False(result.Success);
+        Assert.Equal("search.local", vm.FieldValues[field.Path].Value);
+        Assert.Equal("(not configured)", vm.GetDisplayValue(field));
     }
 
     private sealed class StubHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> handler) : IHttpClientFactory
