@@ -6,6 +6,76 @@ The tactical fixes in #1203 closed the known bugs, but the design is fragile: ad
 
 This change is for `LlmSessionActor` only. The related `SubAgentActor` lifecycle work is tracked by #1212. Shared context models are desirable where the session and sub-agent semantics match, but approval lifecycle state should remain actor-specific.
 
+## State Machine Diagrams
+
+The current approval recovery path works, but authority and provenance are copied through several shapes before a recovered turn can continue.
+
+```mermaid
+flowchart LR
+    A[Live MessageSource] --> B[ToolInteractionRequest]
+    B --> C[ToolApprovalRequested event]
+    C --> D[PendingToolInteraction]
+    D --> E[Synthesize MessageSource]
+    E --> F[Continuation LLM / Tool Dispatch / Memory Curation]
+
+    A -. authority + provenance .-> A
+    E -. can drift if fields are missed .-> F
+```
+
+The target shape builds durable turn authority once, persists it with approval pause state, and reuses it for every resumed operation.
+
+```mermaid
+flowchart TD
+    A[Inbound MessageSource] --> B[Build TurnContext]
+    B --> C[Process turn]
+    C --> D[LLM call]
+    D --> E[Tool batch]
+    E --> F{Approval required?}
+    F -- no --> G[Tool results]
+    F -- yes --> H[Persist approval pause + TurnContext]
+    H --> I[Waiting for user approval]
+    I --> J[Recover / resume]
+    J --> K[Redrive with restored TurnContext]
+    K --> G
+    G --> L[Continuation LLM]
+    L --> M[Continuation tools use same TurnContext]
+    L --> N[Memory safety reads same TurnContext]
+```
+
+At the actor level, approval turn state should be explicit beneath `SessionPhase` instead of inferred from nullable source state and pending dictionaries.
+
+```mermaid
+stateDiagram-v2
+    [*] --> NoActiveApprovalTurn
+    NoActiveApprovalTurn --> RunningTurn: turn accepted / build TurnContext
+    RunningTurn --> WaitingForApprovals: approval prompt emitted
+    WaitingForApprovals --> RedrivingApproval: valid approval response
+    WaitingForApprovals --> AbandoningApproval: new user message supersedes prompt
+    RecoveredWaitingForApprovals --> RedrivingApproval: valid approval response after recovery
+    RecoveredWaitingForApprovals --> AbandoningApproval: new user message supersedes prompt
+    RedrivingApproval --> RunningTurn: parked tool batch returns
+    RunningTurn --> NoActiveApprovalTurn: turn completes or fails
+    AbandoningApproval --> NoActiveApprovalTurn: transcript healed
+
+    note right of RecoveredWaitingForApprovals
+        Created from journaled approval pause state.
+        Uses persisted TurnContext, not synthesized MessageSource.
+    end note
+```
+
+The reusable boundary with #1212 is the context data, not the lifecycle machine.
+
+```mermaid
+flowchart LR
+    A[Execution authority context] --> B[LlmSessionActor approval state]
+    A --> C[Future SubAgentActor approval state]
+
+    B --> D[Journal recovery]
+    B --> E[Tool redrive]
+    C --> F[Watchdog pause]
+    C --> G[Parent approval handoff]
+```
+
 ## Goals / Non-Goals
 
 **Goals:**
