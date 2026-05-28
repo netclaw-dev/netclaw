@@ -7,6 +7,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text;
 using Netclaw.Cli.Tui.Config;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
@@ -152,6 +153,42 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         Assert.Contains("\"Backend\": \"brave\"", config, StringComparison.Ordinal);
         Assert.DoesNotContain("BraveApiKey", config, StringComparison.Ordinal);
         Assert.Contains("BraveApiKey", secrets, StringComparison.Ordinal);
+        Assert.Contains("ENC:", secrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("BSA-live-key", secrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("***REDACTED***", secrets, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Search_contribution_wraps_brave_api_key_as_sensitive_secret()
+    {
+        var mapper = new SearchEditorPersistenceMapper();
+        var model = new SearchEditorModel { Backend = SearchBackend.Brave };
+        model.Brave.ApiKeyDraft = "BSA-live-key";
+
+        var contribution = mapper.BuildContribution(model);
+        var secretAction = Assert.Single(contribution.SecretActionsOrEmpty);
+
+        Assert.Equal("Search.BraveApiKey", secretAction.Path);
+        Assert.Equal(SectionSecretActionKind.Set, secretAction.Action);
+        Assert.NotNull(secretAction.Value);
+        Assert.Equal("BSA-live-key", secretAction.Value.Value);
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            action => action.Path == "Search.Backend" && Equals(action.Value, "brave"));
+    }
+
+    [Fact]
+    public void Search_contribution_preserves_blank_existing_brave_secret()
+    {
+        var mapper = new SearchEditorPersistenceMapper();
+        var model = new SearchEditorModel { Backend = SearchBackend.Brave };
+        model.Brave.HasPersistedApiKey = true;
+
+        var contribution = mapper.BuildContribution(model);
+        var secretAction = Assert.Single(contribution.SecretActionsOrEmpty);
+
+        Assert.Equal("Search.BraveApiKey", secretAction.Path);
+        Assert.Equal(SectionSecretActionKind.Preserve, secretAction.Action);
+        Assert.Null(secretAction.Value);
     }
 
     [Fact]

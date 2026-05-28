@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Options;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Config;
@@ -96,20 +97,36 @@ internal sealed class SearchEditorPersistenceMapper
 
     internal void Save(NetclawPaths paths, SearchEditorModel model)
     {
-        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(paths);
-        config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+        var session = new ConfigEditorSession(paths);
+        session.Apply(BuildContribution(model));
+        session.Save();
+    }
 
-        ConfigFileHelper.SetPathValue(config, "Search.Backend", model.Backend.ToWireValue());
+    internal SectionContribution BuildContribution(SearchEditorModel model)
+    {
+        var fieldActions = new List<SectionFieldAction>
+        {
+            new("Search.Backend", SectionFieldActionKind.Set, model.Backend.ToWireValue())
+        };
 
-        if (!string.IsNullOrWhiteSpace(model.SearXng.Endpoint))
-            ConfigFileHelper.SetPathValue(config, "Search.SearXngEndpoint", model.SearXng.Endpoint);
+        var endpoint = Normalize(model.SearXng.Endpoint);
+        if (!string.IsNullOrWhiteSpace(endpoint))
+            fieldActions.Add(new SectionFieldAction("Search.SearXngEndpoint", SectionFieldActionKind.Set, endpoint));
 
-        if (model.Backend == SearchBackend.Brave && !string.IsNullOrWhiteSpace(model.Brave.ApiKeyDraft))
-            ConfigFileHelper.SetPathValue(secrets, "Search.BraveApiKey", model.Brave.ApiKeyDraft);
+        var secretActions = new List<SectionSecretAction>();
+        if (model.Backend == SearchBackend.Brave)
+        {
+            var apiKey = Normalize(model.Brave.ApiKeyDraft);
+            if (!string.IsNullOrWhiteSpace(apiKey))
+                secretActions.Add(new SectionSecretAction(
+                    "Search.BraveApiKey",
+                    SectionSecretActionKind.Set,
+                    new SensitiveString(apiKey)));
+            else if (model.Brave.HasPersistedApiKey)
+                secretActions.Add(new SectionSecretAction("Search.BraveApiKey", SectionSecretActionKind.Preserve));
+        }
 
-        ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
-        if (File.Exists(paths.SecretsPath) || ConfigFileHelper.PathPresent(secrets, "Search.BraveApiKey"))
-            ConfigFileHelper.WriteSecretsFile(paths, secrets);
+        return new SectionContribution(fieldActions, secretActions);
     }
 
     private static SearchBackend ParseBackend(string? value)
