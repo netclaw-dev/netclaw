@@ -47,7 +47,7 @@ internal static class SessionToolExecutionPipeline
         Action<SubAgentOutput> emitSubAgentOutput,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         IApprovalChannel? approvalChannel = null,
-        Action<ToolInteractionRequest>? emitApprovalRequest = null,
+        Action<ToolInteractionRequestDispatch>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
         int maxToolTimeoutSeconds = 600,
         ILogger? logger = null,
@@ -63,7 +63,8 @@ internal static class SessionToolExecutionPipeline
         bool? supportsInteractiveApprovalOverride = null,
         SenderId? requesterSenderIdOverride = null,
         PrincipalClassification? requesterPrincipalOverride = null,
-        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null)
+        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -85,7 +86,7 @@ internal static class SessionToolExecutionPipeline
                 emitSubAgentOutput,
                 spawnChildActor,
                 timeout,
-                CancellationToken.None,
+                ct,
                 approvalChannel,
                 emitApprovalRequest,
                 approvalTimeout ?? Timeout.InfiniteTimeSpan,
@@ -162,7 +163,7 @@ internal static class SessionToolExecutionPipeline
         TimeSpan timeout,
         CancellationToken ct,
         IApprovalChannel? approvalChannel = null,
-        Action<ToolInteractionRequest>? emitApprovalRequest = null,
+        Action<ToolInteractionRequestDispatch>? emitApprovalRequest = null,
         TimeSpan? approvalTimeout = null,
         int maxToolTimeoutSeconds = 600,
         ILogger? logger = null,
@@ -221,6 +222,7 @@ internal static class SessionToolExecutionPipeline
                 approvalChannel,
                 emitApprovalRequest,
                 sessionId,
+                tc.CallId,
                 requesterSenderIdOverride ?? source?.SenderId,
                 requesterPrincipalOverride ?? source?.Principal,
                 source?.HasAdoptedContext ?? false,
@@ -373,9 +375,9 @@ internal static class SessionToolExecutionPipeline
             var waitTask = approvalChannel.WaitForApprovalAsync(
                 new ToolCallId(tc.CallId),
                 approvalWaitTimeout,
-                CancellationToken.None);
+                ct);
 
-            emitApprovalRequest(new ToolInteractionRequest
+            emitApprovalRequest(new ToolInteractionRequestDispatch(new ToolInteractionRequest
             {
                 SessionId = sessionId,
                 Kind = "approval",
@@ -396,7 +398,7 @@ internal static class SessionToolExecutionPipeline
                 Options = ctx.Options
                     .Select(o => new ToolInteractionOption(o.Key, o.Label))
                     .ToList()
-            });
+            }, PersistApprovalState: true));
 
             var decision = await waitTask;
 

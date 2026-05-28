@@ -2,7 +2,7 @@
 
 ### Requirement: Sub-agent approval bridge preserves prompt correlation
 
-Sub-agent approval prompts SHALL use the same channel-agnostic `ToolInteractionRequest` contract as parent-session tool prompts. The request SHALL preserve call id, tool name, display text, exact blocked patterns, candidate verbs, per-candidate directories, cwd, messy-command flag, computed approval options, requester identity, principal, audience-derived authority, and adopted-context safety metadata from the parent turn authority context.
+Sub-agent approval prompts SHALL use the same channel-agnostic `ToolInteractionRequest` contract as parent-session tool prompts. The request SHALL use a parent-scoped correlation call id that is unique per bridged approval request while preserving the child call id as part of the correlation value. The request SHALL preserve tool name, display text, exact blocked patterns, candidate verbs, per-candidate directories, cwd, messy-command flag, computed approval options, requester identity, principal, audience-derived authority, and adopted-context safety metadata from the parent turn authority context.
 
 #### Scenario: Sub-agent prompt includes approval candidates and options
 - **GIVEN** a sub-agent shell tool call requires approval
@@ -16,6 +16,12 @@ Sub-agent approval prompts SHALL use the same channel-agnostic `ToolInteractionR
 - **WHEN** the sub-agent emits an approval prompt
 - **THEN** the prompt includes adopted-context and third-party adopted-context flags
 - **AND** the prompt includes adopted speaker ids when present
+
+#### Scenario: Duplicate child call ids do not share approval state
+- **GIVEN** two bridged sub-agent approval waits have the same child-local tool call id
+- **WHEN** the parent approval bridge emits prompts for both waits
+- **THEN** each prompt uses a distinct parent-scoped call id
+- **AND** approving one prompt cannot complete or authorize the other wait
 
 ### Requirement: Sub-agent approval responses do not execute expired work
 
@@ -34,6 +40,13 @@ Approval responses for sub-agent prompts SHALL execute a tool only while the ori
 - **WHEN** an approval response arrives while the parent session is processing
 - **THEN** the response is rejected as expired
 - **AND** no approval grant is applied to execute stale sub-agent work
+
+#### Scenario: Durable grant is written only after live wait is claimed
+- **GIVEN** a sub-agent approval response requests a session or persistent grant
+- **AND** the child approval wait is cancelled before the parent claims the response
+- **WHEN** the response is handled
+- **THEN** no durable approval grant is written
+- **AND** the response is rejected as expired
 
 #### Scenario: No bridge fails closed
 - **GIVEN** a sub-agent tool call requires approval

@@ -36,6 +36,10 @@ internal sealed record PendingToolInteraction(
     // path arguments the agent originally passed, rather than collapsing to cwd.
     IReadOnlyList<ApprovalCandidate> Candidates) : INoSerializationVerificationNeeded;
 
+internal sealed record ToolInteractionRequestDispatch(
+    Protocol.ToolInteractionRequest Request,
+    bool PersistApprovalState) : INoSerializationVerificationNeeded;
+
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
     IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride);

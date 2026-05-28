@@ -150,9 +150,10 @@ public sealed class StreamingToolCallTests
             },
             TestContext.Current.CancellationToken);
 
-        channel.Writer.TryWrite(new ToolActivityUpdate(
-            "awaiting human approval",
-            SuspendsInactivityWatchdog: true));
+        channel.Writer.TryWrite(new ToolActivityUpdate("awaiting human approval")
+        {
+            SuspendsInactivityWatchdog = true
+        });
         await firstActivitySeen.Task;
 
         time.Advance(TimeSpan.FromMinutes(5));

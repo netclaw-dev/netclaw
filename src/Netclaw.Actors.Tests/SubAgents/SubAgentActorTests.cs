@@ -484,10 +484,7 @@ public class SubAgentActorTests : TestKit
         // the approval wait, then prove the run stays incomplete well past the
         // 250ms budget before releasing the human decision.
         await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
-        await AwaitAssertAsync(
-            () => Assert.False(runTask.IsCompleted),
-            duration: TimeSpan.FromSeconds(1),
-            cancellationToken: TestContext.Current.CancellationToken);
+        await AssertNotCompletedWithinAsync(runTask, TimeSpan.FromSeconds(1));
         releaseSignal.SetResult(ParentApprovalDecision.ApprovedOnce);
 
         var result = await runTask;
@@ -639,10 +636,7 @@ public class SubAgentActorTests : TestKit
         await AwaitAssertAsync(
             () => Assert.Equal(2, approvalBridge.RequestCount),
             cancellationToken: TestContext.Current.CancellationToken);
-        await AwaitAssertAsync(
-            () => Assert.False(runTask.IsCompleted),
-            duration: TimeSpan.FromMilliseconds(500),
-            cancellationToken: TestContext.Current.CancellationToken);
+        await AssertNotCompletedWithinAsync(runTask, TimeSpan.FromMilliseconds(500));
         releaseSignal.SetResult(ParentApprovalDecision.ApprovedOnce);
 
         var result = await runTask;
@@ -769,6 +763,20 @@ public class SubAgentActorTests : TestKit
         }
 
         throw new Xunit.Sdk.XunitException($"Expected activity phase '{phase}'.");
+    }
+
+    private static async Task AssertNotCompletedWithinAsync(Task<SubAgentResult> task, TimeSpan duration)
+    {
+        try
+        {
+            var result = await task.WaitAsync(duration, TestContext.Current.CancellationToken);
+            throw new Xunit.Sdk.XunitException(
+                $"Expected sub-agent run to remain pending for {duration}, but it completed: {result.Output}");
+        }
+        catch (TimeoutException)
+        {
+            return;
+        }
     }
 
     [Fact]

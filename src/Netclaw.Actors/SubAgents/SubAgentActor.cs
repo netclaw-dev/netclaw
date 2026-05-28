@@ -462,7 +462,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     /// <summary>Emit a liveness/progress item to the spawning tool's stream, if any.</summary>
     private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false)
-        => _activitySink?.TryWrite(new ToolActivityUpdate(phase, SuspendsInactivityWatchdog: suspendsInactivityWatchdog));
+        => _activitySink?.TryWrite(new ToolActivityUpdate(phase)
+        {
+            SuspendsInactivityWatchdog = suspendsInactivityWatchdog
+        });
 
     /// <summary>Record forward progress: re-arm the inactivity watchdog and emit activity.</summary>
     private void RecordProgress(string phase)

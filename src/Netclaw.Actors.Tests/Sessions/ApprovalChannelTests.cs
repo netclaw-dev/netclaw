@@ -87,6 +87,38 @@ public sealed class ApprovalChannelTests
     }
 
     [Fact]
+    public async Task Duplicate_wait_for_same_call_id_fails_loudly()
+    {
+        var channel = new ApprovalChannel();
+        var callId = new ToolCallId("call-duplicate");
+
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None));
+        Assert.Contains(callId.Value, ex.Message, StringComparison.Ordinal);
+
+        Assert.True(channel.Complete(callId, ApprovalDecision.Denied));
+        Assert.Equal(ApprovalDecision.Denied, await waitTask);
+    }
+
+    [Fact]
+    public async Task Claimed_wait_is_no_longer_pending_but_can_still_complete_waiter()
+    {
+        var channel = new ApprovalChannel();
+        var callId = new ToolCallId("call-claim");
+
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Assert.True(channel.TryClaim(callId, out var wait));
+        Assert.False(channel.IsPending(callId));
+        Assert.False(channel.Complete(callId, ApprovalDecision.Denied));
+
+        Assert.True(wait.Complete(ApprovalDecision.ApprovedAlways));
+        Assert.Equal(ApprovalDecision.ApprovedAlways, await waitTask);
+    }
+
+    [Fact]
     public async Task Multiple_concurrent_waits()
     {
         var channel = new ApprovalChannel();

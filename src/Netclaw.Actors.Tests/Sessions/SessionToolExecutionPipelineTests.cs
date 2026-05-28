@@ -59,8 +59,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan);
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -112,8 +113,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvals.Add(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan);
+            emitApprovalRequest: request => approvals.Add(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(() =>
         {
@@ -168,8 +170,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan);
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -181,6 +184,55 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Approval_wait_is_cancelled_by_tool_execution_token()
+    {
+        var executor = new ApprovalThenSuccessExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("approval-cancel-probe");
+        var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var executionCts = new CancellationTokenSource();
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-cancel", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "git push origin dev"
+            })
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            new SessionId("D1/approval-cancel-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: approvalChannel,
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: executionCts.Token);
+
+        var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await executionCts.CancelAsync();
+
+        var failed = await probe.ExpectMsgAsync<ToolExecutionFailed>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.IsType<TimeoutException>(failed.Cause);
+        Assert.False(approvalChannel.IsPending(approvalRequest.CallId));
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 
@@ -208,7 +260,8 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             timeout: TimeSpan.FromSeconds(1),
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()));
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            ct: TestContext.Current.CancellationToken);
 
         // Real-time: the slow tool's per-call watchdog trips ~1-2s in (1s budget
         // plus the 1s poll interval). The ceiling stays tight so a regression —

@@ -52,7 +52,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: jobManagerProbe.Ref);
+            backgroundJobManager: jobManagerProbe.Ref,
+            ct: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -98,7 +99,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager);
+            backgroundJobManager: fakeJobManager,
+            ct: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -146,7 +148,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: fakeJobManager);
+            backgroundJobManager: fakeJobManager,
+            ct: TestContext.Current.CancellationToken);
 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -187,7 +190,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: jobManagerProbe.Ref);
+            backgroundJobManager: jobManagerProbe.Ref,
+            ct: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),
@@ -229,7 +233,8 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
-            backgroundJobManager: jobManagerProbe.Ref);
+            backgroundJobManager: jobManagerProbe.Ref,
+            ct: TestContext.Current.CancellationToken);
 
         var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(5),

@@ -391,13 +391,6 @@ public sealed record ToolInteractionRequest : SessionOutput
     public required IReadOnlyList<ToolInteractionOption> Options { get; init; }
 
     /// <summary>
-    /// Whether the session actor should journal this approval request for cold
-    /// re-drive. Parent-session tool approvals are durable; sub-agent approvals
-    /// are live child-actor waits and must expire on restart instead.
-    /// </summary>
-    public bool PersistApprovalState { get; init; } = true;
-
-    /// <summary>
     /// True when the executable request was accompanied by quoted adopted context.
     /// </summary>
     public bool HasAdoptedContext { get; init; }

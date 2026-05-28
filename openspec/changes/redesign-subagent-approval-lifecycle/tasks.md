@@ -13,6 +13,9 @@
 - [x] 2.5 Ensure the inactivity watchdog remains paused while one or more parent approval waits are active and is re-baselined when the last wait settles.
 - [x] 2.6 Ensure the parent `spawn_agent` streaming tool watchdog is suspended while the child is waiting for human approval and resumes afterward.
 - [x] 2.7 Ensure live-session approval responses for prompts with no live approval wait are rejected as expired before stale work can execute.
+- [x] 2.8 Ensure bridged sub-agent approval call ids are parent-scoped and unique per request, even when child-local tool call ids collide.
+- [x] 2.9 Ensure durable approval grants are written only after the live approval wait is atomically claimed.
+- [x] 2.10 Ensure direct parent-session approval waits are cancellable by the active tool-execution token.
 
 ## 3. Tests
 
@@ -22,6 +25,7 @@
 - [x] 3.4 Add or update sub-agent actor tests for cancellation and terminal-race idempotence during approval waits.
 - [x] 3.5 Add or update sub-agent actor tests proving parallel approval waits pause the watchdog until all waits settle.
 - [x] 3.6 Add or update tests for missing parent authority context, cancelled approval-channel waits, parent watchdog suspension, and session-integrated sub-agent approval authority.
+- [x] 3.7 Add or update tests for duplicate approval wait rejection, parent-scoped sub-agent call ids, claimed wait lifecycle, and cancellable direct approval waits.
 
 ## 4. Validation
 

@@ -17,6 +17,12 @@ Sub-agent approval waits SHALL be owned by the live `SubAgentActor` run that enc
 - **AND** the sub-agent completes at most once with a failed `SubAgentResult`
 - **AND** the gated tool is not executed after cancellation
 
+#### Scenario: Parent session recovery expires live-only prompt
+- **GIVEN** a sub-agent is waiting for parent approval
+- **WHEN** the parent session cold-recovers before the user responds
+- **THEN** the sub-agent approval prompt has no durable redrive state
+- **AND** a later approval response is rejected as expired
+
 ### Requirement: Sub-agent approval uses parent turn authority
 
 Sub-agent approval prompts SHALL use the parent session turn's execution authority context for approval requester, principal, audience, boundary, channel capability, provenance, adopted-context safety, and filesystem grounding. The implementation SHALL reuse the `TurnContext` or shared execution-authority subset from #1213 when available, and SHALL keep any interim field mapping isolated to the parent-to-child spawn boundary.

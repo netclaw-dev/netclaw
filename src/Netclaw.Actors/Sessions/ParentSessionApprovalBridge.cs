@@ -18,18 +18,21 @@ namespace Netclaw.Actors.Sessions;
 internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
 {
     private readonly IApprovalChannel _channel;
-    private readonly Action<ToolInteractionRequest> _emitRequest;
+    private readonly Action<ToolInteractionRequestDispatch> _emitRequest;
     private readonly SessionId _sessionId;
+    private readonly string _approvalScopeId;
     private readonly SenderId? _requesterSenderId;
     private readonly PrincipalClassification? _requesterPrincipal;
     private readonly bool _hasAdoptedContext;
     private readonly bool _hasThirdPartyAdoptedContext;
     private readonly IReadOnlyList<string> _adoptedSpeakerIds;
+    private int _nextApprovalRequestId;
 
     public ParentSessionApprovalBridge(
         IApprovalChannel channel,
-        Action<ToolInteractionRequest> emitRequest,
+        Action<ToolInteractionRequestDispatch> emitRequest,
         SessionId sessionId,
+        string approvalScopeId,
         SenderId? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
         bool hasAdoptedContext,
@@ -39,6 +42,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         _channel = channel;
         _emitRequest = emitRequest;
         _sessionId = sessionId;
+        _approvalScopeId = approvalScopeId;
         _requesterSenderId = requesterSenderId;
         _requesterPrincipal = requesterPrincipal;
         _hasAdoptedContext = hasAdoptedContext;
@@ -60,18 +64,19 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
     {
         EnsureAuthorityContext();
 
-        var waitTask = _channel.WaitForApprovalAsync(callId, Timeout.InfiniteTimeSpan, ct);
+        var parentCallId = CreateParentCallId(callId);
+        var waitTask = _channel.WaitForApprovalAsync(parentCallId, Timeout.InfiniteTimeSpan, ct);
 
         // Emit verbatim from the gate's computed options so persistent-grant
         // buttons (Always here / Always anywhere) and the messy-command
         // four-button fallback stay in lock-step with the parent path. The
         // earlier hardcoded list silently dropped "Always anywhere" for
         // sub-agents.
-        _emitRequest(new ToolInteractionRequest
+        _emitRequest(new ToolInteractionRequestDispatch(new ToolInteractionRequest
         {
             SessionId = _sessionId,
             Kind = "approval",
-            CallId = callId,
+            CallId = parentCallId,
             ToolName = new Netclaw.Tools.ToolName(toolName),
             DisplayText = displayText,
             RequesterSenderId = _requesterSenderId,
@@ -81,7 +86,6 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             Candidates = candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToList(),
             Cwd = cwd,
             IsMessy = isMessy,
-            PersistApprovalState = false,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
@@ -89,7 +93,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             Options = options
                 .Select(o => new ToolInteractionOption(new ApprovalOptionKey(o.Key), o.Label))
                 .ToList()
-        });
+        }, PersistApprovalState: false));
 
         var decision = await waitTask;
 
@@ -102,6 +106,12 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             ApprovalDecision.TimedOut => ParentApprovalDecision.TimedOut,
             _ => ParentApprovalDecision.Denied
         };
+    }
+
+    private ToolCallId CreateParentCallId(ToolCallId childCallId)
+    {
+        var requestId = Interlocked.Increment(ref _nextApprovalRequestId);
+        return new ToolCallId($"{_approvalScopeId}/subagent-approval/{requestId}/{childCallId.Value}");
     }
 
     private void EnsureAuthorityContext()

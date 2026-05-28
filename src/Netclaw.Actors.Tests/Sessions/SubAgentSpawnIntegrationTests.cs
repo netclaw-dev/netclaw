@@ -311,11 +311,11 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(SubAgentPhase.Started, started.Phase);
 
         var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("call-subagent-shell", request.CallId.Value);
+        Assert.NotEqual("call-subagent-shell", request.CallId.Value);
+        Assert.Contains("call-subagent-shell", request.CallId.Value, StringComparison.Ordinal);
         Assert.Equal("shell_execute", request.ToolName.Value);
         Assert.Equal(source.SenderId, request.RequesterSenderId);
         Assert.Equal(source.Principal, request.RequesterPrincipal);
-        Assert.False(request.PersistApprovalState);
         Assert.Contains(request.Options, o => o.Key.Value == ApprovalOptionKeys.ApproveOnce);
 
         var approvalReply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
@@ -389,7 +389,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.False(request.PersistApprovalState);
+        Assert.Contains("call-subagent-shell-expire", request.CallId.Value, StringComparison.Ordinal);
         Assert.False(_recordingShellTool!.WasCalled);
 
         await ColdRespawnAsync(sessionId);
