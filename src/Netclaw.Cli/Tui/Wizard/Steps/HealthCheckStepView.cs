@@ -28,11 +28,12 @@ public sealed class HealthCheckStepView : IWizardStepView
 
         foreach (var item in items)
         {
-            var (icon, color) = item.Passed switch
+            var (icon, color) = (item.Passed, item.IsWarning) switch
             {
-                true => ("\u2713", Color.Green),
-                false => ("\u2717", Color.Red),
-                null => ("\u25cf", Color.Yellow)
+                (true, true) => ("\u26a0", Color.Yellow),
+                (true, _) => ("\u2713", Color.Green),
+                (false, _) => ("\u2717", Color.Red),
+                (null, _) => ("\u25cf", Color.Yellow),
             };
             lines.Add(new TextNode($"  {icon}  {item.Label}").WithForeground(color));
         }

@@ -187,6 +187,41 @@ public sealed class ProviderStepViewModelTests : IDisposable
         Assert.Null(builder.Model);
     }
 
+    [Fact]
+    public async Task ContributeHealthChecks_NoProvider_EmitsWarnItem()
+    {
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
+        // SelectedProviderType deliberately left null.
+
+        var items = new List<HealthCheckItem>();
+        var runner = new HealthCheckRunner(items, () => { });
+        await step.ContributeHealthChecksAsync(runner, TestContext.Current.CancellationToken);
+
+        var providerItem = items[0];
+        Assert.True(providerItem.Passed);
+        Assert.True(providerItem.IsWarning);
+        Assert.Contains("No-Op", providerItem.Label);
+        Assert.Contains("netclaw model", providerItem.Label, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ContributeHealthChecks_ProviderSelected_EmitsPassItem()
+    {
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe)
+        {
+            SelectedProviderType = "ollama",
+        };
+
+        var items = new List<HealthCheckItem>();
+        var runner = new HealthCheckRunner(items, () => { });
+        await step.ContributeHealthChecksAsync(runner, TestContext.Current.CancellationToken);
+
+        var providerItem = items[0];
+        Assert.True(providerItem.Passed);
+        Assert.False(providerItem.IsWarning);
+        Assert.Contains("LLM provider configured", providerItem.Label);
+    }
+
     // Reuse the existing FakeProviderProbe from the monolith tests
     private sealed class FakeProviderProbe : IProviderProbe
     {

@@ -325,14 +325,16 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // TimeProvider (virtualized for testing)
     services.AddSingleton(TimeProvider.System);
 
-    // Providers and model resolution via plugin architecture
+    // Providers and model resolution via plugin architecture.
+    // No silent fallback to local-ollama: an empty Providers section yields
+    // the NoProviderConfigured outcome and the host registers NoOpChatClientProvider.
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    if (providers.Count == 0)
-        providers = new() { ["local-ollama"] = new ProviderEntry() };
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
+    var validation = ProviderRuntimeValidation.Evaluate(providers, models);
 
-    services.AddDaemonLlmProviders(providers, models);
+    services.AddSingleton(validation);
+    services.AddDaemonLlmProviders(providers, models, validation);
 
     return paths;
 }
@@ -386,9 +388,10 @@ static void ConfigureDaemonServices(
     // / LoggerFactory needed, and per-resolver Debug output is visible. The
     // factory is invoked eagerly after Build() (see RunDaemonAsync) so timing
     // matches a startup-bound resolution rather than first-session lazy hit.
+    // Capability resolution runs against the loaded providers as-is — if
+    // no providers are configured we never reach a real plugin, the No-Op
+    // client supersedes, and capabilities default to text-only below.
     var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
-    if (providers.Count == 0)
-        providers = new() { ["local-ollama"] = new ProviderEntry() };
     var mainProviderType = providers.TryGetValue(models.Main.Provider, out var mainProvider)
         ? mainProvider.Type
         : null;
@@ -408,9 +411,19 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton<ModelCapabilities>(sp =>
     {
-        var resolver = sp.GetRequiredService<IModelCapabilityResolver>();
         var logger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Netclaw.Startup");
 
+        // In degraded mode (No-Op chat client) we never talk to a real model;
+        // skip capability detection (which may do network I/O) and use defaults.
+        var chatProvider = sp.GetRequiredService<IChatClientProvider>();
+        if (chatProvider.IsDegraded)
+        {
+            logger.LogInformation(
+                "No-Op chat client active; skipping model capability detection and using text-only defaults.");
+            return ModelCapabilityResolution.ResolveModelCapabilities(models, detected: null);
+        }
+
+        var resolver = sp.GetRequiredService<IModelCapabilityResolver>();
         var detected = resolver.ResolveAsync(models.Main.ModelId, CancellationToken.None)
             .GetAwaiter().GetResult();
 

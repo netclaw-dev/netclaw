@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DaemonProviderServiceExtensions.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -18,13 +18,35 @@ public static class DaemonProviderServiceExtensions
 {
     /// <summary>
     /// Registers provider plugins (via Netclaw.Providers) plus daemon-specific
-    /// factory, retry, and resilient chat client provider.
+    /// factory, retry, and resilient chat client provider. When
+    /// <paramref name="validation"/> reports
+    /// <see cref="ProviderRuntimeStatus.NoProviderConfigured"/>, the No-Op
+    /// chat client provider is registered instead — the host comes up in
+    /// degraded mode and chat turns return a fixed configuration banner.
+    /// The <see cref="ProviderRuntimeStatus.Invalid"/> outcome is left to the
+    /// real provider construction path to surface as a startup failure
+    /// (e.g., plugin throws on missing credentials).
     /// </summary>
     public static IServiceCollection AddDaemonLlmProviders(
         this IServiceCollection services,
         Dictionary<string, ProviderEntry> providers,
-        ModelSelection models)
+        ModelSelection models,
+        ProviderRuntimeValidation validation)
     {
+        if (validation.Status == ProviderRuntimeStatus.NoProviderConfigured)
+        {
+            services.AddSingleton<IChatClientProvider>(sp =>
+            {
+                var logger = sp.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("Netclaw.ChatClient");
+                logger.LogWarning(
+                    "No valid inference provider configured ({Reason}). Registering No-Op chat client. Run `netclaw doctor` for details.",
+                    validation.Reason);
+                return new NoOpChatClientProvider(validation.AvailableProviders);
+            });
+            return services;
+        }
+
         // Register plugins and OAuth from Netclaw.Providers
         services.AddLlmProviders();
 

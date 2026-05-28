@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.8.0"
+  version: "2.9.0"
 ---
 
 # Netclaw Operations
@@ -673,6 +673,27 @@ netclaw provider add my-copilot github-copilot --auth oauth-device
 
 The token is **not** auto-cleared on 401 — the operator retains visibility
 into the failing credential until they explicitly remove the entry.
+
+### Degraded mode: No-Op chat client
+
+When Netclaw starts without a valid inference provider/model configuration
+(no `Providers` section, or `Models:Main` points to a provider that isn't
+configured), the daemon launches in **degraded mode** with a No-Op chat
+client. Every chat turn returns a fixed configuration banner beginning with
+`"No valid model configuration detected."` and listing the three recovery
+steps: `netclaw doctor`, `netclaw model`, edit `netclaw.json`.
+
+If the operator reports seeing that banner, do not investigate model
+behavior — the daemon does not have a working provider. Direct them through
+the recovery steps. Recovery requires a daemon restart; live config changes
+are not picked up by the running No-Op client. `netclaw doctor` reports the
+state as a **warn**-level "Chat Client" item that names "No-Op chat client
+will be active" along with the remediation commands.
+
+Malformed provider configuration (declared provider missing required
+credentials, schema violations) is **not** treated as degraded — it fails
+startup loudly with the validation error. The No-Op fallback is reserved
+for the genuinely-not-configured case.
 
 ## Search Providers
 
