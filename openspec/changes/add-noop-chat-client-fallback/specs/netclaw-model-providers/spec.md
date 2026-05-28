@@ -98,6 +98,35 @@ back to the No-Op client.
 - **AND** the host SHALL register the real provider's chat client through
   `NetclawChatClientProvider` (unchanged behavior)
 
+### Requirement: Runtime status reports degraded chat client
+
+The daemon's runtime status wire model (`DaemonRuntimeStatus.Model`) SHALL
+include a `Degraded` boolean and a human-readable `DegradedReason` so that
+`netclaw status` and any other consumer can render the No-Op state
+distinctly. When `Degraded` is true, the overall daemon status SHALL be
+reported as `degraded` rather than `healthy`, even if every other
+subsystem is fine.
+
+#### Scenario: Status reports degraded chat client and degraded overall
+
+- **GIVEN** the daemon is running with the No-Op chat client active
+- **WHEN** a client calls the runtime status endpoint
+- **THEN** `Model.Degraded` SHALL be `true`
+- **AND** `Model.DegradedReason` SHALL contain the validation reason
+  (e.g., the configured-but-unknown provider name)
+- **AND** `Overall` SHALL be `degraded`
+
+#### Scenario: `netclaw status` renders degraded model line distinctly
+
+- **GIVEN** the daemon reports `Model.Degraded = true`
+- **WHEN** the operator runs `netclaw status`
+- **THEN** the model line SHALL clearly indicate the degraded state
+  (e.g., `model: (none — No-Op chat client active)`)
+- **AND** the status SHALL NOT display the configured-but-broken
+  `ModelId`/`Provider` as if they were a live model
+- **AND** the output SHALL reference the recovery commands
+  (`netclaw doctor`, `netclaw model`)
+
 ### Requirement: Chat client provider exposes degraded state for diagnostics
 
 The `IChatClientProvider` contract SHALL expose whether it is operating in
