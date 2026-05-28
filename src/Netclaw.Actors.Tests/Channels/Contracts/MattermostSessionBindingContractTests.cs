@@ -294,6 +294,13 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
             Assert.NotNull(update.Attachments);
             Assert.All(update.Attachments!, attachment => Assert.Null(attachment.Actions));
+
+            // PendingApprovalPromptTracked now carries the tool name + display
+            // text through cold recovery, so the resolved attachment regains
+            // the Tool/Action detail the hot path renders. End-to-end guarantee
+            // that the binding journals and rehydrates the fields.
+            Assert.Contains("shell_execute", update.Text, StringComparison.Ordinal);
+            Assert.Contains("git status", update.Text, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
 

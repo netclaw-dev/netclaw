@@ -223,6 +223,79 @@ public sealed class SlackApprovalBlockBuilderTests
     }
 
     [Fact]
+    public void Resolved_text_without_request_includes_persisted_tool_name_and_display_text()
+    {
+        var text = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
+            ApprovalOptionKeys.ApproveSession,
+            "U123",
+            toolName: "shell_execute",
+            displayText: "gh pr create --base master --head feature/foo");
+
+        Assert.Contains("`shell_execute`", text);
+        Assert.Contains("gh pr create --base master --head feature/foo", text);
+        Assert.Contains("Saved for this chat", text);
+    }
+
+    [Fact]
+    public void Resolved_blocks_without_request_render_tool_request_section_when_persisted_summary_supplied()
+    {
+        var blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocksWithoutRequest(
+            ApprovalOptionKeys.ApproveSession,
+            "U123",
+            toolName: "shell_execute",
+            displayText: "gh pr create");
+
+        Assert.NotEmpty(blocks);
+        // No action buttons in cold-spawn redraw — the prompt is being cleared.
+        Assert.DoesNotContain(blocks, b => b is ActionsBlock);
+
+        var rendered = string.Join("\n", blocks.OfType<SectionBlock>()
+            .Select(b => b.Text is Markdown md ? md.Text : string.Empty));
+        Assert.Contains("`shell_execute`", rendered);
+        Assert.Contains("gh pr create", rendered);
+        Assert.Contains("Saved for this chat", rendered);
+    }
+
+    [Fact]
+    public void Resolved_without_request_falls_back_to_generic_when_only_one_field_supplied()
+    {
+        // Backward-compat guard: legacy journals that supplied only the tool name
+        // (or only the display text) should not produce a half-rendered Tool/Request
+        // section. Both must be present, otherwise fall through to the generic
+        // banner.
+        var toolOnly = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123", toolName: "shell_execute", displayText: null);
+        Assert.DoesNotContain("`shell_execute`", toolOnly);
+        Assert.Contains("Approved (no save)", toolOnly);
+
+        var displayOnly = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123", toolName: null, displayText: "gh pr create");
+        Assert.DoesNotContain("gh pr create", displayOnly);
+        Assert.Contains("Approved (no save)", displayOnly);
+    }
+
+    [Fact]
+    public void Resolved_blocks_without_request_truncate_oversized_display_text()
+    {
+        // The persisted ceiling (16 KB) is much larger than Slack's per-section
+        // 2500-char cap. The builder must still truncate at render time so a
+        // recovered journal with a giant body doesn't blow the section cap.
+        var oversized = new string('x', 5_000);
+        var blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocksWithoutRequest(
+            ApprovalOptionKeys.ApproveSession,
+            "U123",
+            toolName: "shell_execute",
+            displayText: oversized);
+
+        foreach (var block in blocks.OfType<SectionBlock>())
+        {
+            if (block.Text is Markdown md)
+                Assert.True(md.Text.Length < 3001,
+                    $"SectionBlock text length {md.Text.Length} exceeded Slack's 3000-char cap");
+        }
+    }
+
+    [Fact]
     public void Oversized_command_keeps_every_block_under_Slack_cap()
     {
         // Regression for the auto-deny-on-Slack-failure bug: a multi-KB

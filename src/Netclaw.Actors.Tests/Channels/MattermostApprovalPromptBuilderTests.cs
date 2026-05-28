@@ -260,6 +260,32 @@ public sealed class MattermostApprovalPromptBuilderTests
     }
 
     [Fact]
+    public void BuildResolvedAttachmentWithoutRequest_includes_persisted_tool_name_and_display_text()
+    {
+        var attachment = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.ApproveSession,
+            "user-99",
+            toolName: "shell_execute",
+            displayText: "gh pr create --base master --head feature/foo");
+
+        Assert.Contains("**Tool:** `shell_execute`", attachment.Text!);
+        Assert.Contains("gh pr create --base master --head feature/foo", attachment.Text!);
+        Assert.Null(attachment.Actions);
+    }
+
+    [Fact]
+    public void BuildResolvedAttachmentWithoutRequest_falls_back_to_generic_when_only_one_field_supplied()
+    {
+        var toolOnly = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "user-99", toolName: "shell_execute", displayText: null);
+        Assert.DoesNotContain("**Tool:**", toolOnly.Text!);
+
+        var displayOnly = MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "user-99", toolName: null, displayText: "gh pr create");
+        Assert.DoesNotContain("gh pr create", displayOnly.Text!);
+    }
+
+    [Fact]
     public void BuildButtonPrompt_with_action_store_includes_action_token()
     {
         var request = CreateStandardRequest();

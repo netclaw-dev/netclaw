@@ -789,6 +789,193 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Cold_recovered_continuation_tool_calls_run_at_original_turn_audience()
+    {
+        // Regression for the 0.21 cold-recovery audience bug (session
+        // D0AC6CKBK5K/1779897736.065949): RedriveToolBatchForApproval correctly
+        // passes pending.Audience as the audienceOverride for the parked batch
+        // itself, but the LLM iteration that follows (the model's NEXT tool call
+        // in the same recovered turn) re-enters DispatchToolBatch with no
+        // override and previously fell through to TrustAudience.Public, silently
+        // blocking shell_execute and any other tool the audience profile
+        // doesn't list for Public. RedriveToolBatchForApproval now rehydrates
+        // _currentTurnSource from the pending record so every subsequent
+        // dispatch in the recovered turn reads the original audience.
+        const string parkedCallId = "call-shell-parked";
+        const string continuationCallId = "call-read-continuation";
+        _toolExecutor.GatedTools.Add("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(parkedCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        // After the redriven shell_execute returns its result, the LLM emits a
+        // continuation tool call (read_file). read_file is NOT gated, so it
+        // runs immediately — and its execution context is what we use to pin
+        // whether the rehydrated _currentTurnSource carried the audience.
+        _fakeChatClient.PlannedResponses.Enqueue(new AIContent[]
+        {
+            new FunctionCallContent(continuationCallId, "read_file",
+                new Dictionary<string, object?> { ["path"] = "/tmp/example.txt" })
+        });
+
+        var sessionId = new SessionId("test-channel/redrive-continuation-audience");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("redrive-cont-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status then read a file",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await ColdRespawnAsync(sessionId);
+
+        var subscriberB = CreateTestProbe("redrive-cont-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(parkedCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        // Drain through the redriven shell_execute result, the LLM continuation
+        // call that produces the read_file batch, and the read_file result.
+        // TurnCompleted comes last when the model returns a plain text reply.
+        var completed = await subscriberB.FishForMessageAsync<TurnCompleted>(
+            _ => true,
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+
+        // Both tool calls executed: the redriven shell_execute AND the
+        // continuation read_file.
+        Assert.Equal(2, _toolExecutor.SuccessfulExecutions);
+        Assert.Equal(1, _toolExecutor.ExecutionsFor("shell_execute"));
+        Assert.Equal(1, _toolExecutor.ExecutionsFor("read_file"));
+
+        // The CONTINUATION call's execution context carries the original turn's
+        // Team audience. Without the synthesized _currentTurnSource fix this
+        // would be Public — the broken path that blocks shell_execute and other
+        // tools the audience profile doesn't list for Public.
+        Assert.Equal(TrustAudience.Team, _toolExecutor.LastExecutionAudience);
+        Assert.Equal(TrustBoundary.Team, _toolExecutor.LastExecutionBoundary);
+        Assert.Equal(ChannelType.Slack.ToWireValue(), _toolExecutor.LastExecutionChannelType);
+        Assert.True(_toolExecutor.LastSupportsInteractiveApproval);
+    }
+
+    [Fact]
+    public async Task Cold_recovered_continuation_approval_preserves_third_party_adopted_context()
+    {
+        const string parkedCallId = "call-shell-adopted-parked";
+        const string continuationCallId = "call-shell-adopted-continuation";
+        _toolExecutor.GatedTools.Add("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(parkedCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+        _fakeChatClient.PlannedResponses.Enqueue(new AIContent[]
+        {
+            new FunctionCallContent(continuationCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git diff" })
+        });
+
+        var sessionId = new SessionId("test-channel/redrive-adopted-context");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("redrive-adopted-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status then git diff",
+            Source = RequesterSourceWithThirdPartyAdoptedContext("U-requester", "U-observer")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var liveRequest = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(liveRequest.HasThirdPartyAdoptedContext);
+        Assert.Equal(["U-observer"], liveRequest.AdoptedSpeakerIds);
+
+        await ColdRespawnAsync(sessionId);
+
+        var subscriberB = CreateTestProbe("redrive-adopted-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(parkedCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var recoveredContinuationRequest = await subscriberB.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(continuationCallId, recoveredContinuationRequest.CallId.Value);
+        Assert.True(recoveredContinuationRequest.HasThirdPartyAdoptedContext);
+        Assert.Equal(["U-observer"], recoveredContinuationRequest.AdoptedSpeakerIds);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(continuationCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Cold_recovered_denied_approval_returns_denial_result_without_reprompting()
     {
         const string callId = "call-shell-denied";
@@ -1071,6 +1258,13 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             TransportAuthenticity.Verified, PayloadTaint.Public),
         ReceivedAt = FixedReceivedAt,
     };
+
+    private MessageSource RequesterSourceWithThirdPartyAdoptedContext(string senderId, params string[] adoptedSpeakerIds)
+        => RequesterSource(senderId) with
+        {
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = adoptedSpeakerIds
+        };
 }
 
 /// <summary>

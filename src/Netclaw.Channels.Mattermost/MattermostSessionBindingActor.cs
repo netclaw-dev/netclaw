@@ -773,7 +773,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             pending!.Request,
             pending!.CallId,
             selectedKey,
-            message.SenderId.Value);
+            message.SenderId.Value,
+            persistedToolName: pending.ToolName,
+            persistedDisplayText: pending.DisplayText);
         return true;
     }
 
@@ -887,15 +889,19 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 pending.Request,
                 pending.CallId,
                 message.SelectedKey,
-                message.SenderId.Value);
+                message.SenderId.Value,
+                persistedToolName: pending.ToolName,
+                persistedDisplayText: pending.DisplayText);
         }
         else if (message.PromptPostId is { } payloadPromptPostId)
         {
-            // Cold-spawn path with a payload-provided post ID: the binding has no
-            // original ToolInteractionRequest to render the full resolved attachment,
-            // but the Mattermost action callback always carries the prompt's post_id.
-            // Use it to redraw with a generic "Resolved: <decision>" banner and drop
-            // the buttons. See issue #939.
+            // Cold-spawn path with no local pending entry for this CallId (no
+            // journal record replayed, or the entry was already cleared). The
+            // Mattermost action callback always carries the prompt's post_id;
+            // render the generic banner so the buttons clear. Pre-0.21 journals
+            // that DO replay take the upper `pending is not null` branch — they
+            // render generically via the !IsNullOrEmpty fallback inside the
+            // builder, not here. See issue #939.
             await TryResolveApprovalPromptAsync(
                 payloadPromptPostId,
                 request: null,
@@ -927,16 +933,26 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         ToolInteractionRequest? request,
         Netclaw.Tools.ToolCallId callId,
         string selectedKey,
-        string senderId)
+        string senderId,
+        string? persistedToolName = null,
+        string? persistedDisplayText = null)
     {
         if (promptPostId is not { } postId)
             return;
 
         try
         {
+            // Hot path uses the in-memory request. Cold-spawn path uses the persisted
+            // tool name + display text when present (PendingApprovalPromptTracked
+            // carried them); legacy journals without the fields fall back to the
+            // generic banner.
             var resolvedAttachment = request is not null
                 ? MattermostApprovalPromptBuilder.BuildResolvedAttachment(request, selectedKey, senderId)
-                : MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(selectedKey, senderId);
+                : MattermostApprovalPromptBuilder.BuildResolvedAttachmentWithoutRequest(
+                    selectedKey,
+                    senderId,
+                    toolName: persistedToolName,
+                    displayText: persistedDisplayText);
 
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.ReplyClient.UpdatePostAsync(
@@ -1078,7 +1094,16 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                         RequesterSenderId = pendingApproval.RequesterSenderId,
                         RequesterPrincipal = pendingApproval.RequesterPrincipal,
                         OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptPostId.Value.Value
+                        PromptId = promptPostId.Value.Value,
+                        ToolName = pendingApproval.ToolName,
+                        // Preserve null-vs-set semantics on the wire: Truncate
+                        // returns string.Empty for null input, which would round-
+                        // trip as DisplayText="" with HasDisplayText=true.
+                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
+                            ? null
+                            : ApprovalDisplayTextFormatter.Truncate(
+                                pendingApproval.DisplayText,
+                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
                     }, ApplyPendingApprovalPromptTracked);
                 }
                 else
@@ -1615,7 +1640,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             tracked.RequesterSenderId,
             tracked.RequesterPrincipal,
             tracked.OptionKeys,
-            new MattermostPostId(tracked.PromptId)));
+            new MattermostPostId(tracked.PromptId),
+            toolName: tracked.ToolName,
+            displayText: tracked.DisplayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)

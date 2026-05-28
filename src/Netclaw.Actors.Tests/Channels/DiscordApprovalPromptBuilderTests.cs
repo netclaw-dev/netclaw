@@ -402,6 +402,49 @@ public sealed class DiscordApprovalPromptBuilderTests
     }
 
     [Fact]
+    public void Resolved_text_without_request_includes_persisted_tool_name_and_display_text()
+    {
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.ApproveSession,
+            "U123",
+            toolName: "shell_execute",
+            displayText: "gh pr create --base master --head feature/foo");
+
+        Assert.Contains("**Tool:** `shell_execute`", text);
+        Assert.Contains("gh pr create --base master --head feature/foo", text);
+        Assert.Contains("Saved for this chat", text);
+    }
+
+    [Fact]
+    public void Resolved_text_without_request_falls_back_to_generic_when_only_one_field_supplied()
+    {
+        var toolOnly = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123", toolName: "shell_execute", displayText: null);
+        Assert.DoesNotContain("**Tool:**", toolOnly);
+        Assert.Contains("Approved (no save)", toolOnly);
+
+        var displayOnly = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "U123", toolName: null, displayText: "gh pr create");
+        Assert.DoesNotContain("gh pr create", displayOnly);
+        Assert.Contains("Approved (no save)", displayOnly);
+    }
+
+    [Fact]
+    public void Resolved_text_without_request_truncates_oversized_persisted_display_text()
+    {
+        // Cold-spawn redraw must respect Discord's 2000-char cap even when the
+        // persisted display text is at the 16 KB journal ceiling.
+        var oversized = new string('y', 5_000);
+        var text = DiscordApprovalPromptBuilder.BuildResolvedPromptTextWithoutRequest(
+            ApprovalOptionKeys.ApproveSession,
+            "U123",
+            toolName: "shell_execute",
+            displayText: oversized);
+
+        Assert.True(text.Length < 2001, $"Resolved text length {text.Length} exceeded Discord's 2000-char cap");
+    }
+
+    [Fact]
     public void Oversized_command_keeps_prompt_under_Discord_cap()
     {
         // Discord rejects messages over 2000 chars; without truncation

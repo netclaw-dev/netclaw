@@ -72,6 +72,8 @@ internal sealed class PendingApprovalRequest
         RequesterPrincipal = request.RequesterPrincipal;
         Options = request.Options;
         OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
+        ToolName = request.ToolName.Value;
+        DisplayText = request.DisplayText;
     }
 
     public PendingApprovalRequest(
@@ -79,7 +81,9 @@ internal sealed class PendingApprovalRequest
         string? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
         IReadOnlyList<string> optionKeys,
-        DiscordMessageId? promptMessageId)
+        DiscordMessageId? promptMessageId,
+        string? toolName = null,
+        string? displayText = null)
     {
         Request = null;
         CallId = callId;
@@ -90,6 +94,8 @@ internal sealed class PendingApprovalRequest
             .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
             .ToArray();
         PromptMessageId = promptMessageId;
+        ToolName = toolName;
+        DisplayText = displayText;
     }
 
     public ToolInteractionRequest? Request { get; }
@@ -100,5 +106,19 @@ internal sealed class PendingApprovalRequest
     public PrincipalClassification? RequesterPrincipal { get; }
     public IReadOnlyList<ToolInteractionOption> Options { get; }
     public IReadOnlyList<string> OptionKeys { get; }
+
+    /// <summary>
+    /// Tool name carried through cold-spawn recovery so the redraw can render
+    /// the original tool name without round-tripping to the session. Null on
+    /// pre-field journal entries.
+    /// </summary>
+    public string? ToolName { get; }
+
+    /// <summary>
+    /// Display text carried through cold-spawn recovery (already truncated to
+    /// the persisted ceiling). Null on pre-field journal entries.
+    /// </summary>
+    public string? DisplayText { get; }
+
     public DiscordMessageId? PromptMessageId { get; set; }
 }

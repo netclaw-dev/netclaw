@@ -275,6 +275,8 @@ internal static class NetclawProtoMapper
             proto.SupportsInteractiveApproval = evt.SupportsInteractiveApproval.Value;
         proto.OptionKeys.AddRange(evt.OptionKeys);
         proto.Candidates.AddRange(evt.Candidates.Select(ToApprovalCandidateProto));
+        proto.HasThirdPartyAdoptedContext = evt.HasThirdPartyAdoptedContext;
+        proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
         return proto;
     }
 
@@ -294,6 +296,8 @@ internal static class NetclawProtoMapper
         Boundary = proto.HasBoundary ? new Configuration.TrustBoundary(proto.Boundary) : null,
         ChannelType = proto.HasChannelType ? proto.ChannelType : null,
         SupportsInteractiveApproval = proto.HasSupportsInteractiveApproval ? proto.SupportsInteractiveApproval : null,
+        HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
+        AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
         OptionKeys = proto.OptionKeys.ToArray(),
         Candidates = proto.Candidates.Select(FromApprovalCandidateProto).ToArray(),
         RequestedAtMs = proto.RequestedAtMs
@@ -648,6 +652,10 @@ internal static class NetclawProtoMapper
         if (evt.RequesterPrincipal is not null)
             proto.RequesterPrincipal = (int)evt.RequesterPrincipal.Value;
         proto.OptionKeys.AddRange(evt.OptionKeys);
+        if (evt.ToolName is not null)
+            proto.ToolName = evt.ToolName;
+        if (evt.DisplayText is not null)
+            proto.DisplayText = evt.DisplayText;
         return proto;
     }
 
@@ -659,7 +667,9 @@ internal static class NetclawProtoMapper
             ? (Configuration.PrincipalClassification)proto.RequesterPrincipal
             : null,
         OptionKeys = proto.OptionKeys.ToArray(),
-        PromptId = proto.PromptId
+        PromptId = proto.PromptId,
+        ToolName = proto.HasToolName ? proto.ToolName : null,
+        DisplayText = proto.HasDisplayText ? proto.DisplayText : null
     };
 
     internal static Proto.PendingApprovalPromptClearedProto ToProto(PendingApprovalPromptCleared evt) => new()

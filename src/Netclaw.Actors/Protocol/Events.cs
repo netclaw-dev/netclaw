@@ -105,6 +105,10 @@ public sealed record ToolApprovalRequested : INetclawSerializableMessage
 
     public PrincipalClassification? RequesterPrincipal { get; init; }
 
+    public bool HasThirdPartyAdoptedContext { get; init; }
+
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = Array.Empty<string>();
+
     public string? Cwd { get; init; }
 
     public IReadOnlyList<string> OptionKeys { get; init; } = Array.Empty<string>();

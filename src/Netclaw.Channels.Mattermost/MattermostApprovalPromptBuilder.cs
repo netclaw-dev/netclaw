@@ -124,10 +124,18 @@ internal static class MattermostApprovalPromptBuilder
     /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
     /// binding actor was passivated between posting the prompt and the user
     /// clicking a button. The callback payload still carries the prompt's
-    /// post ID, which is enough to redraw the post with a generic decision
-    /// banner and drop the action buttons. See issue #939.
+    /// post ID, which is enough to redraw the post with a decision banner
+    /// and drop the action buttons. When the persisted
+    /// <see cref="Netclaw.Actors.Channels.PendingApprovalPromptTracked"/>
+    /// carried <paramref name="toolName"/> + <paramref name="displayText"/>,
+    /// the redraw includes the original tool name and request text;
+    /// otherwise it falls back to a generic banner. See issue #939.
     /// </summary>
-    public static MattermostAttachment BuildResolvedAttachmentWithoutRequest(string selectedKey, string senderId)
+    public static MattermostAttachment BuildResolvedAttachmentWithoutRequest(
+        string selectedKey,
+        string senderId,
+        string? toolName = null,
+        string? displayText = null)
     {
         var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
@@ -136,6 +144,15 @@ internal static class MattermostApprovalPromptBuilder
 
         var sb = new StringBuilder();
         sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+
+        if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
+        {
+            sb.Append("**Tool:** `").Append(toolName).AppendLine("`");
+            sb.Append("**Action:** `")
+                .Append(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))
+                .AppendLine("`");
+        }
+
         sb.Append("**Decision:** ").Append(decisionLabel);
         sb.Append(" (by @").Append(senderId).Append(')');
 

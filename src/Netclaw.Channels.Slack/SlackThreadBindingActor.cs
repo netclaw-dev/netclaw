@@ -1138,7 +1138,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             tracked.RequesterSenderId,
             tracked.RequesterPrincipal,
             tracked.OptionKeys,
-            new SlackEventTs(tracked.PromptId)));
+            new SlackEventTs(tracked.PromptId),
+            toolName: tracked.ToolName,
+            displayText: tracked.DisplayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
@@ -1199,7 +1201,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                         RequesterSenderId = pendingApproval.RequesterSenderId,
                         RequesterPrincipal = pendingApproval.RequesterPrincipal,
                         OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptMessageTs.Value.Value
+                        PromptId = promptMessageTs.Value.Value,
+                        ToolName = pendingApproval.ToolName,
+                        // Preserve null-vs-set semantics on the wire: Truncate
+                        // returns string.Empty for null input, which would round-
+                        // trip as DisplayText="" with HasDisplayText=true.
+                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
+                            ? null
+                            : ApprovalDisplayTextFormatter.Truncate(
+                                pendingApproval.DisplayText,
+                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
                     }, ApplyPendingApprovalPromptTracked);
                 }
                 else
@@ -1341,7 +1352,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 pending.Request,
                 pending.CallId,
                 selectedKey,
-                message.SenderId.Value);
+                message.SenderId.Value,
+                persistedToolName: pending.ToolName,
+                persistedDisplayText: pending.DisplayText);
 
             _log.Info(
                 "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
@@ -1484,7 +1497,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 pending.Request,
                 pending.CallId,
                 message.SelectedKey,
-                message.SenderId.Value);
+                message.SenderId.Value,
+                persistedToolName: pending.ToolName,
+                persistedDisplayText: pending.DisplayText);
 
             _log.Info(
                 "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
@@ -1494,9 +1509,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
         else if (message.PromptMessageTs is { } payloadPromptTs)
         {
-            // Cold-spawn redraw — the binding has no original request but the click
-            // payload carries the prompt's message TS, and the session has now
-            // accepted the response. Render a generic banner that clears the buttons.
+            // Cold-spawn redraw — no local pending entry exists for this CallId
+            // (the journal didn't replay a PendingApprovalPromptTracked event for
+            // it, typically because the binding was re-created without recovery
+            // or the entry was cleared before the click landed). The click
+            // payload still carries the prompt's message TS and the session has
+            // accepted the response; render the generic banner so the buttons
+            // clear. NOTE: pre-0.21 journals that DO replay (with no tool name /
+            // display text) take the upper `pending is not null` branch instead
+            // — they render the generic banner via the !IsNullOrEmpty fallback
+            // inside the builder, not via this branch.
             await TryResolveApprovalPromptAsync(
                 payloadPromptTs,
                 request: null,
@@ -1640,7 +1662,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         ToolInteractionRequest? request,
         ToolCallId callId,
         string selectedKey,
-        string senderId)
+        string senderId,
+        string? persistedToolName = null,
+        string? persistedDisplayText = null)
     {
         if (promptMessageTs is not { } promptTs)
             return;
@@ -1664,14 +1688,20 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
             else
             {
-                // Cold-spawn path: only the payload-provided message TS is known.
-                // Strip the buttons; show a generic resolution banner.
+                // Cold-spawn path: only the payload-provided message TS plus what was
+                // journaled with PendingApprovalPromptTracked. When the journal carried
+                // tool name + display text, the builder renders them; otherwise it
+                // falls back to a generic banner (pre-field journal entries).
                 text = SlackApprovalBlockBuilder.BuildResolvedApprovalTextWithoutRequest(
                     selectedKey,
-                    senderId);
+                    senderId,
+                    toolName: persistedToolName,
+                    displayText: persistedDisplayText);
                 blocks = SlackApprovalBlockBuilder.BuildResolvedApprovalBlocksWithoutRequest(
                     selectedKey,
-                    senderId);
+                    senderId,
+                    toolName: persistedToolName,
+                    displayText: persistedDisplayText);
             }
 
             using var cts = new CancellationTokenSource(OperationTimeout);
@@ -1749,6 +1779,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             RequesterPrincipal = request.RequesterPrincipal;
             Options = request.Options;
             OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
+            ToolName = request.ToolName.Value;
+            DisplayText = request.DisplayText;
         }
 
         public PendingApprovalRequest(
@@ -1756,7 +1788,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             string? requesterSenderId,
             PrincipalClassification? requesterPrincipal,
             IReadOnlyList<string> optionKeys,
-            SlackEventTs? promptMessageTs)
+            SlackEventTs? promptMessageTs,
+            string? toolName = null,
+            string? displayText = null)
         {
             Request = null;
             CallId = callId;
@@ -1767,6 +1801,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 .Select(key => new ToolInteractionOption(new ApprovalOptionKey(key), ApprovalOptionKeys.LabelFor(key)))
                 .ToArray();
             PromptMessageTs = promptMessageTs;
+            ToolName = toolName;
+            DisplayText = displayText;
         }
 
         public ToolInteractionRequest? Request { get; }
@@ -1775,6 +1811,21 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         public PrincipalClassification? RequesterPrincipal { get; }
         public IReadOnlyList<ToolInteractionOption> Options { get; }
         public IReadOnlyList<string> OptionKeys { get; }
+
+        /// <summary>
+        /// Tool name. Populated from <see cref="ToolInteractionRequest.ToolName"/>
+        /// on the hot path and from the persisted
+        /// <see cref="PendingApprovalPromptTracked.ToolName"/> on the cold-spawn
+        /// recovery path. Null only for journal entries written before the field
+        /// was added.
+        /// </summary>
+        public string? ToolName { get; }
+
+        /// <summary>
+        /// Display text (already truncated to the persisted ceiling on the
+        /// cold-spawn path). Null only for legacy journal entries.
+        /// </summary>
+        public string? DisplayText { get; }
 
         public SlackEventTs? PromptMessageTs { get; set; }
     }

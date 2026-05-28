@@ -107,9 +107,18 @@ internal static class DiscordApprovalPromptBuilder
     /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
     /// binding actor was passivated between posting the prompt and the user
     /// clicking a button. Sender's component payload still carries enough
-    /// state (message ID + decision) to clear the buttons. See issue #939.
+    /// state (message ID + decision) to clear the buttons. When the persisted
+    /// <see cref="Netclaw.Actors.Channels.PendingApprovalPromptTracked"/>
+    /// carried <paramref name="toolName"/> + <paramref name="displayText"/>,
+    /// the redraw includes the original tool name and request text; otherwise
+    /// it falls back to a generic banner (pre-field journal entries). See
+    /// issue #939.
     /// </summary>
-    public static string BuildResolvedPromptTextWithoutRequest(string selectedKey, string senderId)
+    public static string BuildResolvedPromptTextWithoutRequest(
+        string selectedKey,
+        string senderId,
+        string? toolName = null,
+        string? displayText = null)
     {
         var statusEmoji = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
@@ -117,6 +126,15 @@ internal static class DiscordApprovalPromptBuilder
 
         var sb = new StringBuilder();
         sb.Append(statusEmoji).AppendLine(" **Tool approval resolved**");
+
+        if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
+        {
+            sb.Append("**Tool:** `").Append(toolName).AppendLine("`");
+            sb.Append("**Action:** `")
+                .Append(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))
+                .AppendLine("`");
+        }
+
         sb.Append("**").Append(BuildGenericResolutionLine(selectedKey)).Append("**");
         sb.Append(" (by <@").Append(senderId).Append(">)");
 

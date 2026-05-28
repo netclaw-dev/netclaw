@@ -23,6 +23,8 @@ internal sealed record PendingToolInteraction(
     bool? SupportsInteractiveApproval,
     string? RequesterSenderId,
     PrincipalClassification? RequesterPrincipal,
+    bool HasThirdPartyAdoptedContext,
+    IReadOnlyList<string> AdoptedSpeakerIds,
     string? Cwd,
     long RequestedAtMs,
     // Option keys that were actually offered to the user when the prompt was

@@ -543,6 +543,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SupportsInteractiveApproval = _currentTurnSource?.ChannelType.SupportsInteractiveApproval(),
                 RequesterSenderId = msg.RequesterSenderId,
                 RequesterPrincipal = msg.RequesterPrincipal,
+                HasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
+                AdoptedSpeakerIds = msg.AdoptedSpeakerIds,
                 Cwd = msg.Cwd,
                 OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
                 Candidates = msg.Candidates
@@ -3160,6 +3162,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.SupportsInteractiveApproval,
             evt.RequesterSenderId?.Value,
             evt.RequesterPrincipal,
+            evt.HasThirdPartyAdoptedContext,
+            evt.AdoptedSpeakerIds,
             evt.Cwd,
             evt.RequestedAtMs,
             evt.OptionKeys,
@@ -3770,17 +3774,109 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             "Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
             toolCalls.Count, callId);
 
+        // On cold recovery _currentTurnSource is null because MessageSource is
+        // never persisted. Rehydrate it (and the paired _currentTrustContext +
+        // turn telemetry) from pending.* so every subsequent dispatch in the
+        // recovered turn reads the correct audience/boundary/channel-type. The
+        // LLM iteration that follows the parked batch re-enters DispatchToolBatch
+        // with no override; without rehydration it would fall through to
+        // SessionToolExecutionPipeline's TrustAudience.Public fail-closed default,
+        // silently blocking shell_execute and any other tool the audience profile
+        // doesn't list for Public. ResolveExposedToolsForCurrentTurn separately
+        // reads _currentTrustContext, so that field must be rehydrated too or the
+        // continuation LLM call gets a Public-audience tool list.
+        // Only rehydrates when null; preserves live _currentTurnSource on the
+        // non-recovery idle-redrive path.
+        if (_currentTurnSource is null)
+        {
+            var synthesized = SynthesizeTurnSourceFromPending(pending);
+            if (synthesized is null)
+            {
+                // Fail loud per the no-silent-fallbacks rule: the override on this
+                // dispatch alone covers the parked batch, but any continuation tool
+                // call in the recovered turn will fall through to Public. Log so
+                // an operator investigating a still-broken cold-recovery has a
+                // breadcrumb instead of an apparently-applied fix that no-ops.
+                _log.Warning(
+                    "Cold-recovery redrive could not synthesize turn source for call {CallId} "
+                    + "(channelType={ChannelType}, requesterSenderId={Requester}); "
+                    + "continuation tool calls in this turn will fall back to TrustAudience.Public.",
+                    callId,
+                    pending.ChannelType ?? "<null>",
+                    pending.RequesterSenderId ?? "<null>");
+            }
+            else
+            {
+                _currentTurnSource = synthesized;
+                _currentTrustContext = _trustContextDeriver?.Derive(synthesized);
+                BindTurnTelemetry(synthesized);
+            }
+        }
+
         TransitionTo(SessionPhase.Processing);
+        // Only supportsInteractiveApprovalOverride is materially distinct from
+        // what the synthesized source carries — pending persists the bool? the
+        // transport actually returned at prompt time, while the synthesized
+        // source can only re-derive it from ChannelType. The other audience /
+        // boundary / channel-type / sender / principal overrides duplicate fields
+        // the synthesized _currentTurnSource now carries; SessionToolExecutionPipeline's
+        // `override ?? source?.X ?? default` fallback resolves to the same value
+        // either way. Carrying both creates two parallel mechanisms that will
+        // drift on the next maintenance edit — single source of truth wins.
         DispatchToolBatch(
             toolCalls,
-            audienceOverride: pending.Audience,
-            boundaryOverride: pending.Boundary,
-            channelTypeOverride: pending.ChannelType,
             supportsInteractiveApprovalOverride: pending.SupportsInteractiveApproval,
-            requesterSenderIdOverride: pending.RequesterSenderId is null ? null : new SenderId(pending.RequesterSenderId),
-            requesterPrincipalOverride: pending.RequesterPrincipal,
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
             decisionOverride: redrivePlan.DecisionOverride);
+    }
+
+    /// <summary>
+    /// Reconstructs a minimal <see cref="MessageSource"/> from a parked
+    /// <see cref="PendingToolInteraction"/>'s persisted trust fields. Used only
+    /// during cold-recovery re-drive to rehydrate <see cref="_currentTurnSource"/>
+    /// so subsequent tool dispatches in the recovered turn read the correct
+    /// audience/boundary/channel-type. The stable adopted-context provenance
+    /// needed by downstream safety checks also survives here, but the runtime-only
+    /// fields on <see cref="MessageSource"/> (AckTarget, ReminderId,
+    /// BackgroundJobId, adopted-context window/projection entries, MessageId,
+    /// TurnId) are left at their defaults — they belong to the original live
+    /// transport invocation and cannot be reconstructed from journal state.
+    /// Returns null when the pending record
+    /// lacks enough state to construct a usable source (no channel type, no
+    /// requester sender id); the caller surfaces a warning per the
+    /// no-silent-fallbacks rule.
+    /// </summary>
+    private MessageSource? SynthesizeTurnSourceFromPending(PendingToolInteraction pending)
+    {
+        if (!ChannelTypeExtensions.TryFromWireValue(pending.ChannelType, out var channelType))
+            return null;
+
+        if (string.IsNullOrEmpty(pending.RequesterSenderId))
+            return null;
+
+        return new MessageSource
+        {
+            ChannelType = channelType,
+            SenderId = new SenderId(pending.RequesterSenderId),
+            Audience = pending.Audience,
+            // ResolveBoundary is the canonical helper: when pending.Boundary is
+            // null it consults channelType so slack/discord pendings resolve to
+            // TrustedInstance rather than the audience-only fallback.
+            Boundary = SecurityPolicyDefaults.ResolveBoundary(
+                pending.Boundary, pending.ChannelType, pending.Audience),
+            Principal = pending.RequesterPrincipal ?? PrincipalClassification.UntrustedExternal,
+            HasThirdPartyAdoptedContext = pending.HasThirdPartyAdoptedContext,
+            AdoptedSpeakerIds = pending.AdoptedSpeakerIds,
+            // The original transport was authenticated when the prompt was first
+            // posted (the binding actor only journals PendingToolInteraction after
+            // a successful inbound), so Verified is honest. PayloadTaint, however,
+            // is never persisted — Unknown is the honest sentinel for "we don't
+            // know what the original taint was" and lets downstream gates branch
+            // safely without us falsely claiming Public.
+            Provenance = new SourceProvenance(
+                TransportAuthenticity.Verified,
+                PayloadTaint.Unknown)
+        };
     }
 
     /// <summary>

@@ -500,6 +500,13 @@ public sealed class DiscordSessionBindingContractTests(ITestOutputHelper output)
             Assert.Equal(new DiscordMessageId("msg-1"), update.MessageId);
             Assert.True(update.RemoveComponents);
             Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
+
+            // PendingApprovalPromptTracked now carries the tool name + display
+            // text through cold recovery, so the resolved message regains the
+            // Tool/Action detail the hot path renders. End-to-end guarantee
+            // that the binding journals and rehydrates the fields.
+            Assert.Contains("shell_execute", update.Text, StringComparison.Ordinal);
+            Assert.Contains("git status", update.Text, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
 

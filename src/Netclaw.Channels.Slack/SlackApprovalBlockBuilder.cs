@@ -181,44 +181,89 @@ internal static class SlackApprovalBlockBuilder
     /// <see cref="ToolInteractionRequest"/> is no longer available — e.g. the
     /// binding actor was passivated between posting the prompt and the user
     /// clicking a button. The button payload still carries enough state to
-    /// redraw the prompt with a decision banner; we just can't reconstruct
-    /// the verb/location detail without the original request. Better than
-    /// leaving the buttons live indefinitely. See issue #939.
+    /// redraw the prompt with a decision banner. When the persisted
+    /// <see cref="Netclaw.Actors.Channels.PendingApprovalPromptTracked"/>
+    /// carried <paramref name="toolName"/> + <paramref name="displayText"/>,
+    /// the redraw includes the original tool name and request text; otherwise
+    /// it falls back to a generic banner (pre-field journal entries). See
+    /// issue #939.
     /// </summary>
-    public static string BuildResolvedApprovalTextWithoutRequest(string selectedKey, string senderId)
+    public static string BuildResolvedApprovalTextWithoutRequest(
+        string selectedKey,
+        string senderId,
+        string? toolName = null,
+        string? displayText = null)
     {
+        // Match the hot-path text variant (BuildResolvedApprovalText) formatting
+        // so the same approval renders identically pre-passivation and post-
+        // recovery: no escape on the tool/request code-fenced fields, no bold or
+        // escape on the resolution line. Block-Kit variants escape because they
+        // render inside markdown SectionBlocks; the text variant is the
+        // notification body which Slack already treats as code-fence-safe inside
+        // the backticks.
         var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
 
-        return string.Join("\n", new[]
+        var lines = new List<string>(3)
         {
-            $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>",
-            $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*"
-        });
+            $"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>"
+        };
+
+        if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
+        {
+            lines.Add(
+                $"> `{toolName}`: `{ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars)}`");
+        }
+
+        lines.Add(BuildGenericResolutionLine(selectedKey));
+
+        return string.Join("\n", lines);
     }
 
     /// <summary>
     /// Block-Kit variant of <see cref="BuildResolvedApprovalTextWithoutRequest"/>.
     /// Renders without buttons so the prompt UI clears on the cold-spawn path.
+    /// Includes the persisted tool name + request text when supplied.
     /// </summary>
-    public static IReadOnlyList<Block> BuildResolvedApprovalBlocksWithoutRequest(string selectedKey, string senderId)
+    public static IReadOnlyList<Block> BuildResolvedApprovalBlocksWithoutRequest(
+        string selectedKey,
+        string senderId,
+        string? toolName = null,
+        string? displayText = null)
     {
         var statusPrefix = selectedKey == ApprovalOptionKeys.Deny
             ? ":no_entry:"
             : ":white_check_mark:";
 
-        return
-        [
+        var blocks = new List<Block>(3)
+        {
             new SectionBlock
             {
                 Text = new Markdown($"{statusPrefix} *Tool approval resolved* by <@{EscapeMarkdown(senderId)}>")
-            },
-            new SectionBlock
+            }
+        };
+
+        if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
+        {
+            blocks.Add(new SectionBlock
+            {
+                Text = new Markdown(
+                    $"*Tool:* `{EscapeMarkdown(toolName)}`\n"
+                    + $"*Request:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))}`\n"
+                    + $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*"),
+                Expand = true
+            });
+        }
+        else
+        {
+            blocks.Add(new SectionBlock
             {
                 Text = new Markdown($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey))}*")
-            }
-        ];
+            });
+        }
+
+        return blocks;
     }
 
     private static string BuildGenericResolutionLine(string selectedKey)

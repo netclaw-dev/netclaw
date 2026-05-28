@@ -463,6 +463,55 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void PendingApprovalPromptTracked_round_trips_with_tool_name_and_display_text()
+    {
+        var original = new PendingApprovalPromptTracked
+        {
+            CallId = "call-shell-1",
+            RequesterSenderId = "U-requester",
+            RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.TrustedInternal,
+            OptionKeys = ["approve_once", "deny"],
+            PromptId = "1779898078.594569",
+            ToolName = "shell_execute",
+            DisplayText = "gh pr create --base master --head feature/foo"
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Equal(original.CallId, result.CallId);
+        Assert.Equal(original.RequesterSenderId, result.RequesterSenderId);
+        Assert.Equal(original.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Equal(original.OptionKeys, result.OptionKeys);
+        Assert.Equal(original.PromptId, result.PromptId);
+        Assert.Equal(original.ToolName, result.ToolName);
+        Assert.Equal(original.DisplayText, result.DisplayText);
+    }
+
+    [Fact]
+    public void PendingApprovalPromptTracked_round_trips_when_tool_name_and_display_text_are_null()
+    {
+        // Backward-compat with pre-0.21.1 journals: the new fields are optional
+        // and a recovered record must come back with nulls intact so the binding
+        // falls through to the generic cold-spawn banner.
+        var original = new PendingApprovalPromptTracked
+        {
+            CallId = "call-legacy",
+            RequesterSenderId = null,
+            RequesterPrincipal = null,
+            OptionKeys = ["approve_once"],
+            PromptId = "1779898078.594569",
+            ToolName = null,
+            DisplayText = null
+        };
+
+        var result = RoundTrip(original);
+
+        Assert.Null(result.ToolName);
+        Assert.Null(result.DisplayText);
+        Assert.Equal(original.PromptId, result.PromptId);
+    }
+
+    [Fact]
     public void Unknown_manifest_throws_on_deserialize()
     {
         var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
@@ -713,6 +762,8 @@ public sealed class SerializationRoundTripTests : TestKit
             SupportsInteractiveApproval = true,
             RequesterSenderId = new SenderId("U12345"),
             RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.Operator,
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
@@ -736,6 +787,8 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.SupportsInteractiveApproval, result.SupportsInteractiveApproval);
         Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
         Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
+        Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);

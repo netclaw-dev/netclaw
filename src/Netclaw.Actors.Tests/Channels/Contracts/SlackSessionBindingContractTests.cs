@@ -317,6 +317,14 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             Assert.Contains("resolved", update.Text, StringComparison.OrdinalIgnoreCase);
             Assert.NotNull(update.Blocks);
             Assert.DoesNotContain(update.Blocks!, block => block is SlackNet.Blocks.ActionsBlock);
+
+            // The cold-spawn redraw now pulls the tool name + display text out of
+            // the persisted PendingApprovalPromptTracked record, so the resolved
+            // banner regains the Tool/Request detail the hot path renders. This
+            // pins the wire-level guarantee end-to-end: the binding cold-recovers
+            // those fields from its journal and threads them into the builder.
+            Assert.Contains("shell_execute", update.Text, StringComparison.Ordinal);
+            Assert.Contains("git status", update.Text, StringComparison.Ordinal);
         }, cancellationToken: ct);
     }
 
