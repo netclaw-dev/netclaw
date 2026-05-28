@@ -107,6 +107,21 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Navigate_back_resets_preserved_editor_to_provider_selection()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+        string? route = null;
+        vm.RouteRequested = value => route = value;
+
+        vm.SaveWithoutProbeOverride();
+        vm.NavigateBack();
+
+        Assert.Equal("/config", route);
+        Assert.Equal(SearchConfigEditorScreen.ProviderSelection, vm.CurrentScreen.Value);
+        Assert.Equal(SearchConfigEditorDialog.None, vm.ActiveDialog.Value);
+    }
+
+    [Fact]
     public async Task Brave_probe_failure_opens_override_dialog_before_save()
     {
         using var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>

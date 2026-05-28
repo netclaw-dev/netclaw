@@ -128,7 +128,7 @@ internal sealed class SearchSectionSpec
         => $"✔ {GetBackendLabel(model.Backend)} validated and saved.";
 
     internal string GetSavedNextStepText()
-        => "Press Esc to return to Search backends or Up/Down to review providers.";
+        => "Press Enter to return to Settings Areas or Esc to review Search backends.";
 
     internal string GetBackendLabel(SearchBackend backend)
         => backend switch

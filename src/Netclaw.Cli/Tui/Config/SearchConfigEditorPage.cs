@@ -213,7 +213,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 SearchConfigEditorScreen.ProviderSelection => " [↑/↓] Navigate  [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
                 SearchConfigEditorScreen.Entry => " [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
                 SearchConfigEditorScreen.Validating => " [Ctrl+Q] Quit",
-                SearchConfigEditorScreen.Saved => " [↑/↓] Navigate  [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
+                SearchConfigEditorScreen.Saved => " [Enter] Settings Areas  [Esc] Review backends  [Ctrl+Q] Quit",
                 _ => " [Ctrl+Q] Quit",
             };
 
@@ -270,7 +270,9 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         if (ViewModel.CurrentScreen.Value == SearchConfigEditorScreen.Saved)
         {
-            EnsureProviderList().HandleInput(keyInfo);
+            if (keyInfo.Key == ConsoleKey.Enter)
+                ViewModel.NavigateBack();
+
             return true;
         }
 

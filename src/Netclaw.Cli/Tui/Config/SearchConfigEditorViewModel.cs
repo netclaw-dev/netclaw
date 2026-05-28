@@ -329,6 +329,8 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     {
         CancelValidationSpinner();
         ReloadPersistedDraft();
+        ActiveDialog.Value = SearchConfigEditorDialog.None;
+        CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RouteRequested?.Invoke("/config");
         Navigate?.Invoke("/config");
