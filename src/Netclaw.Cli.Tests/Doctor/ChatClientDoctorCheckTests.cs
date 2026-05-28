@@ -52,16 +52,22 @@ public sealed class ChatClientDoctorCheckTests
     }
 
     [Fact]
-    public async Task ReturnsError_WhenModelReferencesUnknownProvider()
+    public async Task ReturnsWarning_WhenModelReferencesUnknownProvider()
     {
+        // Regression: a typo in Models:Main.Provider (e.g. operator typed
+        // "ollama-local1" instead of "ollama-local") used to crash the daemon
+        // with an unhandled ProviderPluginFactory exception. We now treat it
+        // as degraded mode — same remediation as genuinely-no-provider —
+        // and surface the typo via the No-Op banner's available-providers
+        // line and this doctor warning.
         var paths = CreatePathsWithConfig("""
             {
               "configVersion": 1,
               "Providers": {
-                "openrouter": { "Type": "openrouter" }
+                "ollama-local": { "Type": "ollama" }
               },
               "Models": {
-                "Main": { "Provider": "anthropic", "ModelId": "claude-4" }
+                "Main": { "Provider": "ollama-local1", "ModelId": "qwen3:30b" }
               }
             }
             """);
@@ -69,9 +75,10 @@ public sealed class ChatClientDoctorCheckTests
         var check = new ChatClientDoctorCheck(paths);
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("anthropic", result.Message);
-        Assert.DoesNotContain("No-Op", result.Message);
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("No-Op chat client", result.Message);
+        Assert.Contains("ollama-local1", result.Message);
+        Assert.Contains("ollama-local", result.Message);
     }
 
     [Fact]

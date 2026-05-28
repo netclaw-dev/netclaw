@@ -57,6 +57,37 @@ public sealed class DaemonProviderServiceExtensionsTests
     }
 
     [Fact]
+    public void UnknownProviderReference_RegistersNoOpInsteadOfCrashing()
+    {
+        // Regression for the operator typo scenario (Models:Main.Provider
+        // "ollama-local1" vs configured "ollama-local") that previously
+        // crashed the daemon with a raw ProviderPluginFactory stack trace.
+        var services = new ServiceCollection();
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+
+        var providers = new Dictionary<string, ProviderEntry>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["github-copilot"] = new ProviderEntry { Type = "github-copilot" },
+            ["my-openrouter"] = new ProviderEntry { Type = "openrouter" },
+            ["ollama-local"] = new ProviderEntry { Type = "ollama" },
+        };
+        var models = new ModelSelection
+        {
+            Main = new ModelReference { Provider = "ollama-local1", ModelId = "qwen3:30b" },
+        };
+        var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+
+        services.AddDaemonLlmProviders(providers, models, validation);
+
+        using var sp = services.BuildServiceProvider();
+
+        // Must not throw — degraded startup is the contract.
+        var chatProvider = sp.GetRequiredService<IChatClientProvider>();
+        Assert.IsType<NoOpChatClientProvider>(chatProvider);
+        Assert.True(chatProvider.IsDegraded);
+    }
+
+    [Fact]
     public async Task NoOpProvider_ResponseStartsWithFixedBanner()
     {
         var services = new ServiceCollection();

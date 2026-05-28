@@ -53,20 +53,28 @@ public sealed class ProviderRuntimeValidationTests
     }
 
     [Fact]
-    public void ProvidersConfigured_ModelPointsToUnknownProvider_ReturnsInvalid()
+    public void ProvidersConfigured_ModelPointsToUnknownProvider_ReturnsNoProviderConfigured()
     {
+        // Regression: operator typo in Models:Main.Provider (e.g. "ollama-local1"
+        // vs configured "ollama-local") used to crash the daemon with a raw
+        // ProviderPluginFactory stack trace. Same operator remediation as
+        // genuinely-no-provider, so select No-Op and surface available providers
+        // in the banner.
         var providers = new Dictionary<string, ProviderEntry>(StringComparer.OrdinalIgnoreCase)
         {
-            ["openrouter"] = new ProviderEntry { Type = "openrouter" },
+            ["github-copilot"] = new ProviderEntry { Type = "github-copilot" },
+            ["my-openrouter"] = new ProviderEntry { Type = "openrouter" },
+            ["ollama-local"] = new ProviderEntry { Type = "ollama" },
         };
 
         var validation = ProviderRuntimeValidation.Evaluate(
             providers,
-            new ModelSelection { Main = new ModelReference { Provider = "anthropic", ModelId = "claude-4" } });
+            new ModelSelection { Main = new ModelReference { Provider = "ollama-local1", ModelId = "qwen3:30b" } });
 
-        Assert.Equal(ProviderRuntimeStatus.Invalid, validation.Status);
-        Assert.Contains("unknown provider", validation.Reason, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("anthropic", validation.Reason);
+        Assert.Equal(ProviderRuntimeStatus.NoProviderConfigured, validation.Status);
+        Assert.Contains("ollama-local1", validation.Reason);
+        Assert.Contains("ollama-local", validation.Reason);
+        Assert.Equal(3, validation.AvailableProviders.Count);
     }
 
     [Fact]

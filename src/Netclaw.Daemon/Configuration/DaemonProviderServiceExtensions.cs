@@ -45,6 +45,20 @@ public static class DaemonProviderServiceExtensions
             return services;
         }
 
+        if (validation.Status == ProviderRuntimeStatus.Invalid)
+        {
+            // Fail loudly with the validation reason rather than letting the
+            // provider plugin factory throw a raw "Provider 'X' not found"
+            // deep in the DI graph. The exception fires when
+            // IChatClientProvider is first resolved so it surfaces during the
+            // host's startup sequence, not at config-binding time.
+            services.AddSingleton<IChatClientProvider>(_ =>
+                throw new InvalidOperationException(
+                    $"Invalid inference configuration: {validation.Reason}. " +
+                    "Fix the issue in `netclaw.json` and restart the daemon. Run `netclaw doctor` for details."));
+            return services;
+        }
+
         // Register plugins and OAuth from Netclaw.Providers
         services.AddLlmProviders();
 
