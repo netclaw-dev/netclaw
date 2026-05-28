@@ -275,6 +275,8 @@ internal static class NetclawProtoMapper
             proto.SupportsInteractiveApproval = evt.SupportsInteractiveApproval.Value;
         proto.OptionKeys.AddRange(evt.OptionKeys);
         proto.Candidates.AddRange(evt.Candidates.Select(ToApprovalCandidateProto));
+        proto.HasThirdPartyAdoptedContext = evt.HasThirdPartyAdoptedContext;
+        proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
         return proto;
     }
 
@@ -294,6 +296,8 @@ internal static class NetclawProtoMapper
         Boundary = proto.HasBoundary ? new Configuration.TrustBoundary(proto.Boundary) : null,
         ChannelType = proto.HasChannelType ? proto.ChannelType : null,
         SupportsInteractiveApproval = proto.HasSupportsInteractiveApproval ? proto.SupportsInteractiveApproval : null,
+        HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
+        AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
         OptionKeys = proto.OptionKeys.ToArray(),
         Candidates = proto.Candidates.Select(FromApprovalCandidateProto).ToArray(),
         RequestedAtMs = proto.RequestedAtMs

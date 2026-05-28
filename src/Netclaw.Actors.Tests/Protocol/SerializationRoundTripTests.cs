@@ -762,6 +762,8 @@ public sealed class SerializationRoundTripTests : TestKit
             SupportsInteractiveApproval = true,
             RequesterSenderId = new SenderId("U12345"),
             RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.Operator,
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
@@ -785,6 +787,8 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.SupportsInteractiveApproval, result.SupportsInteractiveApproval);
         Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
         Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
+        Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);

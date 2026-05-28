@@ -888,6 +888,94 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Cold_recovered_continuation_approval_preserves_third_party_adopted_context()
+    {
+        const string parkedCallId = "call-shell-adopted-parked";
+        const string continuationCallId = "call-shell-adopted-continuation";
+        _toolExecutor.GatedTools.Add("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(parkedCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+        _fakeChatClient.PlannedResponses.Enqueue(new AIContent[]
+        {
+            new FunctionCallContent(continuationCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git diff" })
+        });
+
+        var sessionId = new SessionId("test-channel/redrive-adopted-context");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("redrive-adopted-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status then git diff",
+            Source = RequesterSourceWithThirdPartyAdoptedContext("U-requester", "U-observer")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var liveRequest = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.True(liveRequest.HasThirdPartyAdoptedContext);
+        Assert.Equal(["U-observer"], liveRequest.AdoptedSpeakerIds);
+
+        await ColdRespawnAsync(sessionId);
+
+        var subscriberB = CreateTestProbe("redrive-adopted-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(parkedCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var recoveredContinuationRequest = await subscriberB.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(continuationCallId, recoveredContinuationRequest.CallId.Value);
+        Assert.True(recoveredContinuationRequest.HasThirdPartyAdoptedContext);
+        Assert.Equal(["U-observer"], recoveredContinuationRequest.AdoptedSpeakerIds);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(continuationCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Cold_recovered_denied_approval_returns_denial_result_without_reprompting()
     {
         const string callId = "call-shell-denied";
@@ -1170,6 +1258,13 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             TransportAuthenticity.Verified, PayloadTaint.Public),
         ReceivedAt = FixedReceivedAt,
     };
+
+    private MessageSource RequesterSourceWithThirdPartyAdoptedContext(string senderId, params string[] adoptedSpeakerIds)
+        => RequesterSource(senderId) with
+        {
+            HasThirdPartyAdoptedContext = true,
+            AdoptedSpeakerIds = adoptedSpeakerIds
+        };
 }
 
 /// <summary>

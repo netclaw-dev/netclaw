@@ -543,6 +543,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SupportsInteractiveApproval = _currentTurnSource?.ChannelType.SupportsInteractiveApproval(),
                 RequesterSenderId = msg.RequesterSenderId,
                 RequesterPrincipal = msg.RequesterPrincipal,
+                HasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
+                AdoptedSpeakerIds = msg.AdoptedSpeakerIds,
                 Cwd = msg.Cwd,
                 OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
                 Candidates = msg.Candidates
@@ -3165,6 +3167,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.SupportsInteractiveApproval,
             evt.RequesterSenderId?.Value,
             evt.RequesterPrincipal,
+            evt.HasThirdPartyAdoptedContext,
+            evt.AdoptedSpeakerIds,
             evt.Cwd,
             evt.RequestedAtMs,
             evt.OptionKeys,
@@ -3836,11 +3840,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// <see cref="PendingToolInteraction"/>'s persisted trust fields. Used only
     /// during cold-recovery re-drive to rehydrate <see cref="_currentTurnSource"/>
     /// so subsequent tool dispatches in the recovered turn read the correct
-    /// audience/boundary/channel-type. The runtime-only fields on
-    /// <see cref="MessageSource"/> (AckTarget, ReminderId, BackgroundJobId,
-    /// adopted-context window, MessageId, TurnId) are left at their defaults —
-    /// they belong to the original live transport invocation and cannot be
-    /// reconstructed from journal state. Returns null when the pending record
+    /// audience/boundary/channel-type. The stable adopted-context provenance
+    /// needed by downstream safety checks also survives here, but the runtime-only
+    /// fields on <see cref="MessageSource"/> (AckTarget, ReminderId,
+    /// BackgroundJobId, adopted-context window/projection entries, MessageId,
+    /// TurnId) are left at their defaults — they belong to the original live
+    /// transport invocation and cannot be reconstructed from journal state.
+    /// Returns null when the pending record
     /// lacks enough state to construct a usable source (no channel type, no
     /// requester sender id); the caller surfaces a warning per the
     /// no-silent-fallbacks rule.
@@ -3864,6 +3870,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Boundary = SecurityPolicyDefaults.ResolveBoundary(
                 pending.Boundary, pending.ChannelType, pending.Audience),
             Principal = pending.RequesterPrincipal ?? PrincipalClassification.UntrustedExternal,
+            HasThirdPartyAdoptedContext = pending.HasThirdPartyAdoptedContext,
+            AdoptedSpeakerIds = pending.AdoptedSpeakerIds,
             // The original transport was authenticated when the prompt was first
             // posted (the binding actor only journals PendingToolInteraction after
             // a successful inbound), so Verified is honest. PayloadTaint, however,

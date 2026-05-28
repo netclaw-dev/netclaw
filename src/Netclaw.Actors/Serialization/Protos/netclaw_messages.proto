@@ -146,6 +146,8 @@ message ToolApprovalRequestedProto {
   optional bool supports_interactive_approval = 13;
   int64 requested_at_ms = 14;
   repeated string option_keys = 15;
+  bool has_third_party_adopted_context = 16;
+  repeated string adopted_speaker_ids = 17;
 }
 
 message ToolApprovalResolvedProto {
