@@ -3588,7 +3588,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            if (!_approvalChannel.TryClaim(msg.CallId, out claimedWait))
+            if (!_approvalChannel.TryClaim(msg.CallId, out var approvalWait))
             {
                 _log.Warning(
                     "Ignoring tool interaction response for call {CallId}: prompt no longer has a live approval wait",
@@ -3597,13 +3597,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TryReplyNack(ApprovalNackReasons.PromptExpired);
                 return;
             }
+            claimedWait = approvalWait;
 
             if (!pending.PersistApprovalState)
                 _pendingToolInteractions.Remove(msg.CallId.Value);
 
             await PersistApprovalGrantIfNeededAsync(pending, decision, CancellationToken.None);
-            var approvalWait = claimedWait
-                ?? throw new InvalidOperationException("Approval wait claim succeeded without a wait handle.");
 
             if (!pending.PersistApprovalState)
             {

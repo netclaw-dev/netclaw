@@ -232,7 +232,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.IsType<TimeoutException>(failed.Cause);
-        Assert.False(approvalChannel.IsPending(approvalRequest.CallId));
+        Assert.False(approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedOnce));
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 

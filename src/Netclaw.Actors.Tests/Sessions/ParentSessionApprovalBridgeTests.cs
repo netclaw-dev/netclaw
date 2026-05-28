@@ -143,7 +143,7 @@ public sealed class ParentSessionApprovalBridgeTests
             TestContext.Current.CancellationToken));
 
         Assert.False(emitted);
-        Assert.False(channel.IsPending(callId));
+        Assert.False(channel.Complete(callId, ApprovalDecision.ApprovedOnce));
     }
 
     [Fact]
@@ -176,7 +176,7 @@ public sealed class ParentSessionApprovalBridgeTests
             TestContext.Current.CancellationToken));
 
         Assert.False(emitted);
-        Assert.False(channel.IsPending(callId));
+        Assert.False(channel.Complete(callId, ApprovalDecision.ApprovedOnce));
     }
 
     [Fact]
@@ -262,7 +262,7 @@ public sealed class ParentSessionApprovalBridgeTests
             Assert.NotEqual(childCallId, dispatch.Request.CallId);
             Assert.Contains(childCallId.Value, dispatch.Request.CallId.Value, StringComparison.Ordinal);
         });
-        Assert.False(channel.IsPending(childCallId));
+        Assert.False(channel.Complete(childCallId, ApprovalDecision.ApprovedOnce));
     }
 
     [Fact]

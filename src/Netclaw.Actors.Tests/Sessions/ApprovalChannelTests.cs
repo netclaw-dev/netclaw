@@ -22,11 +22,10 @@ public sealed class ApprovalChannelTests
         var callId = new ToolCallId($"call-{decision}");
 
         var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
-        Assert.True(channel.IsPending(callId));
         Assert.True(channel.Complete(callId, decision));
 
         Assert.Equal(decision, await waitTask);
-        Assert.False(channel.IsPending(callId));
+        Assert.False(channel.Complete(callId, decision));
     }
 
     [Fact]
@@ -77,12 +76,10 @@ public sealed class ApprovalChannelTests
         using var cts = new CancellationTokenSource();
 
         var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), cts.Token);
-        Assert.True(channel.IsPending(callId));
 
         await cts.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => waitTask);
 
-        Assert.False(channel.IsPending(callId));
         Assert.False(channel.Complete(callId, ApprovalDecision.ApprovedOnce));
     }
 
@@ -111,7 +108,6 @@ public sealed class ApprovalChannelTests
         var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
 
         Assert.True(channel.TryClaim(callId, out var wait));
-        Assert.False(channel.IsPending(callId));
         Assert.False(channel.Complete(callId, ApprovalDecision.Denied));
 
         Assert.True(wait.Complete(ApprovalDecision.ApprovedAlways));

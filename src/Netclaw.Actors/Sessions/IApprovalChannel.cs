@@ -58,11 +58,6 @@ internal interface IApprovalChannel
     Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct);
 
     /// <summary>
-    /// Returns true when a live tool task is still waiting on <paramref name="callId"/>.
-    /// </summary>
-    bool IsPending(ToolCallId callId);
-
-    /// <summary>
     /// Atomically claims a pending approval request so no later response can use
     /// the same prompt while the session persists any required grant state.
     /// Returns false when the prompt is no longer backed by a live wait.
@@ -127,9 +122,6 @@ internal sealed class ApprovalChannel : IApprovalChannel
             TryRemoveExact(callId, tcs);
         }
     }
-
-    public bool IsPending(ToolCallId callId)
-        => _pending.ContainsKey(callId);
 
     public bool TryClaim(ToolCallId callId, out ClaimedApprovalWait wait)
     {
