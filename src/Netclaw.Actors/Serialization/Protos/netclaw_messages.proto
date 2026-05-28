@@ -131,6 +131,24 @@ message ToolApprovalRequestedProto {
     optional string directory = 2;
   }
 
+  message TurnContextRecordProto {
+    SessionIdProto session_id = 1;
+    string turn_id = 2;
+    TrustAudience audience = 3;
+    optional string boundary = 4;
+    optional string channel_type = 5;
+    optional string requester_sender_id = 6;
+    optional int32 requester_principal = 7;
+    int32 transport_authenticity = 8;
+    int32 payload_taint = 9;
+    optional string source_scope = 10;
+    optional string source_kind = 11;
+    bool has_adopted_context = 12;
+    bool has_third_party_adopted_context = 13;
+    repeated string adopted_speaker_ids = 14;
+    bool supports_interactive_approval = 15;
+  }
+
   SessionIdProto session_id = 1;
   string call_id = 2;
   string tool_name = 3;
@@ -148,6 +166,7 @@ message ToolApprovalRequestedProto {
   repeated string option_keys = 15;
   bool has_third_party_adopted_context = 16;
   repeated string adopted_speaker_ids = 17;
+  TurnContextRecordProto turn_context = 18;
 }
 
 message ToolApprovalResolvedProto {

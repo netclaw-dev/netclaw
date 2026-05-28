@@ -93,7 +93,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // The tool batch is announced (ToolCallOutput) then parks on the
@@ -176,7 +177,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -245,7 +247,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -312,7 +315,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Read and then run git status"
+            Content = "Read and then run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -400,7 +404,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Read the file and run git status"
+            Content = "Read the file and run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -502,7 +507,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -592,7 +598,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "List the directory"
+            Content = "List the directory",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -792,15 +799,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     public async Task Cold_recovered_continuation_tool_calls_run_at_original_turn_audience()
     {
         // Regression for the 0.21 cold-recovery audience bug (session
-        // D0AC6CKBK5K/1779897736.065949): RedriveToolBatchForApproval correctly
-        // passes pending.Audience as the audienceOverride for the parked batch
-        // itself, but the LLM iteration that follows (the model's NEXT tool call
-        // in the same recovered turn) re-enters DispatchToolBatch with no
-        // override and previously fell through to TrustAudience.Public, silently
-        // blocking shell_execute and any other tool the audience profile
-        // doesn't list for Public. RedriveToolBatchForApproval now rehydrates
-        // _currentTurnSource from the pending record so every subsequent
-        // dispatch in the recovered turn reads the original audience.
+        // D0AC6CKBK5K/1779897736.065949): the parked batch and any continuation
+        // tool calls must execute from the same persisted turn context. A null
+        // recovered source used to fall through to TrustAudience.Public,
+        // silently blocking tools the audience profile doesn't list for Public.
         const string parkedCallId = "call-shell-parked";
         const string continuationCallId = "call-read-continuation";
         _toolExecutor.GatedTools.Add("shell_execute");
@@ -1001,7 +1003,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -1133,7 +1136,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(

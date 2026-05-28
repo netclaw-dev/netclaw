@@ -10,10 +10,12 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 
@@ -29,6 +31,19 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     {
     }
 
+    private static TurnContext InteractiveTurnContext(SessionId sessionId) => new()
+    {
+        SessionId = sessionId,
+        TurnId = new TurnId("test-turn"),
+        Audience = TrustAudience.Personal,
+        Boundary = TrustBoundary.Personal,
+        ChannelType = ChannelType.SignalR,
+        RequesterSenderId = new SenderId("local-user"),
+        RequesterPrincipal = PrincipalClassification.Operator,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+        SupportsInteractiveApproval = true
+    };
+
     [Fact]
     public async Task Approval_wait_does_not_consume_tool_execution_timeout_budget()
     {
@@ -36,6 +51,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("tool-pipeline-probe");
         var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/approval-timeout-test");
 
         var toolCalls = new List<FunctionCallContent>
         {
@@ -48,7 +64,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("D1/approval-timeout-test"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -61,6 +77,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             approvalChannel: approvalChannel,
             emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
             ct: TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
@@ -84,12 +101,58 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
+    public async Task Source_less_approval_required_turn_fails_closed_without_prompt()
+    {
+        var executor = new ApprovalThenSuccessExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("source-less-approval-probe");
+        var approvals = new List<ToolInteractionRequest>();
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-no-source", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "git push origin dev"
+            })
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            new SessionId("D1/source-less-approval-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(1),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: approvalChannel,
+            emitApprovalRequest: request => approvals.Add(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Contains("no interactive approval requester is available", result.Content);
+        Assert.Empty(approvals);
+    }
+
+    [Fact]
     public async Task Approve_once_does_not_reprompt_on_retry_execution()
     {
         var executor = new ApprovalThenSuccessExecutor();
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("approve-once-no-reprompt-probe");
         var approvals = new List<ToolInteractionRequest>();
+        var sessionId = new SessionId("signalr/approve-once-no-reprompt");
 
         var toolCalls = new List<FunctionCallContent>
         {
@@ -102,7 +165,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("signalr/approve-once-no-reprompt"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -115,6 +178,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             approvalChannel: approvalChannel,
             emitApprovalRequest: request => approvals.Add(request.Request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
             ct: TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(() =>
@@ -147,6 +211,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("cwd-propagation-probe");
         var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/cwd-propagation-test");
 
         var toolCalls = new List<FunctionCallContent>
         {
@@ -159,7 +224,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("D1/cwd-propagation-test"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -172,6 +237,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             approvalChannel: approvalChannel,
             emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
             ct: TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
@@ -194,6 +260,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("approval-cancel-probe");
         var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/approval-cancel-test");
         using var executionCts = new CancellationTokenSource();
 
         var toolCalls = new List<FunctionCallContent>
@@ -207,7 +274,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("D1/approval-cancel-test"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -220,6 +287,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             approvalChannel: approvalChannel,
             emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
             approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
             ct: executionCts.Token);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(

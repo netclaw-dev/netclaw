@@ -57,13 +57,8 @@ internal static class SessionToolExecutionPipeline
         bool setWorkingDirectoryAvailable = false,
         bool streamToolResults = false,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
-        TrustAudience? audienceOverride = null,
-        TrustBoundary? boundaryOverride = null,
-        string? channelTypeOverride = null,
-        bool? supportsInteractiveApprovalOverride = null,
-        SenderId? requesterSenderIdOverride = null,
-        PrincipalClassification? requesterPrincipalOverride = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
+        TurnContext? turnContext = null,
         CancellationToken ct = default)
     {
         try
@@ -75,40 +70,35 @@ internal static class SessionToolExecutionPipeline
             var tasks = toolCalls.Select(async tc =>
             {
                 var result = await ExecuteSingleToolAsync(
-                executor,
-                tc,
-                sessionId,
-                source,
-                auditLogger,
-                timeProvider,
-                sessionDir,
-                maxInlineToolResultChars,
-                emitSubAgentOutput,
-                spawnChildActor,
-                timeout,
-                ct,
-                approvalChannel,
-                emitApprovalRequest,
-                approvalTimeout ?? Timeout.InfiniteTimeSpan,
-                maxToolTimeoutSeconds,
-                logger,
-                shellTimeoutSeconds,
-                backgroundJobManager,
-                projectDirectory,
-                setWorkingDirectoryAvailable,
-                oneTimeApprovalPreSeed is not null
-                && oneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedPatterns)
-                    ? preSeedPatterns
-                    : null,
-                audienceOverride,
-                boundaryOverride,
-                channelTypeOverride,
-                supportsInteractiveApprovalOverride,
-                requesterSenderIdOverride,
-                requesterPrincipalOverride,
-                decisionOverride is not null && decisionOverride.TryGetValue(tc.CallId, out var overrideDecision)
-                    ? overrideDecision
-                    : null);
+                    executor,
+                    tc,
+                    sessionId,
+                    source,
+                    auditLogger,
+                    timeProvider,
+                    sessionDir,
+                    maxInlineToolResultChars,
+                    emitSubAgentOutput,
+                    spawnChildActor,
+                    timeout,
+                    ct,
+                    approvalChannel,
+                    emitApprovalRequest,
+                    approvalTimeout ?? Timeout.InfiniteTimeSpan,
+                    maxToolTimeoutSeconds,
+                    logger,
+                    shellTimeoutSeconds,
+                    backgroundJobManager,
+                    projectDirectory,
+                    setWorkingDirectoryAvailable,
+                    oneTimeApprovalPreSeed is not null
+                    && oneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedPatterns)
+                        ? preSeedPatterns
+                        : null,
+                    decisionOverride is not null && decisionOverride.TryGetValue(tc.CallId, out var overrideDecision)
+                        ? overrideDecision
+                        : null,
+                    turnContext);
                 if (streamToolResults)
                     self.Tell(new ToolExecutionSingleCompleted(result));
                 return result;
@@ -172,13 +162,8 @@ internal static class SessionToolExecutionPipeline
         string? projectDirectory = null,
         bool setWorkingDirectoryAvailable = false,
         IReadOnlyList<string>? oneTimeApprovalPreSeed = null,
-        TrustAudience? audienceOverride = null,
-        TrustBoundary? boundaryOverride = null,
-        string? channelTypeOverride = null,
-        bool? supportsInteractiveApprovalOverride = null,
-        SenderId? requesterSenderIdOverride = null,
-        PrincipalClassification? requesterPrincipalOverride = null,
-        ApprovalDecision? decisionOverride = null)
+        ApprovalDecision? decisionOverride = null,
+        TurnContext? turnContext = null)
     {
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
@@ -197,10 +182,7 @@ internal static class SessionToolExecutionPipeline
             sessionDir,
             spawnChildActor,
             projectDirectory,
-            audienceOverride,
-            boundaryOverride,
-            channelTypeOverride,
-            supportsInteractiveApprovalOverride);
+            turnContext);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
 
         // Re-drive of an ApprovedOnce approval: the user already clicked
@@ -223,11 +205,11 @@ internal static class SessionToolExecutionPipeline
                 emitApprovalRequest,
                 sessionId,
                 tc.CallId,
-                requesterSenderIdOverride ?? source?.SenderId,
-                requesterPrincipalOverride ?? source?.Principal,
-                source?.HasAdoptedContext ?? false,
-                source?.HasThirdPartyAdoptedContext ?? false,
-                source?.AdoptedSpeakerIds ?? []);
+                turnContext?.RequesterSenderId ?? source?.SenderId,
+                turnContext?.RequesterPrincipal ?? source?.Principal,
+                turnContext?.HasAdoptedContext ?? source?.HasAdoptedContext ?? false,
+                turnContext?.HasThirdPartyAdoptedContext ?? source?.HasThirdPartyAdoptedContext ?? false,
+                turnContext?.AdoptedSpeakerIds ?? source?.AdoptedSpeakerIds ?? []);
         }
         var completedRuns = new List<CompletedSubAgentRun>();
         var acceptedFindings = new List<AcceptedSubAgentFinding>();
@@ -348,6 +330,7 @@ internal static class SessionToolExecutionPipeline
                     sw.Stop();
                     return await RouteToBackgroundJobAsync(
                         tc, sessionId, source, auditLogger, timeProvider,
+                        turnContext,
                         meta, backgroundJobManager,
                         meta.TimeoutHintSeconds ?? shellTimeoutSeconds,
                         sw.Elapsed, logger,
@@ -369,6 +352,26 @@ internal static class SessionToolExecutionPipeline
         catch (ToolApprovalRequiredException approvalEx)
             when (approvalChannel is not null && emitApprovalRequest is not null)
         {
+            if (!CanRequestInteractiveApproval(source, turnContext))
+            {
+                sw.Stop();
+                resultText = $"Tool requires approval but no interactive approval requester is available: {approvalEx.ApprovalContext.ToolName}";
+
+                auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, sw.Elapsed, meta) with
+                {
+                    Allowed = false,
+                    DenyReason = "interactive_approval_unavailable"
+                });
+
+                return new ToolCallResult(new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool,
+                    Content = ClampToolResult(resultText, maxInlineToolResultChars),
+                    ToolCallId = new ToolCallId(tc.CallId),
+                    Name = tc.Name
+                }, context.FileAttachments, completedRuns, acceptedFindings);
+            }
+
             // Mid-turn approval pause: emit request to channel, block on TCS
             var ctx = approvalEx.ApprovalContext;
             var approvalWaitTimeout = approvalTimeout ?? Timeout.InfiniteTimeSpan;
@@ -384,12 +387,12 @@ internal static class SessionToolExecutionPipeline
                 CallId = new ToolCallId(tc.CallId),
                 ToolName = new ToolName(ctx.ToolName),
                 DisplayText = ctx.DisplayText,
-                RequesterSenderId = source?.SenderId,
-                RequesterPrincipal = source?.Principal,
-                HasAdoptedContext = source?.HasAdoptedContext ?? false,
-                HasThirdPartyAdoptedContext = source?.HasThirdPartyAdoptedContext ?? false,
-                AdoptedSpeakerIds = source?.AdoptedSpeakerIds ?? [],
-                PersistedAdoptedContext = source?.HasAdoptedContext ?? false,
+                RequesterSenderId = turnContext?.RequesterSenderId ?? source?.SenderId,
+                RequesterPrincipal = turnContext?.RequesterPrincipal ?? source?.Principal,
+                HasAdoptedContext = turnContext?.HasAdoptedContext ?? source?.HasAdoptedContext ?? false,
+                HasThirdPartyAdoptedContext = turnContext?.HasThirdPartyAdoptedContext ?? source?.HasThirdPartyAdoptedContext ?? false,
+                AdoptedSpeakerIds = turnContext?.AdoptedSpeakerIds ?? source?.AdoptedSpeakerIds ?? [],
+                PersistedAdoptedContext = turnContext?.HasAdoptedContext ?? source?.HasAdoptedContext ?? false,
                 Patterns = ctx.Patterns,
                 CandidateVerbs = ctx.CandidateVerbs,
                 Candidates = ctx.Candidates ?? [],
@@ -427,6 +430,7 @@ internal static class SessionToolExecutionPipeline
                     sw.Stop();
                     return await RouteToBackgroundJobAsync(
                         tc, sessionId, source, auditLogger, timeProvider,
+                        turnContext,
                         meta, backgroundJobManager,
                         meta.TimeoutHintSeconds ?? shellTimeoutSeconds,
                         sw.Elapsed, logger,
@@ -642,6 +646,7 @@ internal static class SessionToolExecutionPipeline
         MessageSource? source,
         IToolAuditLogger? auditLogger,
         TimeProvider timeProvider,
+        TurnContext? turnContext,
         ToolCallMeta meta,
         IActorRef backgroundJobManager,
         int timeoutSeconds,
@@ -665,12 +670,16 @@ internal static class SessionToolExecutionPipeline
             return new ToolCallResult(message, [], [], []);
         }
 
-        // A background job inherits the submitting turn's trust context. There is
-        // no safe default — defaulting a missing source to Personal would silently
-        // escalate the job's audience. A null source here is a programming error.
-        if (source is null)
+        // A background job inherits the submitting turn's authority context.
+        // There is no safe default — defaulting a missing context to Personal
+        // would silently escalate the job's audience.
+        var audience = turnContext?.Audience ?? source?.Audience;
+        var boundary = turnContext?.Boundary ?? source?.Boundary;
+        var channelType = turnContext?.ChannelType ?? source?.ChannelType;
+        var senderId = turnContext?.RequesterSenderId ?? source?.SenderId;
+        if (audience is null || boundary is null || channelType is null)
             throw new InvalidOperationException(
-                "Background-job submission requires a turn source; trust context cannot be defaulted.");
+                "Background-job submission requires turn authority context; trust context cannot be defaulted.");
 
         var startCmd = new StartBackgroundJob
         {
@@ -678,11 +687,11 @@ internal static class SessionToolExecutionPipeline
             WorkingDirectory = workingDirectory,
             SessionId = sessionId,
             Rationale = meta.Rationale ?? "background shell execution",
-            Audience = source.Audience,
-            Boundary = source.Boundary,
-            OriginChannelType = source.ChannelType,
+            Audience = audience.Value,
+            Boundary = boundary.Value,
+            OriginChannelType = channelType.Value,
             TimeoutSeconds = timeoutSeconds,
-            SenderId = source.SenderId
+            SenderId = senderId
         };
 
         try
@@ -741,31 +750,31 @@ internal static class SessionToolExecutionPipeline
         string sessionDir,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         string? projectDirectory,
-        TrustAudience? audienceOverride = null,
-        TrustBoundary? boundaryOverride = null,
-        string? channelTypeOverride = null,
-        bool? supportsInteractiveApprovalOverride = null)
+        TurnContext? turnContext)
     {
-        // A turn with no source carries no trust context — fall closed to the
-        // most-restrictive audience. The default is resolved once, here, so every
-        // downstream tool gate reads a guaranteed audience.
-        //
-        // audienceOverride is set only by the post-approval re-drive of a
-        // cold-recovered session: the live MessageSource is gone, but the
-        // parked turn's audience was persisted, so the re-driven call runs
-        // under the audience its approval grant was recorded against rather
-        // than the fail-closed Public default. It is never an escalation —
-        // the override carries the parked turn's own audience.
+        // A turn with no authority context carries no trust context — fall closed
+        // to the most-restrictive audience. The default is resolved once, here,
+        // so every downstream tool gate reads a guaranteed audience.
         var context = new ToolExecutionContext(sessionId.Value, sessionDir)
         {
-            Audience = audienceOverride ?? source?.Audience ?? TrustAudience.Public,
+            Audience = turnContext?.Audience ?? source?.Audience ?? TrustAudience.Public,
         };
-        context.Boundary = boundaryOverride ?? source?.Boundary;
-        context.ChannelType = channelTypeOverride ?? (source is null ? null : source.ChannelType.ToWireValue());
-        context.SupportsInteractiveApproval = supportsInteractiveApprovalOverride ?? source?.ChannelType.SupportsInteractiveApproval();
+        context.Boundary = turnContext?.Boundary ?? source?.Boundary;
+        context.ChannelType = turnContext?.ChannelType?.ToWireValue()
+                              ?? (source is null ? null : source.ChannelType.ToWireValue());
+        context.SupportsInteractiveApproval = turnContext?.SupportsInteractiveApproval
+                                              ?? source?.ChannelType.SupportsInteractiveApproval();
         context.SpawnChildActor = spawnChildActor;
         context.ProjectDirectory = projectDirectory;
         return context;
+    }
+
+    private static bool CanRequestInteractiveApproval(MessageSource? source, TurnContext? turnContext)
+    {
+        if (turnContext is not null)
+            return turnContext.SupportsInteractiveApproval && turnContext.HasApprovalRequester;
+
+        return source is not null && source.ChannelType.SupportsInteractiveApproval();
     }
 
     private static ToolAuditEntry BuildAuditEntry(

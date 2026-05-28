@@ -277,6 +277,8 @@ internal static class NetclawProtoMapper
         proto.Candidates.AddRange(evt.Candidates.Select(ToApprovalCandidateProto));
         proto.HasThirdPartyAdoptedContext = evt.HasThirdPartyAdoptedContext;
         proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
+        if (evt.TurnContext is not null)
+            proto.TurnContext = ToProto(evt.TurnContext);
         return proto;
     }
 
@@ -300,6 +302,7 @@ internal static class NetclawProtoMapper
         AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
         OptionKeys = proto.OptionKeys.ToArray(),
         Candidates = proto.Candidates.Select(FromApprovalCandidateProto).ToArray(),
+        TurnContext = proto.TurnContext is null ? null : FromProto(proto.TurnContext),
         RequestedAtMs = proto.RequestedAtMs
     };
 
@@ -355,6 +358,58 @@ internal static class NetclawProtoMapper
         Verb = proto.Verb,
         Directory = proto.HasDirectory ? proto.Directory : null
     };
+
+    private static Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto ToProto(TurnContextRecord record)
+    {
+        var proto = new Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto
+        {
+            SessionId = ToProto(record.SessionId),
+            TurnId = record.TurnId,
+            Audience = (Proto.TrustAudience)(int)record.Audience,
+            TransportAuthenticity = (int)record.TransportAuthenticity,
+            PayloadTaint = (int)record.PayloadTaint,
+            HasAdoptedContext = record.HasAdoptedContext,
+            HasThirdPartyAdoptedContext = record.HasThirdPartyAdoptedContext,
+            SupportsInteractiveApproval = record.SupportsInteractiveApproval
+        };
+
+        if (record.Boundary is not null)
+            proto.Boundary = record.Boundary.Value.Value;
+        if (record.ChannelType is not null)
+            proto.ChannelType = record.ChannelType;
+        if (record.RequesterSenderId is not null)
+            proto.RequesterSenderId = record.RequesterSenderId.Value.Value;
+        if (record.RequesterPrincipal is not null)
+            proto.RequesterPrincipal = (int)record.RequesterPrincipal.Value;
+        if (record.SourceScope is not null)
+            proto.SourceScope = record.SourceScope;
+        if (record.SourceKind is not null)
+            proto.SourceKind = record.SourceKind;
+        proto.AdoptedSpeakerIds.AddRange(record.AdoptedSpeakerIds);
+        return proto;
+    }
+
+    private static TurnContextRecord FromProto(Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto proto)
+        => new()
+        {
+            SessionId = FromProto(proto.SessionId),
+            TurnId = proto.TurnId,
+            Audience = (Configuration.TrustAudience)(int)proto.Audience,
+            Boundary = proto.HasBoundary ? new Configuration.TrustBoundary(proto.Boundary) : null,
+            ChannelType = proto.HasChannelType ? proto.ChannelType : null,
+            RequesterSenderId = proto.HasRequesterSenderId ? new SenderId(proto.RequesterSenderId) : null,
+            RequesterPrincipal = proto.HasRequesterPrincipal
+                ? (Configuration.PrincipalClassification)proto.RequesterPrincipal
+                : null,
+            TransportAuthenticity = (Configuration.TransportAuthenticity)proto.TransportAuthenticity,
+            PayloadTaint = (Configuration.PayloadTaint)proto.PayloadTaint,
+            SourceScope = proto.HasSourceScope ? proto.SourceScope : null,
+            SourceKind = proto.HasSourceKind ? proto.SourceKind : null,
+            HasAdoptedContext = proto.HasAdoptedContext,
+            HasThirdPartyAdoptedContext = proto.HasThirdPartyAdoptedContext,
+            AdoptedSpeakerIds = proto.AdoptedSpeakerIds.ToArray(),
+            SupportsInteractiveApproval = proto.SupportsInteractiveApproval
+        };
 
     // ── SessionSnapshot ──
 

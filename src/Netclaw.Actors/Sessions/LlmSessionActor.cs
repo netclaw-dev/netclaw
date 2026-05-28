@@ -79,6 +79,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Durable recovery derives unanswered calls from _state.History.
     private readonly ActiveToolBatchTracker _activeToolBatch = new();
     private MessageSource? _currentTurnSource;
+    private TurnContext? _currentTurnContext;
+    private ApprovalTurnState _approvalTurnState = ApprovalTurnState.None;
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
     private readonly TrustContextDeriver? _trustContextDeriver;
@@ -248,6 +250,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ApplyTurnRecorded(evt);
             _pendingToolInteractions.Clear();
             _resolvedToolApprovals.Clear();
+            ClearApprovalTurnState();
             ClearActiveToolBatchTracking();
         });
         Recover<SessionTitleSet>(evt => _state = _state.Apply(evt));
@@ -256,6 +259,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state.Apply(evt);
             _pendingToolInteractions.Clear();
             _resolvedToolApprovals.Clear();
+            ClearApprovalTurnState();
             ClearActiveToolBatchTracking();
         });
         Recover<ToolBatchStarted>(ApplyToolBatchStarted);
@@ -964,6 +968,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _resolvedToolApprovals.Clear();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, msg.ToolResults.Count);
+        MarkApprovalRunningAfterRedrive();
         FireLlmCall();
     }
 
@@ -998,7 +1003,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (msg.Proposals.Count > 0 && _curationActor is not null
             && CurrentTurnAudience() != TrustAudience.Public && _memoryConfig.Enabled)
         {
-            if (_currentTurnSource?.HasThirdPartyAdoptedContext == true)
+            if (ShouldSkipMemoryCurationForThirdPartyAdoptedContext(_currentTurnContext, _currentTurnSource))
             {
                 TurnLog().Info("memory_curation_skipped third-party adopted-context present; waiting for explicit elevation");
                 if (stopAfterAcceptedProposalPersistence)
@@ -1051,6 +1056,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             CompletePassivation();
         }
     }
+
+    internal static bool ShouldSkipMemoryCurationForThirdPartyAdoptedContext(
+        TurnContext? turnContext,
+        MessageSource? turnSource)
+        => (turnContext?.HasThirdPartyAdoptedContext ?? turnSource?.HasThirdPartyAdoptedContext) == true;
 
     private void Compacting()
     {
@@ -1344,6 +1354,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
         else
         {
+            ClearApprovalTurnState();
             TransitionTo(SessionPhase.Ready);
         }
 
@@ -1504,7 +1515,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
 
         _passivationFinalStopScheduled = true;
-        SaveSnapshot(BuildSnapshot());
+        SaveSnapshotIfSafe();
         Timers.StartSingleTimer(
             PassivationFinalStopTimerKey,
             new PassivationFinalStop(),
@@ -1780,14 +1791,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// re-drive path (<see cref="RedriveToolBatchForApproval"/>) runs the exact
     /// same dispatch logic — there is no divergent second copy.
     /// </summary>
-    /// <param name="audienceOverride">
-    /// Audience the batch must run under when there is no live
-    /// <see cref="_currentTurnSource"/>. The post-approval re-drive of a
-    /// cold-recovered session passes the parked turn's persisted audience so
-    /// the re-driven call runs under the audience its approval grant was
-    /// recorded against — instead of the fail-closed <see cref="TrustAudience.Public"/>
-    /// a null source would otherwise force. Null on the live-turn path.
-    /// </param>
     /// <param name="oneTimeApprovalPreSeed">
     /// Optional map of <c>callId → approved patterns</c>. For each entry, the
     /// pipeline pre-seeds the one-time approval bypass on that call's execution
@@ -1797,12 +1800,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </param>
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
-        TrustAudience? audienceOverride = null,
-        TrustBoundary? boundaryOverride = null,
-        string? channelTypeOverride = null,
-        bool? supportsInteractiveApprovalOverride = null,
-        SenderId? requesterSenderIdOverride = null,
-        PrincipalClassification? requesterPrincipalOverride = null,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null)
     {
@@ -1879,13 +1876,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             setWorkingDirectoryAvailable: setWorkingDirectoryAvailable,
             streamToolResults: true,
             oneTimeApprovalPreSeed: oneTimeApprovalPreSeed,
-            audienceOverride: audienceOverride,
-            boundaryOverride: boundaryOverride,
-            channelTypeOverride: channelTypeOverride,
-            supportsInteractiveApprovalOverride: supportsInteractiveApprovalOverride,
-            requesterSenderIdOverride: requesterSenderIdOverride,
-            requesterPrincipalOverride: requesterPrincipalOverride,
             decisionOverride: decisionOverride,
+            turnContext: _currentTurnContext,
             ct: toolExecutionCt);
     }
 
@@ -1999,6 +1991,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
     }
 
@@ -2086,6 +2079,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // API, which would otherwise wedge every subsequent turn.
         if (_pendingToolInteractions.Count > 0)
         {
+            if (_approvalTurnState is WaitingApprovalTurn waiting)
+                _approvalTurnState = new AbandoningApprovalTurn(waiting.Context, "superseded_by_new_message");
             var abandoned = BuildToolBatchAbandonedEvent();
             Persist(abandoned, evt =>
             {
@@ -2102,8 +2097,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
-        _currentTrustContext = _trustContextDeriver?.Derive(cmd.Source);
         BindTurnTelemetry(cmd.Source);
+        _currentTurnContext = TurnContext.FromMessageSource(
+            _sessionId,
+            _activeTurnId ?? new Protocol.TurnId(IdGen.ShortId()),
+            cmd.Source);
+        _approvalTurnState = new RunningApprovalTurn(_currentTurnContext);
+        _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(_currentTurnContext);
         PersistAdoptedContextIfNeeded(cmd.Source);
 
         // Sessions created from Slack/Discord start without transport-derived
@@ -2518,7 +2518,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_recallManager.TurnRecallCache is null)
         {
             var recallSw = Stopwatch.StartNew();
-            var resolved = _recallManager.ResolveForTurn(recallQuery, _state, _sessionId, _currentTurnSource, _memoryRecallCoordinator, _memoryConfig.Enabled);
+            var resolved = _recallManager.ResolveForTurn(
+                recallQuery,
+                _state,
+                _sessionId,
+                _currentTurnSource,
+                _memoryRecallCoordinator,
+                _memoryConfig.Enabled,
+                turnContext: _currentTurnContext);
             recallSw.Stop();
 
             resolved = _recallManager.ApplyProgressiveRecall(resolved, _log);
@@ -2639,15 +2646,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
 
     private TrustAudience CurrentTurnAudience()
-        => _currentTurnSource?.Audience
+        => _currentTurnContext?.Audience
+           ?? _currentTurnSource?.Audience
            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
 
     private string CurrentMemoryAudience()
-        => (_currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
+        => (_currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
 
     private string CurrentMemoryBoundary()
-        => _currentTurnSource?.Boundary.Value
-           ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, _currentTurnSource?.Audience ?? TrustAudience.Public).Value;
+        => _currentTurnContext?.Boundary.Value
+           ?? _currentTurnSource?.Boundary.Value
+           ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(_sessionId.Value, CurrentTurnAudience()).Value;
 
     private IReadOnlyList<AITool> ResolveExposedToolsForCurrentTurn()
     {
@@ -2900,10 +2909,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             var context = new ToolExecutionContext(_sessionId.Value, GetSessionDirectory())
             {
-                // No active turn source carries no trust context — fall closed.
-                Audience = _currentTurnSource?.Audience ?? TrustAudience.Public,
-                Boundary = _currentTurnSource?.Boundary,
-                ChannelType = _currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue(),
+                // No active turn context/source carries no trust context — fall closed.
+                Audience = _currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public,
+                Boundary = _currentTurnContext?.Boundary ?? _currentTurnSource?.Boundary,
+                ChannelType = _currentTurnContext?.ChannelType?.ToWireValue()
+                              ?? (_currentTurnSource is null ? null : _currentTurnSource.ChannelType.ToWireValue()),
                 ProjectDirectory = _state.WorkingContext.ProjectDirectory,
                 SupportsInteractiveApproval = false,
             };
@@ -3153,10 +3163,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ToolName = msg.ToolName.Value,
             Patterns = msg.Patterns,
             CandidateVerbs = msg.CandidateVerbs,
-            Audience = CurrentTurnAudience(),
-            Boundary = _currentTurnSource?.Boundary,
-            ChannelType = _currentTurnSource?.ChannelType.ToWireValue(),
-            SupportsInteractiveApproval = _currentTurnSource?.ChannelType.SupportsInteractiveApproval(),
+            Audience = _currentTurnContext?.Audience ?? CurrentTurnAudience(),
+            Boundary = _currentTurnContext?.Boundary ?? _currentTurnSource?.Boundary,
+            ChannelType = _currentTurnContext?.ChannelType?.ToWireValue() ?? _currentTurnSource?.ChannelType.ToWireValue(),
+            SupportsInteractiveApproval = _currentTurnContext?.SupportsInteractiveApproval
+                                          ?? _currentTurnSource?.ChannelType.SupportsInteractiveApproval(),
             RequesterSenderId = msg.RequesterSenderId,
             RequesterPrincipal = msg.RequesterPrincipal,
             HasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
@@ -3170,6 +3181,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                     Directory = c.Directory
                 })
                 .ToArray(),
+            TurnContext = _currentTurnContext?.ToRecord(),
             RequestedAtMs = NowMs()
         };
 
@@ -3195,6 +3207,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ApplyToolApprovalRequested(ToolApprovalRequested evt, bool persistApprovalState)
     {
+        var turnContext = ToolApprovalTurnContext.Restore(evt, out var restoreFailure);
         _pendingToolInteractions[evt.CallId] = new PendingToolInteraction(
             evt.CallId,
             evt.ToolName,
@@ -3211,9 +3224,51 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.Cwd,
             evt.RequestedAtMs,
             persistApprovalState,
+            turnContext,
+            restoreFailure,
             evt.OptionKeys,
             evt.Candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToArray());
         _resolvedToolApprovals.Remove(evt.CallId);
+
+        if (persistApprovalState && turnContext is not null)
+            RecordWaitingApprovalState(turnContext, evt.CallId, recovered: _currentPhase == SessionPhase.Recovering);
+        else if (persistApprovalState && restoreFailure is not null)
+            _log.Warning(
+                "Approval request {CallId} could not restore turn context: {Reason}",
+                evt.CallId,
+                restoreFailure);
+    }
+
+    private void RecordWaitingApprovalState(TurnContext context, string callId, bool recovered)
+    {
+        var pendingCallIds = _approvalTurnState is WaitingApprovalTurn waiting
+            ? new HashSet<string>(waiting.PendingCallIds, StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+        pendingCallIds.Add(callId);
+
+        _currentTurnContext = context;
+        _approvalTurnState = new WaitingApprovalTurn(context, pendingCallIds, recovered);
+    }
+
+    private void MarkApprovalRedrive(PendingToolInteraction pending, string callId)
+    {
+        if (pending.TurnContext is null)
+            return;
+
+        _currentTurnContext = pending.TurnContext;
+        _approvalTurnState = new RedrivingApprovalTurn(pending.TurnContext, callId);
+    }
+
+    private void MarkApprovalRunningAfterRedrive()
+    {
+        if (_approvalTurnState is RedrivingApprovalTurn redriving)
+            _approvalTurnState = new RunningApprovalTurn(redriving.Context);
+    }
+
+    private void ClearApprovalTurnState()
+    {
+        _approvalTurnState = ApprovalTurnState.None;
+        _currentTurnContext = null;
     }
 
     private void ApplyToolApprovalResolved(ToolApprovalResolved evt)
@@ -3223,7 +3278,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             : ApprovalDecision.Denied;
 
         if (_pendingToolInteractions.Remove(evt.CallId, out var pending))
+        {
             _resolvedToolApprovals[evt.CallId] = new ResolvedToolApproval(pending, decision);
+
+            if (_pendingToolInteractions.Count == 0 && pending.TurnContext is not null)
+                _approvalTurnState = new RunningApprovalTurn(pending.TurnContext);
+        }
     }
 
     private void ApplyToolBatchAbandoned(ToolBatchAbandoned evt)
@@ -3237,6 +3297,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             });
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
+        ClearApprovalTurnState();
         ClearActiveToolBatchTracking();
     }
 
@@ -3248,9 +3309,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void MaybeSnapshot()
     {
         if (_config.Tuning.SnapshotInterval > 0 && LastSequenceNr % _config.Tuning.SnapshotInterval == 0)
+            SaveSnapshotIfSafe();
+    }
+
+    private void SaveSnapshotIfSafe()
+    {
+        // SessionSnapshot intentionally excludes parked approval state. Writing a
+        // snapshot while an assistant tool_use is unanswered would let recovery
+        // skip the journal event that rehydrates pending approval context.
+        if (_pendingToolInteractions.Count > 0
+            || _resolvedToolApprovals.Count > 0
+            || ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null)
         {
-            SaveSnapshot(BuildSnapshot());
+            _log.Info("Skipping snapshot while approval-paused tool batch is still unresolved");
+            return;
         }
+
+        SaveSnapshot(BuildSnapshot());
     }
 
     private void EmitResponseOutputs(
@@ -3418,14 +3493,24 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ToolInteractionResponse msg,
         bool persistApprovalGrant)
     {
+        if (!TryGetApprovalAuthority(pending, out var requesterPrincipal, out var requesterSenderId, out var authorityFailure))
+        {
+            _log.Warning(
+                "Ignoring tool interaction response for call {CallId}: approval authority context is not recoverable ({Reason})",
+                msg.CallId,
+                authorityFailure);
+            EmitExpiredPromptNotice();
+            return (null, ApprovalNackReasons.PromptExpired);
+        }
+
         // Only the user who triggered the request may approve it — verified
         // automation requests can be approved by any channel member.
         if (!ApprovalButtonValueCodec.CanApprove(
-                pending.RequesterPrincipal, pending.RequesterSenderId, msg.SenderId.Value))
+                requesterPrincipal, requesterSenderId, msg.SenderId.Value))
         {
             _log.Warning(
                 "Ignoring tool interaction response for call {CallId} from sender {SenderId}; expected {ExpectedSenderId}",
-                msg.CallId, msg.SenderId, pending.RequesterSenderId);
+                msg.CallId, msg.SenderId, requesterSenderId);
             EmitWrongRequesterApprovalNotice();
             return (null, ApprovalNackReasons.WrongRequester);
         }
@@ -3562,12 +3647,52 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private PendingToolInteraction? ResolveLatestPendingApprovalForSender(SenderId senderId)
         => _pendingToolInteractions.Values
-            .Where(pending => ApprovalButtonValueCodec.CanApprove(
-                pending.RequesterPrincipal,
-                pending.RequesterSenderId,
-                senderId.Value))
+            .Where(pending => CanApprovePending(pending, senderId))
             .OrderBy(pending => pending.RequestedAtMs)
             .LastOrDefault();
+
+    private static bool CanApprovePending(PendingToolInteraction pending, SenderId senderId)
+        => TryGetApprovalAuthority(pending, out var principal, out var requesterSenderId, out _)
+           && ApprovalButtonValueCodec.CanApprove(principal, requesterSenderId, senderId.Value);
+
+    private static bool TryGetApprovalAuthority(
+        PendingToolInteraction pending,
+        out PrincipalClassification? requesterPrincipal,
+        out string? requesterSenderId,
+        out string? failure)
+    {
+        if (pending.TurnContext is { } context)
+        {
+            requesterPrincipal = context.RequesterPrincipal;
+            requesterSenderId = context.RequesterSenderId?.Value;
+            if (!context.HasApprovalRequester)
+            {
+                failure = "turn context has no requester sender for a non-automation principal";
+                return false;
+            }
+
+            failure = null;
+            return true;
+        }
+
+        requesterPrincipal = pending.RequesterPrincipal;
+        requesterSenderId = pending.RequesterSenderId;
+        if (pending.TurnContextRestoreFailure is not null)
+        {
+            failure = pending.TurnContextRestoreFailure;
+            return false;
+        }
+
+        if (requesterPrincipal is not PrincipalClassification.VerifiedAutomation
+            && string.IsNullOrWhiteSpace(requesterSenderId))
+        {
+            failure = "legacy approval state has no requester sender for a non-automation principal";
+            return false;
+        }
+
+        failure = null;
+        return true;
+    }
 
     private async Task HandleProcessingApprovalResponseAsync(ToolInteractionResponse msg)
     {
@@ -3665,8 +3790,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (!_pendingToolInteractions.TryGetValue(callId, out var pending))
         {
-            // No persisted pending record — there is no trust context to
-            // re-synthesize a faithful MessageSource, and no Patterns to
+            // No persisted pending record — there is no turn context and no Patterns to
             // pre-seed an ApprovedOnce re-drive. Whether or not the history
             // tail still carries the tool_use block, treat the prompt as
             // expired and fail loud with a channel-visible message rather
@@ -3719,7 +3843,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         PersistApprovalResolved(msg, decision, () =>
         {
-            TryRedriveToolBatchAfterApproval(callId);
+            var outcome = TryRedriveToolBatchAfterApproval(callId);
+            if (outcome == ApprovalRedriveOutcome.Failed)
+            {
+                TryReplyNack(ApprovalNackReasons.PromptExpired);
+                return;
+            }
+
             TryReplyAck();
         });
     }
@@ -3736,7 +3866,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         await HandleToolInteractionResponseWhenIdle(structured);
     }
 
-    private bool TryRedriveToolBatchAfterApproval(string callId)
+    private ApprovalRedriveOutcome TryRedriveToolBatchAfterApproval(string callId)
     {
         var assistantMsg = ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, callId);
         if (assistantMsg is null)
@@ -3745,7 +3875,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 "Cannot re-drive tool batch for call {CallId}: no unanswered assistant tool batch in history",
                 callId);
             EmitExpiredPromptNotice();
-            return false;
+            return ApprovalRedriveOutcome.Failed;
         }
 
         if (assistantMsg.ToolCalls.Any(tc => _pendingToolInteractions.ContainsKey(tc.CallId.Value)))
@@ -3753,7 +3883,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _log.Info(
                 "Deferring parked tool batch re-drive for call {CallId}: sibling approval(s) still pending",
                 callId);
-            return false;
+            return ApprovalRedriveOutcome.Deferred;
         }
 
         if (!_resolvedToolApprovals.TryGetValue(callId, out var resolved))
@@ -3762,12 +3892,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 "Cannot re-drive tool batch for call {CallId}: approval decision was not recoverable",
                 callId);
             EmitExpiredPromptNotice();
-            return false;
+            return ApprovalRedriveOutcome.Failed;
         }
 
         var redrivePlan = BuildApprovalRedrivePlan(assistantMsg);
-        RedriveToolBatchForApproval(callId, resolved.Pending, redrivePlan);
-        return true;
+        if (RedriveToolBatchForApproval(callId, resolved.Pending, redrivePlan))
+            return ApprovalRedriveOutcome.Started;
+
+        var abandoned = BuildToolBatchAbandonedEvent(
+            "Tool call was not completed — approval state could not be recovered safely.");
+        Persist(abandoned, ApplyToolBatchAbandoned);
+        return ApprovalRedriveOutcome.Failed;
     }
 
     private bool AbandonResolvedToolBatchAfterRecovery()
@@ -3831,7 +3966,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// <see cref="_currentTurnSource"/> is null, so the persisted trust fields
     /// are what keep the re-driven call faithful to the original turn.
     /// </summary>
-    private void RedriveToolBatchForApproval(
+    private bool RedriveToolBatchForApproval(
         string callId,
         PendingToolInteraction pending,
         ApprovalRedrivePlan redrivePlan)
@@ -3843,7 +3978,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 "Cannot re-drive tool batch for call {CallId}: no unanswered assistant tool batch in history",
                 callId);
             EmitExpiredPromptNotice();
-            return;
+            return false;
         }
 
         // Rebuild the FunctionCallContent batch from the persisted assistant
@@ -3860,116 +3995,34 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 "Cannot re-drive tool batch for call {CallId}: assistant message has no tool calls",
                 callId);
             EmitExpiredPromptNotice();
-            return;
+            return false;
         }
 
         _log.Info(
             "Re-driving parked tool batch ({Count} call(s)) after approval response for {CallId}",
             toolCalls.Count, callId);
 
-        // On cold recovery _currentTurnSource is null because MessageSource is
-        // never persisted. Rehydrate it (and the paired _currentTrustContext +
-        // turn telemetry) from pending.* so every subsequent dispatch in the
-        // recovered turn reads the correct audience/boundary/channel-type. The
-        // LLM iteration that follows the parked batch re-enters DispatchToolBatch
-        // with no override; without rehydration it would fall through to
-        // SessionToolExecutionPipeline's TrustAudience.Public fail-closed default,
-        // silently blocking shell_execute and any other tool the audience profile
-        // doesn't list for Public. ResolveExposedToolsForCurrentTurn separately
-        // reads _currentTrustContext, so that field must be rehydrated too or the
-        // continuation LLM call gets a Public-audience tool list.
-        // Only rehydrates when null; preserves live _currentTurnSource on the
-        // non-recovery idle-redrive path.
-        if (_currentTurnSource is null)
+        if (pending.TurnContext is not { } turnContext)
         {
-            var synthesized = SynthesizeTurnSourceFromPending(pending);
-            if (synthesized is null)
-            {
-                // Fail loud per the no-silent-fallbacks rule: the override on this
-                // dispatch alone covers the parked batch, but any continuation tool
-                // call in the recovered turn will fall through to Public. Log so
-                // an operator investigating a still-broken cold-recovery has a
-                // breadcrumb instead of an apparently-applied fix that no-ops.
-                _log.Warning(
-                    "Cold-recovery redrive could not synthesize turn source for call {CallId} "
-                    + "(channelType={ChannelType}, requesterSenderId={Requester}); "
-                    + "continuation tool calls in this turn will fall back to TrustAudience.Public.",
-                    callId,
-                    pending.ChannelType ?? "<null>",
-                    pending.RequesterSenderId ?? "<null>");
-            }
-            else
-            {
-                _currentTurnSource = synthesized;
-                _currentTrustContext = _trustContextDeriver?.Derive(synthesized);
-                BindTurnTelemetry(synthesized);
-            }
+            _log.Warning(
+                "Cannot re-drive tool batch for call {CallId}: turn context is not recoverable ({Reason})",
+                callId,
+                pending.TurnContextRestoreFailure ?? "missing turn context");
+            EmitExpiredPromptNotice();
+            return false;
         }
 
+        _currentTurnContext = turnContext;
+        _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(turnContext);
+        BindTurnTelemetry(turnContext);
+        MarkApprovalRedrive(pending, callId);
+
         TransitionTo(SessionPhase.Processing);
-        // Only supportsInteractiveApprovalOverride is materially distinct from
-        // what the synthesized source carries — pending persists the bool? the
-        // transport actually returned at prompt time, while the synthesized
-        // source can only re-derive it from ChannelType. The other audience /
-        // boundary / channel-type / sender / principal overrides duplicate fields
-        // the synthesized _currentTurnSource now carries; SessionToolExecutionPipeline's
-        // `override ?? source?.X ?? default` fallback resolves to the same value
-        // either way. Carrying both creates two parallel mechanisms that will
-        // drift on the next maintenance edit — single source of truth wins.
         DispatchToolBatch(
             toolCalls,
-            supportsInteractiveApprovalOverride: pending.SupportsInteractiveApproval,
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
             decisionOverride: redrivePlan.DecisionOverride);
-    }
-
-    /// <summary>
-    /// Reconstructs a minimal <see cref="MessageSource"/> from a parked
-    /// <see cref="PendingToolInteraction"/>'s persisted trust fields. Used only
-    /// during cold-recovery re-drive to rehydrate <see cref="_currentTurnSource"/>
-    /// so subsequent tool dispatches in the recovered turn read the correct
-    /// audience/boundary/channel-type. The stable adopted-context provenance
-    /// needed by downstream safety checks also survives here, but the runtime-only
-    /// fields on <see cref="MessageSource"/> (AckTarget, ReminderId,
-    /// BackgroundJobId, adopted-context window/projection entries, MessageId,
-    /// TurnId) are left at their defaults — they belong to the original live
-    /// transport invocation and cannot be reconstructed from journal state.
-    /// Returns null when the pending record
-    /// lacks enough state to construct a usable source (no channel type, no
-    /// requester sender id); the caller surfaces a warning per the
-    /// no-silent-fallbacks rule.
-    /// </summary>
-    private MessageSource? SynthesizeTurnSourceFromPending(PendingToolInteraction pending)
-    {
-        if (!ChannelTypeExtensions.TryFromWireValue(pending.ChannelType, out var channelType))
-            return null;
-
-        if (string.IsNullOrEmpty(pending.RequesterSenderId))
-            return null;
-
-        return new MessageSource
-        {
-            ChannelType = channelType,
-            SenderId = new SenderId(pending.RequesterSenderId),
-            Audience = pending.Audience,
-            // ResolveBoundary is the canonical helper: when pending.Boundary is
-            // null it consults channelType so slack/discord pendings resolve to
-            // TrustedInstance rather than the audience-only fallback.
-            Boundary = SecurityPolicyDefaults.ResolveBoundary(
-                pending.Boundary, pending.ChannelType, pending.Audience),
-            Principal = pending.RequesterPrincipal ?? PrincipalClassification.UntrustedExternal,
-            HasThirdPartyAdoptedContext = pending.HasThirdPartyAdoptedContext,
-            AdoptedSpeakerIds = pending.AdoptedSpeakerIds,
-            // The original transport was authenticated when the prompt was first
-            // posted (the binding actor only journals PendingToolInteraction after
-            // a successful inbound), so Verified is honest. PayloadTaint, however,
-            // is never persisted — Unknown is the honest sentinel for "we don't
-            // know what the original taint was" and lets downstream gates branch
-            // safely without us falsely claiming Public.
-            Provenance = new SourceProvenance(
-                TransportAuthenticity.Verified,
-                PayloadTaint.Unknown)
-        };
+        return true;
     }
 
     /// <summary>
@@ -4014,6 +4067,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _deliveryRetry.Clear();
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
+        ClearApprovalTurnState();
         Timers.Cancel(StreamingRetryTimerKey);
         _state = _state.AddErrorReply(errorMessage);
 
@@ -4069,6 +4123,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var persistent = decision is ApprovalDecision.ApprovedAlways
             or ApprovalDecision.ApprovedEverywhere;
         var globalWildcard = decision == ApprovalDecision.ApprovedEverywhere;
+        var audience = pending.TurnContext?.Audience ?? pending.Audience;
 
         // Prefer per-clause Candidates so we can use each clause's extracted
         // path argument as the directory half. Fall back to the verb-only
@@ -4079,7 +4134,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var fallbackCwd = globalWildcard ? null : pending.Cwd;
             await _approvalService.RecordApprovalAsync(
                 (ToolApprovalSessionId)_sessionId.Value,
-                pending.Audience,
+                audience,
                 new ToolName(pending.ToolName),
                 pending.CandidateVerbs,
                 persistent,
@@ -4121,7 +4176,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             await _approvalService.RecordApprovalAsync(
                 (ToolApprovalSessionId)_sessionId.Value,
-                pending.Audience,
+                audience,
                 new ToolName(pending.ToolName),
                 verbs,
                 persistent,
@@ -4307,6 +4362,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ClearActiveToolBatchTracking();
         TurnLog().Info("turn_tool_execution_complete iteration={Iteration} callCount={CallCount} max={Max} resultCount={ResultCount}",
             _turnState.ToolIterationCount, _turnState.ToolCallCount, _config.MaxToolIterationsPerTurn, resultCount);
+        MarkApprovalRunningAfterRedrive();
         FireLlmCall();
     }
 
@@ -4373,6 +4429,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TimeSpan? Duration,
         int FindingsCount) : INoSerializationVerificationNeeded;
 
+    private enum ApprovalRedriveOutcome
+    {
+        Started,
+        Deferred,
+        Failed
+    }
+
     private void BindTurnTelemetry(MessageSource? source)
     {
         var sourceMessageId = source?.MessageId;
@@ -4380,6 +4443,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeTurnId = source?.TurnId
             ?? new Protocol.TurnId(sourceMessageId ?? IdGen.ShortId());
         _activeChannelType = source?.ChannelType;
+
+        CrashContextSnapshot.Update(
+            _sessionId.Value,
+            _activeTurnId?.Value,
+            _activeMessageId,
+            _activeChannelType?.ToWireValue(),
+            _timeProvider.GetUtcNow());
+    }
+
+    private void BindTurnTelemetry(TurnContext context)
+    {
+        _activeMessageId = null;
+        _activeTurnId = context.TurnId;
+        _activeChannelType = context.ChannelType;
 
         CrashContextSnapshot.Update(
             _sessionId.Value,

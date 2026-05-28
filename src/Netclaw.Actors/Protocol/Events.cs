@@ -74,6 +74,39 @@ public sealed record ToolCallRecorded : INetclawSerializableMessage
     public long RecordedAtMs { get; init; }
 }
 
+public sealed record TurnContextRecord
+{
+    public SessionId SessionId { get; init; }
+
+    public string TurnId { get; init; } = string.Empty;
+
+    public TrustAudience Audience { get; init; }
+
+    public TrustBoundary? Boundary { get; init; }
+
+    public string? ChannelType { get; init; }
+
+    public SenderId? RequesterSenderId { get; init; }
+
+    public PrincipalClassification? RequesterPrincipal { get; init; }
+
+    public TransportAuthenticity TransportAuthenticity { get; init; }
+
+    public PayloadTaint PayloadTaint { get; init; }
+
+    public string? SourceScope { get; init; }
+
+    public string? SourceKind { get; init; }
+
+    public bool HasAdoptedContext { get; init; }
+
+    public bool HasThirdPartyAdoptedContext { get; init; }
+
+    public IReadOnlyList<string> AdoptedSpeakerIds { get; init; } = Array.Empty<string>();
+
+    public bool SupportsInteractiveApproval { get; init; }
+}
+
 public sealed record ToolApprovalRequested : INetclawSerializableMessage
 {
     public sealed record ApprovalCandidateRecord
@@ -115,6 +148,8 @@ public sealed record ToolApprovalRequested : INetclawSerializableMessage
 
     public IReadOnlyList<ApprovalCandidateRecord> Candidates { get; init; } =
         Array.Empty<ApprovalCandidateRecord>();
+
+    public TurnContextRecord? TurnContext { get; init; }
 
     public long RequestedAtMs { get; init; }
 }

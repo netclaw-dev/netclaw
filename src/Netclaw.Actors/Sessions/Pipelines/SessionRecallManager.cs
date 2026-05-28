@@ -37,9 +37,11 @@ internal sealed class SessionRecallManager
         SessionId sessionId,
         MessageSource? turnSource,
         IMemoryRecallCoordinator coordinator,
-        bool memoryEnabled = true)
+        bool memoryEnabled = true,
+        TurnContext? turnContext = null)
     {
-        var audience = turnSource?.Audience
+        var audience = turnContext?.Audience
+            ?? turnSource?.Audience
             ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(sessionId.Value);
 
         // Memory recall is disabled for Public audience or when the subsystem is off
@@ -65,7 +67,8 @@ internal sealed class SessionRecallManager
             recentUser,
             3,
             Audience: audience,
-            Boundary: turnSource?.Boundary.Value
+            Boundary: turnContext?.Boundary.Value
+                      ?? turnSource?.Boundary.Value
                       ?? SecurityPolicyDefaults.ResolveBoundaryFromSessionId(sessionId.Value, audience).Value,
             RecentAssistantMessages: state.History
                 .Where(x => x.Role == Protocol.ChatRole.Assistant)
