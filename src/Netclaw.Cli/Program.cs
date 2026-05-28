@@ -191,19 +191,7 @@ static async Task RunAsync(string[] args)
                     .AddEnvironmentVariables("NETCLAW_");
                 var initConfig = configBuilder.Build();
 
-                var models = initConfig.GetSection("Models")
-                    .Get<ModelSelection>() ?? new ModelSelection();
-
-                var runtime = ContextWindowResolution.ResolveRuntimeAsync(
-                    models.Main,
-                    sp.GetRequiredService<DaemonApi>()).GetAwaiter().GetResult();
-
-                return new ModelCapabilities
-                {
-                    ModelId = runtime.ModelId,
-                    ContextWindowTokens = runtime.ContextWindowTokens,
-                    CompactionModelId = models.Compaction?.ModelId,
-                };
+                return BuildModelCapabilities(initConfig, sp.GetRequiredService<DaemonApi>());
             });
 
             builder.Services.AddSingleton<InitNavigationState>();
@@ -1963,30 +1951,49 @@ static IConfigurationRoot BuildCliConfig()
 
 static void ConfigureCliChatServices(IServiceCollection services, IConfigurationManager configuration)
 {
-    // Resolve models for session config
-    var models = configuration.GetSection("Models")
-        .Get<ModelSelection>() ?? new ModelSelection();
-
     // Session config: bind operator-facing settings
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
     services.AddSingleton(sessionConfig);
-    services.AddSingleton(sp =>
-    {
-        var runtime = ContextWindowResolution.ResolveRuntimeAsync(
-            models.Main,
-            sp.GetRequiredService<DaemonApi>()).GetAwaiter().GetResult();
-
-        return new ModelCapabilities
-        {
-            ModelId = runtime.ModelId,
-            ContextWindowTokens = runtime.ContextWindowTokens,
-            CompactionModelId = models.Compaction?.ModelId,
-        };
-    });
+    services.AddSingleton(sp => BuildModelCapabilities(configuration, sp.GetRequiredService<DaemonApi>()));
 
     // DaemonClient uses the endpoint from DaemonApi. For non-loopback (remote) endpoints,
     // reads DeviceToken from secrets.json and attaches it as a bearer token provider.
     services.AddSingleton(sp => DaemonClientFactory.Create(
         sp.GetRequiredService<DaemonApi>().Endpoint,
         sp.GetRequiredService<NetclawPaths>()));
+}
+
+/// <summary>
+/// Build a <see cref="ModelCapabilities"/> for the CLI's chat surface. When
+/// <see cref="ProviderRuntimeValidation"/> reports the daemon is (or will be)
+/// running in degraded No-Op mode, we substitute a sentinel ModelId so the
+/// chat status bar doesn't display a stale/invalid model name and never
+/// attempt the daemon context-window probe (which would 404 or block).
+/// </summary>
+static ModelCapabilities BuildModelCapabilities(IConfiguration configuration, DaemonApi daemonApi)
+{
+    var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+    var models = configuration.GetSection("Models")
+        .Get<ModelSelection>() ?? new ModelSelection();
+    var validation = ProviderRuntimeValidation.Evaluate(providers, models);
+
+    if (validation.Status != ProviderRuntimeStatus.Valid)
+    {
+        return new ModelCapabilities
+        {
+            ModelId = "(no model — run `netclaw model`)",
+            ContextWindowTokens = 0,
+            CompactionModelId = null,
+        };
+    }
+
+    var runtime = ContextWindowResolution.ResolveRuntimeAsync(models.Main, daemonApi)
+        .GetAwaiter().GetResult();
+
+    return new ModelCapabilities
+    {
+        ModelId = runtime.ModelId,
+        ContextWindowTokens = runtime.ContextWindowTokens,
+        CompactionModelId = models.Compaction?.ModelId,
+    };
 }
