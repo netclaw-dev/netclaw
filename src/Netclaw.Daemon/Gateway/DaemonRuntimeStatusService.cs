@@ -38,7 +38,9 @@ internal sealed class DaemonRuntimeStatusService(
     NetclawPaths paths,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
-    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
+    IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null,
+    IChatClientProvider? chatClientProvider = null,
+    ProviderRuntimeValidation? providerValidation = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -57,7 +59,8 @@ internal sealed class DaemonRuntimeStatusService(
 
         connectors.AddRange(BuildMcpStatuses());
 
-        var overall = ResolveOverallStatus(connectors);
+        var degraded = chatClientProvider?.IsDegraded ?? false;
+        var overall = ResolveOverallStatus(connectors, degraded);
 
         return new DaemonRuntimeStatus.Response
         {
@@ -87,7 +90,9 @@ internal sealed class DaemonRuntimeStatusService(
                 Provider = modelSelection.Main.Provider,
                 InputModalities = modelCapabilities.InputModalities.ToString(),
                 OutputModalities = modelCapabilities.OutputModalities.ToString(),
-                ContextWindow = modelCapabilities.ContextWindowTokens
+                ContextWindow = modelCapabilities.ContextWindowTokens,
+                Degraded = degraded,
+                DegradedReason = degraded ? providerValidation?.Reason : null,
             },
             Update = BuildUpdateStatus(),
             Memory = await BuildMemoryStatusAsync(cancellationToken),
@@ -345,8 +350,16 @@ internal sealed class DaemonRuntimeStatusService(
         }
     }
 
-    internal static string ResolveOverallStatus(IReadOnlyList<DaemonRuntimeStatus.Connector> connectors)
+    internal static string ResolveOverallStatus(
+        IReadOnlyList<DaemonRuntimeStatus.Connector> connectors,
+        bool chatClientDegraded = false)
     {
+        // A No-Op chat client means the daemon can't actually serve model
+        // responses — surface that at the top level rather than reporting
+        // "healthy" while every chat turn returns the configuration banner.
+        if (chatClientDegraded)
+            return "degraded";
+
         if (connectors.Any(c => c.Enabled && c.Status is "disconnected" or "auth-failed" or "auth-required"))
             return "degraded";
 

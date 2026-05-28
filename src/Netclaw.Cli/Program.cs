@@ -1461,9 +1461,19 @@ static void WriteStatusResult(DaemonRuntimeStatus.Response status, string endpoi
 
     if (status.Model is { } model)
     {
-        Console.WriteLine($"model: {model.DisplayName ?? model.ModelId} (provider: {model.Provider}, context: {model.ContextWindow:N0} tokens)");
-        Console.WriteLine($"  input: {model.InputModalities}");
-        Console.WriteLine($"  output: {model.OutputModalities}");
+        if (model.Degraded)
+        {
+            Console.WriteLine("model: (none — No-Op chat client active)");
+            if (!string.IsNullOrWhiteSpace(model.DegradedReason))
+                Console.WriteLine($"  reason: {model.DegradedReason}");
+            Console.WriteLine("  fix: run `netclaw doctor` for details, then `netclaw model` to configure.");
+        }
+        else
+        {
+            Console.WriteLine($"model: {model.DisplayName ?? model.ModelId} (provider: {model.Provider}, context: {model.ContextWindow:N0} tokens)");
+            Console.WriteLine($"  input: {model.InputModalities}");
+            Console.WriteLine($"  output: {model.OutputModalities}");
+        }
     }
 
     Console.WriteLine("connectors:");

@@ -86,6 +86,38 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task DegradedChatClient_FlagsModelAsDegradedAndOverallAsDegraded()
+    {
+        var noOpProvider = new NoOpChatClientProvider(new[] { "github-copilot", "my-openrouter" });
+        var validation = new ProviderRuntimeValidation(
+            ProviderRuntimeStatus.NoProviderConfigured,
+            "model 'Main' references provider 'ollama-local1' which is not configured (available: ollama-local)",
+            new[] { "ollama-local" });
+
+        var service = new DaemonRuntimeStatusService(
+            new DaemonStartClock(TimeProvider.System),
+            TimeProvider.System,
+            channels: Array.Empty<IChannel>(),
+            slackOptions: new SlackChannelOptions { Enabled = false },
+            discordOptions: new DiscordChannelOptions { Enabled = false },
+            persistenceOptions: new DaemonPersistenceOptions(),
+            telemetryOptions: Options.Create(new TelemetryOptions()),
+            modelCapabilities: DefaultModelCapabilities,
+            modelSelection: DefaultModelSelection,
+            daemonConfig: new DaemonConfig(),
+            paths: CreatePaths(),
+            chatClientProvider: noOpProvider,
+            providerValidation: validation);
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(status.Model);
+        Assert.True(status.Model.Degraded);
+        Assert.Contains("ollama-local1", status.Model.DegradedReason);
+        Assert.Equal("degraded", status.Overall);
+    }
+
+    [Fact]
     public async Task IncludesSlackConnectorAsDisabled_WhenNotEnabled()
     {
         var service = new DaemonRuntimeStatusService(
