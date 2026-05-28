@@ -57,10 +57,16 @@ internal interface IApprovalChannel
     Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct);
 
     /// <summary>
-    /// Completes a pending approval request. Called by the session actor when a
-    /// <see cref="Protocol.ToolInteractionResponse"/> message arrives.
+    /// Returns true when a live tool task is still waiting on <paramref name="callId"/>.
     /// </summary>
-    void Complete(ToolCallId callId, ApprovalDecision decision);
+    bool IsPending(ToolCallId callId);
+
+    /// <summary>
+    /// Completes a pending approval request. Called by the session actor when a
+    /// <see cref="Protocol.ToolInteractionResponse"/> message arrives. Returns
+    /// false when the prompt is no longer backed by a live wait.
+    /// </summary>
+    bool Complete(ToolCallId callId, ApprovalDecision decision);
 }
 
 /// <summary>
@@ -97,9 +103,14 @@ internal sealed class ApprovalChannel : IApprovalChannel
         }
     }
 
-    public void Complete(ToolCallId callId, ApprovalDecision decision)
+    public bool IsPending(ToolCallId callId)
+        => _pending.ContainsKey(callId);
+
+    public bool Complete(ToolCallId callId, ApprovalDecision decision)
     {
         if (_pending.TryGetValue(callId, out var tcs))
-            tcs.TrySetResult(decision);
+            return tcs.TrySetResult(decision);
+
+        return false;
     }
 }

@@ -57,6 +57,7 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.True(emitted.HasAdoptedContext);
         Assert.True(emitted.HasThirdPartyAdoptedContext);
         Assert.True(emitted.PersistedAdoptedContext);
+        Assert.False(emitted.PersistApprovalState);
         Assert.Equal(["user-123", "user-456"], emitted.AdoptedSpeakerIds);
         Assert.Equal(["grep timeout logs/app.log | wc -l"], emitted.Patterns);
         Assert.Equal(["grep timeout logs/app.log"], emitted.CandidateVerbs);
@@ -107,6 +108,107 @@ public sealed class ParentSessionApprovalBridgeTests
     }
 
     [Fact]
+    public async Task Bridge_without_human_requester_sender_fails_without_emitting_prompt()
+    {
+        var channel = new ApprovalChannel();
+        var emitted = false;
+        var callId = new ToolCallId("call-missing-sender");
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            _ => emitted = true,
+            new SessionId("signalr/thread-missing-sender"),
+            requesterSenderId: null,
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+
+        await Assert.ThrowsAsync<ParentApprovalUnavailableException>(() => bridge.RequestApprovalAsync(
+            callId,
+            "shell_execute",
+            "git push origin main",
+            ["git push origin main"],
+            ["git push origin main"],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            "/home/user/repos/foo",
+            [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
+            isMessy: false,
+            TestContext.Current.CancellationToken));
+
+        Assert.False(emitted);
+        Assert.False(channel.IsPending(callId));
+    }
+
+    [Fact]
+    public async Task Bridge_without_requester_principal_fails_without_emitting_prompt()
+    {
+        var channel = new ApprovalChannel();
+        var emitted = false;
+        var callId = new ToolCallId("call-missing-principal");
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            _ => emitted = true,
+            new SessionId("signalr/thread-missing-principal"),
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: null,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+
+        await Assert.ThrowsAsync<ParentApprovalUnavailableException>(() => bridge.RequestApprovalAsync(
+            callId,
+            "shell_execute",
+            "git push origin main",
+            ["git push origin main"],
+            ["git push origin main"],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            "/home/user/repos/foo",
+            [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
+            isMessy: false,
+            TestContext.Current.CancellationToken));
+
+        Assert.False(emitted);
+        Assert.False(channel.IsPending(callId));
+    }
+
+    [Fact]
+    public async Task Verified_automation_bridge_allows_missing_sender()
+    {
+        var channel = new ApprovalChannel();
+        ToolInteractionRequest? emitted = null;
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            request =>
+            {
+                emitted = request;
+                channel.Complete(request.CallId, ApprovalDecision.ApprovedOnce);
+            },
+            new SessionId("reminder/thread-automation"),
+            requesterSenderId: null,
+            requesterPrincipal: PrincipalClassification.VerifiedAutomation,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+
+        var decision = await bridge.RequestApprovalAsync(
+            new ToolCallId("call-automation"),
+            "shell_execute",
+            "git push origin main",
+            ["git push origin main"],
+            ["git push origin main"],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            "/home/user/repos/foo",
+            [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
+            isMessy: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ParentApprovalDecision.ApprovedOnce, decision);
+        Assert.NotNull(emitted);
+        Assert.Null(emitted!.RequesterSenderId);
+        Assert.Equal(PrincipalClassification.VerifiedAutomation, emitted.RequesterPrincipal);
+    }
+
+    [Fact]
     public async Task Cancelled_bridge_wait_ignores_late_approval_response()
     {
         var channel = new ApprovalChannel();
@@ -139,7 +241,7 @@ public sealed class ParentSessionApprovalBridgeTests
         await cts.CancelAsync();
         await Assert.ThrowsAsync<OperationCanceledException>(() => waitTask);
 
-        channel.Complete(callId, ApprovalDecision.ApprovedOnce);
+        Assert.False(channel.Complete(callId, ApprovalDecision.ApprovedOnce));
         var lateWaitResult = await channel.WaitForApprovalAsync(
             callId,
             TimeSpan.FromMilliseconds(25),

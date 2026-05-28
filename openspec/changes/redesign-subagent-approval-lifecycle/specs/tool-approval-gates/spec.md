@@ -28,6 +28,13 @@ Approval responses for sub-agent prompts SHALL execute a tool only while the ori
 - **THEN** the sub-agent tool is not executed
 - **AND** the response is treated as expired or no-longer-pending
 
+#### Scenario: Live session response requires live approval wait
+- **GIVEN** the parent session still has persisted prompt metadata for a sub-agent approval
+- **AND** the child sub-agent approval wait has already been cancelled or completed
+- **WHEN** an approval response arrives while the parent session is processing
+- **THEN** the response is rejected as expired
+- **AND** no approval grant is applied to execute stale sub-agent work
+
 #### Scenario: No bridge fails closed
 - **GIVEN** a sub-agent tool call requires approval
 - **AND** no parent approval bridge is available

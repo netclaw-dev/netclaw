@@ -22,9 +22,11 @@ public sealed class ApprovalChannelTests
         var callId = new ToolCallId($"call-{decision}");
 
         var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete(callId, decision);
+        Assert.True(channel.IsPending(callId));
+        Assert.True(channel.Complete(callId, decision));
 
         Assert.Equal(decision, await waitTask);
+        Assert.False(channel.IsPending(callId));
     }
 
     [Fact]
@@ -64,8 +66,24 @@ public sealed class ApprovalChannelTests
     public void Complete_unknown_callId_is_noop()
     {
         var channel = new ApprovalChannel();
-        // Should not throw
-        channel.Complete(new ToolCallId("nonexistent"), ApprovalDecision.Denied);
+        Assert.False(channel.Complete(new ToolCallId("nonexistent"), ApprovalDecision.Denied));
+    }
+
+    [Fact]
+    public async Task Cancelled_wait_is_no_longer_pending_or_completable()
+    {
+        var channel = new ApprovalChannel();
+        var callId = new ToolCallId("call-cancelled-late");
+        using var cts = new CancellationTokenSource();
+
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), cts.Token);
+        Assert.True(channel.IsPending(callId));
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => waitTask);
+
+        Assert.False(channel.IsPending(callId));
+        Assert.False(channel.Complete(callId, ApprovalDecision.ApprovedOnce));
     }
 
     [Fact]

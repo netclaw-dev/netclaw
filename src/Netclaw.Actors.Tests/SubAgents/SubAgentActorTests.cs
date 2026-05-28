@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using System.Threading.Channels;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.Memory;
@@ -496,6 +497,56 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task SubAgent_approval_wait_activity_suspends_parent_tool_watchdog()
+    {
+        var fakeTool = new FakeNetclawTool("shell_execute", "ok");
+        var policy = CreateApprovalRequiredPolicy();
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("call-activity-approval", "shell_execute",
+                    new Dictionary<string, object?> { ["Command"] = "git push origin main" })
+            ]
+        };
+
+        var releaseSignal = new TaskCompletionSource<ParentApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var approvalBridge = new DelayingParentApprovalBridge(releaseSignal.Task);
+        var activityChannel = Channel.CreateUnbounded<ToolActivityUpdate>();
+
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy));
+
+        var runTask = agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Push to origin",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ApprovalBridge = approvalBridge,
+                ActivitySink = activityChannel.Writer
+            },
+            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
+        var waitingActivity = await ReadActivityAsync(
+            activityChannel.Reader,
+            "awaiting human approval",
+            TestContext.Current.CancellationToken);
+        Assert.True(waitingActivity.SuspendsInactivityWatchdog);
+
+        releaseSignal.SetResult(ParentApprovalDecision.ApprovedOnce);
+        var resolvedActivity = await ReadActivityAsync(
+            activityChannel.Reader,
+            "approval resolved",
+            TestContext.Current.CancellationToken);
+        Assert.False(resolvedActivity.SuspendsInactivityWatchdog);
+
+        var result = await runTask;
+        Assert.True(result.Success, $"Expected success but got: {result.Output}");
+    }
+
+    [Fact]
     public async Task SubAgent_cancels_promptly_on_external_cancellation_during_approval_wait()
     {
         // External cancellation (parent passivation, daemon restart, user
@@ -701,6 +752,23 @@ public class SubAgentActorTests : TestKit
             .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
             .Single(r => r.CallId == callId)
             .Result?.ToString();
+    }
+
+    private static async Task<ToolActivityUpdate> ReadActivityAsync(
+        ChannelReader<ToolActivityUpdate> reader,
+        string phase,
+        CancellationToken ct)
+    {
+        while (await reader.WaitToReadAsync(ct))
+        {
+            while (reader.TryRead(out var activity))
+            {
+                if (string.Equals(activity.Phase, phase, StringComparison.Ordinal))
+                    return activity;
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"Expected activity phase '{phase}'.");
     }
 
     [Fact]

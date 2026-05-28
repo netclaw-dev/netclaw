@@ -557,6 +557,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 RequestedAtMs = NowMs()
             };
 
+            if (!msg.PersistApprovalState)
+            {
+                ApplyToolApprovalRequested(evt, persistApprovalState: false);
+                EmitOutput(msg);
+                return;
+            }
+
             Persist(evt, e =>
             {
                 ApplyToolApprovalRequested(e);
@@ -3155,6 +3162,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private void ApplyToolApprovalRequested(ToolApprovalRequested evt)
+        => ApplyToolApprovalRequested(evt, persistApprovalState: true);
+
+    private void ApplyToolApprovalRequested(ToolApprovalRequested evt, bool persistApprovalState)
     {
         _pendingToolInteractions[evt.CallId] = new PendingToolInteraction(
             evt.CallId,
@@ -3171,6 +3181,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.AdoptedSpeakerIds,
             evt.Cwd,
             evt.RequestedAtMs,
+            persistApprovalState,
             evt.OptionKeys,
             evt.Candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToArray());
         _resolvedToolApprovals.Remove(evt.CallId);
@@ -3527,6 +3538,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        if (!_approvalChannel.IsPending(msg.CallId))
+        {
+            _log.Warning(
+                "Ignoring tool interaction response for call {CallId}: prompt no longer has a live approval wait",
+                msg.CallId);
+            EmitExpiredPromptNotice();
+            TryReplyNack(ApprovalNackReasons.PromptExpired);
+            return;
+        }
+
         try
         {
             var authorization = await AuthorizeApprovalResponseAsync(pending, msg);
@@ -3536,9 +3557,34 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            if (!pending.PersistApprovalState)
+            {
+                if (!_approvalChannel.Complete(msg.CallId, decision))
+                {
+                    _log.Warning(
+                        "Ignoring tool interaction response for call {CallId}: approval wait expired before completion",
+                        msg.CallId);
+                    EmitExpiredPromptNotice();
+                    TryReplyNack(ApprovalNackReasons.PromptExpired);
+                    return;
+                }
+
+                TryReplyAck();
+                return;
+            }
+
             PersistApprovalResolved(msg, decision, () =>
             {
-                _approvalChannel.Complete(msg.CallId, decision);
+                if (!_approvalChannel.Complete(msg.CallId, decision))
+                {
+                    _log.Warning(
+                        "Ignoring tool interaction response for call {CallId}: approval wait expired before completion",
+                        msg.CallId);
+                    EmitExpiredPromptNotice();
+                    TryReplyNack(ApprovalNackReasons.PromptExpired);
+                    return;
+                }
+
                 TryReplyAck();
             });
         }

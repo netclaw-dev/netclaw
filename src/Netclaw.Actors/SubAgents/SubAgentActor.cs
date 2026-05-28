@@ -331,7 +331,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.WaitingForParentApproval;
             _pendingApprovalWaits++;
-            EmitActivity("awaiting human approval");
+            EmitActivity("awaiting human approval", suspendsInactivityWatchdog: true);
         });
 
         Receive<SubAgentApprovalWaitCompleted>(_ =>
@@ -461,8 +461,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         => Timers.StartSingleTimer(TimeoutTimerKey, SubAgentTimeout.Instance, _inactivityBudget);
 
     /// <summary>Emit a liveness/progress item to the spawning tool's stream, if any.</summary>
-    private void EmitActivity(string phase)
-        => _activitySink?.TryWrite(new ToolActivityUpdate(phase));
+    private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false)
+        => _activitySink?.TryWrite(new ToolActivityUpdate(phase, SuspendsInactivityWatchdog: suspendsInactivityWatchdog));
 
     /// <summary>Record forward progress: re-arm the inactivity watchdog and emit activity.</summary>
     private void RecordProgress(string phase)
@@ -688,8 +688,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (ToolApprovalRequiredException)
                 {
-                    throw new InvalidOperationException(
+                    throw new ParentApprovalUnavailableException(
                         $"Tool '{tc.Name}' requires interactive approval, but no parent approval bridge is available.");
+                }
+                catch (ParentApprovalUnavailableException)
+                {
+                    throw;
                 }
                 catch (OperationCanceledException) when (externalCt.IsCancellationRequested)
                 {

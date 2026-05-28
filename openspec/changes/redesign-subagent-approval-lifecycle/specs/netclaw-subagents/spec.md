@@ -34,6 +34,14 @@ Sub-agent approval prompts SHALL use the parent session turn's execution authori
 - **AND** the sub-agent completes with a failed `SubAgentResult`
 - **AND** no default `Personal` audience or synthetic requester is substituted
 
+#### Scenario: Human approval requires requester binding
+- **GIVEN** a sub-agent approval-gated tool call has a parent approval bridge
+- **AND** the parent turn is not verified automation
+- **AND** the parent turn has no requester sender identity or no requester principal
+- **WHEN** approval is required
+- **THEN** no approval prompt is emitted
+- **AND** the sub-agent completes with a failed `SubAgentResult`
+
 ### Requirement: Sub-agent watchdog pauses during human approval
 
 The sub-agent inactivity watchdog SHALL treat parent approval waits as intentional suspension. While one or more approval waits are active, watchdog timeout ticks SHALL NOT complete the sub-agent as inactive. When the last approval wait settles, the watchdog SHALL be re-baselined so future inactivity is still bounded.
@@ -44,6 +52,13 @@ The sub-agent inactivity watchdog SHALL treat parent approval waits as intention
 - **WHEN** the approval eventually arrives
 - **THEN** the sub-agent applies the approval outcome
 - **AND** the sub-agent is not failed for inactivity during the wait
+
+#### Scenario: Parent spawn-agent watchdog pauses during approval
+- **GIVEN** a parent session is consuming a streaming `spawn_agent` tool call
+- **AND** the child sub-agent is waiting for human approval longer than the parent tool inactivity budget
+- **WHEN** the approval wait is still active
+- **THEN** the parent `spawn_agent` tool call is not timed out for inactivity
+- **AND** the parent tool watchdog resumes after the approval wait settles
 
 #### Scenario: Parallel approval waits keep watchdog paused until all settle
 - **GIVEN** a sub-agent tool batch with two approval-gated calls

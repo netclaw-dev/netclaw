@@ -57,9 +57,9 @@ Alternative considered: let sub-agents display their own approval UI. Rejected b
 
 ### Decision 4: Approval wait pauses the inactivity watchdog
 
-Waiting for a human approval decision is intentional suspension, not sub-agent inactivity. The sub-agent should cancel or suppress the inactivity timer while one or more approval waits are active, then re-baseline the timer when the last wait completes.
+Waiting for a human approval decision is intentional suspension, not sub-agent inactivity. The sub-agent should cancel or suppress the inactivity timer while one or more approval waits are active, then re-baseline the timer when the last wait completes. The streaming `spawn_agent` tool call in the parent session must receive the same signal, otherwise the parent tool-call watchdog can cancel a healthy child that is only waiting on a human.
 
-Parallel tool calls may produce parallel approval waits. The actor therefore needs a count or equivalent keyed state rather than a single boolean. Underflow or double-completion is a bug and should be logged loudly rather than silently clamped.
+Parallel tool calls may produce parallel approval waits. The actor therefore needs a count or equivalent keyed state rather than a single boolean. Underflow or double-completion is a bug and should be logged loudly rather than silently clamped. The parent stream watchdog should suspend on the child "awaiting approval" activity and resume on the next non-suspending activity or terminal completion.
 
 Alternative considered: keep the watchdog active while waiting. Rejected because it turns slow human approval into a false sub-agent timeout.
 

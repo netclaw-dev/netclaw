@@ -29,6 +29,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
     private readonly RecordingRoleChatClientProvider _clientProvider = new();
     private RecordingContextTool? _recordingFileReadTool;
+    private RecordingContextTool? _recordingShellTool;
 
     public SubAgentSpawnIntegrationTests(ITestOutputHelper output) : base(output)
     {
@@ -127,8 +128,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         services.AddSingleton(skillRegistry);
 
         var registry = new ToolRegistry();
+        var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
         var toolAccessPolicy = new ToolAccessPolicy(
-            new ToolConfig(),
+            toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
@@ -148,6 +157,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             Visibility = SubAgentVisibility.UserFacing,
             EmitStructuredFindings = false
         });
+        subAgentRegistry.Register(new SubAgentProfile
+        {
+            Name = "sheller",
+            Description = "Run approved shell commands",
+            SystemPrompt = "You run shell commands when approved.",
+            ToolNames = ["shell_execute"],
+            ModelRole = ModelRole.Compaction,
+            Visibility = SubAgentVisibility.UserFacing,
+            EmitStructuredFindings = false
+        });
 
         var spawner = new SubAgentSpawner(
             _clientProvider,
@@ -160,6 +179,8 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         registry.Register(new SpawnAgentTool(subAgentRegistry, spawner, subAgentPaths));
         _recordingFileReadTool = new RecordingContextTool("file_read", "stub file content", "file");
         registry.Register(_recordingFileReadTool);
+        _recordingShellTool = new RecordingContextTool("shell_execute", "shell ok", "shell");
+        registry.Register(_recordingShellTool);
 
         services.AddSingleton(registry);
         services.AddSingleton(subAgentRegistry);
@@ -237,6 +258,163 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             m.Role == Microsoft.Extensions.AI.ChatRole.System && (m.Text?.Contains("test assistant with subagent support", StringComparison.Ordinal) ?? false));
         Assert.DoesNotContain(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.User && (m.Text?.Contains("Use a subagent to summarize the file", StringComparison.Ordinal) ?? false));
+    }
+
+    [Fact]
+    public async Task Spawn_agent_subagent_approval_uses_parent_authority_and_resumes_after_approval()
+    {
+        _clientProvider.Main.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-spawn-shell",
+                "spawn_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agent"] = "sheller",
+                    ["task"] = "Push the current branch"
+                })
+        ];
+        _clientProvider.Compaction.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-subagent-shell",
+                "shell_execute",
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = "git push origin main"
+                })
+        ];
+
+        var sessionId = new SessionId("console/subagent-approval-integration");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("subagent-approval-events");
+        var source = BuildPersonalSource();
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use a subagent to push the branch",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("spawn_agent", toolCall.ToolName.Value);
+
+        var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(SubAgentPhase.Started, started.Phase);
+
+        var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("call-subagent-shell", request.CallId.Value);
+        Assert.Equal("shell_execute", request.ToolName.Value);
+        Assert.Equal(source.SenderId, request.RequesterSenderId);
+        Assert.Equal(source.Principal, request.RequesterPrincipal);
+        Assert.False(request.PersistApprovalState);
+        Assert.Contains(request.Options, o => o.Key.Value == ApprovalOptionKeys.ApproveOnce);
+
+        var approvalReply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = request.CallId,
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = source.SenderId!
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(approvalReply);
+
+        var completed = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(SubAgentPhase.Completed, completed.Phase);
+        Assert.True(completed.Success);
+
+        var result = await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("spawn_agent", result.ToolName.Value);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotNull(_recordingShellTool);
+        Assert.True(_recordingShellTool!.WasCalled);
+        Assert.Equal(TrustAudience.Personal, _recordingShellTool.LastContext?.Audience);
+    }
+
+    [Fact]
+    public async Task Spawn_agent_subagent_approval_expires_after_parent_session_recovery()
+    {
+        _clientProvider.Main.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-spawn-shell-expire",
+                "spawn_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agent"] = "sheller",
+                    ["task"] = "Push the current branch"
+                })
+        ];
+        _clientProvider.Compaction.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-subagent-shell-expire",
+                "shell_execute",
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = "git push origin main"
+                })
+        ];
+
+        var sessionId = new SessionId("console/subagent-approval-expired");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("subagent-approval-expired-events");
+        var source = BuildPersonalSource();
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use a subagent to push the branch",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(request.PersistApprovalState);
+        Assert.False(_recordingShellTool!.WasCalled);
+
+        await ColdRespawnAsync(sessionId);
+
+        var subscriberB = CreateTestProbe("subagent-approval-expired-events-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var reply = await sessionManager.Ask<ICommandReply>(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = request.CallId,
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = source.SenderId!
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var nack = Assert.IsType<CommandNack>(reply);
+        Assert.Equal(ApprovalNackReasons.PromptExpired, nack.Reason);
+        var notice = await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("expired", notice.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.False(_recordingShellTool.WasCalled);
     }
 
     [Fact]
@@ -554,6 +732,16 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         }
 
         throw new Xunit.Sdk.XunitException("Expected TurnCompleted but only received other session outputs.");
+    }
+
+    private async Task ColdRespawnAsync(SessionId sessionId)
+    {
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(child);
+        Sys.Stop(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     private sealed class RecordingRoleChatClientProvider : IChatClientProvider

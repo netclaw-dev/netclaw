@@ -27,6 +27,7 @@ internal sealed record PendingToolInteraction(
     IReadOnlyList<string> AdoptedSpeakerIds,
     string? Cwd,
     long RequestedAtMs,
+    bool PersistApprovalState,
     // Option keys that were actually offered to the user when the prompt was
     // rendered. Persisted so a later response cannot select a pruned scope.
     IReadOnlyList<string> OptionKeys,

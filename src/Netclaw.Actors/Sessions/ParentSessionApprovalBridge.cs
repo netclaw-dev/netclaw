@@ -58,6 +58,8 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         bool isMessy,
         CancellationToken ct)
     {
+        EnsureAuthorityContext();
+
         var waitTask = _channel.WaitForApprovalAsync(callId, Timeout.InfiniteTimeSpan, ct);
 
         // Emit verbatim from the gate's computed options so persistent-grant
@@ -79,6 +81,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             Candidates = candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToList(),
             Cwd = cwd,
             IsMessy = isMessy,
+            PersistApprovalState = false,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
@@ -99,5 +102,19 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             ApprovalDecision.TimedOut => ParentApprovalDecision.TimedOut,
             _ => ParentApprovalDecision.Denied
         };
+    }
+
+    private void EnsureAuthorityContext()
+    {
+        if (_requesterPrincipal is null)
+            throw new ParentApprovalUnavailableException(
+                "Sub-agent approval requires parent requester principal context.");
+
+        if (_requesterPrincipal is not PrincipalClassification.VerifiedAutomation
+            && _requesterSenderId is null)
+        {
+            throw new ParentApprovalUnavailableException(
+                "Sub-agent approval requires parent requester sender context.");
+        }
     }
 }
