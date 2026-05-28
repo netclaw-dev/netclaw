@@ -1,0 +1,27 @@
+## 1. Context And Contract
+
+- [x] 1.1 Verify current sub-agent approval code maps the parent session authority context from the #1213 field list without synthesizing requester or audience defaults.
+- [x] 1.2 Keep parent-to-child context copying isolated at the `SubAgentSpawner` / `RunSubAgent` boundary so a future `TurnContext` implementation can replace the interim mapping cleanly.
+
+## 2. Approval Lifecycle Implementation
+
+- [x] 2.1 Ensure approval-gated sub-agent calls without a parent approval bridge fail closed with an explicit denial-shaped result or terminal failure, and never execute the gated tool.
+- [x] 2.2 Ensure approved decisions retry only the original blocked tool call with retry-local approval state.
+- [x] 2.3 Ensure denied and timed-out decisions produce tool-result messages and do not execute the gated tool.
+- [x] 2.4 Ensure external cancellation, parent stop, and stale terminal messages complete the sub-agent at most once and cancel pending approval waits.
+- [x] 2.5 Ensure the inactivity watchdog remains paused while one or more parent approval waits are active and is re-baselined when the last wait settles.
+
+## 3. Tests
+
+- [x] 3.1 Add or update sub-agent actor tests for no-bridge fail-closed approval behavior.
+- [x] 3.2 Add or update sub-agent actor tests for approve-once isolation across sibling calls, later iterations, and later sub-agent runs.
+- [x] 3.3 Add or update sub-agent actor tests for denied and timed-out approval decisions.
+- [x] 3.4 Add or update sub-agent actor tests for cancellation and terminal-race idempotence during approval waits.
+- [x] 3.5 Add or update sub-agent actor tests proving parallel approval waits pause the watchdog until all waits settle.
+
+## 4. Validation
+
+- [x] 4.1 Run targeted sub-agent and approval-gate tests.
+- [x] 4.2 Run `openspec validate redesign-subagent-approval-lifecycle --strict`.
+- [x] 4.3 Run `dotnet slopwatch analyze`.
+- [x] 4.4 Run `./scripts/Add-FileHeaders.ps1 -Verify`.

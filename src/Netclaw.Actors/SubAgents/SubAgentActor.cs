@@ -117,14 +117,26 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     /// <summary>
     /// Final cleanup if the actor is stopped externally (parent supervision,
     /// <c>PoisonPill</c>) without going through <see cref="Complete"/>. Cancels
-    /// and disposes both CTSes so any in-flight approval wait running on the
-    /// thread pool unblocks promptly. <see cref="Complete"/> already nulls the
-    /// CTSes, so the null-conditional access is intentional.
+    /// both CTSes so any in-flight approval wait running on the thread pool
+    /// unblocks promptly, then replies once to any outstanding ask. <see cref="Complete"/>
+    /// already nulls the CTSes, so the null-conditional access is intentional.
     /// </summary>
     protected override void PostStop()
     {
         _executionCts?.Cancel();
         _externalCts?.Cancel();
+        if (!_completed)
+        {
+            _completed = true;
+            _replyTo.Tell(new SubAgentResult
+            {
+                Success = false,
+                Output = "Subagent stopped before completion.",
+                AgentName = _definition.Name,
+                Findings = [],
+                FindingsCount = 0
+            });
+        }
         _executionCts?.Dispose();
         _externalCts?.Dispose();
         _externalCancellationRegistration.Dispose();
@@ -670,6 +682,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     {
                         Role = Protocol.ChatRole.Tool,
                         Content = reason,
+                        ToolCallId = new ToolCallId(tc.CallId),
+                        Name = tc.Name
+                    };
+                }
+                catch (ToolApprovalRequiredException)
+                {
+                    return new SerializableChatMessage
+                    {
+                        Role = Protocol.ChatRole.Tool,
+                        Content = "Tool access denied: approval_required_without_parent_bridge",
                         ToolCallId = new ToolCallId(tc.CallId),
                         Name = tc.Name
                     };
