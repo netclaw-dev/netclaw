@@ -33,7 +33,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
         ConfigureSearch(steps, SearchBackend.Brave);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
         ConfigureIdentity(steps, "Netclaw", "America/Chicago");
 
         var config = AssembleConfig(steps);
@@ -54,7 +53,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         EnterAndConfigurePosture(steps, DeploymentPosture.Team);
         EnterFeatureSelection(steps);
         ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-        ConfigureExposure(steps, ExposureMode.TailscaleServe, webhooks: true);
         ConfigureIdentity(steps, "TeamBot", "UTC");
 
         var config = AssembleConfig(steps);
@@ -68,8 +66,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         AssertSectionEnabled(config, "SubAgents", true);
         AssertSectionEnabled(config, "Webhooks", true);
 
-        var daemon = GetSection(config, "Daemon");
-        Assert.Equal("tailscale-serve", daemon["ExposureMode"]);
+        Assert.False(config.ContainsKey("Daemon"));
     }
 
     [Fact]
@@ -86,7 +83,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         featureStep.OnLeave();
 
         ConfigureSearch(steps, SearchBackend.SearXng, searXngEndpoint: "https://search.example.com");
-        ConfigureExposure(steps, ExposureMode.TailscaleFunnel, webhooks: false);
         ConfigureIdentity(steps, "PublicBot", "Europe/London");
 
         var config = AssembleConfig(steps);
@@ -103,8 +99,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         Assert.Equal("searxng", search["Backend"]);
         Assert.Equal("https://search.example.com", search["SearXngEndpoint"]);
 
-        var daemon = GetSection(config, "Daemon");
-        Assert.Equal("tailscale-funnel", daemon["ExposureMode"]);
+        Assert.False(config.ContainsKey("Daemon"));
     }
 
     [Fact]
@@ -121,7 +116,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         featureStep.OnLeave();
 
         ConfigureSearch(steps, SearchBackend.Brave);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
         ConfigureIdentity(steps, "Netclaw", "America/New_York");
 
         var config = AssembleConfig(steps);
@@ -140,7 +134,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         var steps = BuildCoreSteps();
         EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
         ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
 
         var identityStep = GetStep<IdentityStepViewModel>(steps);
         identityStep.AgentName = "Jarvis";
@@ -156,40 +149,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         Assert.Equal("~/projects", workspaces["Directory"]);
 
         AssertNoDisabledFeatureFlags(config);
-    }
-
-    [Fact]
-    public void PersonalPosture_ExposureModeLocal_NoDaemonSection()
-    {
-        var steps = BuildCoreSteps();
-        EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-        ConfigureSearch(steps, SearchBackend.DuckDuckGo);
-        ConfigureExposure(steps, ExposureMode.Local, webhooks: false);
-        ConfigureIdentity(steps, "Netclaw", "UTC");
-
-        var config = AssembleConfig(steps);
-
-        Assert.False(config.ContainsKey("Daemon"));
-        AssertNoEnabledKey(config, "Webhooks");
-    }
-
-    [Fact]
-    public void TeamPosture_ExposureTailscaleFunnel_WebhooksOn()
-    {
-        var steps = BuildCoreSteps();
-        EnterAndConfigurePosture(steps, DeploymentPosture.Team);
-        EnterFeatureSelection(steps);
-        ConfigureSearch(steps, SearchBackend.Brave);
-        ConfigureExposure(steps, ExposureMode.TailscaleFunnel, webhooks: true);
-        ConfigureIdentity(steps, "Netclaw", "UTC");
-
-        var config = AssembleConfig(steps);
-
-        var daemon = GetSection(config, "Daemon");
-        Assert.Equal("tailscale-funnel", daemon["ExposureMode"]);
-
-        // Webhooks: both the feature gate and the exposure step contribute
-        AssertSectionEnabled(config, "Webhooks", true);
     }
 
     [Fact]
@@ -237,8 +196,7 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
             new SecurityPostureStepViewModel(),
             new FeatureSelectionStepViewModel(),
             new SearchStepViewModel(),
-            new IdentityStepViewModel(),
-            new ExposureModeStepViewModel()
+            new IdentityStepViewModel()
         ];
     }
 
@@ -267,13 +225,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         step.SelectedBackend = backend;
         if (searXngEndpoint is not null)
             step.SearXngEndpoint = searXngEndpoint;
-    }
-
-    private static void ConfigureExposure(List<IWizardStepViewModel> steps, ExposureMode mode, bool webhooks)
-    {
-        var step = GetStep<ExposureModeStepViewModel>(steps);
-        step.SelectedMode = mode;
-        step.WebhooksEnabled = webhooks;
     }
 
     private static void ConfigureIdentity(List<IWizardStepViewModel> steps, string name, string timezone)

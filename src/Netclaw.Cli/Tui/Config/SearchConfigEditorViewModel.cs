@@ -39,6 +39,7 @@ internal sealed record SearchFieldCommitResult(bool Success, IReadOnlyList<Searc
 
 internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 {
+    private readonly SearchSectionSpec _spec;
     private readonly NetclawPaths _paths;
     private readonly SearchEditorPersistenceMapper _mapper;
     private readonly SearchEditorValidationAdapter _validator;
@@ -49,34 +50,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private SearchProbeResult? _lastProbeResult;
     private CancellationTokenSource? _validationSpinnerCts;
 
-    public IReadOnlyList<ProjectedConfigField> Fields { get; } =
-    [
-        new(
-            Path: "Search.Backend",
-            PropertyName: "Backend",
-            Label: "Backend",
-            Description: "Search backend identifier.",
-            ValueKind: ConfigFieldValueKind.String,
-            Storage: ConfigFieldStorage.ConfigFile,
-            Widget: ConfigFieldWidget.EnumSelection,
-            Nullable: false,
-            DefaultValue: SearchBackend.DuckDuckGo.ToWireValue(),
-            TrimDefaultOnSave: true,
-            PreserveBlankSecret: false,
-            Placeholder: null,
-            Hint: "Choose your web search provider.",
-            ApplicableWhenPath: null,
-            ApplicableWhenEquals: null,
-            InactiveText: null,
-            EnumOptions:
-            [
-                new("duckduckgo", "DuckDuckGo"),
-                new("brave", "Brave"),
-                new("searxng", "SearXng (self-hosted)")
-            ]),
-        SearchFields.BraveApiKey,
-        SearchFields.SearXngEndpoint,
-    ];
+    public IReadOnlyList<ProjectedConfigField> Fields => _spec.Fields;
 
     public Dictionary<string, ReactiveProperty<string>> FieldValues { get; } = new(StringComparer.Ordinal);
 
@@ -88,6 +62,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         IHttpClientFactory? httpClientFactory = null,
         TimeProvider? timeProvider = null)
     {
+        _spec = new SearchSectionSpec();
         _paths = paths;
         _httpClientFactory = httpClientFactory;
         _timeProvider = timeProvider ?? TimeProvider.System;
@@ -114,13 +89,9 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public bool IsDirty => ComputeIsDirty();
     public SearchProbeResult? LastProbeResult => _lastProbeResult;
+    public string ConfiguredLegend => _spec.GetConfiguredLegend();
     public string CurrentBackendValue => _model.Backend.ToWireValue();
-    public string CurrentBackendLabel => _model.Backend switch
-    {
-        SearchBackend.Brave => "Brave",
-        SearchBackend.SearXng => "SearXng (self-hosted)",
-        _ => "DuckDuckGo",
-    };
+    public string CurrentBackendLabel => _spec.GetBackendLabel(_model.Backend);
 
     public IReadOnlyList<ConfigEnumOption> BackendOptions { get; } =
     [
@@ -129,12 +100,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         new("searxng", "SearXng (self-hosted)")
     ];
 
-    public ProjectedConfigField? CurrentProviderField => _model.Backend switch
-    {
-        SearchBackend.Brave => SearchFields.BraveApiKey,
-        SearchBackend.SearXng => SearchFields.SearXngEndpoint,
-        _ => null,
-    };
+    public ProjectedConfigField? CurrentProviderField => _spec.GetProviderField(_model);
 
     public bool IsCurrentBackendConfigured => _model.Backend switch
     {
@@ -142,6 +108,18 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         SearchBackend.SearXng => !string.IsNullOrWhiteSpace(_model.SearXng.Endpoint),
         _ => true,
     };
+
+    public string GetProviderDescription(string backend) => _spec.GetProviderDescription(backend);
+
+    public string GetEntryTitle(ProjectedConfigField field) => _spec.GetEntryTitle(field);
+
+    public string GetEntryHint(ProjectedConfigField field) => _spec.GetEntryHint(field, _model);
+
+    public string GetValidatingMessage() => _spec.GetValidatingMessage(_model);
+
+    public string GetSavedMessage() => _spec.GetSavedMessage(_model);
+
+    public string GetSavedNextStepText() => _spec.GetSavedNextStepText();
 
     public override void Dispose()
     {
@@ -578,44 +556,4 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
-    private static class SearchFields
-    {
-        internal static readonly ProjectedConfigField BraveApiKey = new(
-            Path: "Search.BraveApiKey",
-            PropertyName: "BraveApiKey",
-            Label: "Brave API key",
-            Description: "Brave Search API key. Required when Backend is Brave. Stored in secrets.json.",
-            ValueKind: ConfigFieldValueKind.String,
-            Storage: ConfigFieldStorage.SecretsFile,
-            Widget: ConfigFieldWidget.PasswordInput,
-            Nullable: true,
-            DefaultValue: null,
-            TrimDefaultOnSave: false,
-            PreserveBlankSecret: true,
-            Placeholder: "Enter Brave Search API key...",
-            Hint: "Stored in secrets.json. Leave blank to keep the existing key.",
-            ApplicableWhenPath: "Search.Backend",
-            ApplicableWhenEquals: "brave",
-            InactiveText: "(not configured)",
-            EnumOptions: []);
-
-        internal static readonly ProjectedConfigField SearXngEndpoint = new(
-            Path: "Search.SearXngEndpoint",
-            PropertyName: "SearXngEndpoint",
-            Label: "SearXng instance URL",
-            Description: "SearXNG instance base URL. Required when Backend is SearXng.",
-            ValueKind: ConfigFieldValueKind.String,
-            Storage: ConfigFieldStorage.ConfigFile,
-            Widget: ConfigFieldWidget.TextInput,
-            Nullable: true,
-            DefaultValue: null,
-            TrimDefaultOnSave: true,
-            PreserveBlankSecret: false,
-            Placeholder: "https://search.example.com",
-            Hint: "Enter the base URL of your SearXNG instance.",
-            ApplicableWhenPath: "Search.Backend",
-            ApplicableWhenEquals: "searxng",
-            InactiveText: "(not configured)",
-            EnumOptions: []);
-    }
 }

@@ -6,6 +6,7 @@
 using System.Net;
 using System.Net.Sockets;
 using Netclaw.Configuration;
+using Netclaw.Cli.Tui.Workflow;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -101,13 +102,11 @@ public sealed class ExposureModeStepView : IWizardStepView
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  How will this Netclaw daemon be accessed?").WithForeground(Color.White))
-            .WithSpacing(1)
-            .WithChild(modeList)
-            .WithSpacing(1)
-            .WithChild(new TextNode("  ⚠ = exposes daemon beyond this machine. Ensure auth is configured first.")
-                .WithForeground(Color.BrightBlack));
+        return WorkflowViewComponents.BuildSelectionScreen(
+            heading: "How will this Netclaw daemon be accessed?",
+            selector: modeList,
+            supportText: "⚠ = exposes daemon beyond this machine. Ensure auth is configured first.",
+            supportColor: Color.BrightBlack);
     }
 
     private ILayoutNode BuildReverseProxyHost(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
@@ -330,16 +329,15 @@ public sealed class ExposureModeStepView : IWizardStepView
             .Subscribe(_ => callbacks.AdvanceStep())
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Tailscale Serve: daemon accessible within your tailnet only.")
-                .WithForeground(Color.Cyan))
-            .WithSpacing(1)
-            .WithChild(new TextNode("  Devices on your tailnet can reach the daemon. Not reachable from the public internet.")
-                .WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("  Ensure `tailscaled` is running before starting Netclaw.")
-                .WithForeground(Color.BrightBlack))
-            .WithSpacing(1)
-            .WithChild(_confirmList);
+        return WorkflowViewComponents.BuildNoticeScreen(
+            title: "Tailscale Serve: daemon accessible within your tailnet only.",
+            bodyLines:
+            [
+                "Devices on your tailnet can reach the daemon. Not reachable from the public internet.",
+                "Ensure `tailscaled` is running before starting Netclaw."
+            ],
+            confirmation: _confirmList,
+            titleColor: Color.Cyan);
     }
 
     private ILayoutNode BuildWebhookToggle(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
@@ -368,15 +366,11 @@ public sealed class ExposureModeStepView : IWizardStepView
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
-            .WithChild(new TextNode("  Should this daemon accept inbound webhooks?").WithForeground(Color.White))
-            .WithSpacing(1)
-            .WithChild(webhookList)
-            .WithSpacing(1)
-            .WithChild(new TextNode("  Inbound webhooks let external services trigger autonomous runs via HTTP POST.")
-                .WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("  This is separate from outbound notification webhooks.")
-                .WithForeground(Color.BrightBlack));
+        return WorkflowViewComponents.BuildSelectionScreen(
+            heading: "Should this daemon accept inbound webhooks?",
+            selector: webhookList,
+            supportText: "Inbound webhooks let external services trigger autonomous runs via HTTP POST.\nThis is separate from outbound notification webhooks.",
+            supportColor: Color.BrightBlack);
     }
 
     private static string FormatServingUrl(string host)

@@ -24,6 +24,7 @@ public sealed class WizardConfigBuilder
 {
     private readonly NetclawPaths _paths;
     private readonly Dictionary<string, object> _existingConfig;
+    private readonly List<SectionContribution> _sectionContributions = [];
 
     public WizardConfigBuilder(NetclawPaths paths)
     {
@@ -407,6 +408,7 @@ public sealed class WizardConfigBuilder
             MergeEnabledFlag(config, "Webhooks", FeatureSelections.WebhooksEnabled);
         }
 
+        ApplySectionContributions(config);
         return config;
     }
 
@@ -429,9 +431,13 @@ public sealed class WizardConfigBuilder
         }
     }
 
-    internal Dictionary<string, object> ApplyContribution(SectionContribution contribution)
+    internal void ApplyContribution(SectionContribution contribution)
     {
-        var config = BuildConfigDictionary();
+        _sectionContributions.Add(contribution);
+    }
+
+    private static void ApplyContribution(Dictionary<string, object> config, SectionContribution contribution)
+    {
         foreach (var action in contribution.FieldActionsOrEmpty)
         {
             switch (action.Action)
@@ -444,8 +450,12 @@ public sealed class WizardConfigBuilder
                     break;
             }
         }
+    }
 
-        return config;
+    private void ApplySectionContributions(Dictionary<string, object> config)
+    {
+        foreach (var contribution in _sectionContributions)
+            ApplyContribution(config, contribution);
     }
 }
 

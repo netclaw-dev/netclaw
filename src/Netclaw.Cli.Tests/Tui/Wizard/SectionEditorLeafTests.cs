@@ -99,3 +99,38 @@ public sealed class FeatureSelectionSectionEditorTests : SectionEditorTestBase<F
         Assert.Contains(contribution.FieldActionsOrEmpty, a => a.Path == "Webhooks.Enabled");
     }
 }
+
+public sealed class ExposureModeSectionEditorTests : SectionEditorTestBase<ExposureModeStepViewModel>
+{
+    [Fact]
+    public void BuildContribution_ReverseProxy_EmitsExistingDaemonShapeFields()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedMode = ExposureMode.ReverseProxy;
+        editor.Host = "10.0.0.5";
+        editor.TrustedProxies = ["10.0.0.0/24"];
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.ExposureMode" && Equals(a.Value, "reverse-proxy"));
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.Host" && Equals(a.Value, "10.0.0.5"));
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.TrustedProxies" && Assert.IsType<string[]>(a.Value).SequenceEqual(["10.0.0.0/24"]));
+    }
+
+    [Fact]
+    public void BuildContribution_Local_DropsActiveHostField()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedMode = ExposureMode.Local;
+
+        var contribution = editor.BuildContribution(editor);
+
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.ExposureMode" && Equals(a.Value, "local"));
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.Host" && a.Action == SectionFieldActionKind.Delete);
+    }
+}

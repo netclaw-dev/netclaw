@@ -22,7 +22,7 @@ public sealed class MenuRegistryAuditTests
         var registry = services.GetRequiredService<SectionEditorRegistry>();
 
         var ids = registry.Editors.Select(e => e.SectionId).OrderBy(static x => x).ToArray();
-        Assert.Equal(["feature-selection", "identity", "provider", "security-posture"], ids);
+        Assert.Equal(["exposure-mode", "feature-selection", "identity", "provider", "security-posture"], ids);
     }
 
     [Fact]
@@ -59,7 +59,8 @@ public sealed class MenuRegistryAuditTests
             ["provider"] = nameof(ProviderSectionEditorTests),
             ["identity"] = nameof(IdentitySectionEditorTests),
             ["security-posture"] = nameof(SecurityPostureSectionEditorTests),
-            ["feature-selection"] = nameof(FeatureSelectionSectionEditorTests)
+            ["feature-selection"] = nameof(FeatureSelectionSectionEditorTests),
+            ["exposure-mode"] = nameof(ExposureModeSectionEditorTests)
         };
 
         using var services = BuildServices();
@@ -84,7 +85,8 @@ public sealed class MenuRegistryAuditTests
             .AddSectionEditor<ProviderStepViewModel>()
             .AddSectionEditor<IdentityStepViewModel>()
             .AddSectionEditor<SecurityPostureStepViewModel>()
-            .AddSectionEditor<FeatureSelectionStepViewModel>();
+            .AddSectionEditor<FeatureSelectionStepViewModel>()
+            .AddSectionEditor<ExposureModeStepViewModel>();
         return services.BuildServiceProvider();
     }
 

@@ -103,17 +103,7 @@ Wait+Screen@10s /Connect to a private skill server/
 Down
 Enter
 
-# ─── Step 9: Network Exposure ───────────────────────────────────────
-Wait+Screen@10s /How will this Netclaw daemon be accessed/
-# "Local — loopback only" is the first / default option.
-Enter
-
-Wait+Screen@10s /Should this daemon accept inbound webhooks/
-# "No" — second option.
-Down
-Enter
-
-# ─── Step 10: Health Check ──────────────────────────────────────────
+# ─── Step 9: Health Check ───────────────────────────────────────────
 Wait+Screen@10s /Press Enter to run health checks/
 Enter
 

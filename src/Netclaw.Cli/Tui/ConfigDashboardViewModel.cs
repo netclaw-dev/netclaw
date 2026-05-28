@@ -51,7 +51,7 @@ public sealed class ConfigDashboardViewModel : ReactiveViewModel
         new("Search", "Search backend and credentials.", "/search"),
         new("Browser Automation", "Browser automation provider settings."),
         new("Telemetry & Alerting", "Telemetry and outbound webhook alerting."),
-        new("Security & Access", "Posture, enabled features, audience profiles, and exposure mode."),
+        new("Security & Access", "Posture, enabled features, audience profiles, and exposure mode.", "/security"),
         new("Run Full Doctor", "Exit the dashboard and run `netclaw doctor`.", IsTerminal: true),
         new("Quit", "Exit without changing settings.", IsTerminal: true),
     ];

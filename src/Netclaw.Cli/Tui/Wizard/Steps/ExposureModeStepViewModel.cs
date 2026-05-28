@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -22,7 +23,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// One <c>TextInputNode</c> per sub-step matches the established wizard pattern
 /// (see SlackStepView, IdentityStepView).
 /// </summary>
-public sealed class ExposureModeStepViewModel : IWizardStepViewModel
+public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEditor
 {
     /// <summary>Default bind address suggested in the reverse-proxy config sub-step.</summary>
     public const string DefaultReverseProxyHost = "0.0.0.0";
@@ -35,13 +36,42 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     private int _currentSubStep;
     private int _highWaterSubStep;
+    private readonly TimeProvider _timeProvider;
 
     // Bootstrap device state — populated during ContributeSecrets for non-Local modes.
     private string? _bootstrapRawToken;
     private PairedDevice? _bootstrapDevice;
 
+    public ExposureModeStepViewModel()
+        : this(TimeProvider.System, includeWebhookToggle: true)
+    {
+    }
+
+    public ExposureModeStepViewModel(TimeProvider timeProvider)
+        : this(timeProvider, includeWebhookToggle: true)
+    {
+    }
+
+    internal ExposureModeStepViewModel(bool includeWebhookToggle)
+        : this(TimeProvider.System, includeWebhookToggle)
+    {
+    }
+
+    private ExposureModeStepViewModel(TimeProvider timeProvider, bool includeWebhookToggle)
+    {
+        _timeProvider = timeProvider;
+        IncludeWebhookToggle = includeWebhookToggle;
+    }
+
     public string StepId => WizardStepIds.ExposureMode;
     public string DisplayTitle => "Network Exposure";
+    public string SectionId => StepId;
+    public string DisplayName => "Exposure Mode";
+    public string? Category => "Security & Access";
+    public bool ShowInMenu => true;
+    public IReadOnlyList<string> RelevantDoctorChecks => ["Config Schema", "exposure-mode"];
+
+    internal bool IncludeWebhookToggle { get; }
 
     /// <summary>The selected exposure mode. Defaults to <see cref="ExposureMode.Local"/>.</summary>
     public ExposureMode SelectedMode { get; set; } = ExposureMode.Local;
@@ -68,7 +98,14 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     public int CurrentSubStep => _currentSubStep;
 
     /// <summary>Sub-step count varies by mode — see class summary.</summary>
-    public int SubStepCount => IsReverseProxy ? 5 : (NeedsConfirmation ? 3 : 2);
+    public int SubStepCount
+    {
+        get
+        {
+            var count = IsReverseProxy ? 4 : (NeedsConfirmation ? 2 : 1);
+            return IncludeWebhookToggle ? count + 1 : count;
+        }
+    }
 
     /// <summary>True when the selected mode requires a confirmation or notice screen.</summary>
     internal bool NeedsConfirmation => SelectedMode != ExposureMode.Local;
@@ -90,14 +127,14 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     internal int NoticeSubStep => IsReverseProxy ? 3 : 1;
 
     /// <summary>The sub-step index for the inbound webhook toggle (always last in the plan).</summary>
-    internal int WebhookSubStep => SubStepCount - 1;
+    internal int WebhookSubStep => IncludeWebhookToggle ? SubStepCount - 1 : -1;
 
     public string GetHelpText()
     {
         if (_currentSubStep == 0)
             return "  Local is safest — daemon only reachable from this machine. Use tunnels for remote access.";
 
-        if (_currentSubStep == WebhookSubStep)
+        if (IncludeWebhookToggle && _currentSubStep == WebhookSubStep)
             return "  Inbound webhooks let external services trigger autonomous runs via HTTP POST.";
 
         if (IsReverseProxy && _currentSubStep == ReverseProxyHostSubStep)
@@ -152,6 +189,9 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     public void OnEnter(WizardContext context, NavigationDirection direction)
     {
+        if (direction == NavigationDirection.Forward)
+            TryPrefillFromExisting(context);
+
         if (direction == NavigationDirection.Back)
         {
             // SubStepCount depends on SelectedMode, which the operator can change
@@ -167,6 +207,11 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     public void OnLeave() { }
 
+    internal void ReturnToModeSelection()
+    {
+        _currentSubStep = 0;
+    }
+
     /// <summary>
     /// Writes the Daemon section (non-local modes) and Webhooks section (when enabled).
     /// For reverse-proxy mode the section also carries the operator-supplied bind address
@@ -174,7 +219,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
     /// </summary>
     public void ContributeConfig(WizardConfigBuilder builder)
     {
-        if (SelectedMode != ExposureMode.Local)
+        if (IncludeWebhookToggle && SelectedMode != ExposureMode.Local)
         {
             builder.Daemon = new DaemonConfigSection
             {
@@ -184,7 +229,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
             };
         }
 
-        if (WebhooksEnabled)
+        if (IncludeWebhookToggle && WebhooksEnabled)
         {
             builder.Webhooks = new WebhooksConfigSection { Enabled = true };
         }
@@ -213,7 +258,7 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
         var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         _bootstrapDevice = new PairedDevice
         {
             Name = Environment.MachineName,
@@ -230,6 +275,39 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
         => Task.CompletedTask;
+
+    public SectionStatus GetStatus(WizardContext context) => SectionStatus.Configured;
+
+    public string Summary(WizardContext context)
+        => FormatModeLabel(ReadExistingMode(context));
+
+    public IWizardStepViewModel CreateEditor(IServiceProvider services)
+        => new ExposureModeStepViewModel(includeWebhookToggle: false);
+
+    public SectionContribution BuildContribution(IWizardStepViewModel editor)
+    {
+        var vm = (ExposureModeStepViewModel)editor;
+        var actions = new List<SectionFieldAction>
+        {
+            new("Daemon.ExposureMode", SectionFieldActionKind.Set, vm.SelectedMode.ToWireValue())
+        };
+
+        if (vm.SelectedMode == ExposureMode.ReverseProxy)
+        {
+            actions.Add(new SectionFieldAction("Daemon.Host", SectionFieldActionKind.Set,
+                string.IsNullOrWhiteSpace(vm.Host) ? DefaultReverseProxyHost : vm.Host));
+            actions.Add(new SectionFieldAction("Daemon.TrustedProxies", SectionFieldActionKind.Set,
+                vm.TrustedProxies.ToArray()));
+        }
+        else
+        {
+            // Host participates in local/tunnel startup validation. Drop any old
+            // reverse-proxy bind address so non-reverse modes return to loopback defaults.
+            actions.Add(new SectionFieldAction("Daemon.Host", SectionFieldActionKind.Delete));
+        }
+
+        return new SectionContribution(actions);
+    }
 
     /// <summary>
     /// Write the bootstrap paired device to <c>devices.json</c> so the daemon can start
@@ -268,6 +346,55 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel
         var rawToken = rawValue is JsonElement jsonElement ? jsonElement.GetString() : rawValue?.ToString();
         return !string.IsNullOrWhiteSpace(ConfigFileHelper.DecryptIfEncrypted(paths, rawToken));
     }
+
+    private void TryPrefillFromExisting(WizardContext context)
+    {
+        if (context.ExistingConfig is null)
+            return;
+
+        SelectedMode = ReadExistingMode(context);
+
+        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.Host", out var hostValue)
+            && hostValue is string host
+            && !string.IsNullOrWhiteSpace(host))
+        {
+            Host = host;
+        }
+
+        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.TrustedProxies", out var proxiesValue))
+            TrustedProxies = ReadTrustedProxies(proxiesValue);
+    }
+
+    private static ExposureMode ReadExistingMode(WizardContext context)
+    {
+        if (context.ExistingConfig is null
+            || !ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.ExposureMode", out var modeValue))
+        {
+            return ExposureMode.Local;
+        }
+
+        return DaemonConfig.ParseExposureMode(modeValue?.ToString());
+    }
+
+    private static IReadOnlyList<string> ReadTrustedProxies(object? value)
+        => value switch
+        {
+            string[] strings => strings,
+            object[] objects => objects.Select(static item => item?.ToString()).Where(static item => !string.IsNullOrWhiteSpace(item)).Cast<string>().ToArray(),
+            IEnumerable<string> strings => strings.ToArray(),
+            _ => []
+        };
+
+    private static string FormatModeLabel(ExposureMode mode)
+        => mode switch
+        {
+            ExposureMode.Local => "Local",
+            ExposureMode.ReverseProxy => "Reverse Proxy",
+            ExposureMode.TailscaleServe => "Tailscale Serve",
+            ExposureMode.TailscaleFunnel => "Tailscale Funnel",
+            ExposureMode.CloudflareTunnel => "Cloudflare Tunnel",
+            _ => mode.ToString()
+        };
 
     public void Dispose() { }
 }

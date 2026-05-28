@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using R3;
 using Netclaw.Cli.Tui;
+using Netclaw.Cli.Tui.Workflow;
 using Termina.Extensions;
 using Termina.Layout;
 using Termina.Reactive;
@@ -90,55 +91,48 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             _providerSelectionSynced = true;
         }
 
-        return Layouts.Vertical()
-            .WithSpacing(1)
-            .WithChild(new TextNode("  Choose the backend Netclaw uses for web search.").WithForeground(Color.White))
-            .WithChild(BuildProviderList())
-            .WithChild(new TextNode("  (*) active backend   ✓ backend has saved setup").WithForeground(Color.Gray))
-            .WithChild(new TextNode($"  {GetProviderDescription(ViewModel.BackendOptions[_providerIndex].Value)}").WithForeground(Color.Gray));
+        return WorkflowViewComponents.BuildSelectionScreen(
+            heading: "Choose the backend Netclaw uses for web search.",
+            selector: BuildProviderList(),
+            legend: ViewModel.ConfiguredLegend,
+            supportText: ViewModel.GetProviderDescription(ViewModel.BackendOptions[_providerIndex].Value));
     }
 
     private ILayoutNode BuildEntryScreen()
     {
-        var content = Layouts.Vertical().WithSpacing(1);
         var field = ViewModel.CurrentProviderField;
 
         if (field is null)
         {
-            content.WithChild(new TextNode("  DuckDuckGo works without setup, but may hit bot detection.")
-                .WithForeground(Color.White));
-            content.WithChild(new TextNode("  Press Enter to validate and save this provider selection.")
-                .WithForeground(Color.Gray));
-            return content;
+            return WorkflowViewComponents.BuildSelectionScreen(
+                heading: "DuckDuckGo works without setup, but may hit bot detection.",
+                selector: Layouts.Empty(),
+                supportText: "Press Enter to validate and save this provider selection.");
         }
 
         var textInput = EnsureEditingTextInput(field);
         textInput.OnFocused();
 
-        content.WithChild(new TextNode($"  {GetEntryTitle(field)}").WithForeground(Color.White));
-        content.WithChild(new TextNode($"  {field.Label}").WithForeground(Color.White));
-        content.WithChild(NetclawTuiChrome.BuildTextInputPanel(textInput, field.Label));
-
-        content.WithChild(new TextNode($"  {GetEntryHint(field)}").WithForeground(Color.Gray));
-        return content;
+        return WorkflowViewComponents.BuildEntryScreen(
+            title: ViewModel.GetEntryTitle(field),
+            fieldLabel: field.Label,
+            input: textInput,
+            hint: ViewModel.GetEntryHint(field));
     }
 
     private ILayoutNode BuildValidatingScreen()
     {
         var frame = SpinnerFrames[ViewModel.ValidationSpinnerTick.Value % SpinnerFrames.Length];
-        return Layouts.Vertical()
-            .WithSpacing(1)
-            .WithChild(new TextNode("  Validating Search configuration...").WithForeground(Color.White))
-            .WithChild(new TextNode($"  {frame} {GetValidatingMessage()}").WithForeground(Color.Yellow))
-            .WithChild(new TextNode("  This may take a few seconds.").WithForeground(Color.Gray));
+        return WorkflowViewComponents.BuildValidatingScreen(
+            heading: "Validating Search configuration...",
+            message: $"{frame} {ViewModel.GetValidatingMessage()}",
+            supportText: "This may take a few seconds.");
     }
 
     private ILayoutNode BuildSavedScreen()
-        => Layouts.Vertical()
-            .WithSpacing(1)
-            .WithChild(new TextNode($"  \u2714 {ViewModel.CurrentBackendLabel} validated and saved.").WithForeground(Color.Green))
-            .WithChild(new TextNode("  Press Esc to return to Search backends or Up/Down to review providers.")
-                .WithForeground(Color.Gray));
+        => WorkflowViewComponents.BuildSavedScreen(
+            successText: ViewModel.GetSavedMessage(),
+            nextStepText: ViewModel.GetSavedNextStepText());
 
     private ILayoutNode BuildProviderList()
     {
@@ -419,39 +413,6 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         return _textInput;
     }
-
-    private string GetProviderDescription(string backend)
-        => backend switch
-        {
-            "brave" => "Brave Search requires an API key and is usually more reliable than DuckDuckGo.",
-            "searxng" => "SearXNG uses your own endpoint URL and supports self-hosted search.",
-            _ => "DuckDuckGo works without setup, but may hit bot detection.",
-        };
-
-    private string GetEntryTitle(ProjectedConfigField field)
-        => field.Path switch
-        {
-            "Search.BraveApiKey" => "Brave Search requires an API key.",
-            _ => "Enter the base URL of your SearXNG instance.",
-        };
-
-    private string GetEntryHint(ProjectedConfigField field)
-        => field.Path switch
-        {
-            "Search.BraveApiKey" when ViewModel.HasPersistedSecret(field.Path)
-                => "Stored in secrets.json. Leave blank to keep the existing key. Press Enter to validate and save.",
-            "Search.BraveApiKey"
-                => "Stored in secrets.json. Press Enter to validate and save.",
-            _ => "Netclaw will validate the URL and probe it on Enter.",
-        };
-
-    private string GetValidatingMessage()
-        => ViewModel.CurrentBackendValue switch
-        {
-            "brave" => "Probing Brave Search",
-            "searxng" => "Probing SearXNG instance",
-            _ => "Validating DuckDuckGo configuration",
-        };
 
     private bool IsConfigured(string backend)
         => backend switch

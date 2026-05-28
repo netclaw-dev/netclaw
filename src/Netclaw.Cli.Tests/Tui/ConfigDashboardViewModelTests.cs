@@ -58,6 +58,18 @@ public sealed class ConfigDashboardViewModelTests
     }
 
     [Fact]
+    public void Security_access_routes_to_security_page()
+    {
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
+        string? navigatedRoute = null;
+        vm.RouteRequested = route => navigatedRoute = route;
+
+        vm.Activate(vm.Items.Single(static item => item.Label == "Security & Access"));
+
+        Assert.Equal("/security", navigatedRoute);
+    }
+
+    [Fact]
     public void Run_full_doctor_sets_pending_action_and_shuts_down()
     {
         var navigationState = new ConfigDashboardNavigationState();

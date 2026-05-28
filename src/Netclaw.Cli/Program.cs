@@ -899,6 +899,10 @@ static async Task RunAsync(string[] args)
                 sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
                 sp.GetService<TimeProvider>()));
         builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+        builder.Services
+            .AddSectionEditor<SecurityPostureStepViewModel>()
+            .AddSectionEditor<FeatureSelectionStepViewModel>()
+            .AddSectionEditor<ExposureModeStepViewModel>();
         builder.Logging.ClearProviders();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
@@ -911,6 +915,8 @@ static async Task RunAsync(string[] args)
             t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
             t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
             t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
+            t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
+            t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode", Termina.Pages.NavigationBehavior.PreserveState);
         });
 
         using var host = builder.Build();
