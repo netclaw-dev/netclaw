@@ -691,6 +691,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (ToolApprovalRequiredException)
                 {
+                    // Missing bridge wiring is a security/configuration failure,
+                    // not a recoverable tool error for the model to continue past.
                     throw new ParentApprovalUnavailableException(
                         $"Tool '{tc.Name}' requires interactive approval, but no parent approval bridge is available.");
                 }

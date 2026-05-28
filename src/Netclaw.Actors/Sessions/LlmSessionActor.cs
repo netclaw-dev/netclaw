@@ -3175,6 +3175,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (!dispatch.PersistApprovalState)
         {
+            // Live sub-agent approvals need the prompt in the in-memory pending
+            // map so responses can be authorized, but there is no durable child
+            // actor/tool batch to redrive after restart.
             ApplyToolApprovalRequested(evt, persistApprovalState: false);
             EmitOutput(msg);
             return;
@@ -3588,6 +3591,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // Claim the live wait before writing any broader grant. A response
+            // can be authorized and still be stale; only a claimed wait proves
+            // the prompt still corresponds to a blocked tool call.
             if (!_approvalChannel.TryClaim(msg.CallId, out var approvalWait))
             {
                 _log.Warning(
@@ -3606,6 +3612,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             if (!pending.PersistApprovalState)
             {
+                // Live-only prompts should release the blocked child task, not
+                // journal ToolApprovalResolved. After restart the child actor is
+                // gone, so a durable redrive would be misleading.
                 approvalWait.Complete(decision);
                 TryReplyAck();
                 return;

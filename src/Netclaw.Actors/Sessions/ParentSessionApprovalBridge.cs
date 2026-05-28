@@ -110,12 +110,22 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
 
     private ToolCallId CreateParentCallId(ToolCallId childCallId)
     {
+        // This bridge is created by the session actor but used by thread-pool
+        // tool tasks. Multiple child tool calls can request approval at once,
+        // so the sequence allocation is not actor-mailbox confined.
         var requestId = Interlocked.Increment(ref _nextApprovalRequestId);
+
+        // Child call ids are only unique inside the sub-agent's tool loop. The
+        // parent approval channel is session-wide, so include the spawning tool
+        // call scope plus a per-bridge sequence before the child-local id.
         return new ToolCallId($"{_approvalScopeId}/subagent-approval/{requestId}/{childCallId.Value}");
     }
 
     private void EnsureAuthorityContext()
     {
+        // Approval responses are authorized against the parent requester. If we
+        // cannot reconstruct that authority context, emitting a prompt would let
+        // the channel decide without a safe requester binding.
         if (_requesterPrincipal is null)
             throw new ParentApprovalUnavailableException(
                 "Sub-agent approval requires parent requester principal context.");
