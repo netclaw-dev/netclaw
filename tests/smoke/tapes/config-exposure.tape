@@ -49,8 +49,12 @@ Wait+Screen@5s /http:\/\/0\.0\.0\.0:[0-9]+/
 Enter
 Wait+Screen@10s /Reverse Proxy exposure mode saved/
 
-# Saved-state back behavior: Esc returns to the mode list before parent page.
-Escape
+# Returning to Security & Access and reopening Exposure Mode must not preserve
+# the one-shot saved screen.
+Enter
+Wait+Screen@10s /Security & Access/
+Down 3
+Enter
 Wait+Screen@10s /How will this Netclaw daemon be accessed/
 Escape
 Wait+Screen@10s /Security & Access/

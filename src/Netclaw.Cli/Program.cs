@@ -916,7 +916,7 @@ static async Task RunAsync(string[] args)
             t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
             t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
             t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
-            t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode", Termina.Pages.NavigationBehavior.PreserveState);
+            t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
         });
 
         using var host = builder.Build();
