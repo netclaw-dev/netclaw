@@ -628,6 +628,13 @@ Structurally identical to 2.x plus:
 **Conditionality:** `Configure mode →` is enabled only when the selected mode
 requires sub-config. Local has no sub-config.
 
+**Inactive values:** Mode-specific values are preserved for later reactivation,
+but only active-mode fields remain in `netclaw.json`. For example, switching
+from Reverse Proxy to Local removes runtime-active `Daemon.Host` and
+`Daemon.TrustedProxies` so local startup validation remains loopback-only; the
+config editor keeps the dormant reverse-proxy values in editor state and restores
+them if Reverse Proxy is selected again.
+
 ### 9.5.2 Reverse Proxy sub-form (T1-shaped)
 
 ```

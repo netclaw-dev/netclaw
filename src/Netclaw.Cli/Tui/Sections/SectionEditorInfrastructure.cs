@@ -39,17 +39,25 @@ public enum SectionStatus
 /// </summary>
 public sealed record SectionContribution(
     IReadOnlyList<SectionFieldAction>? FieldActions = null,
-    IReadOnlyList<SectionSecretAction>? SecretActions = null)
+    IReadOnlyList<SectionSecretAction>? SecretActions = null,
+    IReadOnlyList<SectionEditorStateAction>? StateActions = null)
 {
-    public static readonly SectionContribution Empty = new([], []);
+    public static readonly SectionContribution Empty = new([], [], []);
 
     public IReadOnlyList<SectionFieldAction> FieldActionsOrEmpty => FieldActions ?? [];
     public IReadOnlyList<SectionSecretAction> SecretActionsOrEmpty => SecretActions ?? [];
+    public IReadOnlyList<SectionEditorStateAction> StateActionsOrEmpty => StateActions ?? [];
 }
 
 public sealed record SectionFieldAction(string Path, SectionFieldActionKind Action, object? Value = null);
 
 public sealed record SectionSecretAction(string Path, SectionSecretActionKind Action, object? Value = null);
+
+public sealed record SectionEditorStateAction(
+    string SectionId,
+    string Key,
+    SectionEditorStateActionKind Action,
+    object? Value = null);
 
 public enum SectionFieldActionKind
 {
@@ -60,6 +68,12 @@ public enum SectionFieldActionKind
 public enum SectionSecretActionKind
 {
     Preserve,
+    Set,
+    Delete,
+}
+
+public enum SectionEditorStateActionKind
+{
     Set,
     Delete,
 }

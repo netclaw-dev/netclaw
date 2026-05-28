@@ -91,6 +91,61 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Saving_local_mode_preserves_reverse_proxy_values_for_reactivation()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "ExposureMode": "reverse-proxy",
+                "Host": "10.0.0.5",
+                "Port": 5299,
+                "DisableSelfUpdate": true,
+                "TrustedProxies": ["10.0.0.0/24"]
+              }
+            }
+            """);
+
+        using (var vm = new ExposureModeConfigViewModel(Context.Paths))
+        {
+            vm.Step.SelectedMode = ExposureMode.Local;
+            vm.GoNext();
+        }
+
+        var localConfig = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(localConfig, "Daemon.ExposureMode", out var localMode));
+        Assert.Equal("local", localMode);
+        Assert.True(ConfigFileHelper.TryGetPathValue(localConfig, "Daemon.Port", out var port));
+        Assert.Equal(5299L, port);
+        Assert.True(ConfigFileHelper.TryGetPathValue(localConfig, "Daemon.DisableSelfUpdate", out var disableSelfUpdate));
+        Assert.Equal(true, disableSelfUpdate);
+        Assert.False(ConfigFileHelper.TryGetPathValue(localConfig, "Daemon.Host", out _));
+        Assert.False(ConfigFileHelper.TryGetPathValue(localConfig, "Daemon.TrustedProxies", out _));
+
+        using (var vm = new ExposureModeConfigViewModel(Context.Paths))
+        {
+            Assert.Equal(ExposureMode.Local, vm.Step.SelectedMode);
+            Assert.Equal("10.0.0.5", vm.Step.Host);
+            Assert.Equal(["10.0.0.0/24"], vm.Step.TrustedProxies);
+
+            vm.Step.SelectedMode = ExposureMode.ReverseProxy;
+            vm.GoNext();
+            vm.GoNext();
+            vm.GoNext();
+            vm.GoNext();
+        }
+
+        var reverseProxyConfig = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(reverseProxyConfig, "Daemon.ExposureMode", out var restoredMode));
+        Assert.Equal("reverse-proxy", restoredMode);
+        Assert.True(ConfigFileHelper.TryGetPathValue(reverseProxyConfig, "Daemon.Host", out var restoredHost));
+        Assert.Equal("10.0.0.5", restoredHost);
+        Assert.True(ConfigFileHelper.TryGetPathValue(reverseProxyConfig, "Daemon.TrustedProxies", out var restoredProxies));
+        Assert.Equal(["10.0.0.0/24"], Assert.IsType<object[]>(restoredProxies).Select(static item => item.ToString() ?? string.Empty).ToArray());
+    }
+
+    [Fact]
     public void Escape_from_saved_state_returns_to_mode_selection_before_parent_route()
     {
         using var vm = new ExposureModeConfigViewModel(Context.Paths);

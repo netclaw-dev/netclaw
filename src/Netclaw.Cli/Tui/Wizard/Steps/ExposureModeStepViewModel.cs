@@ -28,6 +28,9 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
     /// <summary>Default bind address suggested in the reverse-proxy config sub-step.</summary>
     public const string DefaultReverseProxyHost = "0.0.0.0";
 
+    private const string ReverseProxyHostStateKey = "ReverseProxy.Host";
+    private const string ReverseProxyTrustedProxiesStateKey = "ReverseProxy.TrustedProxies";
+
     private static readonly JsonSerializerOptions DevicesJsonOptions = new()
     {
         WriteIndented = true,
@@ -291,22 +294,42 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
         {
             new("Daemon.ExposureMode", SectionFieldActionKind.Set, vm.SelectedMode.ToWireValue())
         };
+        var stateActions = new List<SectionEditorStateAction>();
 
         if (vm.SelectedMode == ExposureMode.ReverseProxy)
         {
-            actions.Add(new SectionFieldAction("Daemon.Host", SectionFieldActionKind.Set,
-                string.IsNullOrWhiteSpace(vm.Host) ? DefaultReverseProxyHost : vm.Host));
+            var host = string.IsNullOrWhiteSpace(vm.Host) ? DefaultReverseProxyHost : vm.Host;
+            var trustedProxies = vm.TrustedProxies.ToArray();
+            actions.Add(new SectionFieldAction("Daemon.Host", SectionFieldActionKind.Set, host));
             actions.Add(new SectionFieldAction("Daemon.TrustedProxies", SectionFieldActionKind.Set,
-                vm.TrustedProxies.ToArray()));
+                trustedProxies));
+
+            stateActions.Add(CreateStateAction(ReverseProxyHostStateKey, host, host != DefaultReverseProxyHost));
+            stateActions.Add(CreateStateAction(ReverseProxyTrustedProxiesStateKey, trustedProxies,
+                trustedProxies.Length > 0));
         }
         else
         {
-            // Host participates in local/tunnel startup validation. Drop any old
-            // reverse-proxy bind address so non-reverse modes return to loopback defaults.
+            var trustedProxies = vm.TrustedProxies.ToArray();
+
+            if (!string.IsNullOrWhiteSpace(vm.Host)
+                && !DaemonExposureValidator.IsLoopbackHost(vm.Host)
+                && vm.Host != DefaultReverseProxyHost)
+            {
+                stateActions.Add(CreateStateAction(ReverseProxyHostStateKey, vm.Host, keepValue: true));
+            }
+
+            stateActions.Add(CreateStateAction(ReverseProxyTrustedProxiesStateKey, trustedProxies,
+                trustedProxies.Length > 0));
+
+            // These fields are runtime-active whenever they remain under Daemon.
+            // Move dormant reverse-proxy values to editor state so local/tunnel
+            // startup validation ignores them until reverse-proxy mode is active again.
             actions.Add(new SectionFieldAction("Daemon.Host", SectionFieldActionKind.Delete));
+            actions.Add(new SectionFieldAction("Daemon.TrustedProxies", SectionFieldActionKind.Delete));
         }
 
-        return new SectionContribution(actions);
+        return new SectionContribution(actions, StateActions: stateActions);
     }
 
     /// <summary>
@@ -353,16 +376,52 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
             return;
 
         SelectedMode = ReadExistingMode(context);
+        var editorState = new ConfigEditorStateStore(context.Paths);
 
-        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.Host", out var hostValue)
-            && hostValue is string host
-            && !string.IsNullOrWhiteSpace(host))
+        if (SelectedMode == ExposureMode.ReverseProxy
+            && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.Host", out var hostValue)
+            && TryReadHost(hostValue, out var activeHost))
         {
-            Host = host;
+            Host = activeHost;
+        }
+        else if (editorState.TryGetValue(SectionId, ReverseProxyHostStateKey, out var storedHostValue)
+                 && TryReadHost(storedHostValue, out var storedHost))
+        {
+            Host = storedHost;
+        }
+        else if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.Host", out var inactiveHostValue)
+                 && TryReadHost(inactiveHostValue, out var inactiveHost)
+                 && !DaemonExposureValidator.IsLoopbackHost(inactiveHost))
+        {
+            Host = inactiveHost;
         }
 
-        if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.TrustedProxies", out var proxiesValue))
+        if (SelectedMode == ExposureMode.ReverseProxy
+            && ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.TrustedProxies", out var proxiesValue))
+        {
             TrustedProxies = ReadTrustedProxies(proxiesValue);
+        }
+        else if (editorState.TryGetValue(SectionId, ReverseProxyTrustedProxiesStateKey, out var storedProxiesValue))
+        {
+            TrustedProxies = ReadTrustedProxies(storedProxiesValue);
+        }
+        else if (ConfigFileHelper.TryGetPathValue(context.ExistingConfig, "Daemon.TrustedProxies", out var inactiveProxiesValue))
+        {
+            TrustedProxies = ReadTrustedProxies(inactiveProxiesValue);
+        }
+    }
+
+    private static SectionEditorStateAction CreateStateAction(string key, object? value, bool keepValue)
+        => new(
+            WizardStepIds.ExposureMode,
+            key,
+            keepValue ? SectionEditorStateActionKind.Set : SectionEditorStateActionKind.Delete,
+            value);
+
+    private static bool TryReadHost(object? value, out string host)
+    {
+        host = value?.ToString() ?? string.Empty;
+        return !string.IsNullOrWhiteSpace(host);
     }
 
     private static ExposureMode ReadExistingMode(WizardContext context)

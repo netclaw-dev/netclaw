@@ -63,6 +63,7 @@ public sealed class WizardConfigBuilder
         _paths.EnsureDirectoriesExist();
         PreserveExistingUpdateChannel();
         var config = BuildConfigDictionary();
+        ApplyEditorStateContributions();
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
     }
 
@@ -456,6 +457,13 @@ public sealed class WizardConfigBuilder
     {
         foreach (var contribution in _sectionContributions)
             ApplyContribution(config, contribution);
+    }
+
+    private void ApplyEditorStateContributions()
+    {
+        var stateStore = new ConfigEditorStateStore(_paths);
+        foreach (var contribution in _sectionContributions)
+            stateStore.Apply(contribution.StateActionsOrEmpty);
     }
 }
 

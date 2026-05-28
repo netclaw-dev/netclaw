@@ -121,10 +121,12 @@ public sealed class ExposureModeSectionEditorTests : SectionEditorTestBase<Expos
     }
 
     [Fact]
-    public void BuildContribution_Local_DropsActiveHostField()
+    public void BuildContribution_Local_StashesInactiveReverseProxyFields()
     {
         using var editor = CreateEditor();
         editor.SelectedMode = ExposureMode.Local;
+        editor.Host = "10.0.0.5";
+        editor.TrustedProxies = ["10.0.0.0/24"];
 
         var contribution = editor.BuildContribution(editor);
 
@@ -132,5 +134,13 @@ public sealed class ExposureModeSectionEditorTests : SectionEditorTestBase<Expos
             a => a.Path == "Daemon.ExposureMode" && Equals(a.Value, "local"));
         Assert.Contains(contribution.FieldActionsOrEmpty,
             a => a.Path == "Daemon.Host" && a.Action == SectionFieldActionKind.Delete);
+        Assert.Contains(contribution.FieldActionsOrEmpty,
+            a => a.Path == "Daemon.TrustedProxies" && a.Action == SectionFieldActionKind.Delete);
+        Assert.Contains(contribution.StateActionsOrEmpty,
+            a => a is { SectionId: WizardStepIds.ExposureMode, Key: "ReverseProxy.Host", Action: SectionEditorStateActionKind.Set }
+                 && Equals(a.Value, "10.0.0.5"));
+        Assert.Contains(contribution.StateActionsOrEmpty,
+            a => a is { SectionId: WizardStepIds.ExposureMode, Key: "ReverseProxy.TrustedProxies", Action: SectionEditorStateActionKind.Set }
+                 && Assert.IsType<string[]>(a.Value).SequenceEqual(["10.0.0.0/24"]));
     }
 }
