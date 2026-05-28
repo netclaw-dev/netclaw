@@ -3664,13 +3664,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (pending.TurnContext is { } context)
         {
             requesterPrincipal = context.RequesterPrincipal;
-            requesterSenderId = context.RequesterSenderId?.Value;
             if (!context.HasApprovalRequester)
             {
+                requesterSenderId = null;
                 failure = "turn context has no requester sender for a non-automation principal";
                 return false;
             }
 
+            requesterSenderId = context.RequesterSenderId is { } senderId ? senderId.Value : null;
             failure = null;
             return true;
         }

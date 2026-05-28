@@ -57,8 +57,10 @@ public sealed class TurnContextTests
         Assert.Equal(PrincipalClassification.TrustedInternal, context.RequesterPrincipal);
         Assert.Equal(TransportAuthenticity.Verified, context.Provenance.TransportAuthenticity);
         Assert.Equal(PayloadTaint.Community, context.Provenance.PayloadTaint);
-        Assert.Equal("slack-workspace:T123", context.Provenance.SourceScope?.Value);
-        Assert.Equal("slack", context.Provenance.SourceKind?.Value);
+        var sourceScope = Assert.NotNull(context.Provenance.SourceScope);
+        var sourceKind = Assert.NotNull(context.Provenance.SourceKind);
+        Assert.Equal("slack-workspace:T123", sourceScope.Value);
+        Assert.Equal("slack", sourceKind.Value);
         Assert.True(context.HasAdoptedContext);
         Assert.True(context.HasThirdPartyAdoptedContext);
         Assert.Equal(["U12345", "U67890"], context.AdoptedSpeakerIds);
@@ -172,7 +174,8 @@ public sealed class TurnContextTests
         Assert.Equal(PrincipalClassification.TrustedInternal, context.RequesterPrincipal);
         Assert.Equal(TransportAuthenticity.Verified, context.Provenance.TransportAuthenticity);
         Assert.Equal(PayloadTaint.Unknown, context.Provenance.PayloadTaint);
-        Assert.Equal(ChannelType.Slack.ToWireValue(), context.Provenance.SourceKind?.Value);
+        var sourceKind = Assert.NotNull(context.Provenance.SourceKind);
+        Assert.Equal(ChannelType.Slack.ToWireValue(), sourceKind.Value);
         Assert.True(context.HasAdoptedContext);
         Assert.True(context.HasThirdPartyAdoptedContext);
         Assert.Equal(["U67890"], context.AdoptedSpeakerIds);

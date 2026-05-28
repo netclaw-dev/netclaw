@@ -67,24 +67,30 @@ public sealed record TurnContext
         };
     }
 
-    public TurnContextRecord ToRecord() => new()
+    public TurnContextRecord ToRecord()
     {
-        SessionId = SessionId,
-        TurnId = TurnId.Value,
-        Audience = Audience,
-        Boundary = Boundary,
-        ChannelType = ChannelType?.ToWireValue(),
-        RequesterSenderId = RequesterSenderId,
-        RequesterPrincipal = RequesterPrincipal,
-        TransportAuthenticity = Provenance.TransportAuthenticity,
-        PayloadTaint = Provenance.PayloadTaint,
-        SourceScope = Provenance.SourceScope?.Value,
-        SourceKind = Provenance.SourceKind?.Value,
-        HasAdoptedContext = HasAdoptedContext,
-        HasThirdPartyAdoptedContext = HasThirdPartyAdoptedContext,
-        AdoptedSpeakerIds = [.. AdoptedSpeakerIds],
-        SupportsInteractiveApproval = SupportsInteractiveApproval
-    };
+        var sourceScope = Provenance.SourceScope;
+        var sourceKind = Provenance.SourceKind;
+
+        return new TurnContextRecord
+        {
+            SessionId = SessionId,
+            TurnId = TurnId.Value,
+            Audience = Audience,
+            Boundary = Boundary,
+            ChannelType = ChannelType?.ToWireValue(),
+            RequesterSenderId = RequesterSenderId,
+            RequesterPrincipal = RequesterPrincipal,
+            TransportAuthenticity = Provenance.TransportAuthenticity,
+            PayloadTaint = Provenance.PayloadTaint,
+            SourceScope = sourceScope is null ? null : sourceScope.Value.Value,
+            SourceKind = sourceKind is null ? null : sourceKind.Value.Value,
+            HasAdoptedContext = HasAdoptedContext,
+            HasThirdPartyAdoptedContext = HasThirdPartyAdoptedContext,
+            AdoptedSpeakerIds = [.. AdoptedSpeakerIds],
+            SupportsInteractiveApproval = SupportsInteractiveApproval
+        };
+    }
 
     public static bool TryFromRecord(TurnContextRecord? record, out TurnContext? context, out string? reason)
     {
