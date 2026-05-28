@@ -429,8 +429,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         var secretActions = new List<SectionSecretAction>();
         if (!string.IsNullOrWhiteSpace(vm.ApiKeyInput))
         {
-            secretActions.Add(new SectionSecretAction(secretPath, SectionSecretActionKind.Set,
-                new Dictionary<string, object> { ["ApiKey"] = vm.ApiKeyInput }));
+            secretActions.Add(new SectionSecretAction($"{secretPath}.ApiKey", SectionSecretActionKind.Set,
+                new SensitiveString(vm.ApiKeyInput)));
         }
         else if (vm.HasStoredCredential)
         {

@@ -6,6 +6,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Wizard;
+using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Sections;
 
@@ -51,7 +52,27 @@ public sealed record SectionContribution(
 
 public sealed record SectionFieldAction(string Path, SectionFieldActionKind Action, object? Value = null);
 
-public sealed record SectionSecretAction(string Path, SectionSecretActionKind Action, object? Value = null);
+public sealed record SectionSecretAction
+{
+    public SectionSecretAction(string path, SectionSecretActionKind action, SensitiveString? value = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        if (action == SectionSecretActionKind.Set && value is null)
+            throw new ArgumentNullException(nameof(value), "Secret set actions require a SensitiveString value.");
+
+        if (action != SectionSecretActionKind.Set && value is not null)
+            throw new ArgumentException("Only secret set actions may carry a value.", nameof(value));
+
+        Path = path;
+        Action = action;
+        Value = value;
+    }
+
+    public string Path { get; }
+    public SectionSecretActionKind Action { get; }
+    public SensitiveString? Value { get; }
+}
 
 public sealed record SectionEditorStateAction(
     string SectionId,

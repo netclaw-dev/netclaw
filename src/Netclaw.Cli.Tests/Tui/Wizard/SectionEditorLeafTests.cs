@@ -15,6 +15,23 @@ namespace Netclaw.Cli.Tests.Tui.Wizard;
 public sealed class ProviderSectionEditorTests : SectionEditorTestBase<ProviderStepViewModel>
 {
     [Fact]
+    public void BuildContribution_EnteredCredential_EmitsSensitiveSecretLeaf()
+    {
+        using var editor = CreateEditor();
+        editor.SelectedProviderType = "openai";
+        editor.SelectedModelId = "gpt-4.1";
+        editor.ApiKeyInput = "sk-test";
+
+        var contribution = editor.BuildContribution(editor);
+        var action = Assert.Single(contribution.SecretActionsOrEmpty);
+
+        Assert.Equal("Providers.openai.ApiKey", action.Path);
+        Assert.Equal(SectionSecretActionKind.Set, action.Action);
+        Assert.NotNull(action.Value);
+        Assert.Equal("sk-test", action.Value.Value);
+    }
+
+    [Fact]
     public void BuildContribution_BlankCredential_PreservesExistingSecret()
     {
         File.WriteAllText(Context.Paths.SecretsPath, """
