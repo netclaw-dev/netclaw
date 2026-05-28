@@ -5,7 +5,7 @@
 
 ## 2. Approval Lifecycle Implementation
 
-- [x] 2.1 Ensure approval-gated sub-agent calls without a parent approval bridge fail closed with an explicit denial-shaped result or terminal failure, and never execute the gated tool.
+- [x] 2.1 Ensure approval-gated sub-agent calls without a parent approval bridge fail closed with a terminal failed result, and never execute the gated tool.
 - [x] 2.2 Ensure approved decisions retry only the original blocked tool call with retry-local approval state.
 - [x] 2.3 Ensure denied and timed-out decisions produce tool-result messages and do not execute the gated tool.
 - [x] 2.4 Ensure external cancellation, parent stop, and stale terminal messages complete the sub-agent at most once and cancel pending approval waits.

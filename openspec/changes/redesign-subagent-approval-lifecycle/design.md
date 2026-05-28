@@ -49,7 +49,7 @@ Alternative considered: let the sub-agent synthesize a fresh requester or audien
 
 ### Decision 3: Parent bridge is the only interactive approval path
 
-If `IParentApprovalBridge` is present, approval-gated sub-agent tools route through it. If absent, the sub-agent must fail closed: the gated tool must not execute, and the child should receive a denial-shaped tool result or terminal failure rather than hanging.
+If `IParentApprovalBridge` is present, approval-gated sub-agent tools route through it. If absent, the sub-agent must fail closed: the gated tool must not execute, and the child run completes with a terminal failed result rather than hanging or continuing as if the denial were user-driven.
 
 The bridge emits the same channel-agnostic `ToolInteractionRequest` shape used by parent session tools, including the computed button options, candidate verbs, per-candidate directories, cwd, requester identity, principal, and adopted-context metadata.
 
@@ -87,7 +87,7 @@ Alternative considered: rely on actor stop ordering. Rejected because thread-poo
 ## Migration Plan
 
 1. Add the #1212 OpenSpec delta requirements for `netclaw-subagents` and `tool-approval-gates`.
-2. Tighten `SubAgentActor` approval-gated no-bridge and denied/timed-out paths so they return explicit denial-shaped tool results and never execute gated tools.
+2. Tighten `SubAgentActor` approval-gated no-bridge and denied/timed-out paths so missing bridges produce terminal failed results, denied/timed-out approvals produce explicit tool results, and gated tools never execute without approval.
 3. Add or update tests for approve, deny, timeout, no bridge, cancellation, parallel waits, and approve-once isolation.
 4. Update runbook or operational guidance only if user-visible sub-agent approval behavior changes.
 

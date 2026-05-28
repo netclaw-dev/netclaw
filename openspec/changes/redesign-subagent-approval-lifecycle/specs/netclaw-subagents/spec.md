@@ -31,7 +31,7 @@ Sub-agent approval prompts SHALL use the parent session turn's execution authori
 - **GIVEN** a sub-agent approval-gated tool call has no parent approval bridge or required authority context
 - **WHEN** approval is required
 - **THEN** the gated tool is not executed
-- **AND** the sub-agent receives an explicit denial-shaped result or terminal failure
+- **AND** the sub-agent completes with a failed `SubAgentResult`
 - **AND** no default `Personal` audience or synthetic requester is substituted
 
 ### Requirement: Sub-agent watchdog pauses during human approval

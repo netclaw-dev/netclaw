@@ -688,13 +688,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (ToolApprovalRequiredException)
                 {
-                    return new SerializableChatMessage
-                    {
-                        Role = Protocol.ChatRole.Tool,
-                        Content = "Tool access denied: approval_required_without_parent_bridge",
-                        ToolCallId = new ToolCallId(tc.CallId),
-                        Name = tc.Name
-                    };
+                    throw new InvalidOperationException(
+                        $"Tool '{tc.Name}' requires interactive approval, but no parent approval bridge is available.");
                 }
                 catch (OperationCanceledException) when (externalCt.IsCancellationRequested)
                 {

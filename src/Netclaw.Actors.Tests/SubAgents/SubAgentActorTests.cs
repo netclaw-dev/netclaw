@@ -335,7 +335,7 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Approval_gated_tool_without_bridge_returns_explicit_denial_result()
+    public async Task Approval_gated_tool_without_bridge_fails_subagent_without_executing_tool()
     {
         var fakeTool = new FakeNetclawTool("shell_execute", "should not run");
         var policy = CreateApprovalRequiredPolicy();
@@ -355,12 +355,9 @@ public class SubAgentActorTests : TestKit
             new RunSubAgent { Task = "Try the shell tool", Timeout = TimeSpan.FromSeconds(5) , Audience = TrustAudience.Personal },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        Assert.True(result.Success);
+        Assert.False(result.Success);
         Assert.False(fakeTool.WasCalled);
-        Assert.Contains("Response #2", result.Output);
-        Assert.Equal(
-            "Tool access denied: approval_required_without_parent_bridge",
-            GetLastToolResult(fakeClient, "call-approval"));
+        Assert.Contains("approval bridge", result.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

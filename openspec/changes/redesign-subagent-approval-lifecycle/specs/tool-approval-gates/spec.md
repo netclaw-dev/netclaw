@@ -34,4 +34,4 @@ Approval responses for sub-agent prompts SHALL execute a tool only while the ori
 - **WHEN** the tool executor reports that approval is required
 - **THEN** no approval prompt is emitted
 - **AND** the gated tool is not executed
-- **AND** the sub-agent receives an explicit denial-shaped tool result or terminal failure
+- **AND** the sub-agent completes with a failed `SubAgentResult`

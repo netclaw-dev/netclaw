@@ -105,4 +105,45 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.False(emitted.HasThirdPartyAdoptedContext);
         Assert.Equal(["user-123"], emitted.AdoptedSpeakerIds);
     }
+
+    [Fact]
+    public async Task Cancelled_bridge_wait_ignores_late_approval_response()
+    {
+        var channel = new ApprovalChannel();
+        ToolInteractionRequest? emitted = null;
+        var callId = new ToolCallId("call-late");
+        using var cts = new CancellationTokenSource();
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            request => emitted = request,
+            new SessionId("signalr/thread-late"),
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+
+        var waitTask = bridge.RequestApprovalAsync(
+            callId,
+            "shell_execute",
+            "git push origin main",
+            ["git push origin main"],
+            ["git push origin main"],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            "/home/user/repos/foo",
+            [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
+            isMessy: false,
+            cts.Token);
+        Assert.NotNull(emitted);
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => waitTask);
+
+        channel.Complete(callId, ApprovalDecision.ApprovedOnce);
+        var lateWaitResult = await channel.WaitForApprovalAsync(
+            callId,
+            TimeSpan.FromMilliseconds(25),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(ApprovalDecision.TimedOut, lateWaitResult);
+    }
 }
