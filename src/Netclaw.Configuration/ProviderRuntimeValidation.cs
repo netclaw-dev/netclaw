@@ -64,9 +64,15 @@ public sealed record ProviderRuntimeValidation(
 
         if (!providers.ContainsKey(main.Provider))
         {
+            // Typo / dangling reference: model points at a provider name that
+            // doesn't exist in the providers dict. From the operator's
+            // perspective this is the same remediation as "no provider
+            // configured" (fix the model section), so we select No-Op
+            // instead of failing startup. The available-providers line in
+            // the banner surfaces the mismatch.
             return new(
-                ProviderRuntimeStatus.Invalid,
-                $"model 'Main' references unknown provider '{main.Provider}' (configured: {string.Join(", ", available)})",
+                ProviderRuntimeStatus.NoProviderConfigured,
+                $"model 'Main' references provider '{main.Provider}' which is not configured (available: {string.Join(", ", available)})",
                 available);
         }
 

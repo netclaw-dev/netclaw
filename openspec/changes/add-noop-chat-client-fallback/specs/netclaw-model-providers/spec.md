@@ -67,6 +67,18 @@ back to the No-Op client.
 - **THEN** validation SHALL return the "no provider configured" outcome
 - **AND** the host SHALL register the No-Op chat client
 
+#### Scenario: Model references unknown provider selects No-Op
+
+- **GIVEN** the configuration file declares one or more providers
+- **AND** `Models:Main.Provider` references a provider name that is not in
+  the providers dictionary (e.g., typo: `ollama-local1` vs `ollama-local`)
+- **WHEN** validation runs
+- **THEN** validation SHALL return the "no provider configured" outcome
+- **AND** the No-Op banner's "Available providers:" line SHALL list the
+  configured provider names so the operator can spot the typo
+- **AND** the host SHALL NOT throw an unhandled exception from the
+  provider plugin factory
+
 #### Scenario: Malformed provider configuration still fails startup
 
 - **GIVEN** the configuration file declares a provider but omits a required
