@@ -6,6 +6,7 @@
 - Owner: Netclaw engineering
 - Date: 2026-02-21
 - Revised: 2026-02-21 (MEAI abstraction, primary+fallback model)
+- Revised: 2026-05-27 (No-Op chat client fallback for degraded startup)
 - Depends on: `PRD-001`, `PRD-004`
 
 ## Goal
@@ -124,6 +125,22 @@ The provider abstraction SHALL support tool/function calling through MEAI's
 built-in tool calling API. Tool definitions are registered at session startup
 based on policy grants.
 
+### Degraded startup (No-Op chat client)
+
+If provider/model configuration validation reports **no provider configured**
+(e.g., empty `Providers` section, `Models:Main` references an unconfigured
+provider), daemon startup SHALL succeed in a degraded mode. The host
+registers a No-Op `IChatClient` that returns a fixed banner beginning with
+`"No valid model configuration detected."` and lists the recovery commands
+(`netclaw doctor`, `netclaw model`, edit `netclaw.json`). The No-Op client
+SHALL NOT contact any external service and SHALL NOT emit tool calls.
+
+Malformed provider configuration (declared provider missing required
+credentials, schema violations) remains a **fatal** startup error — only the
+"no provider configured" outcome selects the No-Op fallback. Recovery from
+degraded mode requires a daemon restart; live config swap is out of scope.
+`netclaw doctor` reports the state as a **warn**-level "Chat Client" item.
+
 ## Non-Goals (MVP)
 
 - Automated cross-provider failover logic (beyond primary/fallback)
@@ -140,6 +157,9 @@ based on policy grants.
 5. CI validation pipeline passes with provider mocks/fakes only.
 6. Fallback model activates when primary is unreachable.
 7. Tool calling works through MEAI abstraction.
+8. Daemon starts in degraded mode with No-Op chat client when no provider
+   is configured; doctor reports the state as a warn-level item; chat turns
+   return the fixed recovery banner instead of crashing.
 
 ## Cross-References
 

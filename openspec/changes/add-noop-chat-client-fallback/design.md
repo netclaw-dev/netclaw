@@ -203,16 +203,18 @@ client's response is itself the per-turn signal to the user.
   and `netclaw doctor` output. No rollback procedure required beyond
   reverting the daemon binary.
 
-## Open Questions
+## Resolved Decisions (formerly open questions)
 
-- **Should the `IChatClientProvider` expose a `bool IsDegraded` property** so
-  doctor/diagnostics can query it directly without sniffing the concrete
-  implementation? Leaning yes — cleaner than `is NoOpChatClientProvider`
-  checks at call sites. Will resolve during specs/tasks drafting.
-- **Should we emit a metric** for "no-op chat turns served" so operators
-  running with degraded mode in production can alert on it? Probably yes,
-  but small enough to land in this change or a follow-up — flag for tasks.
-- **Exact wording of the configuration banner** — design fixes the structure
-  and required content; final copy can be refined during implementation
-  against the eval suite (identity/skill grounding cases will catch
-  regressions where the banner ends up in places it shouldn't).
+- **`IChatClientProvider.IsDegraded`** — added as a default interface method
+  returning `false`. `NoOpChatClientProvider` overrides to `true`. Existing
+  test doubles and `SingleClientProvider` inherit the default and need no
+  changes.
+- **`chat.noop_responses_total` metric** — **deferred**. The doctor warn
+  item and the per-turn banner are sufficient signals for operator
+  awareness in MVP; a metric is easy to add later if production telemetry
+  reveals operators silently running in degraded mode. Tracked as a
+  follow-up, not blocking this change.
+- **Banner copy** — finalized at implementation time; structure matches
+  this design. See `NoOpChatClient.BuildBanner` for the canonical text.
+  Eval suite is unchanged because the banner only surfaces in degraded
+  mode, which the eval suite does not cover.

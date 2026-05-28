@@ -227,6 +227,17 @@ When trust-context policy is configured, diagnostics SHALL surface:
 - unsafe unrestricted profile combinations
 - sandbox-shell readiness when `ShellMode` resolves to `SandboxOnly`
 
+`netclaw doctor` SHALL include a **Chat Client** check that reports:
+
+- **pass** — a real provider chat client is configured.
+- **warn** — the No-Op chat client will be active (no valid provider
+  configured); the daemon starts in degraded mode and chat turns return a
+  fixed recovery banner. Remediation references `netclaw model` and editing
+  `netclaw.json`.
+- **fail** — provider configuration is malformed (declared provider missing
+  required credentials, schema violation, model points to an unconfigured
+  provider); daemon startup will fail until resolved.
+
 ### CLI-005 Session Operations
 
 `session inspect` exposes current state, last activity, compaction metadata,

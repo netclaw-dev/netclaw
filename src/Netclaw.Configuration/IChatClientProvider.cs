@@ -21,4 +21,13 @@ public interface IChatClientProvider
     /// <see cref="ModelRole.Main"/>.
     /// </summary>
     IChatClient GetClient(ModelRole role);
+
+    /// <summary>
+    /// True when the provider is serving a No-Op fallback because no valid
+    /// inference provider configuration was detected. Diagnostic surfaces
+    /// (notably <c>netclaw doctor</c>) check this so they can report the
+    /// degraded state without inspecting concrete implementation types.
+    /// Real provider implementations leave this as <c>false</c>.
+    /// </summary>
+    bool IsDegraded => false;
 }

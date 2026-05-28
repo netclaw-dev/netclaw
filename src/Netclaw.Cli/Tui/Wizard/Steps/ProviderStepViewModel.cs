@@ -502,10 +502,23 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
 
     public Task ContributeHealthChecksAsync(HealthCheckRunner runner, CancellationToken ct)
     {
-        // Provider check
+        // Provider check. When no provider is selected we emit a warn-level
+        // item rather than a hard failure: the daemon will still start (in
+        // degraded mode with the No-Op chat client) so the operator can fix
+        // the configuration via `netclaw doctor` / `netclaw model`.
         var providerOk = !string.IsNullOrWhiteSpace(SelectedProviderType);
-        var providerLabel = providerOk ? Registry.Get(SelectedProviderType!).DisplayName : "none";
-        runner.Add(new HealthCheckItem($"LLM provider configured ({providerLabel})", providerOk));
+        if (providerOk)
+        {
+            var providerLabel = Registry.Get(SelectedProviderType!).DisplayName;
+            runner.Add(new HealthCheckItem($"LLM provider configured ({providerLabel})", true));
+        }
+        else
+        {
+            runner.Add(new HealthCheckItem(
+                "No provider configured — No-Op chat client will be active (run `netclaw model` or edit `netclaw.json`)",
+                Passed: true,
+                IsWarning: true));
+        }
 
         // Model check
         var modelOk = !string.IsNullOrWhiteSpace(SelectedModelId);

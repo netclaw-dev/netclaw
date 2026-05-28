@@ -228,7 +228,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
 /// </summary>
 /// <param name="Label">Display text.</param>
 /// <param name="Passed">Null while running, true/false when complete.</param>
-public sealed record HealthCheckItem(string Label, bool? Passed);
+/// <param name="IsWarning">
+/// When <c>true</c> together with <c>Passed=true</c>, the item is rendered as
+/// a degraded/warn state (e.g. No-Op chat client will be active) — the wizard
+/// still treats it as passed so the daemon can start, but the operator sees a
+/// distinct warning indicator.
+/// </param>
+public sealed record HealthCheckItem(string Label, bool? Passed, bool IsWarning = false);
 
 /// <summary>
 /// A channel entry in the Channels wizard step with editable audience.

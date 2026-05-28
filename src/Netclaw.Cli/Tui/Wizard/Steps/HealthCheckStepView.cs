@@ -36,10 +36,11 @@ public sealed class HealthCheckStepView : IWizardStepView
                 continue;
             }
 
-            var (icon, color) = item.Passed.Value switch
+            var (icon, color) = (item.Passed.Value, item.IsWarning) switch
             {
-                true => ("\u2713", Color.Green),
-                false => ("\u2717", Color.Red),
+                (true, true) => ("\u26a0", Color.Yellow),
+                (true, _) => ("\u2713", Color.Green),
+                (false, _) => ("\u2717", Color.Red),
             };
             lines.Add(new TextNode($"  {icon}  {item.Label}").WithForeground(color));
         }
