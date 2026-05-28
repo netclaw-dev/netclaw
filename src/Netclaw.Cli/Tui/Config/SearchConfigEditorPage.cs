@@ -22,7 +22,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
     private string? _textInputFieldPath;
     private DynamicLayoutNode? _contentNode;
     private readonly CompositeDisposable _contentSubscriptions = [];
-    private int _providerIndex;
+    private ActiveSelectionList<ConfigEnumOption>? _providerList;
     private bool _providerSelectionSynced;
 
     public override void OnNavigatedTo()
@@ -93,9 +93,9 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         return WorkflowViewComponents.BuildSelectionScreen(
             heading: "Choose the backend Netclaw uses for web search.",
-            selector: BuildProviderList(),
-            legend: ViewModel.ConfiguredLegend,
-            supportText: ViewModel.GetProviderDescription(ViewModel.BackendOptions[_providerIndex].Value));
+            selector: EnsureProviderList().AsLayout(),
+            legend: ActiveSelectionList<ConfigEnumOption>.BuildLegend("active backend", "backend has saved setup"),
+            supportText: ViewModel.GetProviderDescription(EnsureProviderList().FocusedOption.Value));
     }
 
     private ILayoutNode BuildEntryScreen()
@@ -134,30 +134,19 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             successText: ViewModel.GetSavedMessage(),
             nextStepText: ViewModel.GetSavedNextStepText());
 
-    private ILayoutNode BuildProviderList()
-    {
-        var content = Layouts.Vertical();
-        var options = ViewModel.BackendOptions;
-        for (var i = 0; i < options.Count; i++)
-        {
-            var option = options[i];
-            var isFocused = i == _providerIndex;
-            var isActive = string.Equals(option.Value, ViewModel.CurrentBackendValue, StringComparison.OrdinalIgnoreCase);
-            var marker = isActive ? "(*)" : "( )";
-            var prefix = isFocused ? ">" : " ";
-            var status = IsConfigured(option.Value) ? "\u2713" : " ";
-            var line = $"  {prefix} {marker} {option.Label,-20} {status}";
-            var color = isFocused ? Color.Cyan : Color.White;
-
-            var node = new TextNode(line).WithForeground(color);
-            if (isActive)
-                node.Bold();
-
-            content.WithChild(node.Height(1));
-        }
-
-        return content;
-    }
+    private ActiveSelectionList<ConfigEnumOption> EnsureProviderList()
+        => _providerList ??= new ActiveSelectionList<ConfigEnumOption>(
+            ViewModel.BackendOptions,
+            static option => option.Label,
+            option => string.Equals(option.Value, ViewModel.CurrentBackendValue, StringComparison.OrdinalIgnoreCase),
+            option => IsConfigured(option.Value) ? "✓" : " ",
+            SelectProviderForEditing,
+            () =>
+            {
+                _contentNode?.Invalidate();
+                ViewModel.RequestRedraw();
+            },
+            labelPadWidth: 20);
 
     private ILayoutNode BuildProbeWarningDialog()
     {
@@ -275,55 +264,13 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
         if (ViewModel.CurrentScreen.Value == SearchConfigEditorScreen.ProviderSelection)
         {
-            if (keyInfo.Key == ConsoleKey.UpArrow)
-            {
-                MoveProviderSelection(-1);
-                return true;
-            }
-
-            if (keyInfo.Key == ConsoleKey.DownArrow)
-            {
-                MoveProviderSelection(1);
-                return true;
-            }
-
-            if (keyInfo.Key == ConsoleKey.Enter)
-            {
-                var option = ViewModel.BackendOptions[_providerIndex];
-                ViewModel.SelectBackendForEditing(option.Value);
-                ResetEntryInput();
-                _contentNode?.Invalidate();
-                ViewModel.RequestRedraw();
-                return true;
-            }
-
+            EnsureProviderList().HandleInput(keyInfo);
             return true;
         }
 
         if (ViewModel.CurrentScreen.Value == SearchConfigEditorScreen.Saved)
         {
-            if (keyInfo.Key == ConsoleKey.UpArrow)
-            {
-                MoveProviderSelection(-1);
-                return true;
-            }
-
-            if (keyInfo.Key == ConsoleKey.DownArrow)
-            {
-                MoveProviderSelection(1);
-                return true;
-            }
-
-            if (keyInfo.Key == ConsoleKey.Enter)
-            {
-                var option = ViewModel.BackendOptions[_providerIndex];
-                ViewModel.SelectBackendForEditing(option.Value);
-                ResetEntryInput();
-                _contentNode?.Invalidate();
-                ViewModel.RequestRedraw();
-                return true;
-            }
-
+            EnsureProviderList().HandleInput(keyInfo);
             return true;
         }
 
@@ -371,19 +318,13 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             .FirstOrDefault(entry => string.Equals(entry.option.Value, ViewModel.CurrentBackendValue, StringComparison.OrdinalIgnoreCase))
             .idx;
 
-        _providerIndex = Math.Clamp(index, 0, Math.Max(0, ViewModel.BackendOptions.Count - 1));
+        EnsureProviderList().SetFocusedIndex(index, notify: false);
     }
 
-    private void MoveProviderSelection(int delta)
+    private void SelectProviderForEditing(ConfigEnumOption option)
     {
-        if (ViewModel.BackendOptions.Count == 0)
-            return;
-
-        var next = Math.Clamp(_providerIndex + delta, 0, ViewModel.BackendOptions.Count - 1);
-        if (next == _providerIndex)
-            return;
-
-        _providerIndex = next;
+        ViewModel.SelectBackendForEditing(option.Value);
+        ResetEntryInput();
         _contentNode?.Invalidate();
         ViewModel.RequestRedraw();
     }

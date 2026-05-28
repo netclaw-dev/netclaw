@@ -124,8 +124,6 @@ internal sealed class SearchSectionSpec
             _ => "Validating DuckDuckGo configuration",
         };
 
-    internal string GetConfiguredLegend() => "(*) active backend   ✓ backend has saved setup";
-
     internal string GetSavedMessage(SearchEditorModel model)
         => $"✔ {GetBackendLabel(model.Backend)} validated and saved.";
 

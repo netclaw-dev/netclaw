@@ -37,7 +37,7 @@ public sealed class SearchConfigEditorPageTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
-    public async Task ProviderSelection_RendersActiveAndConfiguredLegend()
+    public async Task ProviderSelection_RendersActiveCheckboxAndConfiguredLegend()
     {
         var (terminal, app, _) = CreateHeadlessApp(out var input);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
@@ -45,8 +45,10 @@ public sealed class SearchConfigEditorPageTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.True(terminal.Contains("(*) active backend"),
+        Assert.True(terminal.Contains("[x] active backend"),
             $"Expected active-backend legend in terminal output. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("[x] DuckDuckGo"),
+            $"Expected active backend checkbox in terminal output. Screen:\n{terminal}");
         Assert.True(terminal.Contains("backend has saved setup"),
             $"Expected configured-backend legend in terminal output. Screen:\n{terminal}");
     }

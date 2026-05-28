@@ -89,7 +89,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public bool IsDirty => ComputeIsDirty();
     public SearchProbeResult? LastProbeResult => _lastProbeResult;
-    public string ConfiguredLegend => _spec.GetConfiguredLegend();
     public string CurrentBackendValue => _model.Backend.ToWireValue();
     public string CurrentBackendLabel => _spec.GetBackendLabel(_model.Backend);
 

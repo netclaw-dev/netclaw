@@ -25,7 +25,16 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ExposureModeStepView : IWizardStepView
 {
-    private IDisposable? _modeList;
+    private static readonly IReadOnlyList<SelectionOption<ExposureMode>> ModeOptions =
+    [
+        new(ExposureMode.Local, "Local — loopback only, safest (recommended)"),
+        new(ExposureMode.ReverseProxy, "Reverse Proxy — behind nginx, Caddy, Traefik, IIS, ALB, etc."),
+        new(ExposureMode.TailscaleServe, "Tailscale Serve — accessible within your tailnet"),
+        new(ExposureMode.TailscaleFunnel, "Tailscale Funnel — public internet ⚠"),
+        new(ExposureMode.CloudflareTunnel, "Cloudflare Tunnel — public internet ⚠")
+    ];
+
+    private ActiveSelectionList<SelectionOption<ExposureMode>>? _modeList;
     private SelectionListNode<string>? _confirmList;
     private IDisposable? _webhookList;
     private TextInputNode? _hostInput;
@@ -44,6 +53,9 @@ public sealed class ExposureModeStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (ExposureModeStepViewModel)stepVm;
+
+        if (vm.CurrentSubStep != 0)
+            _modeList = null;
 
         if (vm.CurrentSubStep == 0)
             return BuildModeSelection(vm, callbacks);
@@ -65,46 +77,32 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildModeSelection(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        var localOption = new SelectionOption<ExposureMode>(ExposureMode.Local,
-            "Local — loopback only, safest (recommended)");
-        var reverseProxyOption = new SelectionOption<ExposureMode>(ExposureMode.ReverseProxy,
-            "Reverse Proxy — behind nginx, Caddy, Traefik, IIS, ALB, etc.");
-        var serveOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleServe,
-            "Tailscale Serve — accessible within your tailnet");
-        var funnelOption = new SelectionOption<ExposureMode>(ExposureMode.TailscaleFunnel,
-            "Tailscale Funnel — public internet ⚠");
-        var cloudflareOption = new SelectionOption<ExposureMode>(ExposureMode.CloudflareTunnel,
-            "Cloudflare Tunnel — public internet ⚠");
-
-        var modeList = Layouts.SelectionList<SelectionOption<ExposureMode>>(
-                [localOption, reverseProxyOption, serveOption, funnelOption, cloudflareOption],
-                static o => o.ToString())
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Cyan);
-
-        _modeList = modeList;
-        modeList.OnFocused();
-        _lastFocusedList = modeList;
+        _modeList = null;
+        _lastFocusedList = null;
         _lastFocusedInput = null;
         _confirmList = null;
         _webhookList = null;
         _hostInput = null;
         _trustedProxiesInput = null;
 
-        modeList.SelectionConfirmed
-            .Subscribe(selected =>
+        var modeList = new ActiveSelectionList<SelectionOption<ExposureMode>>(
+            ModeOptions,
+            static option => option.Label,
+            option => option.Value == vm.SelectedMode,
+            confirmed: option =>
             {
-                if (selected.Count > 0)
-                {
-                    vm.SelectedMode = selected[0].Value;
-                    callbacks.AdvanceStep();
-                }
-            })
-            .DisposeWith(callbacks.Subscriptions);
+                vm.SelectedMode = option.Value;
+                callbacks.AdvanceStep();
+            },
+            changed: callbacks.RequestRedraw);
+        modeList.FocusFirst(option => option.Value == vm.SelectedMode);
+
+        _modeList = modeList;
 
         return WorkflowViewComponents.BuildSelectionScreen(
             heading: "How will this Netclaw daemon be accessed?",
-            selector: modeList,
+            selector: modeList.AsLayout(),
+            legend: ActiveSelectionList<SelectionOption<ExposureMode>>.BuildLegend("active exposure mode"),
             supportText: "⚠ = exposes daemon beyond this machine. Ensure auth is configured first.",
             supportColor: Color.BrightBlack);
     }
@@ -389,6 +387,9 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     public bool HandleKeyPress(KeyPressed key)
     {
+        if (_modeList is not null && _modeList.HandleInput(key.KeyInfo))
+            return true;
+
         if (_lastFocusedList is not null)
         {
             _lastFocusedList.HandleInput(key.KeyInfo);
