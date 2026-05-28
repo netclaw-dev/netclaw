@@ -209,6 +209,49 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void AddVolatileContextNudge_inserts_before_trailing_real_user_message()
+    {
+        // The volatile context block must NOT sit at the tail after the real
+        // user message — a trailing volatile User-role message is read by
+        // strict ChatML templates as a fresh user turn and triggers the
+        // tool-loop acknowledgement spin. It is inserted BEFORE the user
+        // message so the real user message stays at the tail.
+        var state = SessionState.Empty
+            .AddUserMessage("real user request")
+            .AddVolatileContextNudge("[memory-recall] ...");
+
+        Assert.Equal(2, state.History.Count);
+        Assert.True(SessionState.IsSystemNudge(state.History[0]));
+        Assert.Equal(ChatRole.User, state.History[1].Role);
+        Assert.Equal("real user request", state.History[1].Content);
+
+        // The last user-role content the model sees is the real request.
+        Assert.Equal("real user request", state.FindLastUserMessage()?.Content);
+    }
+
+    [Fact]
+    public void AddVolatileContextNudge_appends_when_no_trailing_real_user_message()
+    {
+        // Reminder/scheduled/cold-recovery turns have no trailing real user
+        // message to sit before — append in that case. Also covers the case
+        // where the last entry is itself a system-nudge (e.g. delivery retry).
+        var afterAssistant = SessionState.Empty
+            .AddUserMessage("first")
+            .AddErrorReply("answer")
+            .AddVolatileContextNudge("[working-context] ...");
+
+        Assert.True(SessionState.IsSystemNudge(afterAssistant.History[^1]));
+
+        var afterNudge = SessionState.Empty
+            .AddUserMessage("first")
+            .AddSystemNudge("delivery retry")
+            .AddVolatileContextNudge("[working-context] ...");
+
+        Assert.True(SessionState.IsSystemNudge(afterNudge.History[^1]));
+        Assert.Contains("[working-context]", afterNudge.History[^1].Content);
+    }
+
+    [Fact]
     public void ToSnapshot_and_FromSnapshot_round_trip()
     {
         var state = WithSystemPrompt("Prompt")

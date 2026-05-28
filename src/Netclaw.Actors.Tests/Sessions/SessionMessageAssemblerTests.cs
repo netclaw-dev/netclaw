@@ -71,37 +71,40 @@ public sealed class SessionMessageAssemblerTests
         // static block is structurally identical across them. The assembler
         // no longer wraps the last User message — it just emits the static
         // block + history verbatim. Cache prefix stability comes from the
-        // actor persisting the per-turn volatile block as a system-nudge
-        // entry in history (via SessionState.AddSystemNudge) BEFORE the
-        // assembler runs. We simulate that here by pre-populating history.
-        var turn1History = SeedHistory("first question")
+        // actor inserting the per-turn volatile block as a system-nudge
+        // entry in history (via SessionState.AddVolatileContextNudge) BEFORE
+        // the real user message, so the user message stays at the tail. We
+        // simulate that here by pre-populating history in that order.
+        var turn1History = ImmutableList.Create(
+                new SerializableChatMessage { Role = ProtocolChatRole.System, Content = PersistedSystemPrompt })
             .Add(new SerializableChatMessage
             {
                 Role = ProtocolChatRole.User,
                 Content = $"{SessionState.SystemNudgePrefix} turn-1-volatile-snapshot]",
-            });
+            })
+            .Add(new SerializableChatMessage { Role = ProtocolChatRole.User, Content = "first question" });
         var turn1 = MakeInput(turn1History, activeRecall: null, startupDone: true);
         var turn1Messages = SessionMessageAssembler.Assemble(turn1);
 
         var turn2History = turn1History
             .Add(new SerializableChatMessage { Role = ProtocolChatRole.Assistant, Content = "First answer" })
-            .Add(new SerializableChatMessage { Role = ProtocolChatRole.User, Content = "second question" })
             .Add(new SerializableChatMessage
             {
                 Role = ProtocolChatRole.User,
                 Content = $"{SessionState.SystemNudgePrefix} turn-2-volatile-snapshot]",
-            });
+            })
+            .Add(new SerializableChatMessage { Role = ProtocolChatRole.User, Content = "second question" });
         var turn2 = MakeInput(turn2History, activeRecall: null, startupDone: true);
         var turn2Messages = SessionMessageAssembler.Assemble(turn2);
 
         var prefix = LongestCommonPrefix(turn1Messages, turn2Messages);
 
-        // Turn 1 wire: [persisted, static, user "first question", nudge-1]
-        // Turn 2 wire: [persisted, static, user "first question", nudge-1, assistant, user "second", nudge-2]
+        // Turn 1 wire: [persisted, static, nudge-1, user "first question"]
+        // Turn 2 wire: [persisted, static, nudge-1, user "first question", assistant, nudge-2, user "second"]
         // Cache prefix should extend through turn 1's full content (4 messages)
-        // before turn 2 diverges with its own assistant+user2+nudge2.
+        // before turn 2 diverges with its own assistant+nudge2+user2.
         Assert.True(prefix >= 4,
-            $"Expected cache prefix ≥ 4 (persisted+static+user1+nudge1), got {prefix}. " +
+            $"Expected cache prefix ≥ 4 (persisted+static+nudge1+user1), got {prefix}. " +
             $"Turn 1: [{FormatMessages(turn1Messages)}] Turn 2: [{FormatMessages(turn2Messages)}]");
     }
 

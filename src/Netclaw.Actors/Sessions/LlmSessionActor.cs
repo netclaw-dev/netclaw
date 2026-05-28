@@ -2555,17 +2555,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (resolved.Items.Count > 0)
                 _sessionMetrics?.RecordMemoriesRecalled(resolved.Items.Count);
 
-            // Persist the FULL volatile context block (recall + current
+            // Insert the FULL volatile context block (recall + current
             // time + working context + skill hint + slash command body +
             // session prompt overlay + turn restart notice + active
-            // background jobs) into History via AddSystemNudge. Gated on
-            // the same first-call-of-turn sentinel as recall resolution,
-            // so tool-loop iterations don't re-nudge. By persisting at
-            // turn-start (rather than wrapping at assemble-time), the
-            // volatile bytes become part of History — every byte-prefix
-            // caching provider (llama.cpp, vLLM, OpenAI, Ollama, ...)
-            // can extend the cache prefix through this content on every
-            // subsequent turn instead of re-tokenizing it from scratch.
+            // background jobs) into History via AddVolatileContextNudge.
+            // Gated on the same first-call-of-turn sentinel as recall
+            // resolution, so tool-loop iterations don't re-nudge. The block
+            // is placed BEFORE the real user message (not after) so the user
+            // message stays at the tail of the user-portion — a trailing
+            // volatile User-role message is read by strict ChatML templates
+            // (Qwen3) as a fresh user turn and causes the tool-loop
+            // acknowledgement spin (see AddVolatileContextNudge). By living
+            // in History (rather than being wrapped at assemble-time), the
+            // volatile bytes let every byte-prefix caching provider
+            // (llama.cpp, vLLM, OpenAI, Ollama, ...) extend the cache prefix
+            // through this content on every subsequent turn instead of
+            // re-tokenizing it from scratch.
             _activeRecall = _recallManager.TurnRecallCache;
             var volatileBlock = SessionMessageAssembler.BuildVolatileContextBlock(new ContextAssemblyInput(
                 State: _state,
@@ -2582,7 +2587,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SkillHint: BuildSkillHint()));
             if (!string.IsNullOrEmpty(volatileBlock))
             {
-                _state = _state.AddSystemNudge(volatileBlock);
+                _state = _state.AddVolatileContextNudge(volatileBlock);
             }
         }
 
