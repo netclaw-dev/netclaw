@@ -569,9 +569,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 updates.Add(update);
 
-                // Throttled liveness ping so the actor re-arms its inactivity
-                // watchdog and surfaces activity during a long streaming call.
-                if (pingThrottle.Elapsed >= StreamPingInterval)
+                // Content-free keepalives only prove the socket is alive; they
+                // do not prove the model is making progress. Re-arm the
+                // watchdog only for substantive deltas so provider heartbeat
+                // loops cannot keep a sub-agent alive forever.
+                if (IsSubstantiveStreamingUpdate(update) && pingThrottle.Elapsed >= StreamPingInterval)
                 {
                     pingThrottle.Restart();
                     self.Tell(SubAgentStreamPing.Instance);
@@ -590,6 +592,29 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         {
             self.Tell(new LlmCallFailed(ex));
         }
+    }
+
+    internal static bool IsSubstantiveStreamingUpdate(ChatResponseUpdate update)
+    {
+        if (update.FinishReason is not null)
+            return true;
+
+        foreach (var content in update.Contents)
+        {
+            switch (content)
+            {
+                case TextContent text when !string.IsNullOrEmpty(text.Text):
+                case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text):
+                case FunctionCallContent:
+                    return true;
+                case UsageContent:
+                    break;
+                default:
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private static async Task ExecuteToolsAsync(

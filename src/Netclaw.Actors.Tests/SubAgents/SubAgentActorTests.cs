@@ -825,6 +825,30 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public void Keepalive_only_streaming_updates_are_not_substantive_progress()
+    {
+        Assert.False(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant
+        }));
+        Assert.False(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new UsageContent(new UsageDetails())]
+        }));
+        Assert.True(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("working")]
+        }));
+        Assert.True(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent("call-1", "inspect_context")]
+        }));
+    }
+
+    [Fact]
     public async Task LLM_failure_returns_failure()
     {
         var throwingClient = new ThrowingChatClient();
