@@ -6,6 +6,7 @@
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Config;
@@ -49,8 +50,67 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
 
         vm.Activate(vm.Items.Single(static item => item.Label == "Enabled Features"));
 
-        Assert.True(vm.EditingEnabledFeatures.Value);
+        Assert.Equal(SecurityAccessEditorMode.Features, vm.Mode.Value);
         Assert.Null(route);
+    }
+
+    [Fact]
+    public void Security_posture_saves_posture_and_shell_defaults()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.OpenPostureEditor();
+        vm.SelectedPostureIndex.Value = 1;
+
+        vm.ApplySelectedPosture();
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var posture));
+        Assert.Equal("Team", posture);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Security.ShellExecutionMode", out var securityShellMode));
+        Assert.Equal("Off", securityShellMode);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.ShellMode", out var toolsShellMode));
+        Assert.Equal("Off", toolsShellMode);
+        Assert.Equal(SecurityAccessEditorMode.Features, vm.Mode.Value);
+    }
+
+    [Fact]
+    public void Audience_profiles_opens_inline_audience_list()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        string? route = null;
+        vm.RouteRequested = value => route = value;
+
+        vm.Activate(vm.Items.Single(static item => item.Label == "Audience Profiles"));
+
+        Assert.Equal(SecurityAccessEditorMode.AudienceList, vm.Mode.Value);
+        Assert.Null(route);
+    }
+
+    [Fact]
+    public void Audience_profile_toggle_updates_selected_profile_only()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.WebAccess;
+
+        vm.ActivateSelectedAudienceProfileRow();
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.AllowedTools", out var teamTools));
+        var teamAllowedTools = Assert.IsAssignableFrom<object[]>(teamTools);
+        Assert.DoesNotContain(teamAllowedTools, static tool => tool?.ToString() == "web_search");
+        Assert.DoesNotContain(teamAllowedTools, static tool => tool?.ToString() == "web_fetch");
+
+        Assert.False(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Public.AllowedTools", out _));
     }
 
     [Fact]

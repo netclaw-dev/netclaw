@@ -726,26 +726,26 @@ Same shape as Tailscale Serve, but with stronger public-exposure warning copy.
 
 ## Config.9.1 — Security Posture
 
-### 9.1.1 Posture selection (T1-shaped)
+### 9.1.1 Posture selection (inline T1-shaped)
+
+Security Posture is edited inline within Security & Access. Saving `Team` or
+`Public` immediately continues into the inline Enabled Features editor so the
+operator can review deployment-wide runtime gates.
 
 ```
-╭─ Security Posture ──────────────────────────────────────────╮
+╭─ Security & Access ─────────────────────────────────────────╮
 │                                                             │
+│  Security Posture                                           │
 │  Current posture: Personal                                  │
 │                                                             │
-│  ▸ Personal                                                 │
-│    Just me. Local-only by default. Tools have wide access.  │
+│  ▶ [✓] Personal   Just me. Local-only by default. Tools     │
+│                   have wide access.                         │
+│    [ ] Team       Small team via Slack/Discord. Audience-   │
+│                   restricted tools.                         │
+│    [ ] Public     Open to untrusted users. Strict defaults  │
+│                   and access controls.                      │
 │                                                             │
-│    Team                                                     │
-│    Small team via Slack/Discord. Audience-restricted tools. │
-│                                                             │
-│    Public                                                   │
-│    Open to untrusted users. Strict defaults and access      │
-│    controls.                                                │
-│                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Tab to buttons · Enter activate              │
+│ ↑/↓ navigate · Enter save · Esc back                        │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -760,9 +760,9 @@ customized away from the prior posture's defaults.
 │  You have customized Audience Profiles. Changing posture    │
 │  will overwrite them with the new posture's defaults.       │
 │                                                             │
-│  ▸ [ Cancel — keep current posture ]                        │
-│    [ Apply new posture, overwrite profiles ]                │
-│    [ Apply new posture, keep custom profiles ]              │
+│  ▶ Cancel - keep current posture                            │
+│    Apply new posture, overwrite profiles                    │
+│    Apply new posture, keep custom profiles                  │
 │                                                             │
 │ Default: Cancel (Esc or Enter)                              │
 ╰─────────────────────────────────────────────────────────────╯
@@ -807,11 +807,9 @@ exposure is configured in Audience Profiles and MCP permissions.
 │                                                             │
 │  Configure high-level access per audience tier.             │
 │                                                             │
-│  ▸ Personal           ✓ Default for posture: Personal       │
-│    Team               ✓ Default for posture: Personal       │
-│    Public             ✓ Default for posture: Personal       │
-│                                                             │
-│  [ Cancel ]                                                 │
+│  ▶ Personal           Default for posture: Personal         │
+│    Team               Default for posture: Personal         │
+│    Public             Default for posture: Personal         │
 │                                                             │
 │ ↑/↓ navigate · Enter edit audience · Esc cancel             │
 ╰─────────────────────────────────────────────────────────────╯
@@ -824,21 +822,20 @@ exposure is configured in Audience Profiles and MCP permissions.
 │                                                             │
 │  Tool access for the Team audience:                         │
 │                                                             │
-│  [ X ] Read files                                           │
-│  [ X ] Edit files                                           │
-│  [ X ] Web access                                           │
-│  [ X ] Skills                                               │
-│  [ X ] Scheduling                                           │
-│  [ X ] Change working directory                             │
+│  ▶ [✓] Read files                                           │
+│    [✓] Edit files                                           │
+│    [✓] Web access                                           │
+│    [✓] Skills                                               │
+│    [✓] Scheduling                                           │
+│    [✓] Change working directory                             │
 │                                                             │
 │  File access:               Session only →                  │
 │  Incoming attachments:      Common work files               │
 │  MCP permissions:           Manage in `netclaw mcp         │
 │                              permissions` →                 │
+│  [Reset] Reset to posture default                           │
 │                                                             │
-│  [ Save ]    [ Cancel ]    [ Reset to posture default ]     │
-│                                                             │
-│ ↑/↓ navigate · Space toggle · Tab to buttons · Esc cancel   │
+│ ↑/↓ navigate · Space/Enter toggle/cycle · Esc back          │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -847,13 +844,13 @@ exposure is configured in Audience Profiles and MCP permissions.
 - `↑` / `↓` MUST move focus between toggle rows.
 - `Space` MUST toggle the focused checkbox.
 - `Enter` on a checkbox row also toggles (alternative to Space).
-- `Tab` moves to the action row.
+- `Enter` on a cycle row advances to the next curated value.
 - `Reset to posture default` replaces the full underlying audience profile,
   including hidden MCP and approval settings, with the posture-default mapping.
 
 The `config-audience.tape` smoke tape explicitly exercises `↓`, `Space`,
-`↑`, `Space` to lock in the keystroke contract. Regression in arrow
-nav OR toggle is caught.
+and `Esc` to lock in the keystroke contract. Regression in arrow nav,
+toggle, or return behavior is caught.
 
 **Doctor checks:** `ConfigSchemaDoctorCheck`, `ToolAudienceProfilesDoctorCheck`.
 

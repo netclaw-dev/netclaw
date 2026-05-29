@@ -1,0 +1,45 @@
+# config-audience.tape - edit Audience Profiles from netclaw config.
+#
+# Exercises:
+#   netclaw config -> Security & Access -> Audience Profiles -> Team
+# and verifies curated per-audience tool toggles persist without exposing raw MCP editing.
+
+Output "/tmp/tape-config-audience.gif"
+
+# Seed minimal Team config; Audience Profiles should resolve from posture defaults.
+Type "mkdir -p $NETCLAW_HOME/config"
+Enter
+Type "posture=Team; jq -n --arg posture $posture '{configVersion:1,Security:{DeploymentPosture:$posture}}' > $NETCLAW_HOME/config/netclaw.json"
+Enter
+
+Type "netclaw config"
+Enter
+Wait+Screen@10s /Settings Areas/
+Down 8
+Enter
+Wait+Screen@10s /Security & Access/
+
+# Open Audience Profiles, edit Team, disable Web access.
+Down 2
+Enter
+Wait+Screen@10s /Configure high-level access per audience tier/
+Down
+Enter
+Wait+Screen@10s /Tool access for the Team audience/
+Down 2
+Space
+Wait+Screen@10s /\[ \] Web access/
+Escape
+Wait+Screen@10s /Configure high-level access per audience tier/
+Escape
+Wait+Screen@10s /Security & Access/
+Ctrl+Q
+
+Wait+Screen@10s /TAPE\$/
+
+Type "echo CONFIG_AUDIENCE_EXIT=$?"
+Enter
+Wait+Screen@5s /CONFIG_AUDIENCE_EXIT=0/
+
+Type "exit"
+Enter

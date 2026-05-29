@@ -25,19 +25,13 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
 
-        ViewModel.SelectedIndex
-            .Subscribe(_ => _contentNode?.Invalidate())
-            .DisposeWith(Subscriptions);
-        ViewModel.SelectedFeatureIndex
-            .Subscribe(_ => _contentNode?.Invalidate())
-            .DisposeWith(Subscriptions);
-        ViewModel.EditingEnabledFeatures
-            .Subscribe(_ =>
-            {
-                _contentNode?.Invalidate();
-                _keyBindingsNode?.Invalidate();
-            })
-            .DisposeWith(Subscriptions);
+        ViewModel.Mode.Subscribe(_ => InvalidateAll()).DisposeWith(Subscriptions);
+        ViewModel.SelectedIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.SelectedPostureIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.SelectedCascadeIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.SelectedFeatureIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.SelectedAudienceIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.SelectedAudienceRowIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
     }
 
     public override ILayoutNode BuildLayout()
@@ -53,9 +47,15 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
 
     private ILayoutNode BuildContent()
     {
-        _contentNode = new DynamicLayoutNode(() => ViewModel.EditingEnabledFeatures.Value
-            ? BuildFeatureToggles()
-            : BuildSecurityMenu());
+        _contentNode = new DynamicLayoutNode(() => ViewModel.Mode.Value switch
+        {
+            SecurityAccessEditorMode.Posture => BuildPostureEditor(),
+            SecurityAccessEditorMode.PostureCascade => BuildPostureCascade(),
+            SecurityAccessEditorMode.Features => BuildFeatureToggles(),
+            SecurityAccessEditorMode.AudienceList => BuildAudienceList(),
+            SecurityAccessEditorMode.AudienceProfile => BuildAudienceProfile(),
+            _ => BuildSecurityMenu()
+        });
 
         return _contentNode;
     }
@@ -63,20 +63,57 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     private ILayoutNode BuildSecurityMenu()
     {
         var layout = Layouts.Vertical()
-            .WithChild(new TextNode("  Security & Access").WithForeground(Color.White).Bold());
+            .WithChild(Header("  Security & Access"));
 
         var items = ViewModel.Items;
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
-            var selected = i == ViewModel.SelectedIndex.Value;
-            var prefix = selected ? " ▶ " : "   ";
-            var line = $"{prefix}{item.Label,-20} {item.Summary,-20} {item.Description}";
-            var node = new TextNode(line);
-            node = selected
-                ? node.WithForeground(Color.Cyan).Bold()
-                : node.WithForeground(Color.White);
-            layout = layout.WithChild(node);
+            layout = layout.WithChild(Row(
+                $"{FocusPrefix(i == ViewModel.SelectedIndex.Value)}{item.Label,-20} {item.Summary,-20} {item.Description}",
+                i == ViewModel.SelectedIndex.Value));
+        }
+
+        return layout;
+    }
+
+    private ILayoutNode BuildPostureEditor()
+    {
+        var layout = Layouts.Vertical()
+            .WithChild(Header("  Security Posture"))
+            .WithChild(Hint($"  Current posture: {ViewModel.CurrentPosture}"))
+            .WithChild(Layouts.Empty().Height(1));
+
+        var options = ViewModel.PostureOptions;
+        for (var i = 0; i < options.Count; i++)
+        {
+            var option = options[i];
+            var focused = i == ViewModel.SelectedPostureIndex.Value;
+            var active = option.Value == ViewModel.CurrentPosture;
+            layout = layout.WithChild(Row(
+                $"{FocusPrefix(focused)}[{Check(active)}] {option.Label,-10} {option.Description}",
+                focused,
+                active));
+        }
+
+        return layout;
+    }
+
+    private ILayoutNode BuildPostureCascade()
+    {
+        var layout = Layouts.Vertical()
+            .WithChild(Header("  Posture change affects Audience Profiles"))
+            .WithChild(Hint("  You have customized Audience Profiles. Changing posture can overwrite them."))
+            .WithChild(Layouts.Empty().Height(1));
+
+        var options = ViewModel.PostureCascadeOptions;
+        for (var i = 0; i < options.Count; i++)
+        {
+            var option = options[i];
+            var focused = i == ViewModel.SelectedCascadeIndex.Value;
+            layout = layout.WithChild(Row(
+                $"{FocusPrefix(focused)}{option.Label,-42} {option.Description}",
+                focused));
         }
 
         return layout;
@@ -85,30 +122,77 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     private ILayoutNode BuildFeatureToggles()
     {
         var layout = Layouts.Vertical()
-            .WithChild(new TextNode("  Enabled Features").WithForeground(Color.White).Bold())
-            .WithChild(new TextNode("  Toggle global runtime features. Audience exposure is configured separately.")
-                .WithForeground(Color.BrightBlack))
+            .WithChild(Header("  Enabled Features"))
+            .WithChild(Hint("  Toggle global runtime features. Audience exposure is configured separately."))
             .WithChild(Layouts.Empty().Height(1));
 
         var names = ViewModel.FeatureNames;
         var descriptions = ViewModel.FeatureDescriptions;
         for (var i = 0; i < names.Count; i++)
         {
-            var selected = i == ViewModel.SelectedFeatureIndex.Value;
+            var focused = i == ViewModel.SelectedFeatureIndex.Value;
             var enabled = ViewModel.IsFeatureEnabled(i);
-            var prefix = selected ? " ▶ " : "   ";
-            var marker = enabled ? "✓" : " ";
-            var line = $"{prefix}[{marker}] {names[i],-12} {descriptions[i]}";
-            var node = new TextNode(line);
+            layout = layout.WithChild(Row(
+                $"{FocusPrefix(focused)}[{Check(enabled)}] {names[i],-12} {descriptions[i]}",
+                focused,
+                enabled));
+        }
 
-            if (selected)
-                node = node.WithForeground(Color.Cyan).Bold();
-            else if (enabled)
-                node = node.WithForeground(Color.White);
-            else
-                node = node.WithForeground(Color.BrightBlack);
+        return layout;
+    }
 
-            layout = layout.WithChild(node);
+    private ILayoutNode BuildAudienceList()
+    {
+        var layout = Layouts.Vertical()
+            .WithChild(Header("  Audience Profiles"))
+            .WithChild(Hint("  Configure high-level access per audience tier."))
+            .WithChild(Layouts.Empty().Height(1));
+
+        var options = ViewModel.AudienceOptions;
+        for (var i = 0; i < options.Count; i++)
+        {
+            var option = options[i];
+            var focused = i == ViewModel.SelectedAudienceIndex.Value;
+            var summary = ViewModel.AudienceSummary(option.Value);
+            layout = layout.WithChild(Row(
+                $"{FocusPrefix(focused)}{option.Label,-10} {summary,-30} {option.Description}",
+                focused));
+        }
+
+        return layout;
+    }
+
+    private ILayoutNode BuildAudienceProfile()
+    {
+        var audience = ViewModel.AudienceOptions[ViewModel.SelectedAudienceIndex.Value];
+        var layout = Layouts.Vertical()
+            .WithChild(Header($"  Audience Profiles > {audience.Label}"))
+            .WithChild(Hint($"  Tool access for the {audience.Label} audience."))
+            .WithChild(Layouts.Empty().Height(1));
+
+        var rows = ViewModel.ProfileRows;
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            var focused = i == ViewModel.SelectedAudienceRowIndex.Value;
+            var line = row.Kind switch
+            {
+                AudienceProfileRowKind.FileAccess or AudienceProfileRowKind.IncomingAttachments =>
+                    $"{FocusPrefix(focused)}{row.Label,-25} {ViewModel.AudienceValue(row.Kind),-22} {row.Description}",
+                AudienceProfileRowKind.McpPermissions =>
+                    $"{FocusPrefix(focused)}{row.Label,-25} {ViewModel.AudienceValue(row.Kind),-22} {row.Description}",
+                AudienceProfileRowKind.ResetToDefault =>
+                    $"{FocusPrefix(focused)}[Reset] {row.Label,-27} {row.Description}",
+                _ =>
+                    $"{FocusPrefix(focused)}[{Check(ViewModel.IsAudienceToggleEnabled(row.Kind))}] {row.Label,-23} {row.Description}"
+            };
+
+            var enabled = row.Kind switch
+            {
+                AudienceProfileRowKind.FileAccess or AudienceProfileRowKind.IncomingAttachments or AudienceProfileRowKind.McpPermissions or AudienceProfileRowKind.ResetToDefault => true,
+                _ => ViewModel.IsAudienceToggleEnabled(row.Kind)
+            };
+            layout = layout.WithChild(Row(line, focused, enabled));
         }
 
         return layout;
@@ -122,10 +206,15 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
 
     private LayoutNode BuildKeyBindings()
     {
-        _keyBindingsNode = new DynamicLayoutNode(() => NetclawTuiChrome.BuildKeyHintLine(
-            ViewModel.EditingEnabledFeatures.Value
-                ? " [↑/↓] Navigate  [Space/Enter] Toggle + Save  [Esc] Security & Access  [Ctrl+Q] Quit"
-                : " [↑/↓] Navigate  [Enter] Open  [Esc] Back  [Ctrl+Q] Quit"));
+        _keyBindingsNode = new DynamicLayoutNode(() => NetclawTuiChrome.BuildKeyHintLine(ViewModel.Mode.Value switch
+        {
+            SecurityAccessEditorMode.Posture => " [↑/↓] Navigate  [Enter] Save  [Esc] Security & Access  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.PostureCascade => " [↑/↓] Navigate  [Enter] Apply  [Esc] Back  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.Features => " [↑/↓] Navigate  [Space/Enter] Toggle + Save  [Esc] Security & Access  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.AudienceList => " [↑/↓] Navigate  [Enter] Edit Audience  [Esc] Security & Access  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.AudienceProfile => " [↑/↓] Navigate  [Space/Enter] Toggle/Cycle  [Esc] Audiences  [Ctrl+Q] Quit",
+            _ => " [↑/↓] Navigate  [Enter] Open  [Esc] Back  [Ctrl+Q] Quit"
+        }));
 
         return _keyBindingsNode.Height(1);
     }
@@ -141,31 +230,38 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {
-            ViewModel.BackToConfig();
+            ViewModel.GoBack();
             return;
         }
 
-        if (ViewModel.EditingEnabledFeatures.Value)
+        switch (ViewModel.Mode.Value)
         {
-            switch (keyInfo.Key)
-            {
-                case ConsoleKey.UpArrow:
-                    ViewModel.MoveFeatureSelection(-1);
-                    break;
-                case ConsoleKey.DownArrow:
-                    ViewModel.MoveFeatureSelection(1);
-                    break;
-                case ConsoleKey.Spacebar:
-                case ConsoleKey.Enter:
-                    ViewModel.ToggleSelectedFeature();
-                    _contentNode?.Invalidate();
-                    break;
-            }
-
-            ViewModel.RequestRedraw();
-            return;
+            case SecurityAccessEditorMode.Menu:
+                HandleMenuKey(keyInfo);
+                break;
+            case SecurityAccessEditorMode.Posture:
+                HandlePostureKey(keyInfo);
+                break;
+            case SecurityAccessEditorMode.PostureCascade:
+                HandleCascadeKey(keyInfo);
+                break;
+            case SecurityAccessEditorMode.Features:
+                HandleFeatureKey(keyInfo);
+                break;
+            case SecurityAccessEditorMode.AudienceList:
+                HandleAudienceListKey(keyInfo);
+                break;
+            case SecurityAccessEditorMode.AudienceProfile:
+                HandleAudienceProfileKey(keyInfo);
+                break;
         }
 
+        _contentNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
+    private void HandleMenuKey(ConsoleKeyInfo keyInfo)
+    {
         switch (keyInfo.Key)
         {
             case ConsoleKey.UpArrow:
@@ -178,7 +274,106 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
                 ViewModel.ActivateSelected();
                 break;
         }
+    }
 
-        ViewModel.RequestRedraw();
+    private void HandlePostureKey(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                ViewModel.MovePostureSelection(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                ViewModel.MovePostureSelection(1);
+                break;
+            case ConsoleKey.Enter:
+                ViewModel.ApplySelectedPosture();
+                break;
+        }
+    }
+
+    private void HandleCascadeKey(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                ViewModel.MoveCascadeSelection(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                ViewModel.MoveCascadeSelection(1);
+                break;
+            case ConsoleKey.Enter:
+                ViewModel.ApplySelectedCascadeOption();
+                break;
+        }
+    }
+
+    private void HandleFeatureKey(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                ViewModel.MoveFeatureSelection(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                ViewModel.MoveFeatureSelection(1);
+                break;
+            case ConsoleKey.Spacebar:
+            case ConsoleKey.Enter:
+                ViewModel.ToggleSelectedFeature();
+                break;
+        }
+    }
+
+    private void HandleAudienceListKey(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                ViewModel.MoveAudienceSelection(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                ViewModel.MoveAudienceSelection(1);
+                break;
+            case ConsoleKey.Enter:
+                ViewModel.OpenSelectedAudienceProfile();
+                break;
+        }
+    }
+
+    private void HandleAudienceProfileKey(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                ViewModel.MoveAudienceRow(-1);
+                break;
+            case ConsoleKey.DownArrow:
+                ViewModel.MoveAudienceRow(1);
+                break;
+            case ConsoleKey.Spacebar:
+            case ConsoleKey.Enter:
+                ViewModel.ActivateSelectedAudienceProfileRow();
+                break;
+        }
+    }
+
+    private void InvalidateAll()
+    {
+        _contentNode?.Invalidate();
+        _keyBindingsNode?.Invalidate();
+    }
+
+    private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
+    private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.BrightBlack);
+    private static string FocusPrefix(bool focused) => focused ? " ▶ " : "   ";
+    private static string Check(bool enabled) => enabled ? "✓" : " ";
+
+    private static TextNode Row(string line, bool focused, bool enabled = true)
+    {
+        var node = new TextNode(line);
+        if (focused)
+            return node.WithForeground(Color.Cyan).Bold();
+        return node.WithForeground(enabled ? Color.White : Color.BrightBlack);
     }
 }
