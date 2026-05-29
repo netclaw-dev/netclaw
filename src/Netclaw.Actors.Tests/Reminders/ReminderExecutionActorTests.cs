@@ -308,8 +308,11 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
     private sealed class ScriptedSessionPipeline(
         Func<SessionId, IReadOnlyList<SessionOutput>> outputFactory) : ISessionPipeline
     {
+        private readonly TaskCompletionSource<ChannelInput> _inputCaptured =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public SessionPipelineOptions? CapturedOptions { get; private set; }
-        public ChannelInput? CapturedInput { get; private set; }
+        public Task<ChannelInput> InputCaptured => _inputCaptured.Task;
 
         public Task<MaterializedSession> CreateAsync(
             SessionId sessionId,
@@ -321,10 +324,23 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
             var killSwitch = KillSwitches.Shared($"scripted-{sessionId.Value}");
 
-            var captureInputSink = Sink.ForEach<ChannelInput>(ci => CapturedInput = ci)
+            var captureInputSink = Sink.ForEach<ChannelInput>(ci =>
+                {
+                    _inputCaptured.TrySetResult(ci);
+                })
                 .MapMaterializedValue<NotUsed>(_ => NotUsed.Instance);
 
-            var output = Source.From(outputFactory(sessionId).ToList())
+            var outputs = outputFactory(sessionId).ToList();
+            var output = Source.UnfoldAsync<int, SessionOutput>(0, async state =>
+                {
+                    if (state == 0)
+                        await _inputCaptured.Task.ConfigureAwait(false);
+
+                    if (state < outputs.Count)
+                        return (state + 1, outputs[state]);
+
+                    return default;
+                })
                 .Via(killSwitch.Flow<SessionOutput>());
 
             return Task.FromResult(new MaterializedSession(captureInputSink, output, killSwitch));
@@ -359,8 +375,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotNull(pipeline.CapturedInput);
-        Assert.Equal(TrustAudience.Personal, pipeline.CapturedInput!.Audience);
+        var input = await pipeline.InputCaptured.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(TrustAudience.Personal, input.Audience);
     }
 
     // Note: Execution_fails_when_definition_audience_missing was removed in issue #994.
@@ -388,8 +404,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotNull(pipeline.CapturedInput);
-        Assert.Equal(TrustAudience.Team, pipeline.CapturedInput!.Audience);
+        var input = await pipeline.InputCaptured.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(TrustAudience.Team, input.Audience);
     }
 
     [Fact]
@@ -413,8 +429,8 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
 
         await probe.ExpectMsgAsync<ReminderExecutionCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.NotNull(pipeline.CapturedInput);
-        Assert.Equal(TrustBoundary.Public, pipeline.CapturedInput!.Boundary);
+        var input = await pipeline.InputCaptured.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(TrustBoundary.Public, input.Boundary);
     }
 
     // ── History integration tests ─────────────────────────────────────────────
