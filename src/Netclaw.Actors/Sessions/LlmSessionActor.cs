@@ -2090,6 +2090,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        if (_resolvedToolApprovals.Count > 0)
+        {
+            var abandoned = BuildResolvedToolBatchInterruptedByRestartEvent();
+            Persist(abandoned, evt =>
+            {
+                ApplyToolBatchAbandoned(evt);
+                ContinueIncomingUserMessage(cmd);
+            });
+            return;
+        }
+
         ContinueIncomingUserMessage(cmd);
     }
 
@@ -2350,7 +2361,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // If replay found an approval decision but no durable tool result,
             // do not replay the approved side effect after restart. Close the
             // orphaned tool_use blocks so the next user turn has valid history.
-            AbandonResolvedToolBatchAfterRecovery();
+            if (_currentPhase == SessionPhase.Ready)
+                AbandonResolvedToolBatchAfterRecovery();
         });
 
         Command<LeaveSession>(cmd =>
@@ -3917,12 +3929,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _log.Info(
             "Abandoning recovered parked tool batch with {ResolvedApprovalCount} resolved approval(s) after restart",
             _resolvedToolApprovals.Count);
-        var abandoned = BuildToolBatchAbandonedEvent(
-            "Tool call was not completed — the session restarted after approval before the action completed.");
+        var abandoned = BuildResolvedToolBatchInterruptedByRestartEvent();
         Persist(abandoned, ApplyToolBatchAbandoned);
 
         return true;
     }
+
+    private ToolBatchAbandoned BuildResolvedToolBatchInterruptedByRestartEvent()
+        => BuildToolBatchAbandonedEvent(
+            "Tool call was not completed — the session restarted after approval before the action completed.");
 
     private ApprovalRedrivePlan BuildApprovalRedrivePlan(SerializableChatMessage assistantMessage)
     {
