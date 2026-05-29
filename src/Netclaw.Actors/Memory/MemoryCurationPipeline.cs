@@ -230,6 +230,15 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
     private static MemoryRecallMode ResolveRecallMode(MemoryCheckpointPayload payload, MemoryClass memoryClass)
     {
+        // Compaction-boundary memories are whole-session summary blobs. They
+        // lexically match almost any query in the session's topic area, so when
+        // auto-recallable they dominate the candidate pool and crowd out atomic
+        // memories. Keep the record (Manual) but out of the automatic recall pool.
+        // The summary compaction itself relies on lives in the SessionCompacted
+        // event / in-session history — a separate path that is unaffected.
+        if (payload.IsCompactionBoundary)
+            return MemoryRecallMode.Manual;
+
         if (memoryClass == MemoryClass.Trace)
             return MemoryRecallMode.Never;
 
