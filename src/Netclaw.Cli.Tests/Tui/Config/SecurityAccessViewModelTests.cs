@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
 using Xunit;
@@ -37,6 +38,71 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         vm.Activate(vm.Items.Single(static item => item.Label == "Exposure Mode"));
 
         Assert.Equal("/exposure-mode", route);
+    }
+
+    [Fact]
+    public void Enabled_features_opens_inline_global_toggle_editor()
+    {
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        string? route = null;
+        vm.RouteRequested = value => route = value;
+
+        vm.Activate(vm.Items.Single(static item => item.Label == "Enabled Features"));
+
+        Assert.True(vm.EditingEnabledFeatures.Value);
+        Assert.Null(route);
+    }
+
+    [Fact]
+    public void Enabled_features_summary_treats_missing_flags_as_enabled()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+
+        var features = vm.Items.Single(static item => item.Label == "Enabled Features");
+        Assert.Equal("6/6 enabled", features.Summary);
+    }
+
+    [Fact]
+    public void Toggle_selected_feature_persists_global_flag_and_preserves_siblings()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" },
+              "Memory": { "Enabled": true },
+              "Search": {
+                "Enabled": false,
+                "Backend": "searxng",
+                "SearXngEndpoint": "https://search.example.com"
+              },
+              "SkillSync": { "Enabled": true },
+              "Scheduling": { "Enabled": false },
+              "SubAgents": { "Enabled": true },
+              "Webhooks": { "Enabled": false }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedFeatureIndex.Value = 1;
+
+        vm.ToggleSelectedFeature();
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Search.Enabled", out var searchEnabled));
+        Assert.Equal(true, searchEnabled);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Search.Backend", out var backend));
+        Assert.Equal("searxng", backend);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Search.SearXngEndpoint", out var endpoint));
+        Assert.Equal("https://search.example.com", endpoint);
     }
 
     [Fact]

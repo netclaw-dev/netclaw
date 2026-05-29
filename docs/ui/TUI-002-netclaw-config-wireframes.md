@@ -708,7 +708,7 @@ Same shape as Tailscale Serve, but with stronger public-exposure warning copy.
 
 ## Config.9 — Security & Access
 
-### 9.1 Security & Access sub-page
+### 9.1 Security & Access page
 
 ```
 ╭─ Security & Access ─────────────────────────────────────────╮
@@ -718,9 +718,9 @@ Same shape as Tailscale Serve, but with stronger public-exposure warning copy.
 │    Audience Profiles        Team customized                 │
 │    Exposure Mode            Cloudflare Tunnel               │
 │                                                             │
-│  [ Open ]    [ Back ]                                       │
+│  [ Open / Edit inline ]    [ Back ]                         │
 │                                                             │
-│ ↑/↓ navigate · Enter open · Esc back                        │
+│ ↑/↓ navigate · Enter open/edit · Esc back                   │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -772,24 +772,27 @@ customized away from the prior posture's defaults.
 
 ---
 
-## Config.9.3 — Enabled Features
+## Config.9.3 — Enabled Features inline editor
+
+Enabled Features is edited inline within Security & Access rather than as a
+separate route. It remains deployment-wide runtime enablement; audience
+exposure is configured in Audience Profiles and MCP permissions.
 
 ```
-╭─ Enabled Features ──────────────────────────────────────────╮
+╭─ Security & Access ─────────────────────────────────────────╮
 │                                                             │
-│  Toggle deployment-wide runtime features. Audience          │
-│  exposure is configured separately in Audience Profiles.    │
+│  Enabled Features                                           │
+│  Toggle global runtime features. Audience exposure is       │
+│  configured separately.                                     │
 │                                                             │
-│  [ X ] memory                                               │
-│  [ X ] search                                               │
-│  [ X ] skills                                               │
-│  [ X ] scheduling                                           │
-│  [ X ] sub-agents                                           │
-│  [ X ] webhooks                                             │
+│  ▶ [✓] memory                                               │
+│    [✓] search                                               │
+│    [✓] skills                                               │
+│    [✓] scheduling                                           │
+│    [✓] sub-agents                                           │
+│    [✓] webhooks                                             │
 │                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Space toggle · Tab to buttons                │
+│ ↑/↓ navigate · Space/Enter toggle + save · Esc back         │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 

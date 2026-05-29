@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Tui.Sections;
+using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using R3;
 using Termina.Reactive;
@@ -14,11 +16,24 @@ public sealed record SecurityAccessItem(string Label, string Summary, string Des
 
 public sealed class SecurityAccessViewModel : ReactiveViewModel
 {
+    private const int FeatureCount = 6;
+    private static readonly string[] FeatureConfigPaths =
+    [
+        "Memory.Enabled",
+        "Search.Enabled",
+        "SkillSync.Enabled",
+        "Scheduling.Enabled",
+        "SubAgents.Enabled",
+        "Webhooks.Enabled"
+    ];
+
     private readonly NetclawPaths _paths;
+    private readonly bool[] _enabledFeatures = new bool[FeatureCount];
 
     public SecurityAccessViewModel(NetclawPaths paths)
     {
         _paths = paths;
+        LoadEnabledFeatures();
     }
 
     internal Action<string>? RouteRequested { get; set; }
@@ -26,8 +41,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<int> SelectedIndex { get; } = new(0);
+    public ReactiveProperty<bool> EditingEnabledFeatures { get; } = new(false);
+    public ReactiveProperty<int> SelectedFeatureIndex { get; } = new(0);
 
     public IReadOnlyList<SecurityAccessItem> Items => BuildItems();
+    public IReadOnlyList<string> FeatureNames => FeatureSelectionStepViewModel.FeatureNames;
+    public IReadOnlyList<string> FeatureDescriptions => FeatureSelectionStepViewModel.FeatureDescriptions;
 
     public void MoveSelection(int delta)
     {
@@ -42,6 +61,12 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void ActivateSelected()
     {
+        if (EditingEnabledFeatures.Value)
+        {
+            ToggleSelectedFeature();
+            return;
+        }
+
         var items = Items;
         if (items.Count == 0)
             return;
@@ -51,6 +76,14 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     internal void Activate(SecurityAccessItem item)
     {
+        if (item.Label == "Enabled Features")
+        {
+            EditingEnabledFeatures.Value = true;
+            StatusMessage.Value = "";
+            RequestRedraw();
+            return;
+        }
+
         if (item.Route is not null)
         {
             RouteRequested?.Invoke(item.Route);
@@ -64,8 +97,39 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void BackToConfig()
     {
+        if (EditingEnabledFeatures.Value)
+        {
+            EditingEnabledFeatures.Value = false;
+            StatusMessage.Value = "";
+            RequestRedraw();
+            return;
+        }
+
         RouteRequested?.Invoke("/config");
         Navigate?.Invoke("/config");
+    }
+
+    public void MoveFeatureSelection(int delta)
+    {
+        var next = Math.Clamp(SelectedFeatureIndex.Value + delta, 0, FeatureCount - 1);
+        if (next != SelectedFeatureIndex.Value)
+            SelectedFeatureIndex.Value = next;
+    }
+
+    public bool IsFeatureEnabled(int index) => _enabledFeatures[index];
+
+    public void ToggleSelectedFeature()
+    {
+        var index = SelectedFeatureIndex.Value;
+        _enabledFeatures[index] = !_enabledFeatures[index];
+
+        var session = new ConfigEditorSession(_paths);
+        session.Apply(BuildFeatureContribution());
+        session.Save();
+
+        var state = _enabledFeatures[index] ? "enabled" : "disabled";
+        StatusMessage.Value = $"{FeatureNames[index]} {state}. Saved.";
+        RequestRedraw();
     }
 
     public void RequestQuit()
@@ -78,8 +142,32 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     {
         StatusMessage.Dispose();
         SelectedIndex.Dispose();
+        EditingEnabledFeatures.Dispose();
+        SelectedFeatureIndex.Dispose();
         base.Dispose();
     }
+
+    private void LoadEnabledFeatures()
+    {
+        Array.Fill(_enabledFeatures, true);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        for (var i = 0; i < FeatureConfigPaths.Length; i++)
+        {
+            if (ConfigFileHelper.TryGetPathValue(config, FeatureConfigPaths[i], out var value) && value is bool enabled)
+                _enabledFeatures[i] = enabled;
+        }
+    }
+
+    private SectionContribution BuildFeatureContribution()
+        => new(
+        [
+            new SectionFieldAction(FeatureConfigPaths[0], SectionFieldActionKind.Set, _enabledFeatures[0]),
+            new SectionFieldAction(FeatureConfigPaths[1], SectionFieldActionKind.Set, _enabledFeatures[1]),
+            new SectionFieldAction(FeatureConfigPaths[2], SectionFieldActionKind.Set, _enabledFeatures[2]),
+            new SectionFieldAction(FeatureConfigPaths[3], SectionFieldActionKind.Set, _enabledFeatures[3]),
+            new SectionFieldAction(FeatureConfigPaths[4], SectionFieldActionKind.Set, _enabledFeatures[4]),
+            new SectionFieldAction(FeatureConfigPaths[5], SectionFieldActionKind.Set, _enabledFeatures[5])
+        ]);
 
     private IReadOnlyList<SecurityAccessItem> BuildItems()
     {
@@ -107,29 +195,18 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private static string ReadEnabledFeaturesSummary(Dictionary<string, object> config)
     {
-        var paths = new[]
-        {
-            "Memory.Enabled",
-            "Search.Enabled",
-            "SkillSync.Enabled",
-            "Scheduling.Enabled",
-            "SubAgents.Enabled",
-            "Webhooks.Enabled"
-        };
-
-        var configured = 0;
         var enabled = 0;
-        foreach (var path in paths)
+        foreach (var path in FeatureConfigPaths)
         {
-            if (!ConfigFileHelper.TryGetPathValue(config, path, out var value) || value is not bool flag)
-                continue;
+            var flag = true;
+            if (ConfigFileHelper.TryGetPathValue(config, path, out var value) && value is bool configuredFlag)
+                flag = configuredFlag;
 
-            configured++;
             if (flag)
                 enabled++;
         }
 
-        return configured == 0 ? "Defaults" : $"{enabled}/{paths.Length} enabled";
+        return $"{enabled}/{FeatureConfigPaths.Length} enabled";
     }
 
     private static string ReadExposureModeSummary(Dictionary<string, object> config)

@@ -18,6 +18,7 @@ internal sealed class ActiveSelectionList<T>
     private readonly Func<T, string?>? _statusSelector;
     private readonly Action<T>? _confirmed;
     private readonly Action? _changed;
+    private readonly Action<T>? _toggled;
     private readonly int _labelPadWidth;
     private readonly DynamicLayoutNode _layout;
 
@@ -29,7 +30,8 @@ internal sealed class ActiveSelectionList<T>
         Action<T>? confirmed = null,
         Action? changed = null,
         int focusedIndex = 0,
-        int labelPadWidth = 0)
+        int labelPadWidth = 0,
+        Action<T>? toggled = null)
     {
         _options = options;
         _labelSelector = labelSelector;
@@ -37,6 +39,7 @@ internal sealed class ActiveSelectionList<T>
         _statusSelector = statusSelector;
         _confirmed = confirmed;
         _changed = changed;
+        _toggled = toggled;
         _labelPadWidth = labelPadWidth;
         FocusedIndex = ClampIndex(focusedIndex);
         _layout = new DynamicLayoutNode(BuildRows);
@@ -86,6 +89,10 @@ internal sealed class ActiveSelectionList<T>
                 return true;
             case ConsoleKey.Enter:
                 _confirmed?.Invoke(FocusedOption);
+                return true;
+            case ConsoleKey.Spacebar when _toggled is not null:
+                _toggled(FocusedOption);
+                Invalidate();
                 return true;
             default:
                 return false;
