@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
@@ -354,6 +356,57 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
         var config = builder.BuildConfigDictionary();
 
         Assert.False(config.ContainsKey("ExternalSkills"));
+    }
+
+    [Fact]
+    public void WriteSecretsFile_ExistingSection_OverwritesContributedSecretsAndPreservesUnrelatedValues()
+    {
+        var priorProtector = SensitiveStringTypeConverter.Protector;
+        var protector = SecretsProtection.CreateProtector(Context.Paths);
+        SensitiveStringTypeConverter.Protector = protector;
+
+        try
+        {
+            SecretsFileWriter.Write(Context.Paths.SecretsPath,
+                """
+                {
+                  "Discord": {
+                    "BotToken": "old-token",
+                    "OtherSecret": "keep-discord"
+                  },
+                  "Discord:BotToken": "literal-collision",
+                  "Search": {
+                    "BraveApiKey": "keep-search"
+                  }
+                }
+                """,
+                protector);
+
+            var builder = new WizardSecretsBuilder(Context.Paths);
+            builder.AddSection("Discord", new Dictionary<string, object>
+            {
+                ["BotToken"] = "new-token"
+            });
+
+            builder.WriteSecretsFile();
+
+            var encryptedJson = File.ReadAllText(Context.Paths.SecretsPath);
+            Assert.DoesNotContain("\"Discord:BotToken\"", encryptedJson, StringComparison.Ordinal);
+
+            var decryptedJson = SecretsFileWriter.DecryptJsonLeaves(encryptedJson, protector);
+            using var document = JsonDocument.Parse(decryptedJson);
+
+            var root = document.RootElement;
+            var discord = root.GetProperty("Discord");
+            Assert.Equal("new-token", discord.GetProperty("BotToken").GetString());
+            Assert.Equal("keep-discord", discord.GetProperty("OtherSecret").GetString());
+            Assert.Equal("keep-search", root.GetProperty("Search").GetProperty("BraveApiKey").GetString());
+            Assert.False(root.TryGetProperty("Discord:BotToken", out _));
+        }
+        finally
+        {
+            SensitiveStringTypeConverter.Protector = priorProtector;
+        }
     }
 
     [Fact]

@@ -24,6 +24,8 @@ internal static class UpdateCommand
         {
             case "init":
             case "update":
+            case "secrets":
+            case "daemon":
             case "chat":
             case "sessions":
             case "headless":

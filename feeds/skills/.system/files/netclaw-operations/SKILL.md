@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.8.0"
+  version: "2.8.1"
 ---
 
 # Netclaw Operations
@@ -30,6 +30,7 @@ problems, how to update preferences, or how to maintain itself.
 | Add or switch LLM provider, OAuth login | [LLM Providers](#llm-providers) |
 | Show / kick the tires on Netclaw end-to-end locally | [Demo AppHost](#demo-apphost) |
 | Search backend errors, configure SearXNG | [Search Providers](#search-providers) |
+| Rotate or repair secrets | [Secret Management](#secret-management) |
 
 ## Project Directory
 
@@ -616,6 +617,27 @@ full exception internally. Exception details are **never** forwarded to Slack.
 | Download timeout | bot token valid? Slack network reachable? check `daemon-{date}.log` |
 | Content scan rejection | `netclaw status` scanner section; check scan config |
 | Inbox write failure | disk space? permissions on `~/.netclaw/sessions/`? |
+
+## Secret Management
+
+Secrets live in `~/.netclaw/config/secrets.json`; never print raw values in a
+conversation, issue, PR, or log summary. Use the CLI instead of direct edits:
+
+```bash
+netclaw secrets set Discord:BotToken <replacement>
+netclaw secrets set Slack.BotToken <replacement>
+```
+
+Rules:
+
+- `.` and `:` are both accepted as path delimiters; prefer the documented dotted
+  form unless the operator provides a configuration-style colon path.
+- `netclaw secrets add` is an alias for `set` and overwrites the same effective
+  path.
+- Re-running `netclaw init` updates secret values explicitly entered in the
+  wizard while preserving unrelated secrets.
+- If a channel reports a 401 or invalid-token error, rotate the relevant secret
+  and restart the daemon so the channel reloads config.
 
 ## LLM Providers
 

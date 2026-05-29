@@ -8,6 +8,7 @@ using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Secrets;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -419,8 +420,12 @@ public sealed class WizardSecretsBuilder
             {
                 foreach (var (key, value) in _secrets)
                 {
-                    if (!existingNode.ContainsKey(key))
-                        existingNode[key] = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+                    var segments = SecretsJsonUpdater.ParseKeyPath(key);
+                    var node = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+                    if (node is JsonObject obj)
+                        SecretsJsonUpdater.MergeObject(existingNode, segments, obj);
+                    else
+                        SecretsJsonUpdater.UpsertNode(existingNode, segments, node);
                 }
 
                 SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
