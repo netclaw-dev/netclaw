@@ -33,8 +33,7 @@ public sealed record AudienceProfileRow(AudienceProfileRowKind Kind, string Labe
 
 public enum AudienceProfileRowKind
 {
-    ReadFiles,
-    EditFiles,
+    FileTools,
     WebAccess,
     Skills,
     Scheduling,
@@ -82,20 +81,18 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private static readonly AudienceProfileRow[] AudienceRows =
     [
-        new(AudienceProfileRowKind.ReadFiles, "Read files", "Read and list files within the file scope."),
-        new(AudienceProfileRowKind.EditFiles, "Edit files", "Write or patch files within the file scope."),
-        new(AudienceProfileRowKind.WebAccess, "Web access", "Use web_search and web_fetch."),
-        new(AudienceProfileRowKind.Skills, "Skills", "Manage and load skills."),
-        new(AudienceProfileRowKind.Scheduling, "Scheduling", "Create, list, cancel, and inspect reminders."),
-        new(AudienceProfileRowKind.ChangeWorkingDirectory, "Change working directory", "Let sessions switch workspace roots."),
-        new(AudienceProfileRowKind.FileAccess, "File access", "Cycle Off, Session only, or All files."),
-        new(AudienceProfileRowKind.IncomingAttachments, "Incoming attachments", "Cycle attachment categories accepted from channels."),
-        new(AudienceProfileRowKind.McpPermissions, "MCP permissions", "Managed in netclaw mcp permissions."),
-        new(AudienceProfileRowKind.ResetToDefault, "Reset to posture default", "Replace this full audience profile with the posture default.")
+        new(AudienceProfileRowKind.FileTools, "File tools", "Read, attach, write, and edit files."),
+        new(AudienceProfileRowKind.WebAccess, "Web", "web_search and web_fetch."),
+        new(AudienceProfileRowKind.Skills, "Skills", "Skill management tools."),
+        new(AudienceProfileRowKind.Scheduling, "Scheduling", "Reminder tools."),
+        new(AudienceProfileRowKind.ChangeWorkingDirectory, "Change workspace", "Allow workspace switching."),
+        new(AudienceProfileRowKind.FileAccess, "File scope", "Filesystem scope for file tools."),
+        new(AudienceProfileRowKind.IncomingAttachments, "Attachments", "Accepted channel attachment types."),
+        new(AudienceProfileRowKind.McpPermissions, "MCP grants", "Managed separately."),
+        new(AudienceProfileRowKind.ResetToDefault, "Reset overrides", "Restore this audience to the current posture baseline.")
     ];
 
-    private static readonly string[] ReadFileTools = ["file_read", "file_list", "attach_file"];
-    private static readonly string[] EditFileTools = ["file_write", "file_edit"];
+    private static readonly string[] FileTools = ["file_read", "file_list", "attach_file", "file_write", "file_edit"];
     private static readonly string[] WebTools = ["web_search", "web_fetch"];
     private static readonly string[] SkillTools = ["skill_manage"];
     private static readonly string[] SchedulingTools = ["set_reminder", "list_reminders", "cancel_reminder", "get_reminder_history"];
@@ -144,6 +141,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     public IReadOnlyList<string> FeatureDescriptions => FeatureSelectionStepViewModel.FeatureDescriptions;
     public TrustAudience SelectedAudience => Audiences[SelectedAudienceIndex.Value].Value;
     public DeploymentPosture CurrentPosture => ReadPosture(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+    public string SelectedAudienceOverrideStatus => AudienceHasOverrides(SelectedAudience) ? "Customized overrides" : "No custom overrides";
 
     public void MoveSelection(int delta)
     {
@@ -340,21 +338,23 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    public string AudienceSummary(TrustAudience audience)
-    {
-        var profiles = LoadAudienceProfiles();
-        var current = GetProfile(profiles, audience);
-        var defaults = GetProfile(BuildPostureProfiles(CurrentPosture), audience);
-        return JsonEquivalent(current, defaults) ? $"Default for posture: {CurrentPosture}" : "Customized";
-    }
+    public bool IsSystemDefaultAudience(TrustAudience audience)
+        => audience switch
+        {
+            TrustAudience.Personal => CurrentPosture == DeploymentPosture.Personal,
+            TrustAudience.Team => CurrentPosture == DeploymentPosture.Team,
+            TrustAudience.Public => CurrentPosture == DeploymentPosture.Public,
+            _ => false
+        };
+
+    public string AudienceOverrideMarker(TrustAudience audience) => AudienceHasOverrides(audience) ? "Customized" : "";
 
     public bool IsAudienceToggleEnabled(AudienceProfileRowKind kind)
     {
         var profile = GetSelectedProfile();
         return kind switch
         {
-            AudienceProfileRowKind.ReadFiles => ToolGroupEnabled(profile, ReadFileTools),
-            AudienceProfileRowKind.EditFiles => ToolGroupEnabled(profile, EditFileTools),
+            AudienceProfileRowKind.FileTools => ToolGroupEnabled(profile, FileTools),
             AudienceProfileRowKind.WebAccess => ToolGroupEnabled(profile, WebTools),
             AudienceProfileRowKind.Skills => ToolGroupEnabled(profile, SkillTools),
             AudienceProfileRowKind.Scheduling => ToolGroupEnabled(profile, SchedulingTools),
@@ -370,7 +370,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         {
             AudienceProfileRowKind.FileAccess => DescribeFilesystem(profile),
             AudienceProfileRowKind.IncomingAttachments => DescribeAttachments(profile.ChannelAttachments),
-            AudienceProfileRowKind.McpPermissions => "Manage separately",
+            AudienceProfileRowKind.McpPermissions => "netclaw mcp permissions",
             AudienceProfileRowKind.ResetToDefault => "",
             _ => IsAudienceToggleEnabled(kind) ? "Enabled" : "Disabled"
         };
@@ -381,11 +381,8 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         var row = AudienceRows[SelectedAudienceRowIndex.Value];
         switch (row.Kind)
         {
-            case AudienceProfileRowKind.ReadFiles:
-                ToggleToolGroup(row.Kind, ReadFileTools);
-                return;
-            case AudienceProfileRowKind.EditFiles:
-                ToggleToolGroup(row.Kind, EditFileTools);
+            case AudienceProfileRowKind.FileTools:
+                ToggleToolGroup(row.Kind, FileTools);
                 return;
             case AudienceProfileRowKind.WebAccess:
                 ToggleToolGroup(row.Kind, WebTools);
@@ -400,10 +397,10 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
                 ToggleToolGroup(row.Kind, WorkingDirectoryTools);
                 return;
             case AudienceProfileRowKind.FileAccess:
-                CycleFileAccess();
+                CycleFileAccess(1);
                 return;
             case AudienceProfileRowKind.IncomingAttachments:
-                CycleIncomingAttachments();
+                CycleIncomingAttachments(1);
                 return;
             case AudienceProfileRowKind.McpPermissions:
                 StatusMessage.Value = "Run `netclaw mcp permissions` to edit MCP server and tool grants.";
@@ -415,11 +412,43 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         }
     }
 
+    public void ChangeSelectedAudienceProfileRow(int direction)
+    {
+        var row = AudienceRows[SelectedAudienceRowIndex.Value];
+        switch (row.Kind)
+        {
+            case AudienceProfileRowKind.FileAccess:
+                CycleFileAccess(direction);
+                return;
+            case AudienceProfileRowKind.IncomingAttachments:
+                CycleIncomingAttachments(direction);
+                return;
+        }
+    }
+
+    public string AudienceRowHelp(AudienceProfileRowKind kind)
+    {
+        var profile = GetSelectedProfile();
+        return kind switch
+        {
+            AudienceProfileRowKind.FileTools => "File tools grant read/list/attach/write/edit; File scope below limits where they can operate.",
+            AudienceProfileRowKind.WebAccess => "Web grants web_search and web_fetch for this audience.",
+            AudienceProfileRowKind.Skills => "Skills grants skill management and loading tools for this audience.",
+            AudienceProfileRowKind.Scheduling => "Scheduling grants reminder create/list/cancel/history tools.",
+            AudienceProfileRowKind.ChangeWorkingDirectory => "Change workspace lets sessions switch workspace roots.",
+            AudienceProfileRowKind.FileAccess => DescribeFilesystemHelp(profile),
+            AudienceProfileRowKind.IncomingAttachments => DescribeAttachmentHelp(profile.ChannelAttachments),
+            AudienceProfileRowKind.McpPermissions => "MCP server and per-tool grants are managed in the dedicated MCP permissions editor.",
+            AudienceProfileRowKind.ResetToDefault => "Reset overrides restores this audience to the current global posture baseline, including hidden MCP and approval settings.",
+            _ => string.Empty
+        };
+    }
+
     public void ResetSelectedAudienceProfile()
     {
         var profiles = BuildPostureProfiles(CurrentPosture);
         SaveAudienceProfile(GetProfile(profiles, SelectedAudience));
-        StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} profile reset to {CurrentPosture} defaults.";
+        StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} overrides reset to the {CurrentPosture} posture baseline.";
         RequestRedraw();
     }
 
@@ -490,16 +519,11 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    private void CycleFileAccess()
+    private void CycleFileAccess(int direction)
     {
         var profiles = LoadAudienceProfiles();
         var profile = GetProfile(profiles, SelectedAudience);
-        var next = CurrentFilesystemLevel(profile) switch
-        {
-            FilesystemLevel.Off => FilesystemLevel.SessionOnly,
-            FilesystemLevel.SessionOnly => FilesystemLevel.AllFiles,
-            _ => FilesystemLevel.Off
-        };
+        var next = CycleValue(CurrentFilesystemLevel(profile), FilesystemLevelsFor(SelectedAudience), direction);
 
         ApplyFilesystemLevel(profile, next);
         SaveAudienceProfile(profile);
@@ -507,17 +531,11 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
-    private void CycleIncomingAttachments()
+    private void CycleIncomingAttachments(int direction)
     {
         var profiles = LoadAudienceProfiles();
         var profile = GetProfile(profiles, SelectedAudience);
-        var next = CurrentAttachmentLevel(profile.ChannelAttachments) switch
-        {
-            AttachmentLevel.None => AttachmentLevel.Images,
-            AttachmentLevel.Images => AttachmentLevel.CommonWorkFiles,
-            AttachmentLevel.CommonWorkFiles => AttachmentLevel.All,
-            _ => AttachmentLevel.None
-        };
+        var next = CycleValue(CurrentAttachmentLevel(profile.ChannelAttachments), AttachmentLevels, direction);
 
         profile.ChannelAttachments = BuildAttachmentPolicy(next);
         SaveAudienceProfile(profile);
@@ -611,11 +629,19 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     private static string ReadAudienceProfilesSummary(Dictionary<string, object> config)
     {
         if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
-            return "Defaults";
+            return "No overrides";
 
         var existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
         var defaults = BuildPostureProfiles(ReadPosture(config));
-        return JsonEquivalent(existing, defaults) ? "Defaults" : "Customized";
+        return JsonEquivalent(existing, defaults) ? "No overrides" : "Customized";
+    }
+
+    private bool AudienceHasOverrides(TrustAudience audience)
+    {
+        var profiles = LoadAudienceProfiles();
+        var current = GetProfile(profiles, audience);
+        var defaults = GetProfile(BuildPostureProfiles(CurrentPosture), audience);
+        return !JsonEquivalent(current, defaults);
     }
 
     private static DeploymentPosture ReadPosture(Dictionary<string, object> config)
@@ -739,6 +765,14 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
             _ => "Session only"
         };
 
+    private static string DescribeFilesystemHelp(ToolAudienceProfile profile)
+        => CurrentFilesystemLevel(profile) switch
+        {
+            FilesystemLevel.Off => "Off: file tools stay granted, but no filesystem paths are available.",
+            FilesystemLevel.AllFiles => "All files: unrestricted filesystem scope; intended only for Personal audiences.",
+            _ => "Session only: file tools stay inside the current session workspace."
+        };
+
     private static AttachmentLevel CurrentAttachmentLevel(ChannelAttachmentPolicy? policy)
     {
         if (policy is null || policy.AllowedCategories.Count == 0)
@@ -769,6 +803,61 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
             AttachmentLevel.All => "All attachments",
             _ => "Common work files"
         };
+
+    private static string DescribeAttachmentHelp(ChannelAttachmentPolicy? policy)
+        => CurrentAttachmentLevel(policy) switch
+        {
+            AttachmentLevel.None => "None: inbound channel attachments are rejected.",
+            AttachmentLevel.Images => "Images: allows image uploads only.",
+            AttachmentLevel.All => "All attachments: images, PDFs, documents, archives, media, and unknown file types.",
+            _ => "Common work files: images, PDFs, documents, archives, and media; excludes unknown file types."
+        };
+
+    private static readonly FilesystemLevel[] PersonalFilesystemLevels =
+    [
+        FilesystemLevel.Off,
+        FilesystemLevel.SessionOnly,
+        FilesystemLevel.AllFiles
+    ];
+
+    private static readonly FilesystemLevel[] RestrictedFilesystemLevels =
+    [
+        FilesystemLevel.Off,
+        FilesystemLevel.SessionOnly
+    ];
+
+    private static readonly AttachmentLevel[] AttachmentLevels =
+    [
+        AttachmentLevel.None,
+        AttachmentLevel.Images,
+        AttachmentLevel.CommonWorkFiles,
+        AttachmentLevel.All
+    ];
+
+    private static IReadOnlyList<FilesystemLevel> FilesystemLevelsFor(TrustAudience audience)
+        => audience == TrustAudience.Personal ? PersonalFilesystemLevels : RestrictedFilesystemLevels;
+
+    private static T CycleValue<T>(T current, IReadOnlyList<T> values, int direction)
+    {
+        if (values.Count == 0)
+            return current;
+
+        var index = -1;
+        for (var i = 0; i < values.Count; i++)
+        {
+            if (EqualityComparer<T>.Default.Equals(values[i], current))
+            {
+                index = i;
+                break;
+            }
+        }
+
+        if (index < 0)
+            index = 0;
+
+        var next = (index + Math.Sign(direction) + values.Count) % values.Count;
+        return values[next];
+    }
 
     private static bool JsonEquivalent<T>(T left, T right)
         => JsonSerializer.Serialize(left, JsonDefaults.ConfigFile) == JsonSerializer.Serialize(right, JsonDefaults.ConfigFile);

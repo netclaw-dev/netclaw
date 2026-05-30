@@ -111,6 +111,67 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         Assert.DoesNotContain(teamAllowedTools, static tool => tool?.ToString() == "web_fetch");
 
         Assert.False(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Public.AllowedTools", out _));
+        Assert.Equal("Customized", vm.AudienceOverrideMarker(TrustAudience.Team));
+        Assert.Equal("", vm.AudienceOverrideMarker(TrustAudience.Public));
+        Assert.Equal("Customized overrides", vm.SelectedAudienceOverrideStatus);
+    }
+
+    [Fact]
+    public void Audience_profiles_summary_reports_overrides_not_defaults()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+
+        var audienceProfiles = vm.Items.Single(static item => item.Label == "Audience Profiles");
+        Assert.Equal("No overrides", audienceProfiles.Summary);
+        Assert.Equal("", vm.AudienceOverrideMarker(TrustAudience.Team));
+        Assert.False(vm.IsSystemDefaultAudience(TrustAudience.Personal));
+        Assert.True(vm.IsSystemDefaultAudience(TrustAudience.Team));
+        Assert.False(vm.IsSystemDefaultAudience(TrustAudience.Public));
+
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.WebAccess;
+        vm.ActivateSelectedAudienceProfileRow();
+
+        audienceProfiles = vm.Items.Single(static item => item.Label == "Audience Profiles");
+        Assert.Equal("Customized", audienceProfiles.Summary);
+        Assert.Equal("Customized", vm.AudienceOverrideMarker(TrustAudience.Team));
+    }
+
+    [Fact]
+    public void Audience_profile_file_scope_cycle_keeps_team_scope_restricted()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.FileAccess;
+
+        vm.ActivateSelectedAudienceProfileRow();
+        vm.ActivateSelectedAudienceProfileRow();
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.ReadFiles.Mode", out var readMode));
+        Assert.Equal("Roots", readMode);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.WriteFiles.Mode", out var writeMode));
+        Assert.Equal("Roots", writeMode);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.AttachFiles.Mode", out var attachMode));
+        Assert.Equal("Roots", attachMode);
     }
 
     [Fact]

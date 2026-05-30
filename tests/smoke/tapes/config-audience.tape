@@ -6,7 +6,7 @@
 
 Output "/tmp/tape-config-audience.gif"
 
-# Seed minimal Team config; Audience Profiles should resolve from posture defaults.
+# Seed minimal Team config; Audience Profiles should resolve from the system posture.
 Type "mkdir -p $NETCLAW_HOME/config"
 Enter
 Type "posture=Team; jq -n --arg posture $posture '{configVersion:1,Security:{DeploymentPosture:$posture}}' > $NETCLAW_HOME/config/netclaw.json"
@@ -22,15 +22,20 @@ Wait+Screen@10s /Security & Access/
 # Open Audience Profiles, edit Team, disable Web access.
 Down 2
 Enter
-Wait+Screen@10s /Configure high-level access per audience tier/
+Wait+Screen@10s /System default posture: Team/
+Wait+Screen@10s /\* Team/
 Down
 Enter
-Wait+Screen@10s /Tool access for the Team audience/
-Down 2
+Wait+Screen@10s /Audience Profile: Team/
+Down
 Space
-Wait+Screen@10s /\[ \] Web access/
+Wait+Screen@10s /\[ \] Web/
+Down 4
+Wait+Screen@10s /\[◀ Session only/
+Down
+Wait+Screen@10s /Common work files: images/
 Escape
-Wait+Screen@10s /Configure high-level access per audience tier/
+Wait+Screen@10s /System default posture: Team/
 Escape
 Wait+Screen@10s /Security & Access/
 Ctrl+Q

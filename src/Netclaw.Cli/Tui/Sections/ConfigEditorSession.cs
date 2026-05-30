@@ -80,11 +80,11 @@ internal sealed class ConfigEditorSession
                 case SectionSecretActionKind.Preserve:
                     break;
                 case SectionSecretActionKind.Set:
-                    ConfigFileHelper.SetPathValue(secrets, action.Path, action.Value);
+                    SetSecretPathValue(secrets, action.Path, action.Value!);
                     changed = true;
                     break;
                 case SectionSecretActionKind.Delete:
-                    changed |= ConfigFileHelper.RemovePath(secrets, action.Path);
+                    changed |= RemoveSecretPath(secrets, action.Path);
                     break;
             }
         }
@@ -103,4 +103,94 @@ internal sealed class ConfigEditorSession
 
     private static bool HasUserSecretData(Dictionary<string, object> secrets)
         => secrets.Keys.Any(static key => !string.Equals(key, "configVersion", StringComparison.Ordinal));
+
+    private static void SetSecretPathValue(Dictionary<string, object> secrets, string path, object value)
+    {
+        var segments = ParseSecretPath(path);
+        RemoveLiteralCollisionKeys(secrets, segments);
+
+        var current = secrets;
+        for (var i = 0; i < segments.Length - 1; i++)
+            current = ConfigFileHelper.GetOrCreateSection(current, segments[i]);
+
+        current[segments[^1]] = value;
+    }
+
+    private static bool RemoveSecretPath(Dictionary<string, object> secrets, string path)
+    {
+        var segments = ParseSecretPath(path);
+        var changed = RemovePathBySegments(secrets, segments);
+        changed |= RemoveLiteralCollisionKeys(secrets, segments);
+        return changed;
+    }
+
+    private static string[] ParseSecretPath(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var segments = path.Split(['.', ':'], StringSplitOptions.None)
+            .Select(static segment => segment.Trim())
+            .ToArray();
+
+        if (segments.Length == 0 || segments.Any(string.IsNullOrWhiteSpace))
+            throw new InvalidOperationException("Secret path must be a non-empty dot or colon-delimited path.");
+
+        return segments;
+    }
+
+    private static bool RemovePathBySegments(Dictionary<string, object> root, IReadOnlyList<string> segments)
+    {
+        var current = root;
+        for (var i = 0; i < segments.Count - 1; i++)
+        {
+            var next = ConfigFileHelper.GetSectionOrNull(current, segments[i]);
+            if (next is null)
+                return false;
+
+            current = next;
+        }
+
+        var removed = current.Remove(segments[^1]);
+        if (removed)
+            PruneEmptySections(root, segments);
+
+        return removed;
+    }
+
+    private static bool RemoveLiteralCollisionKeys(Dictionary<string, object> root, IReadOnlyList<string> segments)
+        => RemoveLiteralCollisionKeys(root, segments, offset: 0);
+
+    private static bool RemoveLiteralCollisionKeys(Dictionary<string, object> current, IReadOnlyList<string> segments, int offset)
+    {
+        var changed = false;
+        for (var end = offset + 2; end <= segments.Count; end++)
+            changed |= current.Remove(string.Join(':', segments.Skip(offset).Take(end - offset)));
+
+        if (offset < segments.Count - 1 && ConfigFileHelper.GetSectionOrNull(current, segments[offset]) is { } child)
+            changed |= RemoveLiteralCollisionKeys(child, segments, offset + 1);
+
+        return changed;
+    }
+
+    private static void PruneEmptySections(Dictionary<string, object> root, IReadOnlyList<string> segments)
+    {
+        for (var depth = segments.Count - 1; depth > 0; depth--)
+        {
+            var parent = root;
+            for (var i = 0; i < depth - 1; i++)
+            {
+                var next = ConfigFileHelper.GetSectionOrNull(parent, segments[i]);
+                if (next is null)
+                    return;
+
+                parent = next;
+            }
+
+            var key = segments[depth - 1];
+            if (ConfigFileHelper.GetSectionOrNull(parent, key) is { Count: 0 })
+                parent.Remove(key);
+            else
+                return;
+        }
+    }
 }

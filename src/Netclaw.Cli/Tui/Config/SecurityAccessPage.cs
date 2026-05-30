@@ -145,7 +145,9 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     {
         var layout = Layouts.Vertical()
             .WithChild(Header("  Audience Profiles"))
-            .WithChild(Hint("  Configure high-level access per audience tier."))
+            .WithChild(Hint($"  System default posture: {ViewModel.CurrentPosture}"))
+            .WithChild(Hint("  Customize audience/channel access when it should differ."))
+            .WithChild(Legend("  * global default audience   Customized = custom overrides"))
             .WithChild(Layouts.Empty().Height(1));
 
         var options = ViewModel.AudienceOptions;
@@ -153,9 +155,10 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
         {
             var option = options[i];
             var focused = i == ViewModel.SelectedAudienceIndex.Value;
-            var summary = ViewModel.AudienceSummary(option.Value);
+            var marker = ViewModel.AudienceOverrideMarker(option.Value);
+            var defaultMarker = ViewModel.IsSystemDefaultAudience(option.Value) ? "*" : " ";
             layout = layout.WithChild(Row(
-                $"{FocusPrefix(focused)}{option.Label,-10} {summary,-30} {option.Description}",
+                $"{FocusPrefix(focused)}{defaultMarker} {option.Label,-9} {option.Description,-34} {marker}",
                 focused));
         }
 
@@ -166,8 +169,9 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     {
         var audience = ViewModel.AudienceOptions[ViewModel.SelectedAudienceIndex.Value];
         var layout = Layouts.Vertical()
-            .WithChild(Header($"  Audience Profiles > {audience.Label}"))
-            .WithChild(Hint($"  Tool access for the {audience.Label} audience."))
+            .WithChild(Header($"  Audience Profile: {audience.Label}"))
+            .WithChild(Hint($"  System default posture: {ViewModel.CurrentPosture}"))
+            .WithChild(Hint($"  Profile: {ViewModel.SelectedAudienceOverrideStatus}"))
             .WithChild(Layouts.Empty().Height(1));
 
         var rows = ViewModel.ProfileRows;
@@ -175,16 +179,23 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
         {
             var row = rows[i];
             var focused = i == ViewModel.SelectedAudienceRowIndex.Value;
+            if (row.Kind == AudienceProfileRowKind.FileTools)
+                layout = layout.WithChild(Section("  Tools"));
+            if (row.Kind == AudienceProfileRowKind.FileAccess)
+                layout = layout.WithChild(Layouts.Empty().Height(1)).WithChild(Section("  Access"));
+            if (row.Kind == AudienceProfileRowKind.ResetToDefault)
+                layout = layout.WithChild(Layouts.Empty().Height(1)).WithChild(Section("  Actions"));
+
             var line = row.Kind switch
             {
                 AudienceProfileRowKind.FileAccess or AudienceProfileRowKind.IncomingAttachments =>
-                    $"{FocusPrefix(focused)}{row.Label,-25} {ViewModel.AudienceValue(row.Kind),-22} {row.Description}",
+                    $"{FocusPrefix(focused)}{row.Label,-14} {CycleValue(ViewModel.AudienceValue(row.Kind))}",
                 AudienceProfileRowKind.McpPermissions =>
-                    $"{FocusPrefix(focused)}{row.Label,-25} {ViewModel.AudienceValue(row.Kind),-22} {row.Description}",
+                    $"{FocusPrefix(focused)}{row.Label,-14} [Open] {ViewModel.AudienceValue(row.Kind)}",
                 AudienceProfileRowKind.ResetToDefault =>
-                    $"{FocusPrefix(focused)}[Reset] {row.Label,-27} {row.Description}",
+                    $"{FocusPrefix(focused)}{row.Label,-14} [Reset]",
                 _ =>
-                    $"{FocusPrefix(focused)}[{Check(ViewModel.IsAudienceToggleEnabled(row.Kind))}] {row.Label,-23} {row.Description}"
+                    $"{FocusPrefix(focused)}[{Check(ViewModel.IsAudienceToggleEnabled(row.Kind))}] {row.Label}"
             };
 
             var enabled = row.Kind switch
@@ -194,6 +205,11 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
             };
             layout = layout.WithChild(Row(line, focused, enabled));
         }
+
+        var focusedRow = rows[ViewModel.SelectedAudienceRowIndex.Value];
+        layout = layout
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Hint($"  {ViewModel.AudienceRowHelp(focusedRow.Kind)}"));
 
         return layout;
     }
@@ -212,7 +228,7 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
             SecurityAccessEditorMode.PostureCascade => " [↑/↓] Navigate  [Enter] Apply  [Esc] Back  [Ctrl+Q] Quit",
             SecurityAccessEditorMode.Features => " [↑/↓] Navigate  [Space/Enter] Toggle + Save  [Esc] Security & Access  [Ctrl+Q] Quit",
             SecurityAccessEditorMode.AudienceList => " [↑/↓] Navigate  [Enter] Edit Audience  [Esc] Security & Access  [Ctrl+Q] Quit",
-            SecurityAccessEditorMode.AudienceProfile => " [↑/↓] Navigate  [Space/Enter] Toggle/Cycle  [Esc] Audiences  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.AudienceProfile => " [↑/↓] Navigate  [←/→] Change  [Space/Enter] Toggle/Apply  [Esc] Audiences  [Ctrl+Q] Quit",
             _ => " [↑/↓] Navigate  [Enter] Open  [Esc] Back  [Ctrl+Q] Quit"
         }));
 
@@ -351,6 +367,12 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
             case ConsoleKey.DownArrow:
                 ViewModel.MoveAudienceRow(1);
                 break;
+            case ConsoleKey.LeftArrow:
+                ViewModel.ChangeSelectedAudienceProfileRow(-1);
+                break;
+            case ConsoleKey.RightArrow:
+                ViewModel.ChangeSelectedAudienceProfileRow(1);
+                break;
             case ConsoleKey.Spacebar:
             case ConsoleKey.Enter:
                 ViewModel.ActivateSelectedAudienceProfileRow();
@@ -365,9 +387,12 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     }
 
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
+    private static TextNode Section(string text) => new TextNode(text).WithForeground(Color.White).Bold();
+    private static TextNode Legend(string text) => new TextNode(text).WithForeground(Color.White);
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.BrightBlack);
     private static string FocusPrefix(bool focused) => focused ? " ▶ " : "   ";
     private static string Check(bool enabled) => enabled ? "✓" : " ";
+    private static string CycleValue(string value) => $"[◀ {value,-17} ▶]";
 
     private static TextNode Row(string line, bool focused, bool enabled = true)
     {

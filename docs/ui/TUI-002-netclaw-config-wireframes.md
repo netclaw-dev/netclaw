@@ -715,7 +715,7 @@ Same shape as Tailscale Serve, but with stronger public-exposure warning copy.
 │                                                             │
 │  ▸ Security Posture         Team                            │
 │    Enabled Features         4/6 enabled                     │
-│    Audience Profiles        Team customized                 │
+│    Audience Profiles        Customized                      │
 │    Exposure Mode            Cloudflare Tunnel               │
 │                                                             │
 │  [ Open / Edit inline ]    [ Back ]                         │
@@ -805,37 +805,54 @@ exposure is configured in Audience Profiles and MCP permissions.
 ```
 ╭─ Audience Profiles ─────────────────────────────────────────╮
 │                                                             │
-│  Configure high-level access per audience tier.             │
+│  System default posture: Team                               │
+│  Customize audience/channel access when it should differ.   │
+│  * global default audience   Customized = custom overrides  │
 │                                                             │
-│  ▶ Personal           Default for posture: Personal         │
-│    Team               Default for posture: Personal         │
-│    Public             Default for posture: Personal         │
+│  ▶   Personal        Operator/local sessions                │
+│    * Team            Trusted internal channels              │
+│      Public          Untrusted external users               │
 │                                                             │
 │ ↑/↓ navigate · Enter edit audience · Esc cancel             │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
+When a profile differs from the current system posture baseline, only that row
+gets a `Customized` override marker:
+
+```
+│  ▶ Personal           Operator/local sessions               │
+│  * Team               Trusted internal channels  Customized │
+│    Public             Untrusted external users              │
+```
+
 ### 9.4.2 Per-audience editor
 
 ```
-╭─ Audience Profiles › Team ──────────────────────────────────╮
+╭─ Audience Profile: Team ────────────────────────────────────╮
 │                                                             │
-│  Tool access for the Team audience:                         │
+│  System default posture: Team                               │
+│  Profile: No custom overrides                               │
 │                                                             │
-│  ▶ [✓] Read files                                           │
-│    [✓] Edit files                                           │
-│    [✓] Web access                                           │
+│  Tools                                                      │
+│  ▶ [✓] File tools                                           │
+│    [✓] Web                                                  │
 │    [✓] Skills                                               │
 │    [✓] Scheduling                                           │
-│    [✓] Change working directory                             │
+│    [✓] Change workspace                                     │
 │                                                             │
-│  File access:               Session only →                  │
-│  Incoming attachments:      Common work files               │
-│  MCP permissions:           Manage in `netclaw mcp         │
-│                              permissions` →                 │
-│  [Reset] Reset to posture default                           │
+│  Access                                                     │
+│    File scope        [◀ Session only      ▶]                │
+│    Attachments       [◀ Common work files ▶]                │
+│    MCP grants        [Open] netclaw mcp permissions         │
 │                                                             │
-│ ↑/↓ navigate · Space/Enter toggle/cycle · Esc back          │
+│  Actions                                                    │
+│    Reset overrides  [Reset]                                │
+│                                                             │
+│  Common work files: images, PDFs, documents, archives,      │
+│  and media; excludes unknown file types.                    │
+│                                                             │
+│ ↑/↓ navigate · ←/→ change · Space/Enter toggle/apply        │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -844,9 +861,10 @@ exposure is configured in Audience Profiles and MCP permissions.
 - `↑` / `↓` MUST move focus between toggle rows.
 - `Space` MUST toggle the focused checkbox.
 - `Enter` on a checkbox row also toggles (alternative to Space).
+- `←` / `→` on a cycle row moves backward or forward through curated values.
 - `Enter` on a cycle row advances to the next curated value.
-- `Reset to posture default` replaces the full underlying audience profile,
-  including hidden MCP and approval settings, with the posture-default mapping.
+- `Reset overrides` replaces the full underlying audience profile, including
+  hidden MCP and approval settings, with the current posture baseline mapping.
 
 The `config-audience.tape` smoke tape explicitly exercises `↓`, `Space`,
 and `Esc` to lock in the keystroke contract. Regression in arrow nav,

@@ -103,6 +103,46 @@ public sealed class ConfigEditorSessionTests : IDisposable
     }
 
     [Fact]
+    public void Save_SecretSetNormalizesColonPathAndRemovesLiteralCollision()
+    {
+        File.WriteAllText(_paths.SecretsPath,
+            """
+            {
+              "configVersion": 1,
+              "Search": {
+                "BraveApiKey": "old-brave-key",
+                "OtherSecret": "keep-search"
+              },
+              "Search:BraveApiKey": "literal-collision",
+              "Slack": {
+                "BotToken": "stored-slack-token"
+              }
+            }
+            """);
+
+        var session = new ConfigEditorSession(_paths);
+        session.Apply(new SectionContribution(
+            SecretActions:
+            [
+                new SectionSecretAction("Search:BraveApiKey", SectionSecretActionKind.Set, new SensitiveString("new-brave-key"))
+            ]));
+
+        session.Save();
+
+        var serializedSecrets = File.ReadAllText(_paths.SecretsPath);
+        Assert.DoesNotContain("\"Search:BraveApiKey\"", serializedSecrets, StringComparison.Ordinal);
+        Assert.DoesNotContain("new-brave-key", serializedSecrets, StringComparison.Ordinal);
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Search.BraveApiKey", out var braveKey));
+        Assert.Equal("new-brave-key", ConfigFileHelper.DecryptIfEncrypted(_paths, braveKey?.ToString()));
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Search.OtherSecret", out var otherSecret));
+        Assert.Equal("keep-search", ConfigFileHelper.DecryptIfEncrypted(_paths, otherSecret?.ToString()));
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var slackToken));
+        Assert.Equal("stored-slack-token", ConfigFileHelper.DecryptIfEncrypted(_paths, slackToken?.ToString()));
+    }
+
+    [Fact]
     public void Apply_StoresAndDeletesPassiveEditorState()
     {
         var session = new ConfigEditorSession(_paths);
