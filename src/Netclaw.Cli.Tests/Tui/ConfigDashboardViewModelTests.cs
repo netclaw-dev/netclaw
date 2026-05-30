@@ -70,6 +70,18 @@ public sealed class ConfigDashboardViewModelTests
     }
 
     [Fact]
+    public void Channels_routes_to_channels_page()
+    {
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
+        string? navigatedRoute = null;
+        vm.RouteRequested = route => navigatedRoute = route;
+
+        vm.Activate(vm.Items.Single(static item => item.Label == "Channels"));
+
+        Assert.Equal("/channels", navigatedRoute);
+    }
+
+    [Fact]
     public void Run_full_doctor_sets_pending_action_and_shuts_down()
     {
         var navigationState = new ConfigDashboardNavigationState();
@@ -81,12 +93,16 @@ public sealed class ConfigDashboardViewModelTests
         Assert.True(vm.ShutdownRequestedForTest);
     }
 
-    [Fact]
-    public void Placeholder_sections_report_not_implemented_status()
+    [Theory]
+    [InlineData("Inbound Webhooks")]
+    [InlineData("Skill Sources")]
+    [InlineData("Browser Automation")]
+    [InlineData("Telemetry & Alerting")]
+    public void Placeholder_sections_report_not_implemented_status(string label)
     {
         using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
 
-        vm.Activate(vm.Items.Single(static item => item.Label == "Channels"));
+        vm.Activate(vm.Items.Single(item => item.Label == label));
 
         Assert.Contains("not implemented yet", vm.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
     }

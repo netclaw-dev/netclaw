@@ -45,7 +45,7 @@ public sealed class ConfigDashboardViewModel : ReactiveViewModel
     [
         new("Inference Providers", "Manage provider definitions and authentication.", "/provider"),
         new("Models", "Assign model roles and discover provider models.", "/model"),
-        new("Channels", "Slack, Discord, and Mattermost settings."),
+        new("Channels", "Slack, Discord, and Mattermost settings.", "/channels"),
         new("Inbound Webhooks", "Configure inbound webhook routes and verification."),
         new("Skill Sources", "External skills and private skill feeds."),
         new("Search", "Search backend and credentials.", "/search"),
