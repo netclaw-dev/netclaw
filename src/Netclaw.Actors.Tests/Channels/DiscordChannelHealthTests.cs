@@ -233,7 +233,7 @@ public sealed class DiscordChannelHealthTests(ITestOutputHelper output) : TestKi
         {
             ConnectCount++;
             IsConnected = true;
-            IsReady = ConnectReadyResults.TryDequeue(out var ready) ? ready : true;
+            IsReady = NextConnectReady();
             HealthDetail = IsReady ? null : "Discord gateway connected but not ready.";
             BotUserId ??= new DiscordUserId("bot-1");
 
@@ -252,6 +252,14 @@ public sealed class DiscordChannelHealthTests(ITestOutputHelper output) : TestKi
 
         public Task RaiseCleanReconnectRequiredAsync(string reason) =>
             _cleanReconnectRequired?.Invoke(reason) ?? Task.CompletedTask;
+
+        private bool NextConnectReady()
+        {
+            if (ConnectReadyResults.TryDequeue(out var ready))
+                return ready;
+
+            return true;
+        }
     }
 
     private sealed class FakeHttpClientFactory : IHttpClientFactory
