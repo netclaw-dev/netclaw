@@ -141,6 +141,9 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         string? extensionMime,
         bool looksText)
     {
+        // ZIP/OLE Office containers should be explained as documents, not as
+        // generic archives or OLE blobs. The extension is only trusted after the
+        // container signature proves this is the expected binary family.
         if (IsZipBackedOfficeDocument(path) && string.Equals(magicMime, "application/zip", StringComparison.OrdinalIgnoreCase))
             return extensionMime!;
 
@@ -154,6 +157,9 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         if (looksText)
             return IsTextMime(extensionMime) ? extensionMime! : "text/plain";
 
+        // Extensions are only hints. A binary file named `.json` or `.png`
+        // must stay metadata-only instead of leaking control bytes or spoofed
+        // media into a tool result / model input path.
         if (IsTextMime(extensionMime))
             return "application/octet-stream";
 

@@ -774,6 +774,10 @@ internal static class SessionToolExecutionPipeline
         {
             try
             {
+                // Treat tool-registered model input as a request, not proof it
+                // is safe. This is the provider-boundary guardrail that keeps
+                // future tools from smuggling arbitrary local bytes into the
+                // next LLM call by setting a convincing MIME string.
                 var mimeType = NormalizeModelInputMime(file.MimeType);
                 if (!TryGetSupportedModelInputModality(mimeType, out var mediaModality, out var requiredModelModality))
                 {
