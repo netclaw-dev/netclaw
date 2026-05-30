@@ -23,13 +23,28 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     // 0/1 guard: Discord.Net raises Disconnected on every reconnect attempt,
     // so a fatal close is logged and acted on exactly once. Reset per ConnectAsync.
     private int _fatalCloseHandled;
+    private int _hasObservedReady;
+    private int _waitingForConnectReady;
+    private int _cleanReconnectRequested;
 
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
+    public event Func<string, Task>? CleanReconnectRequired;
 
     private volatile string? _botMentionTag;
+    private volatile string? _healthDetail = "Discord gateway disconnected.";
 
     public bool IsConnected => _client.ConnectionState == ConnectionState.Connected;
+    public bool IsReady => IsConnected
+        && Volatile.Read(ref _hasObservedReady) == 1
+        && BotUserId is not null
+        && _botMentionTag is not null
+        && Volatile.Read(ref _cleanReconnectRequested) == 0;
+
+    public string? HealthDetail => IsReady
+        ? null
+        : _healthDetail ?? "Discord gateway is not ready.";
+
     public DiscordUserId? BotUserId { get; private set; }
 
     public DiscordNetGatewayClient(
@@ -42,6 +57,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         _logger = logger;
 
         _client.Log += OnDiscordLog;
+        _client.Connected += OnConnectedAsync;
         _client.Ready += OnReadyAsync;
         _client.Disconnected += OnDisconnectedAsync;
         _client.MessageReceived += OnMessageReceivedAsync;
@@ -54,6 +70,10 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         // failure is not satisfied by a stale result or fault.
         var readyTcs = _readyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Interlocked.Exchange(ref _fatalCloseHandled, 0);
+        Interlocked.Exchange(ref _hasObservedReady, 0);
+        Interlocked.Exchange(ref _waitingForConnectReady, 1);
+        Interlocked.Exchange(ref _cleanReconnectRequested, 0);
+        _healthDetail = "Discord gateway connecting.";
 
         await _client.LoginAsync(TokenType.Bot, botToken);
         await _client.StartAsync();
@@ -70,19 +90,40 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
 
     private Task OnReadyAsync()
     {
-        if (_client.CurrentUser is { } currentUser)
+        if (!TryRefreshBotIdentity("READY"))
         {
-            BotUserId = new DiscordUserId(currentUser.Id.ToString());
-            _botMentionTag = $"<@{currentUser.Id}>";
-            _logger.LogInformation("Discord bot identity resolved: {BotUserId}", currentUser.Id);
+            var failure = new ChannelConnectException(
+                ChannelConnectFailureKind.Transient,
+                "Discord gateway reached READY, but Discord.Net did not expose the current bot identity.");
+            _healthDetail = failure.Message;
+            _readyTcs.TrySetException(failure);
+            return Task.CompletedTask;
         }
 
+        Interlocked.Exchange(ref _hasObservedReady, 1);
+        Interlocked.Exchange(ref _waitingForConnectReady, 0);
+        _healthDetail = null;
         _readyTcs.TrySetResult();
         return Task.CompletedTask;
     }
 
+    private Task OnConnectedAsync()
+    {
+        if (Volatile.Read(ref _waitingForConnectReady) == 1)
+        {
+            _healthDetail = "Discord gateway connected; waiting for READY.";
+            return Task.CompletedTask;
+        }
+
+        return RequestCleanReconnectAsync(
+            "Discord gateway reconnected outside a clean startup cycle; forcing a clean reconnect.");
+    }
+
     private Task OnDisconnectedAsync(Exception exception)
     {
+        Interlocked.Exchange(ref _hasObservedReady, 0);
+        _healthDetail = "Discord gateway disconnected.";
+
         // Transient drops are left alone — Discord.Net reconnects on its own,
         // and OnReadyAsync completes the readiness signal when it recovers.
         var classified = DiscordConnectFailureClassifier.Classify(exception);
@@ -121,13 +162,16 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
+        _healthDetail = "Discord gateway disconnecting.";
         await _client.StopAsync();
         await _client.LogoutAsync();
+        _healthDetail = "Discord gateway disconnected.";
     }
 
     public void Dispose()
     {
         _client.Log -= OnDiscordLog;
+        _client.Connected -= OnConnectedAsync;
         _client.Ready -= OnReadyAsync;
         _client.Disconnected -= OnDisconnectedAsync;
         _client.MessageReceived -= OnMessageReceivedAsync;
@@ -138,6 +182,15 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
     {
         if (message is not SocketUserMessage userMessage)
             return;
+
+        if (!IsReady)
+        {
+            _logger.LogWarning(
+                "Dropping Discord message {MessageId} while gateway is not ready: {Reason}",
+                message.Id,
+                HealthDetail);
+            return;
+        }
 
         var handler = MessageReceived;
         if (handler is null)
@@ -193,6 +246,15 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
 
     private async Task OnButtonExecutedAsync(SocketMessageComponent component)
     {
+        if (!IsReady)
+        {
+            _logger.LogWarning(
+                "Dropping Discord interaction {InteractionId} while gateway is not ready: {Reason}",
+                component.Id,
+                HealthDetail);
+            return;
+        }
+
         try
         {
             await component.DeferAsync();
@@ -304,6 +366,65 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDisposab
         _logger.Log(level, logMessage.Exception, "[Discord.Net] {Source}: {Message}",
             logMessage.Source, logMessage.Message);
 
+        if (string.Equals(logMessage.Source, "Gateway", StringComparison.Ordinal)
+            && logMessage.Message?.Contains("Resumed previous session", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return RequestCleanReconnectAsync(
+                "Discord.Net resumed a previous gateway session; forcing a clean reconnect to avoid stale resumed state.");
+        }
+
         return Task.CompletedTask;
+    }
+
+    private bool TryRefreshBotIdentity(string source)
+    {
+        if (_client.CurrentUser is not { } currentUser)
+        {
+            _healthDetail = "Discord gateway is connected but the current bot identity is unavailable.";
+            return false;
+        }
+
+        var botUserId = new DiscordUserId(currentUser.Id.ToString());
+        var previousBotUserId = BotUserId;
+        BotUserId = botUserId;
+        _botMentionTag = $"<@{currentUser.Id}>";
+
+        if (previousBotUserId == botUserId)
+        {
+            _logger.LogDebug("Discord bot identity refreshed from {Source}: {BotUserId}", source, currentUser.Id);
+        }
+        else if (string.Equals(source, "READY", StringComparison.Ordinal))
+        {
+            _logger.LogInformation("Discord bot identity resolved: {BotUserId}", currentUser.Id);
+        }
+        else
+        {
+            _logger.LogInformation("Discord bot identity resolved from {Source}: {BotUserId}", source, currentUser.Id);
+        }
+
+        return true;
+    }
+
+    private async Task RequestCleanReconnectAsync(string reason)
+    {
+        _healthDetail = reason;
+
+        if (Interlocked.Exchange(ref _cleanReconnectRequested, 1) == 1)
+            return;
+
+        _logger.LogWarning("Discord gateway requested clean reconnect: {Reason}", reason);
+
+        var handler = CleanReconnectRequired;
+        if (handler is null)
+            return;
+
+        try
+        {
+            await handler(reason);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Discord clean reconnect handler failed.");
+        }
     }
 }

@@ -61,7 +61,27 @@ public interface IDiscordGatewayClient
 
     event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
 
+    /// <summary>
+    /// Raised when the current Discord socket/session must be discarded and
+    /// replaced with a fresh login/start cycle.
+    /// </summary>
+    event Func<string, Task>? CleanReconnectRequired;
+
+    /// <summary>
+    /// True when the underlying Discord socket reports connected.
+    /// </summary>
     bool IsConnected { get; }
+
+    /// <summary>
+    /// True only when inbound Discord events are safe to process. Implementations
+    /// must not emit message or interaction events while this is false.
+    /// </summary>
+    bool IsReady { get; }
+
+    /// <summary>
+    /// Operator-facing detail for disconnected or connected-but-not-ready states.
+    /// </summary>
+    string? HealthDetail { get; }
 
     DiscordUserId? BotUserId { get; }
 
@@ -130,7 +150,17 @@ public sealed class UnconfiguredDiscordGatewayClient : IDiscordGatewayClient
         remove { }
     }
 
+    public event Func<string, Task>? CleanReconnectRequired
+    {
+        add { }
+        remove { }
+    }
+
     public bool IsConnected => false;
+
+    public bool IsReady => false;
+
+    public string? HealthDetail => "Discord gateway client is not configured.";
 
     public DiscordUserId? BotUserId => null;
 
