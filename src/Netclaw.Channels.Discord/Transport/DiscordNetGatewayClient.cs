@@ -172,8 +172,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         Receive<DiscordReady>(_ => HandleReadyOutsideConnect());
         Receive<DiscordDisconnected>(HandleDisconnectedWhileNotReady);
         ReceiveNotReadyIngress();
-        ReceiveStaleConnectWork();
-        ReceiveStaleStopWork();
         ReceiveUnexpected(nameof(Disconnected));
     }
 
@@ -190,7 +188,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         Receive<DiscordReady>(_ => HandleReadyWhileConnecting());
         Receive<DiscordDisconnected>(HandleDisconnectedWhileConnecting);
         ReceiveNotReadyIngress();
-        ReceiveStaleStopWork();
         ReceiveUnexpected(nameof(Connecting));
     }
 
@@ -206,8 +203,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         Receive<DiscordMessageReceived>(HandleMessageReceived);
         Receive<DiscordButtonExecuted>(HandleButtonExecuted);
         Receive<DiscordButtonDeferred>(HandleButtonDeferred);
-        ReceiveStaleConnectWork();
-        ReceiveStaleStopWork();
         ReceiveUnexpected(nameof(Ready));
     }
 
@@ -222,8 +217,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         Receive<DiscordReady>(_ => { });
         Receive<DiscordDisconnected>(HandleDisconnectedWhileNotReady);
         ReceiveNotReadyIngress();
-        ReceiveStaleConnectWork();
-        ReceiveStaleStopWork();
         ReceiveUnexpected(nameof(CleanReconnectRequired));
     }
 
@@ -240,7 +233,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         Receive<DiscordReady>(_ => { });
         Receive<DiscordDisconnected>(_ => { });
         ReceiveNotReadyIngress();
-        ReceiveStaleConnectWork();
         ReceiveUnexpected(nameof(Disconnecting));
     }
 
@@ -254,29 +246,11 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
 
     private void ReceiveNotReadyIngress()
     {
-        Receive<DiscordMessageReceived>(DropMessageReceived);
-        Receive<DiscordButtonExecuted>(DropButtonExecuted);
-        Receive<DiscordButtonDeferred>(DropDeferredButton);
-    }
-
-    private void ReceiveStaleConnectWork()
-    {
-        Receive<DiscordStartSucceeded>(IgnoreStaleStartSucceeded);
-        Receive<DiscordStartFailed>(IgnoreStaleStartFailed);
-        Receive<ReadyTimedOut>(IgnoreStaleReadyTimeout);
-    }
-
-    private void ReceiveStaleStopWork()
-    {
-        Receive<DiscordStopSucceeded>(IgnoreStaleStopSucceeded);
-        Receive<DiscordStopFailed>(IgnoreStaleStopFailed);
+        Receive<IDiscordGatewayIngressMessage>(DropIngress);
     }
 
     private void ReceiveUnexpected(string behaviorName) =>
-        ReceiveAny(message => _logger.LogWarning(
-            "Ignoring unexpected Discord gateway message {MessageType} while in {State} state.",
-            message.GetType().Name,
-            behaviorName));
+        ReceiveAny(message => HandleWrongBehaviorMessage(message, behaviorName));
 
     private Task OnDiscordLogAsync(LogMessage logMessage)
     {
@@ -407,39 +381,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         RequestCleanReconnect(failure.Message);
     }
 
-    private void IgnoreStaleStartSucceeded(DiscordStartSucceeded started) =>
-        _logger.LogDebug(
-            "Ignoring stale Discord gateway start completion for attempt {Attempt}; current attempt is {CurrentAttempt}.",
-            started.Attempt,
-            _connectAttempt);
-
-    private void IgnoreStaleStartFailed(DiscordStartFailed failed)
-    {
-        _logger.LogDebug(
-            failed.Exception,
-            "Ignoring stale Discord gateway start failure for attempt {Attempt}; current attempt is {CurrentAttempt}.",
-            failed.Attempt,
-            _connectAttempt);
-
-        if (_pendingConnectReplyTo is not null)
-            FailPendingConnect(failed.Exception);
-    }
-
-    private void IgnoreStaleReadyTimeout(ReadyTimedOut timeout)
-    {
-        _logger.LogDebug(
-            "Ignoring stale Discord READY timeout for attempt {Attempt}; current attempt is {CurrentAttempt}.",
-            timeout.Attempt,
-            _connectAttempt);
-
-        if (_pendingConnectReplyTo is null)
-            return;
-
-        FailPendingConnect(new ChannelConnectException(
-            ChannelConnectFailureKind.Transient,
-            "Discord gateway did not reach READY within 30 seconds."));
-    }
-
     private void StartDisconnecting(IActorRef replyTo)
     {
         ++_connectAttempt;
@@ -494,18 +435,6 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
     {
         _healthDetail = failed.Exception.Message;
         Become(Disconnected);
-        failed.ReplyTo.Tell(new Status.Failure(failed.Exception));
-    }
-
-    private void IgnoreStaleStopSucceeded(DiscordStopSucceeded stopped)
-    {
-        _logger.LogDebug("Ignoring stale Discord gateway stop completion.");
-        stopped.ReplyTo.Tell(CurrentSnapshot());
-    }
-
-    private void IgnoreStaleStopFailed(DiscordStopFailed failed)
-    {
-        _logger.LogDebug(failed.Exception, "Ignoring stale Discord gateway stop failure.");
         failed.ReplyTo.Tell(new Status.Failure(failed.Exception));
     }
 
@@ -827,8 +756,98 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
             CurrentSnapshot().HealthDetail);
     }
 
+    private void DropIngress(IDiscordGatewayIngressMessage message)
+    {
+        switch (message)
+        {
+            case DiscordMessageReceived received:
+                DropMessageReceived(received);
+                break;
+            case DiscordButtonExecuted executed:
+                DropButtonExecuted(executed);
+                break;
+            case DiscordButtonDeferred deferred:
+                DropDeferredButton(deferred);
+                break;
+            default:
+                _logger.LogWarning(
+                    "Dropping Discord ingress message {MessageType} while gateway is not ready: {Reason}",
+                    message.GetType().Name,
+                    CurrentSnapshot().HealthDetail);
+                break;
+        }
+    }
+
     private void HandleButtonDeferFailed(DiscordButtonDeferFailed failed) =>
         _logger.LogWarning(failed.Exception, "Failed to defer Discord button interaction {InteractionId}", failed.InteractionId);
+
+    private void HandleWrongBehaviorMessage(object message, string behaviorName)
+    {
+        switch (message)
+        {
+            case IDiscordGatewayConnectWork connectWork:
+                IgnoreWrongBehaviorConnectWork(connectWork, behaviorName);
+                break;
+            case IDiscordGatewayStopWork stopWork:
+                IgnoreWrongBehaviorStopWork(stopWork, behaviorName);
+                break;
+            case IDiscordGatewayInternalMessage:
+                _logger.LogDebug(
+                    "Ignoring Discord gateway internal message {MessageType} while in {State} state.",
+                    message.GetType().Name,
+                    behaviorName);
+                break;
+            default:
+                _logger.LogWarning(
+                    "Ignoring unexpected Discord gateway message {MessageType} while in {State} state.",
+                    message.GetType().Name,
+                    behaviorName);
+                break;
+        }
+    }
+
+    private void IgnoreWrongBehaviorConnectWork(
+        IDiscordGatewayConnectWork connectWork,
+        string behaviorName)
+    {
+        _logger.LogDebug(
+            "Ignoring Discord gateway connect work {MessageType} for attempt {Attempt} while in {State} state; current attempt is {CurrentAttempt}.",
+            connectWork.GetType().Name,
+            connectWork.Attempt,
+            behaviorName,
+            _connectAttempt);
+
+        if (_pendingConnectReplyTo is null)
+            return;
+
+        switch (connectWork)
+        {
+            case IDiscordGatewayConnectFailure failure:
+                FailPendingConnect(failure.Exception);
+                break;
+            case ReadyTimedOut:
+                FailPendingConnect(new ChannelConnectException(
+                    ChannelConnectFailureKind.Transient,
+                    "Discord gateway did not reach READY within 30 seconds."));
+                break;
+        }
+    }
+
+    private void IgnoreWrongBehaviorStopWork(IDiscordGatewayStopWork stopWork, string behaviorName)
+    {
+        _logger.LogDebug(
+            "Ignoring Discord gateway stop work {MessageType} while in {State} state.",
+            stopWork.GetType().Name,
+            behaviorName);
+
+        if (stopWork is IDiscordGatewayStopFailure failure)
+        {
+            stopWork.ReplyTo.Tell(new Status.Failure(failure.Exception));
+            return;
+        }
+
+        stopWork.ReplyTo.Tell(CurrentSnapshot());
+    }
 
     private void RequestCleanReconnect(string reason)
     {
@@ -1004,37 +1023,61 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
         public static readonly Disconnect Instance = new();
     }
 
-    private sealed record DiscordStartSucceeded(long Attempt);
+    private interface IDiscordGatewayInternalMessage;
 
-    private sealed record DiscordStartFailed(long Attempt, Exception Exception);
+    private interface IDiscordGatewayIngressMessage : IDiscordGatewayInternalMessage;
 
-    private sealed record ReadyTimedOut(long Attempt);
+    private interface IDiscordGatewayConnectWork : IDiscordGatewayInternalMessage
+    {
+        long Attempt { get; }
+    }
 
-    private sealed record DiscordStopSucceeded(IActorRef ReplyTo);
+    private interface IDiscordGatewayConnectFailure : IDiscordGatewayConnectWork
+    {
+        Exception Exception { get; }
+    }
 
-    private sealed record DiscordStopFailed(IActorRef ReplyTo, Exception Exception);
+    private interface IDiscordGatewayStopWork : IDiscordGatewayInternalMessage
+    {
+        IActorRef ReplyTo { get; }
+    }
 
-    private sealed record DiscordConnected
+    private interface IDiscordGatewayStopFailure : IDiscordGatewayStopWork
+    {
+        Exception Exception { get; }
+    }
+
+    private sealed record DiscordStartSucceeded(long Attempt) : IDiscordGatewayConnectWork;
+
+    private sealed record DiscordStartFailed(long Attempt, Exception Exception) : IDiscordGatewayConnectFailure;
+
+    private sealed record ReadyTimedOut(long Attempt) : IDiscordGatewayConnectWork;
+
+    private sealed record DiscordStopSucceeded(IActorRef ReplyTo) : IDiscordGatewayStopWork;
+
+    private sealed record DiscordStopFailed(IActorRef ReplyTo, Exception Exception) : IDiscordGatewayStopFailure;
+
+    private sealed record DiscordConnected : IDiscordGatewayInternalMessage
     {
         public static readonly DiscordConnected Instance = new();
     }
 
-    private sealed record DiscordReady
+    private sealed record DiscordReady : IDiscordGatewayInternalMessage
     {
         public static readonly DiscordReady Instance = new();
     }
 
-    private sealed record DiscordDisconnected(Exception Exception);
+    private sealed record DiscordDisconnected(Exception Exception) : IDiscordGatewayInternalMessage;
 
-    private sealed record DiscordLogReceived(LogMessage LogMessage);
+    private sealed record DiscordLogReceived(LogMessage LogMessage) : IDiscordGatewayInternalMessage;
 
-    private sealed record DiscordMessageReceived(SocketMessage Message);
+    private sealed record DiscordMessageReceived(SocketMessage Message) : IDiscordGatewayIngressMessage;
 
-    private sealed record DiscordButtonExecuted(SocketMessageComponent Component);
+    private sealed record DiscordButtonExecuted(SocketMessageComponent Component) : IDiscordGatewayIngressMessage;
 
-    private sealed record DiscordButtonDeferred(SocketMessageComponent Component);
+    private sealed record DiscordButtonDeferred(SocketMessageComponent Component) : IDiscordGatewayIngressMessage;
 
-    private sealed record DiscordButtonDeferFailed(ulong InteractionId, Exception Exception);
+    private sealed record DiscordButtonDeferFailed(ulong InteractionId, Exception Exception) : IDiscordGatewayInternalMessage;
 
-    private sealed record DispatchFailed(string Operation, Exception Exception);
+    private sealed record DispatchFailed(string Operation, Exception Exception) : IDiscordGatewayInternalMessage;
 }
