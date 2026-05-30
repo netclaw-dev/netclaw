@@ -90,7 +90,25 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         // records against the directory the spawned process will run in.
         var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
         if (!string.IsNullOrWhiteSpace(resolvedCwd))
+        {
+            if (IsResolvedSessionDirectory(resolvedCwd, context.SessionDirectory))
+            {
+                try
+                {
+                    Directory.CreateDirectory(resolvedCwd);
+                }
+                catch (Exception ex) when (ex is ArgumentException
+                                           or IOException
+                                           or NotSupportedException
+                                           or UnauthorizedAccessException
+                                           or System.Security.SecurityException)
+                {
+                    return $"Error preparing session working directory: {ex.Message}";
+                }
+            }
+
             psi.WorkingDirectory = resolvedCwd;
+        }
 
         var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
             ? context.RequestedTimeoutSeconds.Value
@@ -201,4 +219,8 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
         return string.Concat(output.AsSpan(0, maxChars), $"{Environment.NewLine}... [output truncated]");
     }
+
+    private static bool IsResolvedSessionDirectory(string resolvedCwd, string? sessionDirectory)
+        => !string.IsNullOrWhiteSpace(sessionDirectory)
+           && PathUtility.AreEquivalentPaths(resolvedCwd, sessionDirectory);
 }

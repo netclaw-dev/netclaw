@@ -108,7 +108,7 @@ internal sealed class TurnStateTracker
             return new ToolBudgetStatus.Exhausted(
                 $"You have reached the tool iteration limit for this turn. "
                 + "Do NOT request any more tools. "
-                + "Summarize the work you completed and answer the user's question "
+                + "Summarize the work you completed and produce your final response "
                 + "based on the information you have gathered so far. "
                 + "If you could not complete the task, explain what you found and what remains.");
         }
@@ -122,7 +122,7 @@ internal sealed class TurnStateTracker
                 remaining,
                 $"You have used {ToolIterationCount} of {maxToolIterationsPerTurn} tool iterations for this turn. "
                 + $"You have approximately {remaining} iterations remaining. "
-                + "Start wrapping up your tool usage and prepare to answer the user's question.");
+                + "Start wrapping up your tool usage and prepare to produce your final response.");
         }
 
         return ToolBudgetStatus.Ok.Instance;
@@ -149,7 +149,7 @@ internal sealed class TurnStateTracker
                 $"You have called the tool '{fingerprint.ToolName}' with the same arguments {count} times this turn. "
                 + "This strongly indicates you are repeating work you already completed. "
                 + "Review your prior tool results — the information you need is already in the conversation. "
-                + "If the task is complete, produce your final response to the user.");
+                + "If the task is complete, produce your final response.");
         }
 
         return null;
@@ -194,7 +194,7 @@ internal sealed class TurnStateTracker
         return new EmptyResponseAction.Retry(hasThinking
             ? ThinkingOnlyNudge
             : "You received tool results but did not respond. "
-              + "Continue working or answer the user's question.");
+              + "Continue working or produce your final response.");
     }
 }
 

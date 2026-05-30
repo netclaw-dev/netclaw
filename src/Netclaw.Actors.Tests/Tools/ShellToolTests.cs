@@ -191,6 +191,28 @@ public class ShellToolTests
     }
 
     [Fact]
+    public async Task Cwd_creates_missing_session_directory_when_used_as_default()
+    {
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        try
+        {
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal };
+            var args = ToolInput.Create("Command", OperatingSystem.IsWindows() ? "cd" : "pwd");
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.True(Directory.Exists(sessionDir));
+            Assert.Contains("Exit code: 0", result);
+            var resolved = sessionDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            Assert.Contains(resolved, result, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Cwd_explicit_arg_overrides_project_and_session_directories()
     {
         var explicitDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));

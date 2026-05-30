@@ -2101,6 +2101,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        if (HasInterruptedToolBatchAfterRecovery())
+        {
+            var abandoned = BuildInterruptedToolBatchAfterRecoveryEvent();
+            Persist(abandoned, evt =>
+            {
+                ApplyToolBatchAbandoned(evt);
+                ContinueIncomingUserMessage(cmd);
+            });
+            return;
+        }
+
         ContinueIncomingUserMessage(cmd);
     }
 
@@ -2362,7 +2373,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // do not replay the approved side effect after restart. Close the
             // orphaned tool_use blocks so the next user turn has valid history.
             if (_currentPhase == SessionPhase.Ready)
-                AbandonResolvedToolBatchAfterRecovery();
+            {
+                if (!AbandonResolvedToolBatchAfterRecovery())
+                    AbandonInterruptedToolBatchAfterRecovery();
+            }
         });
 
         Command<LeaveSession>(cmd =>
@@ -3935,9 +3949,29 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return true;
     }
 
+    private bool AbandonInterruptedToolBatchAfterRecovery()
+    {
+        if (!HasInterruptedToolBatchAfterRecovery())
+            return false;
+
+        _log.Info("Abandoning recovered interrupted tool batch with no recoverable approval state");
+        Persist(BuildInterruptedToolBatchAfterRecoveryEvent(), ApplyToolBatchAbandoned);
+
+        return true;
+    }
+
+    private bool HasInterruptedToolBatchAfterRecovery()
+        => _pendingToolInteractions.Count == 0
+        && _resolvedToolApprovals.Count == 0
+        && ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null;
+
     private ToolBatchAbandoned BuildResolvedToolBatchInterruptedByRestartEvent()
         => BuildToolBatchAbandonedEvent(
             "Tool call was not completed — the session restarted after approval before the action completed.");
+
+    private ToolBatchAbandoned BuildInterruptedToolBatchAfterRecoveryEvent()
+        => BuildToolBatchAbandonedEvent(
+            "Tool call was not completed — the session restarted before the action completed.");
 
     private ApprovalRedrivePlan BuildApprovalRedrivePlan(SerializableChatMessage assistantMessage)
     {

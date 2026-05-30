@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.2.2"
+  version: "1.2.4"
 ---
 
 # Subagent Authoring
@@ -27,7 +27,7 @@ Both gates must pass for subagent features to be available.
 
 Load this when the user asks to:
 - create a new subagent
-- edit tools, timeout, or behavior for an existing subagent
+- edit advisory tool metadata, timeout, or behavior for an existing subagent
 - diagnose why a subagent does not appear in `[available-subagents]`
 - route a slash skill through `metadata.subagent`
 
@@ -51,7 +51,7 @@ description: What this agent does
 You are a specialist assistant. Your job is to...
 ```
 
-With tools restricted to a specific set:
+With advisory tool metadata for compatibility with other agent systems:
 
 ```markdown
 ---
@@ -75,10 +75,10 @@ The markdown body below the closing `---` must also be non-empty.
 
 | Field | Default | Notes |
 |------|---------|-------|
-| `tools` | (inherit all except denied) | List of tool names. When omitted, the runtime starts from all registered tools available to the parent session, then removes statically denied subagent tools. When specified, it acts as a whitelist before the same denylist is applied. |
-| `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values fall back to `Compaction`. |
+| `tools` | `[]` | Advisory tool metadata retained for file-format compatibility. Netclaw does not use this as a runtime whitelist. |
+| `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values make the file fail loud and skip loading. |
 | `timeoutSeconds` | `60` | Inactivity timeout for subagent execution. The watchdog resets when the subagent makes progress. |
-| `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values fall back to `user-facing`. |
+| `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values make the file fail loud and skip loading. |
 | `emitStructuredFindings` | `false` | When true, successful output is emitted as findings for parent-session review. |
 
 Unknown fields are ignored.
@@ -90,7 +90,6 @@ Unknown fields are ignored.
 name: notion-planner
 description: Summarizes local daily planning notes for the parent session
 timeoutSeconds: 120
-tools: [file_read]
 ---
 
 You are a planning assistant that reviews daily planning notes.
@@ -106,9 +105,28 @@ Summarize the latest planning notes and highlight next actions.
 - Follow the user's existing plan format and structure
 ```
 
-This agent inherits the parent session's runtime tool policy. User-facing
+This agent inherits the parent session's audience/profile tool policy. User-facing
 subagents then apply the static subagent denylist, which blocks recursive
-delegation through `spawn_agent` even when `tools` is omitted.
+delegation through `spawn_agent`. Frontmatter `tools:` values are advisory only.
+
+## Runtime contract
+
+Subagents run as headless workers on behalf of the parent session:
+- do the delegated work as far as possible with the task, context, and tools
+  exposed by the parent audience/profile policy
+- do not ask the user clarifying questions or wait for conversational replies
+- make reasonable assumptions when safe, and state them in the final output
+- if blocked, return a final result describing what was found, what remains,
+  and what decision the parent session needs
+
+Parent-mediated tool approval is still allowed for concrete tool calls when the
+parent channel supports it. Treat approval as a security gate, not as a dialogue
+channel.
+
+Subagents share the same tool-loop budget strategy as parent sessions: budget
+nudges, duplicate-call nudges, and force-no-tools wrap-up. The current
+subagent budget is 30 tool iterations per run, where one LLM response with any
+number of parallel tool calls counts as one iteration.
 
 ## Fail-loud loader behavior
 
@@ -155,7 +173,7 @@ the same way. There is no separate code path for routed execution.
 After creating or editing a subagent file:
 1. save the file and trigger the next turn or subagent lookup
 2. confirm the agent appears in `[available-subagents]`
-3. run a small `spawn_agent` task to verify tools, inherited context, and output
+3. run a small `spawn_agent` task to verify inherited context, tool exposure, and output
 4. if missing, check daemon logs for the rejection reason
 
 If the user has no agent files yet, `netclaw init` seeds starter definitions.

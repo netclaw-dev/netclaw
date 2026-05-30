@@ -30,6 +30,20 @@ internal sealed record LlmResponseReceived : INoSerializationVerificationNeeded
     /// Stale responses from cancelled calls are ignored.
     /// </summary>
     public long CallId { get; init; }
+
+    public int StreamUpdateCount { get; init; }
+
+    public int EmptyStreamUpdateCount { get; init; }
+
+    public int StreamTextDeltaCount { get; init; }
+
+    public int StreamTextChars { get; init; }
+
+    public int StreamThinkingDeltaCount { get; init; }
+
+    public int StreamThinkingChars { get; init; }
+
+    public int StreamToolCallDeltaCount { get; init; }
 }
 
 /// <summary>

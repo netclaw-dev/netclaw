@@ -12,7 +12,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
-/// Defines a subagent's identity: system prompt, tools, and model.
+/// Defines a subagent's identity: system prompt, resolved runtime tools, and model.
 /// Can be constructed from built-in definitions or authored dynamically.
 /// </summary>
 public sealed record SubAgentDefinition
@@ -23,7 +23,7 @@ public sealed record SubAgentDefinition
     /// <summary>System prompt for the subagent's LLM context.</summary>
     public required string SystemPrompt { get; init; }
 
-    /// <summary>Tools available to the subagent during execution.</summary>
+    /// <summary>Runtime tools available to the subagent after audience-policy filtering.</summary>
     public required IReadOnlyList<INetclawTool> Tools { get; init; }
 
     /// <summary>

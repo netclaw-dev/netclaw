@@ -229,7 +229,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var started = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Started, started.Phase);
         Assert.Equal("summarizer", started.AgentName.Value);
-        Assert.Equal(1, started.ToolCount);
+        Assert.Equal(2, started.ToolCount);
 
         var completed = await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(SubAgentPhase.Completed, completed.Phase);
@@ -251,7 +251,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
 
         var subagentCall = Assert.Single(_clientProvider.Compaction.ReceivedMessages);
         Assert.Contains(subagentCall, m =>
-            m.Role == Microsoft.Extensions.AI.ChatRole.System && string.Equals(m.Text, "You are a summarizer.", StringComparison.Ordinal));
+            m.Role == Microsoft.Extensions.AI.ChatRole.System
+            && m.Text.Contains("You are a summarizer.", StringComparison.Ordinal)
+            && m.Text.Contains("headless, non-interactive worker", StringComparison.Ordinal));
         Assert.Contains(subagentCall, m =>
             m.Role == Microsoft.Extensions.AI.ChatRole.User && string.Equals(m.Text, "Summarize src/README.md", StringComparison.Ordinal));
         Assert.DoesNotContain(subagentCall, m =>
@@ -263,10 +265,13 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Spawn_agent_subagent_approval_uses_parent_authority_and_resumes_after_approval()
     {
+        const string parentCallId = "call_5aaea0c7afec4e47bbc062d8";
+        const string childCallId = "call_6f11cdf0c19746c59e778331";
+
         _clientProvider.Main.ToolCallsOnFirstCall =
         [
             new FunctionCallContent(
-                "call-spawn-shell",
+                parentCallId,
                 "spawn_agent",
                 new Dictionary<string, object?>
                 {
@@ -277,7 +282,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         _clientProvider.Compaction.ToolCallsOnFirstCall =
         [
             new FunctionCallContent(
-                "call-subagent-shell",
+                childCallId,
                 "shell_execute",
                 new Dictionary<string, object?>
                 {
@@ -311,8 +316,11 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(SubAgentPhase.Started, started.Phase);
 
         var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.NotEqual("call-subagent-shell", request.CallId.Value);
-        Assert.Contains("call-subagent-shell", request.CallId.Value, StringComparison.Ordinal);
+        Assert.NotEqual(childCallId, request.CallId.Value);
+        Assert.StartsWith($"{parentCallId}/subagent-approval/", request.CallId.Value, StringComparison.Ordinal);
+        Assert.Contains("subagent-approval", request.CallId.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain(childCallId, request.CallId.Value, StringComparison.Ordinal);
+        AssertApprovalButtonValuesRoundTrip(request);
         Assert.Equal("shell_execute", request.ToolName.Value);
         Assert.Equal(source.SenderId, request.RequesterSenderId);
         Assert.Equal(source.Principal, request.RequesterPrincipal);
@@ -389,7 +397,9 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SubAgentOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("call-subagent-shell-expire", request.CallId.Value, StringComparison.Ordinal);
+        Assert.Contains("subagent-approval", request.CallId.Value, StringComparison.Ordinal);
+        Assert.DoesNotContain("call-subagent-shell-expire", request.CallId.Value, StringComparison.Ordinal);
+        AssertApprovalButtonValuesRoundTrip(request);
         Assert.False(_recordingShellTool!.WasCalled);
 
         await ColdRespawnAsync(sessionId);
@@ -415,6 +425,23 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         var notice = await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains("expired", notice.Text, StringComparison.OrdinalIgnoreCase);
         Assert.False(_recordingShellTool.WasCalled);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Never mind, just say hello",
+            Source = source
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriberB.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var resumedCall = _clientProvider.Main.ReceivedMessages[^1];
+        Assert.Contains(resumedCall, message =>
+            message.Role == Microsoft.Extensions.AI.ChatRole.Tool
+            && message.Contents.OfType<FunctionResultContent>().Any(result =>
+                result.CallId == "call-spawn-shell-expire"
+                && result.Result?.ToString()?.Contains("session restarted", StringComparison.OrdinalIgnoreCase) == true));
     }
 
     [Fact]
@@ -742,6 +769,21 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Watch(child);
         Sys.Stop(child);
         await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private static void AssertApprovalButtonValuesRoundTrip(ToolInteractionRequest request)
+    {
+        foreach (var option in request.Options)
+        {
+            var encoded = ApprovalButtonValueCodec.Encode(request, option);
+            Assert.True(
+                encoded.Length <= ApprovalButtonValueCodec.MaxEncodedLength,
+                $"Approval button value exceeded {ApprovalButtonValueCodec.MaxEncodedLength} chars: {encoded.Length}");
+            Assert.True(ApprovalButtonValueCodec.TryDecode(encoded, out var callId, out var selectedKey, out var requesterSenderId));
+            Assert.Equal(request.CallId.Value, callId);
+            Assert.Equal(option.Key.Value, selectedKey);
+            Assert.Equal(request.RequesterSenderId?.Value, requesterSenderId);
+        }
     }
 
     private sealed class RecordingRoleChatClientProvider : IChatClientProvider

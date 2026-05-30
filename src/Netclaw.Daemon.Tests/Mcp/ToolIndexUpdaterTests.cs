@@ -48,7 +48,7 @@ public sealed class ToolIndexUpdaterTests
         Assert.Contains("available-subagents", discovery, StringComparison.OrdinalIgnoreCase);
         Assert.Contains(paths.AgentsDirectory, discovery, StringComparison.Ordinal);
 
-        Assert.Contains("Sub-agents inherit the parent session's tool policy", discovery, StringComparison.Ordinal);
+        Assert.Contains("Sub-agents inherit the parent audience policy", discovery, StringComparison.Ordinal);
         foreach (var tool in SubAgentToolPolicy.GetDeniedSubAgentTools())
             Assert.Contains(tool, discovery, StringComparison.Ordinal);
     }

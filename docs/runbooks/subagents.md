@@ -1,11 +1,11 @@
 # Subagents
 
 Subagents are specialist workers that the main Netclaw agent can delegate tasks
-to. Each subagent runs autonomously with its own system prompt, tool set, and
-timeout — then returns a synthesized result to the main agent. The delegation
-protects the main session's context window from token-heavy work (deep research,
-broad exploration, long summarization) and lets the main agent stay focused on
-conversation and coordination.
+to. Each subagent runs autonomously with its own system prompt, inherited
+audience-scoped tool surface, and timeout — then returns a synthesized result to
+the main agent. The delegation protects the main session's context window from
+token-heavy work (deep research, broad exploration, long summarization) and lets
+the main agent stay focused on conversation and coordination.
 
 ## How it works
 
@@ -13,24 +13,24 @@ conversation and coordination.
 
 On every LLM turn, the main agent's system prompt includes an
 `[available-subagents]` section that enumerates every user-facing subagent along
-with its description, tools, and timeout:
+with its description, inherited tool policy, and timeout:
 
 ```
 [available-subagents — use spawn_agent to delegate]
 
 ## research-assistant
 Deep web research with search and citation
-Tools: web_search, web_fetch, file_read, attach_file
+Tools: inherited from parent audience policy, except denied sub-agent tools
 Timeout: 120s
 
 ## code-analyst
 Analyze code, run commands, and review files
-Tools: (inherits all)
+Tools: inherited from parent audience policy, except denied sub-agent tools
 Timeout: 120s
 
 ## summarizer
 Summarize documents and content concisely
-Tools: file_read
+Tools: inherited from parent audience policy, except denied sub-agent tools
 Timeout: 60s
 
 ## How to delegate
@@ -40,7 +40,7 @@ Call `spawn_agent(agent: "<name>", task: "<specific task>", context: "<optional 
 - `context` is optional per-invocation background (workspace details, the user's broader goal,
   facts the subagent would otherwise have to rediscover). Do NOT duplicate the agent's built-in
   instructions — use this for THIS invocation's situation.
-- Subagents run autonomously with their own tools and return a synthesized result, not a transcript.
+- Subagents run autonomously with audience-scoped tools and return a synthesized result, not a transcript.
 ```
 
 The main agent sees this on every turn, so it always knows what subagents are
@@ -85,14 +85,14 @@ first user message is just the raw task, identical to the pre-context protocol.
 ### Execution
 
 1. The `spawn_agent` tool resolves the named agent from the definition registry.
-2. Tools listed in the agent's definition are resolved from the tool registry.
-   Subagents inherit the parent session's runtime tool policy, then
-   `SubAgentToolPolicy` removes tools that are statically denied to subagents
-   (`spawn_agent`).
+2. The runtime starts from tools exposed by the parent session's audience/profile
+   policy, then `SubAgentToolPolicy` removes tools that are statically denied to
+   subagents (`spawn_agent`). Agent definition `tools:` metadata is advisory and
+   does not narrow runtime authorization.
 3. A `SubAgentActor` is spawned as a **child of the session actor** (supervised,
    lifecycle-managed — stops when the session stops).
 4. The subagent runs an autonomous LLM loop: call tools, process results, repeat.
-5. After at most 10 tool iterations, a final response, or an inactivity timeout,
+5. After at most 30 tool iterations, a final response, or an inactivity timeout,
    the subagent returns its final text response.
 6. The main agent receives this response as the `spawn_agent` tool result.
 
@@ -106,12 +106,13 @@ responsive subagent is not stopped merely because wall-clock time has elapsed.
 Subagent start/complete events are emitted as `SubAgentOutput` session events:
 
 ```
-[subagent:start] research-assistant (4 tools)
+[subagent:start] research-assistant (N tools)
 [subagent:done]  research-assistant (success, 23.4s)
 ```
 
-These appear in the headless CLI output and session logs. They are suppressed
-in Slack.
+The start event reports the number of tools exposed for that parent audience and
+profile. These events appear in the headless CLI output and session logs. They
+are suppressed in Slack.
 
 Completion events are emitted for every finished subagent run, even when the
 subagent returns no structured findings. In that case `FindingsCount` is `0`
@@ -146,7 +147,6 @@ the authoritative agent name comes from the `name` field in the frontmatter.
 ---
 name: research-assistant
 description: Deep web research with search and citation
-tools: [web_search, web_fetch, file_read, attach_file]
 modelRole: Compaction
 timeoutSeconds: 120
 visibility: user-facing
@@ -171,7 +171,7 @@ findings into clear, well-organized summaries.
 |-------|----------|---------|-------------|
 | `name` | Yes | — | Unique identifier. Used in `spawn_agent(agent: "<name>")`. Duplicate names across files are rejected with a warning. |
 | `description` | Yes | — | One-line description shown in the `[available-subagents]` discovery block. |
-| `tools` | No | (inherit all except denied) | List of tool names. When omitted, the runtime starts from all registered tools available to the parent session, then removes statically denied subagent tools. When specified, it acts as a whitelist before the same denylist is applied. |
+| `tools` | No | `[]` | Advisory tool metadata retained for file-format compatibility. It does not constrain runtime tool access. |
 | `modelRole` | No | `Compaction` | `Compaction` (cheaper/faster) or `Main` (full model). |
 | `timeoutSeconds` | No | `60` | Inactivity timeout in seconds. The watchdog resets when the subagent makes progress. |
 | `visibility` | No | `user-facing` | `user-facing` (visible to `spawn_agent`) or `internal` (platform-owned, hidden). Accepts both hyphenated and PascalCase. |
@@ -202,8 +202,9 @@ ignored at the glob layer and never logged.
 
 - **Be specific about the output format.** The main agent receives the
   subagent's final text response — make sure it's structured and useful.
-- **Reference tools by name.** The subagent only has the tools listed in its
-  definition. Tell it which tools to use and when.
+- **Reference capabilities by name.** The subagent sees tools exposed by the
+  parent audience/profile policy. Tell it which capabilities to use and when,
+  but keep prompts robust when a tool is unavailable.
 - **Set boundaries.** Tell the subagent what NOT to do (e.g., "do not modify
   code unless explicitly asked").
 - **Keep it focused.** A subagent with a narrow, clear purpose works better
@@ -213,15 +214,13 @@ ignored at the glob layer and never logged.
 
 ### Tool access
 
-When `tools` is omitted from the frontmatter, the runtime starts from all
-registered tools available under the parent session's audience, boundary,
-approval, and shell policies. It then applies the subagent denylist, which
-prevents recursive delegation through `spawn_agent`.
+Runtime tool access is derived from the parent session's audience/profile policy,
+boundary, approval, and shell policies. The subagent denylist is then applied to
+prevent recursive delegation through `spawn_agent`.
 
-When `tools` is specified, it acts as a whitelist limiting which tools the
-subagent can access before the same subagent denylist and runtime policy checks
-are applied. Use this when you want to restrict a subagent to specific
-capabilities (e.g., read-only access via `tools: [file_read, web_search]`).
+The `tools:` frontmatter field is advisory metadata only. It may be useful when
+sharing definitions with other agent systems, but Netclaw does not use it as a
+runtime whitelist.
 
 Spawned subagents inherit the parent session's `session_dir` and current
 `project_dir` as read-only grounding. That means file tools resolve against the
@@ -233,7 +232,10 @@ parent session's approval channel and requester context. Human approval time doe
 not count as subagent inactivity or parent `spawn_agent` tool inactivity; both
 watchdogs resume after the approval wait settles. If no parent approval bridge or
 requester authority context is available, the gated tool fails closed as a failed
-subagent run and is not executed.
+subagent run and is not executed. Subagent approval waits are live-only: if the
+daemon or parent session restarts before the user responds, the stale prompt is
+expired and the interrupted parent `spawn_agent` call is closed before the next
+turn continues.
 
 ## Built-in agents
 
@@ -241,13 +243,13 @@ Three agents are seeded during `netclaw init`. They are regular file-based
 definitions — you can edit or delete them.
 
 **research-assistant** — Deep web research with search and citation.
-Tools: `web_search`, `web_fetch`, `file_read`, `attach_file`. Timeout: 120s.
+Timeout: 120s. Tools are inherited from the parent audience/profile policy.
 
 **code-analyst** — Analyze code and review files.
-Tools: filtered to the user-facing safe set when loaded from disk. Timeout: 120s.
+Timeout: 120s. Tools are inherited from the parent audience/profile policy.
 
 **summarizer** — Summarize documents and content concisely.
-Tools: `file_read`. Timeout: 60s.
+Timeout: 60s. Tools are inherited from the parent audience/profile policy.
 
 ## Creating a custom agent
 
@@ -257,7 +259,6 @@ Create a single `.md` file in `~/.netclaw/agents/`:
 ---
 name: github-reviewer
 description: Read local PR notes and summarize next steps for the parent session
-tools: [file_read]
 modelRole: Compaction
 timeoutSeconds: 90
 visibility: user-facing
@@ -276,10 +277,9 @@ parent session should do next.
 Save the file. The next turn or subagent lookup reloads the on-disk definitions
 and refreshes the `[available-subagents]` discovery block.
 
-If a tool name in your frontmatter doesn't match any registered tool, or falls
-outside the user-facing allowlist, the agent is skipped with a specific
-warning in the daemon log naming both the file and the disallowed tool — look
-there first when a new agent "doesn't show up."
+If a spawned subagent cannot access a tool it expected, inspect the parent
+session audience/profile policy and runtime tool discovery output. Frontmatter
+`tools:` values do not grant or remove tool access.
 
 If you edit a previously valid agent into an invalid state, the runtime drops it
 from the active catalog on the next reload instead of serving the stale last
@@ -290,7 +290,7 @@ known-good version.
 - Subagents are **single-turn**: they receive a task, run their tool loop, and
   return a result. They do not maintain conversation history or support
   back-and-forth interaction with the user.
-- Subagents have a **maximum of 10 tool iterations** before being forced to
+- Subagents have a **maximum of 30 tool iterations** before being forced to
   produce a text response.
 - Subagents run on the **compaction model** by default (cheaper/faster). Set
   `modelRole: Main` in frontmatter if the task requires the full model's

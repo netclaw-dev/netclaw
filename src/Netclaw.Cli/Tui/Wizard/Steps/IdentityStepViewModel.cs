@@ -216,7 +216,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             ---
             name: research-assistant
             description: Deep web research with search and citation
-            tools: [web_search, web_fetch, file_read, attach_file]
             modelRole: Compaction
             timeoutSeconds: 120
             visibility: user-facing
@@ -263,7 +262,6 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel
             ---
             name: summarizer
             description: Summarize documents and content concisely
-            tools: [file_read]
             modelRole: Compaction
             timeoutSeconds: 60
             visibility: user-facing

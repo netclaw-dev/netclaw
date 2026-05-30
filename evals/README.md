@@ -67,6 +67,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Tool Discovery & Use | 4 | Progressive tool discovery and invocation |
 | Grounding & Alignment | 3 | Uses tools to verify facts, admits uncertainty |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
+| Subagents | 1 | Delegates through `spawn_agent` and verifies headless subagents complete ambiguous work without clarification loops |
 | Complex Task Execution | 3 | Multi-step tool chains complete successfully |
 | Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |
 

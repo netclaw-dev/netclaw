@@ -48,8 +48,8 @@ wall-clock cap on a sub-agent run that is continuously producing activity.
 
 The `spawn_agent` tool SHALL be denied to sub-agents by a single tool-policy
 denylist applied when a sub-agent's tool set is resolved. A sub-agent's resolved
-tool set SHALL never include `spawn_agent`, regardless of what its profile lists
-or inherits.
+tool set SHALL never include `spawn_agent`, regardless of parent audience policy
+or advisory definition metadata.
 
 #### Scenario: spawn_agent is absent from a resolved sub-agent tool set
 

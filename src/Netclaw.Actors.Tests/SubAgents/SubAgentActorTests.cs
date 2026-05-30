@@ -41,6 +41,15 @@ public class SubAgentActorTests : TestKit
         };
     }
 
+    private static string MalformedToolCallMarkup() => """
+        <function=shell_execute>
+        <parameter=Command>
+        gh pr list --repo example/repo --state open
+        </parameter>
+        </function>
+        </tool_call>
+        """;
+
     [Fact]
     public async Task Text_response_returns_success_result()
     {
@@ -56,6 +65,121 @@ public class SubAgentActorTests : TestKit
         Assert.Contains("Response #1", result.Output);
         Assert.Equal("test-agent", result.AgentName.Value);
         Assert.Empty(result.Findings);
+    }
+
+    [Fact]
+    public async Task Malformed_final_tool_markup_gets_one_repair_turn()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            ResponseTextsByCall =
+            [
+                MalformedToolCallMarkup(),
+                "Final report based on executed results."
+            ]
+        };
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Analyze repos", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal("Final report based on executed results.", result.Output);
+        Assert.Equal(2, fakeClient.CallCount);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        Assert.Contains(fakeClient.LastReceivedMessages,
+            message => message.Role == ChatRole.User
+                       && message.Text.Contains("unexecuted tool-call markup", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Repeated_malformed_final_tool_markup_fails_without_timeout_error()
+    {
+        var fakeClient = new FakeChatClient
+        {
+            ResponseTextsByCall =
+            [
+                MalformedToolCallMarkup(),
+                MalformedToolCallMarkup()
+            ]
+        };
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Analyze repos", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Equal(2, fakeClient.CallCount);
+        Assert.Contains("malformed final output", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not a timeout", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Fenced_tool_markup_example_is_accepted_as_final_output()
+    {
+        const string finalOutput = """
+            The failed model output looked like this:
+
+            ```xml
+            <function=shell_execute>
+            <parameter=Command>
+            gh pr list --repo example/repo --state open
+            </parameter>
+            </function>
+            </tool_call>
+            ```
+
+            No tool call was executed from that quoted example.
+            """;
+        var fakeClient = new FakeChatClient
+        {
+            ResponseTextsByCall = [finalOutput]
+        };
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Explain malformed output", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(finalOutput, result.Output);
+        Assert.Equal(1, fakeClient.CallCount);
+    }
+
+    [Theory]
+    [InlineData("<function=shell_execute>\n<parameter=Command>\nls\n</parameter>\n</function>", true)]
+    [InlineData("<tool_call>\n<function=shell_execute>\n</function>\n</tool_call>", true)]
+    [InlineData("> <function=shell_execute>\n> <parameter=Command>\n> ls\n> </parameter>\n> </function>", false)]
+    [InlineData("```xml\n<function=shell_execute>\n<parameter=Command>\nls\n</parameter>\n</function>\n```", false)]
+    [InlineData("The literal token <function=shell_execute> appeared in the transcript.", false)]
+    public void Tool_call_markup_detection_ignores_quoted_examples(string text, bool expected)
+    {
+        Assert.Equal(expected, SubAgentActor.ContainsUnexecutedToolCallMarkup(text));
+    }
+
+    [Fact]
+    public async Task System_prompt_includes_headless_subagent_contract()
+    {
+        var fakeClient = new FakeChatClient();
+        var definition = CreateDefinition();
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent { Task = "Say hello", Timeout = TimeSpan.FromSeconds(5), Audience = TrustAudience.Personal },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        Assert.Equal(ChatRole.System, fakeClient.LastReceivedMessages[0].Role);
+        Assert.Contains("headless, non-interactive worker", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("Do not ask the user clarifying questions", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("Parent-mediated tool approval", fakeClient.LastReceivedMessages[0].Text);
     }
 
     [Fact]
@@ -332,7 +456,8 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success);
         Assert.NotNull(fakeClient.LastReceivedMessages);
         var systemMessage = fakeClient.LastReceivedMessages!.Single(m => m.Role == ChatRole.System);
-        Assert.Equal("You are a test agent.", systemMessage.Text);
+        Assert.Contains("You are a test agent.", systemMessage.Text);
+        Assert.DoesNotContain("Project rules:", systemMessage.Text);
     }
 
     [Fact]
@@ -793,16 +918,25 @@ public class SubAgentActorTests : TestKit
         };
 
         var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            definition,
+            fakeClient,
+            maxToolIterations: 3));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent { Task = "Loop forever", Timeout = TimeSpan.FromSeconds(10) , Audience = TrustAudience.Personal },
             TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 
-        // After 10 tool iterations, forces a no-tools call which returns text
+        // After the configured tool budget, force a no-tools call which returns text.
         Assert.True(result.Success);
-        // Should have made multiple calls: 10 tool calls + 1 initial + 1 forced text
-        Assert.True(fakeClient.CallCount >= 11);
+        Assert.Equal(4, fakeClient.CallCount);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        Assert.Contains(fakeClient.LastReceivedMessages,
+            message => message.Role == ChatRole.User
+                       && message.Text.Contains("Start wrapping up your tool usage", StringComparison.Ordinal));
+        Assert.Contains(fakeClient.LastReceivedMessages,
+            message => message.Role == ChatRole.User
+                       && message.Text.Contains("Do NOT request any more tools", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -822,6 +956,30 @@ public class SubAgentActorTests : TestKit
         Assert.False(result.Success);
         Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(result.Findings);
+    }
+
+    [Fact]
+    public void Keepalive_only_streaming_updates_are_not_substantive_progress()
+    {
+        Assert.False(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant
+        }));
+        Assert.False(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new UsageContent(new UsageDetails())]
+        }));
+        Assert.True(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new TextContent("working")]
+        }));
+        Assert.True(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            Contents = [new FunctionCallContent("call-1", "inspect_context")]
+        }));
     }
 
     [Fact]
@@ -1055,6 +1213,8 @@ internal sealed class FakeChatClient : IChatClient
 
     public string? ResponseText { get; set; }
 
+    public IReadOnlyList<string>? ResponseTextsByCall { get; set; }
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -1081,9 +1241,13 @@ internal sealed class FakeChatClient : IChatClient
             }
         }
 
+        var responseText = ResponseTextsByCall is { Count: > 0 } responses && _callCount <= responses.Count
+            ? responses[_callCount - 1]
+            : ResponseText ?? $"[fake] Response #{_callCount}";
+
         var responseMessage = new ChatMessage(
             ChatRole.Assistant,
-            [new TextContent(ResponseText ?? $"[fake] Response #{_callCount}")]);
+            [new TextContent(responseText)]);
         return new ChatResponse(responseMessage);
     }
 

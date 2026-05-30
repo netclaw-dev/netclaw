@@ -260,7 +260,8 @@ public sealed class ParentSessionApprovalBridgeTests
         {
             Assert.False(dispatch.PersistApprovalState);
             Assert.NotEqual(childCallId, dispatch.Request.CallId);
-            Assert.Contains(childCallId.Value, dispatch.Request.CallId.Value, StringComparison.Ordinal);
+            Assert.StartsWith("spawn-call-duplicates/subagent-approval/", dispatch.Request.CallId.Value, StringComparison.Ordinal);
+            Assert.DoesNotContain(childCallId.Value, dispatch.Request.CallId.Value, StringComparison.Ordinal);
         });
         Assert.False(channel.Complete(childCallId, ApprovalDecision.ApprovedOnce));
     }

@@ -16,12 +16,14 @@ namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
 /// Shared utility that encapsulates the subagent spawn-ask-report lifecycle.
-/// Resolves tools by name, spawns a <see cref="SubAgentActor"/> as a child of the
+/// Resolves audience-scoped runtime tools, spawns a <see cref="SubAgentActor"/> as a child of the
 /// owning session actor, awaits results, and emits observability notifications.
 /// Singleton — registered in DI.
 /// </summary>
 public sealed class SubAgentSpawner
 {
+    private const int SubAgentMaxToolIterations = 30;
+
     private readonly IChatClientProvider _chatClientProvider;
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolAccessPolicy _toolAccessPolicy;
@@ -73,15 +75,17 @@ public sealed class SubAgentSpawner
             };
         }
 
-        var tools = ResolveTools(profile);
+        var tools = ResolveTools(profile, context);
         if (tools.Count == 0)
         {
-            _logger.LogWarning("SubAgent [{AgentName}] has no resolvable tools — cannot spawn", profile.Name);
+            _logger.LogWarning(
+                "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn",
+                profile.Name);
             activitySink?.TryComplete();
             return new SubAgentResult
             {
                 Success = false,
-                Output = $"Cannot spawn subagent '{profile.Name}': none of its tools are currently available.",
+                Output = $"Cannot spawn subagent '{profile.Name}': no tools are available under the parent audience policy.",
                 AgentName = new AgentName(profile.Name)
             };
         }
@@ -114,7 +118,12 @@ public sealed class SubAgentSpawner
             : $"subagent/{definition.Name}/{runId}";
 
         // Spawn as child of the session actor via the context factory
-        var props = SubAgentActor.CreateProps(definition, chatClient, _toolAccessPolicy, _approvalService);
+        var props = SubAgentActor.CreateProps(
+            definition,
+            chatClient,
+            _toolAccessPolicy,
+            _approvalService,
+            SubAgentMaxToolIterations);
         var actorName = $"subagent-{definition.Name}-{runId}";
         var subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
 
@@ -198,38 +207,12 @@ public sealed class SubAgentSpawner
         }
     }
 
-    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile)
+    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolExecutionContext context)
     {
-        // When no tools specified, inherit all registered tools (matches Claude Code behavior).
-        // When tools are specified, use them as a whitelist to limit access.
-        IEnumerable<INetclawTool> candidates;
-        if (profile.ToolNames.Count == 0)
-        {
-            candidates = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
-        }
-        else
-        {
-            var resolved = new List<INetclawTool>();
-            foreach (var name in profile.ToolNames)
-            {
-                var tool = _toolRegistry.GetByName(name);
-                if (tool is not null)
-                {
-                    resolved.Add(tool);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "SubAgent [{AgentName}] references tool '{ToolName}' which is not registered — skipping",
-                        profile.Name, name);
-                }
-            }
-
-            candidates = resolved;
-        }
-
-        // Sub-agents inherit the parent session's runtime tool policy; the only
-        // static sub-agent-specific filter denies recursive spawn_agent delegation.
+        // Sub-agents inherit the parent session's runtime tool policy. Agent
+        // definition tool metadata is advisory only; the only static
+        // sub-agent-specific filter denies recursive spawn_agent delegation.
+        var candidates = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
         var tools = new List<INetclawTool>();
         foreach (var tool in candidates)
         {
@@ -245,7 +228,7 @@ public sealed class SubAgentSpawner
             }
         }
 
-        return tools;
+        return _toolAccessPolicy.FilterDiscoverableTools(tools, context);
     }
 
     private static void TryStopSubAgent(IActorRef subAgent)

@@ -128,7 +128,7 @@ public sealed class FileSubAgentDefinitionLoader
 
             results.Add(profile);
             _logger.LogInformation(
-                "Loaded agent definition: {Name} ({ToolCount} tools, timeout={Timeout}s)",
+                "Loaded agent definition: {Name} (tool metadata={ToolCount}, timeout={Timeout}s)",
                 profile.Name, profile.ToolNames.Count, profile.TimeoutSeconds);
         }
 
@@ -199,8 +199,8 @@ public sealed class FileSubAgentDefinitionLoader
             return null;
         }
 
-        // Tools are optional. When omitted, the subagent inherits session tools at spawn time.
-        // This matches Claude Code's agent format where tools are not specified.
+        // Tool metadata is optional and advisory. Runtime access is resolved from
+        // the parent session audience at spawn time.
         var tools = frontmatter.Tools ?? [];
 
         if (!TryParseModelRole(frontmatter.ModelRole, out var modelRole))

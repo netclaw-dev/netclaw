@@ -64,7 +64,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
     {
         EnsureAuthorityContext();
 
-        var parentCallId = CreateParentCallId(callId);
+        var parentCallId = CreateParentCallId();
         var waitTask = _channel.WaitForApprovalAsync(parentCallId, Timeout.InfiniteTimeSpan, ct);
 
         // Emit verbatim from the gate's computed options so persistent-grant
@@ -108,7 +108,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         };
     }
 
-    private ToolCallId CreateParentCallId(ToolCallId childCallId)
+    private ToolCallId CreateParentCallId()
     {
         // This bridge is created by the session actor but used by thread-pool
         // tool tasks. Multiple child tool calls can request approval at once,
@@ -117,8 +117,9 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
 
         // Child call ids are only unique inside the sub-agent's tool loop. The
         // parent approval channel is session-wide, so include the spawning tool
-        // call scope plus a per-bridge sequence before the child-local id.
-        return new ToolCallId($"{_approvalScopeId}/subagent-approval/{requestId}/{childCallId.Value}");
+        // call scope plus a per-bridge sequence. Keep this short: approval
+        // button payloads are capped by the most restrictive channel adapter.
+        return new ToolCallId($"{_approvalScopeId}/subagent-approval/{requestId}");
     }
 
     private void EnsureAuthorityContext()

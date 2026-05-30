@@ -323,7 +323,7 @@ start_eval_daemon() {
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
     # that break identity evals. Templates have {{PLACEHOLDER}} tokens that we
     # substitute with eval defaults.
-    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
+    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data" "$EVAL_HOME/data/agents"
     local template_dir="$REPO_ROOT/src/Netclaw.Cli/Resources/identity"
     if [[ -d "$template_dir" ]]; then
         # Substitute placeholders with eval-appropriate defaults
@@ -350,6 +350,12 @@ start_eval_daemon() {
     # Copy user skills from eval fixtures (non-system skills for activation testing).
     if [[ -d "$REPO_ROOT/evals/fixtures/skills" ]]; then
         cp -r "$REPO_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
+    fi
+
+    # Copy eval-only subagent definitions into the mounted NETCLAW_HOME so
+    # spawn_agent behavior can be exercised without touching the host install.
+    if [[ -d "$REPO_ROOT/evals/fixtures/agents" ]]; then
+        cp -r "$REPO_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
     fi
 
     # The eval container runs as the non-root `netclaw` user and needs write
@@ -820,6 +826,17 @@ stdout_not_contains() {
     ! grep -qi "$1" "$STDOUT_FILE" 2>/dev/null
 }
 
+stdout_response_contains() {
+    grep -v '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qi "$1"
+}
+
+stdout_response_not_contains() {
+    if grep -v '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qi "$1"; then
+        return 1
+    fi
+    return 0
+}
+
 daemon_log_tail() {
     if [[ -f "$DAEMON_LOG" ]]; then
         tail -n +"$((DAEMON_LOG_LINES_BEFORE + 1))" "$DAEMON_LOG" 2>/dev/null
@@ -1010,6 +1027,17 @@ assert_autonomy_execute() {
 
 assert_autonomy_web_fetch() {
     stdout_contains '\[tool:call\] web_search' || stdout_contains '\[tool:call\] web_fetch'
+}
+
+# Category 6b: Subagents
+assert_subagent_headless_ambiguous_task() {
+    stdout_tool_called 'spawn_agent' && \
+        daemon_log_contains 'SubAgent \[headless-analyst\] completed \(success=True' && \
+        stdout_response_contains 'assumption' && \
+        stdout_response_not_contains 'which.*include' && \
+        stdout_response_not_contains 'what.*include' && \
+        stdout_response_not_contains 'please.*clarify' && \
+        stdout_response_not_contains 'need.*more.*information'
 }
 
 # Category 7: Complex Task Execution
@@ -1414,6 +1442,15 @@ run_all() {
 
     run_case autonomy_web_fetch "web_search or web_fetch called" \
         "What's on the front page of Hacker News right now?"
+
+    end_category
+
+    # ── Category 6b: Subagents ──
+    print_category "Subagents"
+
+    run_case subagent_headless_ambiguous_task "spawned subagent completes ambiguous task without clarification" \
+        "Use spawn_agent with agent headless-analyst. Ask it to prepare final release notes from these candidate changes without asking follow-up questions. Include everything that looks user-facing: fixed arrow-key input decoding; updated an internal test helper; improved file trace listener encoding. Return the subagent's assumptions and final notes." \
+        "Delegate this to the headless-analyst subagent using spawn_agent: decide what belongs in release notes from this ambiguous list without asking me for clarification: legacy CSI key decoding fix; private test fixture cleanup; file trace listener writes UTF-8 correctly. Include all user-facing items and return assumptions plus final notes."
 
     end_category
 

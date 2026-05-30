@@ -119,9 +119,8 @@ subagent returns a synthesized summary, not a transcript.
 
 **When NOT to delegate:**
 - Simple single searches (use web_search directly)
-- Tasks requiring MCP tools (subagents only have web_search, web_fetch,
-  file_read, attach_file)
-- Interactive browser tasks (subagents cannot use browser MCP tools)
+- Tasks requiring tools outside the current audience/profile policy
+- Interactive browser tasks when the current audience/profile does not expose browser tools
 - Tasks where coordination overhead outweighs parallelization benefits
 
 **Per-call specialization:** spawn_agent accepts an optional `context`
