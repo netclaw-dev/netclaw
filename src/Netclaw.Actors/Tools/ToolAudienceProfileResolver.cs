@@ -173,21 +173,5 @@ internal sealed class ToolAudienceProfileResolver
     }
 
     private static bool IsProfileManagedTool(ToolName toolName)
-        => toolName.Value is "shell_execute"
-            or "file_read"
-            or "file_write"
-            or "file_edit"
-            or "file_list"
-            or "attach_file"
-            or "web_search"
-            or "web_fetch"
-            or "skill_manage"
-            or "set_webhook"
-            or "list_webhooks"
-            or "delete_webhook"
-            or "set_reminder"
-            or "list_reminders"
-            or "cancel_reminder"
-            or "get_reminder_history"
-            or "set_working_directory";
+        => ToolAudienceProfileToolCatalog.IsProfileManaged(toolName.Value);
 }

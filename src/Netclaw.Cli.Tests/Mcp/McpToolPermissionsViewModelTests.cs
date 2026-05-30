@@ -48,51 +48,65 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void CycleServerDefault_StartingFromAuto_LandsOnDenyAfterTwoCycles()
+    public void InitializeForTests_ThrowsForMalformedConfig()
+    {
+        var vm = CreateVm();
+        File.WriteAllText(_paths.NetclawConfigPath, "{ not json");
+
+        Assert.ThrowsAny<JsonException>(() =>
+            vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" }));
+    }
+
+    public static TheoryData<bool, ToolApprovalMode[]> ServerDefaultCycles => new()
+    {
+        { false, [ToolApprovalMode.Approval, ToolApprovalMode.Deny, ToolApprovalMode.Auto] },
+        { true, [ToolApprovalMode.Deny, ToolApprovalMode.Approval, ToolApprovalMode.Auto] }
+    };
+
+    public static TheoryData<bool, ToolApprovalMode[]> ToolOverrideCycles => new()
+    {
+        { false, [ToolApprovalMode.Auto, ToolApprovalMode.Approval, ToolApprovalMode.Deny] },
+        { true, [ToolApprovalMode.Deny, ToolApprovalMode.Approval, ToolApprovalMode.Auto] }
+    };
+
+    [Theory]
+    [MemberData(nameof(ServerDefaultCycles))]
+    public void CycleServerDefault_CyclesThroughModes(bool reverse, ToolApprovalMode[] expectedModes)
     {
         var vm = CreateVm();
         vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        vm.CycleServerDefault();
-        Assert.Equal(ToolApprovalMode.Approval, vm.GetServerDefault());
-
-        vm.CycleServerDefault();
-        Assert.Equal(ToolApprovalMode.Deny, vm.GetServerDefault());
-
-        vm.CycleServerDefault();
-        Assert.Equal(ToolApprovalMode.Auto, vm.GetServerDefault());
+        foreach (var expectedMode in expectedModes)
+        {
+            CycleServerDefault(vm, reverse);
+            Assert.Equal(expectedMode, vm.GetServerDefault());
+        }
     }
 
-    [Fact]
-    public void CycleToolOverride_FromInherit_CyclesThroughAllModes()
+    [Theory]
+    [MemberData(nameof(ToolOverrideCycles))]
+    public void CycleToolOverride_CyclesThroughModes(bool reverse, ToolApprovalMode[] expectedModes)
     {
         var vm = CreateVm();
-        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+        var toolName = new ToolName("create-pages");
+        vm.InitializeForTests(new McpServerName("notion"), new[] { toolName.Value });
         vm.SetSelectedAudienceForTests(TrustAudience.Personal);
 
-        // Initial: inherit (effective mode resolves from server default / global default).
-        var (_, isInherited) = vm.GetEffectiveMode(new ToolName("create-pages"));
+        var (_, isInherited) = vm.GetEffectiveMode(toolName);
         Assert.True(isInherited);
 
-        vm.CycleToolOverride(new ToolName("create-pages"));
-        var step1 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.Equal(ToolApprovalMode.Auto, step1.Mode);
-        Assert.False(step1.IsInherited);
+        foreach (var expectedMode in expectedModes)
+        {
+            CycleToolOverride(vm, toolName, reverse);
+            var step = vm.GetEffectiveMode(toolName);
+            Assert.Equal(expectedMode, step.Mode);
+            Assert.False(step.IsInherited);
+        }
 
-        vm.CycleToolOverride(new ToolName("create-pages"));
-        var step2 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.Equal(ToolApprovalMode.Approval, step2.Mode);
-        Assert.False(step2.IsInherited);
-
-        vm.CycleToolOverride(new ToolName("create-pages"));
-        var step3 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.Equal(ToolApprovalMode.Deny, step3.Mode);
-        Assert.False(step3.IsInherited);
-
-        vm.CycleToolOverride(new ToolName("create-pages"));
-        var step4 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.True(step4.IsInherited);
+        CycleToolOverride(vm, toolName, reverse);
+        var final = vm.GetEffectiveMode(toolName);
+        Assert.True(final.IsInherited);
     }
 
     [Fact]
@@ -117,7 +131,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
 
         vm.Save();
 
-        var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         var approvalPolicy = doc.RootElement
             .GetProperty("Tools")
             .GetProperty("AudienceProfiles")
@@ -166,53 +180,6 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         Assert.Equal(ToolApprovalMode.Approval, mode);
         Assert.True(inherited);
         Assert.Equal(ToolApprovalMode.Approval, vm.GetServerDefault());
-    }
-
-    [Fact]
-    public void CycleServerDefaultBack_StartingFromAuto_CyclesInReverse()
-    {
-        var vm = CreateVm();
-        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
-        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
-
-        vm.CycleServerDefaultBack();
-        Assert.Equal(ToolApprovalMode.Deny, vm.GetServerDefault());
-
-        vm.CycleServerDefaultBack();
-        Assert.Equal(ToolApprovalMode.Approval, vm.GetServerDefault());
-
-        vm.CycleServerDefaultBack();
-        Assert.Equal(ToolApprovalMode.Auto, vm.GetServerDefault());
-    }
-
-    [Fact]
-    public void CycleToolOverrideBack_FromInherit_CyclesThroughAllModesInReverse()
-    {
-        var vm = CreateVm();
-        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
-        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
-
-        var (_, isInherited) = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.True(isInherited);
-
-        vm.CycleToolOverrideBack(new ToolName("create-pages"));
-        var step1 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.Equal(ToolApprovalMode.Deny, step1.Mode);
-        Assert.False(step1.IsInherited);
-
-        vm.CycleToolOverrideBack(new ToolName("create-pages"));
-        var step2 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.Equal(ToolApprovalMode.Approval, step2.Mode);
-        Assert.False(step2.IsInherited);
-
-        vm.CycleToolOverrideBack(new ToolName("create-pages"));
-        var step3 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.Equal(ToolApprovalMode.Auto, step3.Mode);
-        Assert.False(step3.IsInherited);
-
-        vm.CycleToolOverrideBack(new ToolName("create-pages"));
-        var step4 = vm.GetEffectiveMode(new ToolName("create-pages"));
-        Assert.True(step4.IsInherited);
     }
 
     [Fact]
@@ -265,6 +232,112 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         foreach (var tool in tools)
             Assert.False(vm.IsToolGranted(new ToolName(tool)));
     }
+
+    [Fact]
+    public void Save_DisablingServerFromAllowlistPreservesOtherServers()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Team": {
+                    "McpServersMode": "Allowlist",
+                    "AllowedMcpServers": ["notion", "github"]
+                  }
+                }
+              }
+            }
+            """);
+
+        var vm = CreateVm();
+        vm.Servers.Add(("notion", "running", 1));
+        vm.Servers.Add(("github", "running", 1));
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Team);
+
+        vm.ToggleServerAccess();
+        Assert.True(vm.Save());
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var team = GetAudienceProfile(doc, "Team");
+        Assert.Equal("Allowlist", team.GetProperty("McpServersMode").GetString());
+
+        var servers = ReadAllowedServers(team);
+        Assert.DoesNotContain("notion", servers);
+        Assert.Contains("github", servers);
+    }
+
+    [Fact]
+    public void Save_DisablingServerFromAllProfileConvertsToAllowlist()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "McpServers": {
+                "github": { "Transport": "stdio" }
+              },
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "McpServersMode": "All"
+                  }
+                }
+              }
+            }
+            """);
+
+        var vm = CreateVm();
+        vm.Servers.Add(("notion", "running", 1));
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.ToggleServerAccess();
+        Assert.True(vm.Save());
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var personal = GetAudienceProfile(doc, "Personal");
+        Assert.Equal("Allowlist", personal.GetProperty("McpServersMode").GetString());
+
+        var servers = ReadAllowedServers(personal);
+        Assert.DoesNotContain("notion", servers);
+        Assert.Contains("github", servers);
+
+        var reloaded = CreateVm();
+        reloaded.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+        reloaded.SetSelectedAudienceForTests(TrustAudience.Personal);
+        Assert.False(reloaded.IsServerAllowedForSelectedAudience());
+    }
+
+    private static void CycleServerDefault(McpToolPermissionsViewModel vm, bool reverse)
+    {
+        if (reverse)
+            vm.CycleServerDefaultBack();
+        else
+            vm.CycleServerDefault();
+    }
+
+    private static void CycleToolOverride(McpToolPermissionsViewModel vm, ToolName toolName, bool reverse)
+    {
+        if (reverse)
+            vm.CycleToolOverrideBack(toolName);
+        else
+            vm.CycleToolOverride(toolName);
+    }
+
+    private static JsonElement GetAudienceProfile(JsonDocument doc, string audienceName)
+        => doc.RootElement
+            .GetProperty("Tools")
+            .GetProperty("AudienceProfiles")
+            .GetProperty(audienceName);
+
+    private static string[] ReadAllowedServers(JsonElement profile)
+        => profile.GetProperty("AllowedMcpServers")
+            .EnumerateArray()
+            .Select(static server => server.GetString() ?? string.Empty)
+            .ToArray();
 
     private sealed class NoopHttpClientFactory : IHttpClientFactory
     {

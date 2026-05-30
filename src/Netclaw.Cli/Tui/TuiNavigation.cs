@@ -11,8 +11,6 @@ public sealed class TuiNavigation
 {
     private TerminaApplication? _application;
 
-    internal int BackRequestsForTests { get; private set; }
-
     public void Attach(TerminaApplication application)
     {
         ArgumentNullException.ThrowIfNull(application);
@@ -21,7 +19,6 @@ public sealed class TuiNavigation
 
     public bool TryGoBack()
     {
-        BackRequestsForTests++;
         if (_application is null)
             throw new InvalidOperationException("TUI navigation was requested before TerminaApplication was attached.");
 

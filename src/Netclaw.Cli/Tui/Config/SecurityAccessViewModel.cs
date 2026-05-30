@@ -47,8 +47,6 @@ public enum AudienceProfileRowKind
 
 public sealed class SecurityAccessViewModel : ReactiveViewModel
 {
-    private const int FeatureCount = 6;
-    private const string ShellToolName = "shell_execute";
     private static readonly string[] FeatureConfigPaths =
     [
         "Memory.Enabled",
@@ -93,27 +91,15 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         new(AudienceProfileRowKind.ResetToDefault, "Reset overrides", "Restore this audience to the current posture baseline.")
     ];
 
-    private static readonly string[] FileTools = ["file_read", "file_list", "attach_file", "file_write", "file_edit"];
-    private static readonly string[] WebTools = ["web_search", "web_fetch"];
-    private static readonly string[] SkillTools = ["skill_manage"];
-    private static readonly string[] SchedulingTools = ["set_reminder", "list_reminders", "cancel_reminder", "get_reminder_history"];
-    private static readonly string[] WorkingDirectoryTools = ["set_working_directory"];
-    private static readonly string[] KnownFirstPartyTools =
-    [
-        "file_read", "file_list", "file_write", "file_edit", "attach_file",
-        "web_search", "web_fetch", "skill_manage", "set_reminder",
-        "list_reminders", "cancel_reminder", "get_reminder_history",
-        "set_working_directory", ShellToolName, "set_webhook", "delete_webhook",
-        "list_webhooks", "send_slack_message", "lookup_slack_user",
-        "send_discord_message", "send_mattermost_message", "lookup_mattermost_user",
-        "spawn_agent", "search_tools", "load_tool", "skill_load",
-        "skill_read_resource", "store_memory", "get_memories", "update_memory",
-        "find_memories", "check_background_job"
-    ];
+    private static IReadOnlyList<string> FileTools => ToolAudienceProfileToolCatalog.FileTools;
+    private static IReadOnlyList<string> WebTools => ToolAudienceProfileToolCatalog.WebTools;
+    private static IReadOnlyList<string> SkillTools => ToolAudienceProfileToolCatalog.SkillTools;
+    private static IReadOnlyList<string> SchedulingTools => ToolAudienceProfileToolCatalog.SchedulingTools;
+    private static IReadOnlyList<string> WorkingDirectoryTools => ToolAudienceProfileToolCatalog.WorkingDirectoryTools;
 
     private readonly NetclawPaths _paths;
     private readonly McpToolPermissionsNavigationState? _mcpNavigationState;
-    private readonly bool[] _enabledFeatures = new bool[FeatureCount];
+    private readonly bool[] _enabledFeatures = new bool[FeatureConfigPaths.Length];
     private DeploymentPosture? _pendingPosture;
 
     public SecurityAccessViewModel(
@@ -161,7 +147,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     public void MovePostureSelection(int delta) => Move(SelectedPostureIndex, delta, Postures.Length);
     public void MoveCascadeSelection(int delta) => Move(SelectedCascadeIndex, delta, CascadeOptions.Length);
-    public void MoveFeatureSelection(int delta) => Move(SelectedFeatureIndex, delta, FeatureCount);
+    public void MoveFeatureSelection(int delta) => Move(SelectedFeatureIndex, delta, FeatureConfigPaths.Length);
     public void MoveAudienceSelection(int delta) => Move(SelectedAudienceIndex, delta, Audiences.Length);
     public void MoveAudienceRow(int delta) => Move(SelectedAudienceRowIndex, delta, AudienceRows.Length);
 
@@ -594,15 +580,9 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     }
 
     private SectionContribution BuildFeatureContribution()
-        => new(
-        [
-            new SectionFieldAction(FeatureConfigPaths[0], SectionFieldActionKind.Set, _enabledFeatures[0]),
-            new SectionFieldAction(FeatureConfigPaths[1], SectionFieldActionKind.Set, _enabledFeatures[1]),
-            new SectionFieldAction(FeatureConfigPaths[2], SectionFieldActionKind.Set, _enabledFeatures[2]),
-            new SectionFieldAction(FeatureConfigPaths[3], SectionFieldActionKind.Set, _enabledFeatures[3]),
-            new SectionFieldAction(FeatureConfigPaths[4], SectionFieldActionKind.Set, _enabledFeatures[4]),
-            new SectionFieldAction(FeatureConfigPaths[5], SectionFieldActionKind.Set, _enabledFeatures[5])
-        ]);
+        => new(FeatureConfigPaths
+            .Select((path, index) => new SectionFieldAction(path, SectionFieldActionKind.Set, _enabledFeatures[index]))
+            .ToArray());
 
     private IReadOnlyList<SecurityAccessItem> BuildItems()
     {
@@ -688,7 +668,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
             {
                 ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
                 {
-                    [ShellToolName] = ToolApprovalMode.Approval
+                    [ToolAudienceProfileToolCatalog.ShellExecute] = ToolApprovalMode.Approval
                 }
             };
         }
@@ -726,7 +706,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
             return;
 
         profile.ToolsMode = ToolProfileMode.Allowlist;
-        profile.AllowedTools = [.. KnownFirstPartyTools];
+        profile.AllowedTools = [.. ToolAudienceProfileToolCatalog.ProfileManagedTools];
     }
 
     private static void AddTools(List<string> target, IReadOnlyList<string> tools)

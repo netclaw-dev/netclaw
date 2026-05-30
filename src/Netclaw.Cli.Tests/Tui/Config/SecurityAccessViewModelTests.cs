@@ -118,6 +118,40 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Audience_profile_toggle_from_all_mode_materializes_profile_managed_allowlist()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal" }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 0;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.WebAccess;
+
+        vm.ActivateSelectedAudienceProfileRow();
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Personal.ToolsMode", out var mode));
+        Assert.Equal("Allowlist", mode);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Personal.AllowedTools", out var tools));
+        var allowedTools = Assert.IsAssignableFrom<object[]>(tools).Select(static tool => tool?.ToString() ?? string.Empty).ToArray();
+        var expected = ToolAudienceProfileToolCatalog.ProfileManagedTools
+            .Except(ToolAudienceProfileToolCatalog.WebTools)
+            .ToArray();
+
+        Assert.Equal(expected, allowedTools);
+        Assert.Contains(ToolAudienceProfileToolCatalog.ShellExecute, allowedTools);
+        Assert.Contains(ToolAudienceProfileToolCatalog.SetWebhook, allowedTools);
+        Assert.DoesNotContain(ToolAudienceProfileToolCatalog.WebSearch, allowedTools);
+        Assert.DoesNotContain(ToolAudienceProfileToolCatalog.WebFetch, allowedTools);
+    }
+
+    [Fact]
     public void Audience_profiles_summary_reports_overrides_not_defaults()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,

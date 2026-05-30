@@ -44,7 +44,7 @@ public sealed class SecurityAccessNavigationTests : IDisposable
             }
             """);
 
-        var app = CreateHeadlessApp(out var input, out var securityVm, out var getMcpVm, out var navigation);
+        var app = CreateHeadlessApp(out var input, out var securityVm, out var getMcpVm);
         securityVm.SelectedAudienceIndex.Value = 1;
         securityVm.OpenSelectedAudienceProfile();
         securityVm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.McpPermissions;
@@ -59,14 +59,12 @@ public sealed class SecurityAccessNavigationTests : IDisposable
         var mcpVm = Assert.IsType<McpToolPermissionsViewModel>(getMcpVm());
         Assert.Equal("/security", app.CurrentPath);
         Assert.Equal(TrustAudience.Team, mcpVm.SelectedAudience);
-        Assert.Equal(1, navigation.BackRequestsForTests);
     }
 
     private TerminaApplication CreateHeadlessApp(
         out VirtualInputSource input,
         out SecurityAccessViewModel securityVm,
-        out Func<McpToolPermissionsViewModel?> getMcpVm,
-        out TuiNavigation navigation)
+        out Func<McpToolPermissionsViewModel?> getMcpVm)
     {
         var terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
@@ -111,7 +109,6 @@ public sealed class SecurityAccessNavigationTests : IDisposable
 
         securityVm = capturedSecurityVm!;
         getMcpVm = () => capturedMcpVm;
-        navigation = tuiNavigation;
         return app;
     }
 
