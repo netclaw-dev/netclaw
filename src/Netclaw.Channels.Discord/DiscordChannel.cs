@@ -36,6 +36,8 @@ public sealed class DiscordChannel : IChannel
 
     // Cancels the background reconnect loop when the channel stops.
     private readonly CancellationTokenSource _lifetimeCts = new();
+    private readonly object _reconnectLock = new();
+    private int _queuedCleanReconnect;
 
     private IActorRef? _gateway;
     private Task? _reconnectTask;
@@ -79,6 +81,8 @@ public sealed class DiscordChannel : IChannel
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
         _paths = paths;
+
+        _gatewayClient.CleanReconnectRequired += HandleCleanReconnectRequiredAsync;
     }
 
     public ChannelType ChannelType => ChannelType.Discord;
@@ -92,17 +96,24 @@ public sealed class DiscordChannel : IChannel
     /// </summary>
     internal IActorRef? Gateway => _gateway;
 
-    public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)
-            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled."));
+            return new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled.");
 
-        if (_gatewayClient.IsConnected)
-            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
+        var gatewaySnapshot = await _gatewayClient.GetSnapshotAsync(cancellationToken);
 
-        return ValueTask.FromResult(new ChannelHealth(
+        if (gatewaySnapshot.IsReady)
+            return new ChannelHealth(ChannelHealthStatus.Healthy);
+
+        if (gatewaySnapshot.IsConnected)
+            return new ChannelHealth(
+                ChannelHealthStatus.Degraded,
+                gatewaySnapshot.HealthDetail ?? _connectFailureDetail ?? "Discord gateway connected but not ready.");
+
+        return new ChannelHealth(
             ChannelHealthStatus.Disconnected,
-            _connectFailureDetail ?? "Discord gateway disconnected."));
+            _connectFailureDetail ?? gatewaySnapshot.HealthDetail ?? "Discord gateway disconnected.");
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -134,8 +145,9 @@ public sealed class DiscordChannel : IChannel
         try
         {
             // Connect first so BotUserId is available before creating the gateway actor.
-            await _gatewayClient.ConnectAsync(botToken, cancellationToken);
-            CompleteConnectionSetup();
+            var gatewaySnapshot = await _gatewayClient.ConnectAsync(botToken, cancellationToken);
+            EnsureGatewayReadyAfterConnect(gatewaySnapshot);
+            CompleteConnectionSetup(gatewaySnapshot.BotUserId);
             _connectFailureDetail = null;
             _logger.LogInformation("Discord channel connected.");
         }
@@ -149,7 +161,7 @@ public sealed class DiscordChannel : IChannel
     /// Wires up message handling and the gateway actor once a connection
     /// succeeds. Idempotent — safe to call again after a reconnect.
     /// </summary>
-    private void CompleteConnectionSetup()
+    private void CompleteConnectionSetup(DiscordUserId? botUserId)
     {
         if (_gateway is not null)
             return;
@@ -173,7 +185,7 @@ public sealed class DiscordChannel : IChannel
                 AudienceProfiles: _audienceProfiles,
                 ModelCapabilities: _modelCapabilities,
                 Paths: _paths,
-                BotUserId: _gatewayClient.BotUserId,
+                BotUserId: botUserId,
                 PromptInjectionDetector: _promptInjectionDetector,
                 ThreadHistoryFetcher: _threadHistoryFetcher,
                 HttpClient: httpClient)),
@@ -217,31 +229,65 @@ public sealed class DiscordChannel : IChannel
             "Discord channel could not connect (transient). The daemon will keep running "
             + "and retry the connection in the background. {Reason}",
             failure.Message);
-        StartReconnectLoop();
+        StartReconnectLoop(initialDelay: TimeSpan.FromSeconds(5));
     }
 
-    private void StartReconnectLoop()
+    private void StartReconnectLoop(TimeSpan initialDelay)
     {
-        if (_reconnectTask is { IsCompleted: false })
+        lock (_reconnectLock)
+        {
+            if (_reconnectTask is { IsCompleted: false } activeReconnect)
+            {
+                if (initialDelay == TimeSpan.Zero)
+                {
+                    Interlocked.Exchange(ref _queuedCleanReconnect, 1);
+                    _ = activeReconnect.ContinueWith(
+                        _ => StartQueuedCleanReconnect(),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
+
+                return;
+            }
+
+            _reconnectTask = Task.Run(() => ReconnectLoopAsync(initialDelay, _lifetimeCts.Token));
+        }
+    }
+
+    private void StartQueuedCleanReconnect()
+    {
+        if (Volatile.Read(ref _queuedCleanReconnect) == 0)
             return;
 
-        _reconnectTask = Task.Run(() => ReconnectLoopAsync(_lifetimeCts.Token));
+        StartReconnectLoop(initialDelay: TimeSpan.Zero);
     }
 
-    private async Task ReconnectLoopAsync(CancellationToken cancellationToken)
+    private Task HandleCleanReconnectRequiredAsync(string reason)
     {
-        var delay = TimeSpan.FromSeconds(5);
+        _connectFailureDetail = reason;
+        _logger.LogWarning("Discord gateway requested clean reconnect: {Reason}", reason);
+        StartReconnectLoop(initialDelay: TimeSpan.Zero);
+        return Task.CompletedTask;
+    }
+
+    private async Task ReconnectLoopAsync(TimeSpan initialDelay, CancellationToken cancellationToken)
+    {
+        var delay = initialDelay;
         var maxDelay = TimeSpan.FromMinutes(5);
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            try
+            if (delay > TimeSpan.Zero)
             {
-                await Task.Delay(delay, _timeProvider, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
+                try
+                {
+                    await Task.Delay(delay, _timeProvider, cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
             }
 
             // Reset transport state so the retry performs a clean login + connect.
@@ -261,10 +307,18 @@ public sealed class DiscordChannel : IChannel
                         ChannelConnectFailureKind.Fatal,
                         "Discord is enabled but no bot token is configured.");
 
-                await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
-                CompleteConnectionSetup();
+                var gatewaySnapshot = await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+                EnsureGatewayReadyAfterConnect(gatewaySnapshot);
+                CompleteConnectionSetup(gatewaySnapshot.BotUserId);
                 _connectFailureDetail = null;
                 _logger.LogInformation("Discord channel reconnected after a transient failure.");
+
+                if (Interlocked.Exchange(ref _queuedCleanReconnect, 0) == 1)
+                {
+                    delay = TimeSpan.Zero;
+                    continue;
+                }
+
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -290,9 +344,21 @@ public sealed class DiscordChannel : IChannel
                     classified,
                     "Discord reconnect attempt failed; will retry. {Reason}",
                     classified.Message);
-                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
+                delay = delay == TimeSpan.Zero
+                    ? TimeSpan.FromSeconds(5)
+                    : TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
             }
         }
+    }
+
+    private static void EnsureGatewayReadyAfterConnect(DiscordGatewaySnapshot gatewaySnapshot)
+    {
+        if (gatewaySnapshot.IsReady)
+            return;
+
+        throw new ChannelConnectException(
+            ChannelConnectFailureKind.Transient,
+            gatewaySnapshot.HealthDetail ?? "Discord gateway connected but did not become ready.");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -312,6 +378,7 @@ public sealed class DiscordChannel : IChannel
         }
 
         // Unsubscribe events first so no new messages enter the actor system.
+        _gatewayClient.CleanReconnectRequired -= HandleCleanReconnectRequiredAsync;
         _gatewayClient.MessageReceived -= HandleMessageReceivedAsync;
         _gatewayClient.InteractionReceived -= HandleInteractionReceivedAsync;
 
