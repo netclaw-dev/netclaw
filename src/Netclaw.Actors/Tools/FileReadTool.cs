@@ -127,9 +127,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         var magicMime = MagicByteValidator.DetectMimeType(buffer.AsSpan(0, Math.Min(buffer.Length, 64)));
         var extensionMime = GuessMimeType(path);
-        var mimeType = ResolveMimeType(path, magicMime, extensionMime, buffer);
+        var looksText = LooksLikeText(buffer);
+        var mimeType = ResolveMimeType(path, magicMime, extensionMime, looksText);
         var category = AttachmentCategories.FromMime(mimeType);
-        var isTextLike = IsTextMime(mimeType) || (magicMime is null && LooksLikeText(buffer));
+        var isTextLike = looksText && IsTextMime(mimeType);
 
         return new FileInspection(mimeType, category, info.Length, isTextLike);
     }
@@ -138,16 +139,26 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         string path,
         string? magicMime,
         string? extensionMime,
-        ReadOnlySpan<byte> sample)
+        bool looksText)
     {
         if (IsZipBackedOfficeDocument(path) && string.Equals(magicMime, "application/zip", StringComparison.OrdinalIgnoreCase))
+            return extensionMime!;
+
+        if (IsOleBackedOfficeDocument(path)
+            && string.Equals(magicMime, "application/x-ole-compound-document", StringComparison.OrdinalIgnoreCase))
             return extensionMime!;
 
         if (magicMime is not null)
             return magicMime;
 
-        if (LooksLikeText(sample))
+        if (looksText)
             return IsTextMime(extensionMime) ? extensionMime! : "text/plain";
+
+        if (IsTextMime(extensionMime))
+            return "application/octet-stream";
+
+        if (RequiresBinarySignature(extensionMime))
+            return "application/octet-stream";
 
         return extensionMime ?? "application/octet-stream";
     }
@@ -249,11 +260,33 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         };
     }
 
+    private static bool RequiresBinarySignature(string? mimeType)
+    {
+        if (string.IsNullOrWhiteSpace(mimeType))
+            return false;
+
+        return AttachmentCategories.FromMime(mimeType) is
+            AttachmentCategory.Image or
+            AttachmentCategory.Pdf or
+            AttachmentCategory.Document or
+            AttachmentCategory.Archive or
+            AttachmentCategory.Media;
+    }
+
     private static bool IsZipBackedOfficeDocument(string path)
     {
         return Path.GetExtension(path).ToLowerInvariant() switch
         {
             ".docx" or ".xlsx" or ".pptx" or ".odt" or ".ods" or ".odp" => true,
+            _ => false
+        };
+    }
+
+    private static bool IsOleBackedOfficeDocument(string path)
+    {
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".doc" or ".xls" or ".ppt" => true,
             _ => false
         };
     }

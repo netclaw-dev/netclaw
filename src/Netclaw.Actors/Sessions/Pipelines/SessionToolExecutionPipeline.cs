@@ -13,6 +13,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions.Pipelines;
@@ -34,6 +35,9 @@ internal sealed record ToolCallResult(
 /// </summary>
 internal static class SessionToolExecutionPipeline
 {
+    private const long MaxModelInputFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes;
+    private const long MaxModelInputBatchBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes;
+
     public static async Task ExecuteToolsAsync(
         IToolExecutor executor,
         List<FunctionCallContent> toolCalls,
@@ -765,10 +769,27 @@ internal static class SessionToolExecutionPipeline
         Directory.CreateDirectory(mediaDir);
 
         var refs = new List<SerializableMediaReference>(context.ModelInputFiles.Count);
+        var totalBytes = 0L;
         foreach (var file in context.ModelInputFiles)
         {
             try
             {
+                var mimeType = NormalizeModelInputMime(file.MimeType);
+                if (!TryGetSupportedModelInputModality(mimeType, out var mediaModality, out var requiredModelModality))
+                {
+                    logger?.LogWarning("Model input file MIME type is not supported, skipping: {MimeType}", mimeType);
+                    continue;
+                }
+
+                if (!context.ModelInputModalities.HasFlag(requiredModelModality))
+                {
+                    logger?.LogWarning(
+                        "Model input file requires unavailable modality {Modality}, skipping: {Path}",
+                        requiredModelModality,
+                        file.FilePath);
+                    continue;
+                }
+
                 if (!File.Exists(file.FilePath))
                 {
                     logger?.LogWarning("Model input file not found, skipping: {Path}", file.FilePath);
@@ -779,17 +800,38 @@ internal static class SessionToolExecutionPipeline
                 if (info.Length <= 0)
                     continue;
 
-                var ext = ChatMessageConverter.MimeToExtension(file.MimeType);
+                if (info.Length > MaxModelInputFileBytes)
+                {
+                    logger?.LogWarning("Model input file exceeds size limit, skipping: {Path}", file.FilePath);
+                    continue;
+                }
+
+                if (totalBytes + info.Length > MaxModelInputBatchBytes)
+                {
+                    logger?.LogWarning("Model input file would exceed batch size limit, skipping: {Path}", file.FilePath);
+                    continue;
+                }
+
+                if (!IsFileMagicCompatible(file.FilePath, mimeType))
+                {
+                    logger?.LogWarning(
+                        "Model input file MIME type does not match detected bytes, skipping: {Path}",
+                        file.FilePath);
+                    continue;
+                }
+
+                var ext = ChatMessageConverter.MimeToExtension(mimeType);
                 var fileName = $"{Guid.NewGuid():N}{ext}";
                 var fullPath = Path.Combine(mediaDir, fileName);
 
                 File.Copy(file.FilePath, fullPath);
+                totalBytes += info.Length;
 
                 refs.Add(new SerializableMediaReference
                 {
                     RelativePath = fileName,
-                    MimeType = new Netclaw.Security.MimeType(file.MimeType),
-                    Modality = (int)ChatMessageConverter.MimeToModality(file.MimeType),
+                    MimeType = new MimeType(mimeType),
+                    Modality = (int)mediaModality,
                     FileSizeBytes = info.Length
                 });
             }
@@ -800,6 +842,46 @@ internal static class SessionToolExecutionPipeline
         }
 
         return refs;
+    }
+
+    private static string NormalizeModelInputMime(string? mimeType)
+    {
+        var normalized = string.IsNullOrWhiteSpace(mimeType)
+            ? MimeType.DefaultValue
+            : mimeType.Trim();
+        var semicolon = normalized.IndexOf(';', StringComparison.Ordinal);
+        if (semicolon >= 0)
+            normalized = normalized[..semicolon].Trim();
+
+        return string.Equals(normalized, "image/jpg", StringComparison.OrdinalIgnoreCase)
+            ? "image/jpeg"
+            : normalized.ToLowerInvariant();
+    }
+
+    private static bool TryGetSupportedModelInputModality(
+        string mimeType,
+        out MediaModality mediaModality,
+        out ModelModality requiredModelModality)
+    {
+        if (mimeType is "image/png" or "image/jpeg" or "image/gif" or "image/webp")
+        {
+            mediaModality = MediaModality.Image;
+            requiredModelModality = ModelModality.Image;
+            return true;
+        }
+
+        mediaModality = default;
+        requiredModelModality = default;
+        return false;
+    }
+
+    private static bool IsFileMagicCompatible(string path, string mimeType)
+    {
+        Span<byte> header = stackalloc byte[64];
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var read = stream.Read(header);
+        var detected = MagicByteValidator.DetectMimeType(header[..read]);
+        return string.Equals(detected, mimeType, StringComparison.OrdinalIgnoreCase);
     }
 
     private static ToolExecutionContext BuildToolExecutionContext(

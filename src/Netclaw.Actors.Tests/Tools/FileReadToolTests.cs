@@ -86,6 +86,20 @@ public class FileReadToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Image_extension_without_image_magic_returns_binary_guidance()
+    {
+        var filePath = Path.Combine(_dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(filePath, [0, 1, 2, 3, 4, 5, 6, 7], TestContext.Current.CancellationToken);
+        var context = CreatePersonalContext();
+        context.ModelInputModalities = ModelModality.Text | ModelModality.Image;
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), context, CancellationToken.None);
+
+        Assert.Contains("application/octet-stream", result);
+        Assert.Empty(context.ModelInputFiles);
+    }
+
+    [Fact]
     public async Task Pdf_read_returns_metadata_without_extracting_text()
     {
         var filePath = Path.Combine(_dir.Path, "report.pdf");
@@ -108,6 +122,30 @@ public class FileReadToolTests : IDisposable
 
         Assert.Contains("application/octet-stream", result);
         Assert.Contains("Raw binary output is not returned by file_read", result);
+    }
+
+    [Fact]
+    public async Task Text_extension_with_binary_content_returns_guidance_instead_of_raw_bytes()
+    {
+        var filePath = Path.Combine(_dir.Path, "payload.json");
+        await File.WriteAllBytesAsync(filePath, [0, 1, 2, 3, 4, 5, 6, 7], TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("application/octet-stream", result);
+        Assert.Contains("Raw binary output is not returned by file_read", result);
+    }
+
+    [Fact]
+    public async Task Legacy_office_document_returns_document_guidance()
+    {
+        var filePath = Path.Combine(_dir.Path, "report.doc");
+        await File.WriteAllBytesAsync(filePath, FakeOleDocumentBytes, TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("Type: application/msword (Document)", result);
+        Assert.Contains("Binary document extraction is not built into file_read", result);
     }
 
     [Fact]
@@ -413,6 +451,12 @@ public class FileReadToolTests : IDisposable
     ];
 
     private static readonly byte[] FakePdfBytes = "%PDF-1.7\nfake body\n%%EOF"u8.ToArray();
+
+    private static readonly byte[] FakeOleDocumentBytes =
+    [
+        0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1,
+        0x00, 0x01, 0x02, 0x03
+    ];
 
     private sealed class FakeMetrics : ISessionMetrics
     {
