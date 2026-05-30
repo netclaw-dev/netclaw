@@ -6,6 +6,7 @@
 using System.ComponentModel;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
@@ -15,14 +16,16 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Reads file contents as UTF-8 text with optional line offset/limit.
+/// Reads UTF-8 text files and inspects non-text files without returning raw bytes.
 /// </summary>
 [NetclawTool(ToolName,
-    "Read the contents of a file as text. For large files, use Offset and Limit to read sections to avoid truncation. If output is truncated, the response includes the Offset value to use to continue reading.",
+    "Read text files or inspect non-text files. Images can be loaded for visual inspection when the active model supports image input; PDFs/media/archives return metadata and guidance. For large text files, use Offset and Limit to read sections.",
     Grant = "file")]
 public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {
     public const string ToolName = "file_read";
+    private const long MaxModelInputFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes;
+    private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
@@ -75,6 +78,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         try
         {
+            var inspection = await InspectFileAsync(authorizedPath, ct);
+            if (!inspection.IsTextLike)
+                return HandleNonTextFile(authorizedPath, inspection, context);
+
             if (offset.HasValue || limit.HasValue)
             {
                 var lines = await ReadLinesAsync(authorizedPath, offset ?? 1, limit, _config.MaxOutputChars, ct);
@@ -82,9 +89,16 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
                 return lines;
             }
 
-            var content = await File.ReadAllTextAsync(authorizedPath, Encoding.UTF8, ct);
+            var content = await File.ReadAllTextAsync(authorizedPath, StrictUtf8, ct);
             RecordSkillReadIfApplicable(authorizedPath);
             return TruncateFileOutput(content, _config.MaxOutputChars);
+        }
+        catch (DecoderFallbackException)
+        {
+            return BuildMetadataResponse(
+                authorizedPath,
+                new FileInspection("application/octet-stream", AttachmentCategory.Other, new FileInfo(authorizedPath).Length, false),
+                "File is not valid UTF-8 text. Raw binary output is not returned by file_read.");
         }
         catch (UnauthorizedAccessException)
         {
@@ -95,6 +109,197 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             return $"Error reading file: {ex.Message}";
         }
     }
+
+    private static async Task<FileInspection> InspectFileAsync(string path, CancellationToken ct)
+    {
+        var info = new FileInfo(path);
+        if (info.Length == 0)
+            return new FileInspection("text/plain", AttachmentCategory.Document, 0, true);
+
+        var sampleLength = (int)Math.Min(info.Length, 4096);
+        var buffer = new byte[sampleLength];
+        await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(0, sampleLength), ct);
+            if (read < buffer.Length)
+                Array.Resize(ref buffer, read);
+        }
+
+        var magicMime = MagicByteValidator.DetectMimeType(buffer.AsSpan(0, Math.Min(buffer.Length, 64)));
+        var extensionMime = GuessMimeType(path);
+        var mimeType = ResolveMimeType(path, magicMime, extensionMime, buffer);
+        var category = AttachmentCategories.FromMime(mimeType);
+        var isTextLike = IsTextMime(mimeType) || (magicMime is null && LooksLikeText(buffer));
+
+        return new FileInspection(mimeType, category, info.Length, isTextLike);
+    }
+
+    private static string ResolveMimeType(
+        string path,
+        string? magicMime,
+        string? extensionMime,
+        ReadOnlySpan<byte> sample)
+    {
+        if (IsZipBackedOfficeDocument(path) && string.Equals(magicMime, "application/zip", StringComparison.OrdinalIgnoreCase))
+            return extensionMime!;
+
+        if (magicMime is not null)
+            return magicMime;
+
+        if (LooksLikeText(sample))
+            return IsTextMime(extensionMime) ? extensionMime! : "text/plain";
+
+        return extensionMime ?? "application/octet-stream";
+    }
+
+    private string HandleNonTextFile(
+        string authorizedPath,
+        FileInspection inspection,
+        ToolExecutionContext context)
+    {
+        var inlineImages = context.ModelInputModalities.HasFlag(ModelModality.Image);
+        var (inlined, note) = AttachmentInlineDecision.Resolve(inspection.Category, inlineImages);
+
+        if (inspection.Category == AttachmentCategory.Image && inlined)
+        {
+            if (inspection.SizeBytes > MaxModelInputFileBytes)
+            {
+                return BuildMetadataResponse(
+                    authorizedPath,
+                    inspection,
+                    $"Image exceeds the {FormatBytes(MaxModelInputFileBytes)} model-input handoff limit. Raw binary output is not returned by file_read.");
+            }
+
+            context.AddModelInputFile(authorizedPath, Path.GetFileName(authorizedPath), inspection.MimeType);
+            return BuildMetadataResponse(
+                authorizedPath,
+                inspection,
+                "Image loaded for model-visible inspection on the next LLM call.");
+        }
+
+        var guidance = inspection.Category switch
+        {
+            AttachmentCategory.Image => note ?? AttachmentNotes.ModelMissingImage,
+            AttachmentCategory.Pdf => "Native PDF extraction is not built into file_read. Use a configured document processor or shell_execute with a tool such as pdftotext where available.",
+            AttachmentCategory.Media => "Audio transcription and video keyframe extraction are not built into file_read. Use a configured media processor where available.",
+            AttachmentCategory.Archive => "Archive extraction is not built into file_read. Use a configured archive processor or shell_execute where available.",
+            AttachmentCategory.Document => "Binary document extraction is not built into file_read. Use a configured document processor where available.",
+            _ => "File is not readable as UTF-8 text. Raw binary output is not returned by file_read."
+        };
+
+        return BuildMetadataResponse(authorizedPath, inspection, guidance);
+    }
+
+    private static string BuildMetadataResponse(
+        string path,
+        FileInspection inspection,
+        string guidance)
+    {
+        return $"File is not readable as plain text.\n" +
+               $"Path: {path}\n" +
+               $"Type: {inspection.MimeType} ({inspection.Category})\n" +
+               $"Size: {FormatBytes(inspection.SizeBytes)}\n" +
+               guidance;
+    }
+
+    private static bool LooksLikeText(ReadOnlySpan<byte> sample)
+    {
+        if (sample.Length == 0)
+            return true;
+
+        var controlCount = 0;
+        foreach (var b in sample)
+        {
+            if (b == 0)
+                return false;
+
+            if (b < 0x20 && b is not ((byte)'\n') and not ((byte)'\r') and not ((byte)'\t'))
+                controlCount++;
+        }
+
+        if (controlCount > Math.Max(1, sample.Length / 20))
+            return false;
+
+        try
+        {
+            StrictUtf8.GetString(sample);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsTextMime(string? mimeType)
+    {
+        if (string.IsNullOrWhiteSpace(mimeType))
+            return false;
+
+        if (mimeType.StartsWith("text/", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return mimeType.ToLowerInvariant() switch
+        {
+            "application/json" => true,
+            "application/xml" => true,
+            "application/x-yaml" => true,
+            "application/yaml" => true,
+            _ => false
+        };
+    }
+
+    private static bool IsZipBackedOfficeDocument(string path)
+    {
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".docx" or ".xlsx" or ".pptx" or ".odt" or ".ods" or ".odp" => true,
+            _ => false
+        };
+    }
+
+    private static string? GuessMimeType(string path)
+    {
+        return Path.GetExtension(path).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".svg" => "image/svg+xml",
+            ".pdf" => "application/pdf",
+            ".mp3" => "audio/mpeg",
+            ".wav" => "audio/wav",
+            ".ogg" => "audio/ogg",
+            ".mp4" => "video/mp4",
+            ".webm" => "video/webm",
+            ".zip" => "application/zip",
+            ".gz" => "application/gzip",
+            ".7z" => "application/x-7z-compressed",
+            ".doc" => "application/msword",
+            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls" => "application/vnd.ms-excel",
+            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".ppt" => "application/vnd.ms-powerpoint",
+            ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ".rtf" => "application/rtf",
+            ".txt" => "text/plain",
+            ".md" => "text/markdown",
+            ".csv" => "text/csv",
+            ".html" or ".htm" => "text/html",
+            ".json" => "application/json",
+            ".xml" => "application/xml",
+            ".yml" or ".yaml" => "application/yaml",
+            _ => null
+        };
+    }
+
+    private static string FormatBytes(long size) => size switch
+    {
+        >= 1024L * 1024L => $"{size / (1024d * 1024d):F1} MiB",
+        >= 1024L => $"{size / 1024d:F1} KiB",
+        _ => $"{size} bytes"
+    };
 
     private static string TruncateFileOutput(string content, int maxChars)
     {
@@ -120,7 +325,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         var lineNumber = 0;
         var linesRead = 0;
 
-        using var reader = new StreamReader(path, Encoding.UTF8);
+        using var reader = new StreamReader(path, StrictUtf8);
         while (await reader.ReadLineAsync(ct) is { } line)
         {
             lineNumber++;
@@ -141,6 +346,12 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         return sb.ToString();
     }
+
+    private sealed record FileInspection(
+        string MimeType,
+        AttachmentCategory Category,
+        long SizeBytes,
+        bool IsTextLike);
 
     private void RecordSkillReadIfApplicable(string authorizedPath)
     {

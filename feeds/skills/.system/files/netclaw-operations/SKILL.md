@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.8.1"
+  version: "2.8.2"
 ---
 
 # Netclaw Operations
@@ -600,8 +600,15 @@ The `[attachment]` line format is:
 ```
 
 `inlined="true"` means the file bytes were forwarded to the model as
-`DataContent` (images and PDFs on vision-capable models). `inlined="false"`
+`DataContent` (currently image files on image-capable models). `inlined="false"`
 means the model only sees the path reference.
+
+`file_read` follows the same file taxonomy as chat attachments. It reads
+text-like files directly. For images, it can load the file for visual inspection
+when the active model supports image input. For PDFs, audio/video, archives,
+binary documents, and unknown binaries, it returns metadata plus explicit
+guidance; it does not perform PDF extraction, OCR, transcription, keyframe
+extraction, or raw binary output.
 
 **Historical thread backfill** follows the same download/scan flow for all
 file types (not just images) — PDFs and other documents from prior thread

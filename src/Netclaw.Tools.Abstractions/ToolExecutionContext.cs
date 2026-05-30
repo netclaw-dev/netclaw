@@ -8,6 +8,11 @@ using Netclaw.Configuration;
 namespace Netclaw.Tools;
 
 /// <summary>
+/// Describes a file a tool wants to add to the next LLM call as model input.
+/// </summary>
+public sealed record ModelInputFileInfo(string FilePath, string FileName, string MimeType);
+
+/// <summary>
 /// Describes a file attachment registered by a tool during execution.
 /// </summary>
 public sealed record FileAttachmentInfo(string FilePath, string FileName, string MimeType);
@@ -60,6 +65,7 @@ public sealed class ToolExecutionContext
     private static readonly IReadOnlySet<string> EmptyApprovedPatternSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private List<FileAttachmentInfo>? _fileAttachments;
+    private List<ModelInputFileInfo>? _modelInputFiles;
     private HashSet<string>? _oneTimeApprovedPatterns;
 
     public ToolExecutionContext(string? sessionId, string? sessionDirectory)
@@ -92,6 +98,11 @@ public sealed class ToolExecutionContext
     /// When false, approval-gated tools are automatically denied.
     /// </summary>
     public bool? SupportsInteractiveApproval { get; set; }
+
+    /// <summary>
+    /// Modalities accepted by the active model for this tool call.
+    /// </summary>
+    public ModelModality ModelInputModalities { get; set; } = ModelModality.Text;
 
     /// <summary>
     /// Optional callback for tools that spawn subagents.
@@ -228,12 +239,27 @@ public sealed class ToolExecutionContext
         => _fileAttachments ?? (IReadOnlyList<FileAttachmentInfo>)[];
 
     /// <summary>
+    /// Files registered by tools for model-visible input on the next LLM call.
+    /// </summary>
+    public IReadOnlyList<ModelInputFileInfo> ModelInputFiles
+        => _modelInputFiles ?? (IReadOnlyList<ModelInputFileInfo>)[];
+
+    /// <summary>
     /// Register a file attachment to be emitted as <c>FileOutput</c> after tool execution.
     /// </summary>
     public void AddFileAttachment(string filePath, string fileName, string mimeType)
     {
         _fileAttachments ??= [];
         _fileAttachments.Add(new FileAttachmentInfo(filePath, fileName, mimeType));
+    }
+
+    /// <summary>
+    /// Register a file to be copied into session media and supplied to the model.
+    /// </summary>
+    public void AddModelInputFile(string filePath, string fileName, string mimeType)
+    {
+        _modelInputFiles ??= [];
+        _modelInputFiles.Add(new ModelInputFileInfo(filePath, fileName, mimeType));
     }
 
     public void SetOneTimeApprovedPatterns(IEnumerable<string> patterns)

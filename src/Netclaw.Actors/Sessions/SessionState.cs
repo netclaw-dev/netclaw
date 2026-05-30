@@ -219,9 +219,12 @@ public sealed record SessionState
     /// treats them as the most recent input. Not persisted as a turn — just
     /// injected into the conversation to guide the next LLM call.
     /// </summary>
-    public SessionState AddSystemNudge(string nudge)
+    public SessionState AddSystemNudge(
+        string nudge,
+        IReadOnlyList<SerializableMediaReference>? mediaReferences = null)
     {
-        return this with { History = History.Add(BuildNudgeMessage(nudge)) };
+        var message = BuildNudgeMessage(nudge, mediaReferences);
+        return this with { History = History.Add(message) };
     }
 
     /// <summary>
@@ -264,8 +267,17 @@ public sealed record SessionState
         return this with { History = History.Add(nudgeMsg) };
     }
 
-    private static SerializableChatMessage BuildNudgeMessage(string nudge) =>
-        new() { Role = ChatRole.User, Content = $"{SystemNudgePrefix} {nudge}]" };
+    private static SerializableChatMessage BuildNudgeMessage(
+        string nudge,
+        IReadOnlyList<SerializableMediaReference>? mediaReferences = null) =>
+        mediaReferences is { Count: > 0 }
+            ? new()
+            {
+                Role = ChatRole.User,
+                Content = $"{SystemNudgePrefix} {nudge}]",
+                MediaReferences = mediaReferences
+            }
+            : new() { Role = ChatRole.User, Content = $"{SystemNudgePrefix} {nudge}]" };
 
     /// <summary>
     /// Find the last user message in history (for building persistence events).

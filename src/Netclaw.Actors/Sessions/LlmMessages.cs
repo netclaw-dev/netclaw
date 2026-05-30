@@ -69,6 +69,7 @@ internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerifica
 internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeeded
 {
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
+    public List<SerializableMediaReference> ModelInputMediaReferences { get; init; } = [];
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];

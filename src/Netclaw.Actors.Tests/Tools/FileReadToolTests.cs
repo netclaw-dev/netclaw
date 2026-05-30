@@ -44,6 +44,73 @@ public class FileReadToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Read_code_file_with_unknown_mime_returns_content()
+    {
+        var filePath = Path.Combine(_dir.Path, "Program.cs");
+        await File.WriteAllTextAsync(filePath, "public static class Program { }", TestContext.Current.CancellationToken);
+
+        var args = ToolInput.Create("Path", filePath);
+        var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Equal("public static class Program { }", result);
+    }
+
+    [Fact]
+    public async Task Image_read_on_image_capable_model_registers_model_input_file()
+    {
+        var filePath = Path.Combine(_dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(filePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var context = CreatePersonalContext();
+        context.ModelInputModalities = ModelModality.Text | ModelModality.Image;
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), context, CancellationToken.None);
+
+        Assert.Contains("Image loaded for model-visible inspection", result);
+        var modelInput = Assert.Single(context.ModelInputFiles);
+        Assert.Equal(filePath, modelInput.FilePath);
+        Assert.Equal("diagram.png", modelInput.FileName);
+        Assert.Equal("image/png", modelInput.MimeType);
+    }
+
+    [Fact]
+    public async Task Image_read_on_text_only_model_returns_modality_guidance()
+    {
+        var filePath = Path.Combine(_dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(filePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var context = CreatePersonalContext();
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), context, CancellationToken.None);
+
+        Assert.Contains("current model has no image modality", result);
+        Assert.Empty(context.ModelInputFiles);
+    }
+
+    [Fact]
+    public async Task Pdf_read_returns_metadata_without_extracting_text()
+    {
+        var filePath = Path.Combine(_dir.Path, "report.pdf");
+        await File.WriteAllBytesAsync(filePath, FakePdfBytes, TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("Type: application/pdf (Pdf)", result);
+        Assert.Contains("Native PDF extraction is not built into file_read", result);
+        Assert.DoesNotContain("fake body", result);
+    }
+
+    [Fact]
+    public async Task Unknown_binary_read_returns_guidance_instead_of_raw_bytes()
+    {
+        var filePath = Path.Combine(_dir.Path, "payload.bin");
+        await File.WriteAllBytesAsync(filePath, [0, 1, 2, 3, 4, 5, 6, 7], TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("application/octet-stream", result);
+        Assert.Contains("Raw binary output is not returned by file_read", result);
+    }
+
+    [Fact]
     public async Task Read_missing_file_returns_error()
     {
         var filePath = Path.Combine(_dir.Path, "nonexistent.txt");
@@ -338,6 +405,14 @@ public class FileReadToolTests : IDisposable
             Boundary = TrustBoundary.Public,
             ChannelType = "slack"
         };
+
+    private static readonly byte[] FakePngBytes =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
+    ];
+
+    private static readonly byte[] FakePdfBytes = "%PDF-1.7\nfake body\n%%EOF"u8.ToArray();
 
     private sealed class FakeMetrics : ISessionMetrics
     {

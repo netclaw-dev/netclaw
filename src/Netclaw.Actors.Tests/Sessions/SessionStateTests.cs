@@ -201,6 +201,25 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void AddSystemNudge_can_carry_media_without_becoming_last_user_message()
+    {
+        var media = new SerializableMediaReference
+        {
+            RelativePath = "image.png",
+            MimeType = new Netclaw.Security.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 16
+        };
+        var state = SessionState.Empty
+            .AddUserMessage("Real user message")
+            .AddSystemNudge("Loaded media.", [media]);
+
+        var nudge = state.History[^1];
+        Assert.Single(nudge.MediaReferences);
+        Assert.Equal("Real user message", state.FindLastUserMessage()?.Content);
+    }
+
+    [Fact]
     public void FindLastUserMessage_returns_null_when_no_user_messages()
     {
         var state = WithSystemPrompt("System");

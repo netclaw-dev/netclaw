@@ -66,15 +66,7 @@ public static class AttachmentIngressFormatting
     public static (bool Inlined, string? Note) ResolveInlineDecision(
         AttachmentCategory category,
         bool inlineImages)
-    {
-        return category switch
-        {
-            AttachmentCategory.Image when inlineImages => (true, null),
-            AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
-            AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
-            _ => (false, AttachmentNotes.FormatNotInlineable)
-        };
-    }
+        => AttachmentInlineDecision.Resolve(category, inlineImages);
 
     public static string FormatBytes(long size)
     {

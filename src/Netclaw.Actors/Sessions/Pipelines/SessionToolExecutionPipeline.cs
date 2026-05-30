@@ -23,6 +23,7 @@ namespace Netclaw.Actors.Sessions.Pipelines;
 /// </summary>
 internal sealed record ToolCallResult(
     SerializableChatMessage Message,
+    IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
     IReadOnlyList<FileAttachmentInfo> FileAttachments,
     IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
@@ -56,6 +57,7 @@ internal static class SessionToolExecutionPipeline
         string? projectDirectory = null,
         bool setWorkingDirectoryAvailable = false,
         bool streamToolResults = false,
+        ModelModality modelInputModalities = ModelModality.Text,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
         TurnContext? turnContext = null,
@@ -91,6 +93,7 @@ internal static class SessionToolExecutionPipeline
                     backgroundJobManager,
                     projectDirectory,
                     setWorkingDirectoryAvailable,
+                    modelInputModalities,
                     oneTimeApprovalPreSeed is not null
                     && oneTimeApprovalPreSeed.TryGetValue(tc.CallId, out var preSeedPatterns)
                         ? preSeedPatterns
@@ -112,9 +115,11 @@ internal static class SessionToolExecutionPipeline
             }
 
             var fileAttachments = results.SelectMany(r => r.FileAttachments).ToList();
+            var modelInputMediaReferences = results.SelectMany(r => r.ModelInputMediaReferences).ToList();
             self.Tell(new ToolExecutionCompleted
             {
                 ToolResults = [.. results.Select(r => r.Message)],
+                ModelInputMediaReferences = modelInputMediaReferences,
                 FileAttachments = fileAttachments,
                 CompletedSubAgentRuns = [.. results.SelectMany(r => r.CompletedSubAgentRuns)],
                 AcceptedSubAgentFindings = [.. results.SelectMany(r => r.AcceptedSubAgentFindings)]
@@ -161,6 +166,7 @@ internal static class SessionToolExecutionPipeline
         IActorRef? backgroundJobManager = null,
         string? projectDirectory = null,
         bool setWorkingDirectoryAvailable = false,
+        ModelModality modelInputModalities = ModelModality.Text,
         IReadOnlyList<string>? oneTimeApprovalPreSeed = null,
         ApprovalDecision? decisionOverride = null,
         TurnContext? turnContext = null)
@@ -182,7 +188,8 @@ internal static class SessionToolExecutionPipeline
             sessionDir,
             spawnChildActor,
             projectDirectory,
-            turnContext);
+            turnContext,
+            modelInputModalities);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
 
         // Re-drive of an ApprovedOnce approval: the user already clicked
@@ -305,7 +312,7 @@ internal static class SessionToolExecutionPipeline
                     Name = tc.Name
                 };
 
-                return new ToolCallResult(deniedMessage, [], [], []);
+                return new ToolCallResult(deniedMessage, [], [], [], []);
             }
 
             if (meta is { Background: true })
@@ -369,7 +376,7 @@ internal static class SessionToolExecutionPipeline
                     Content = ClampToolResult(resultText, maxInlineToolResultChars),
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
-                }, context.FileAttachments, completedRuns, acceptedFindings);
+                }, [], context.FileAttachments, completedRuns, acceptedFindings);
             }
 
             // Mid-turn approval pause: emit request to channel, block on TCS
@@ -519,6 +526,7 @@ internal static class SessionToolExecutionPipeline
         }
 
         resultText = ClampToolResult(resultText, maxInlineToolResultChars);
+        var modelInputMediaReferences = MaterializeModelInputFiles(context, sessionDir, logger);
 
         var message = new SerializableChatMessage
         {
@@ -530,6 +538,7 @@ internal static class SessionToolExecutionPipeline
 
         return new ToolCallResult(
             message,
+            modelInputMediaReferences,
             context.FileAttachments,
             completedRuns,
             acceptedFindings);
@@ -667,7 +676,7 @@ internal static class SessionToolExecutionPipeline
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             };
-            return new ToolCallResult(message, [], [], []);
+            return new ToolCallResult(message, [], [], [], []);
         }
 
         // A background job inherits the submitting turn's authority context.
@@ -719,7 +728,7 @@ internal static class SessionToolExecutionPipeline
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             };
-            return new ToolCallResult(resultMessage, [], [], []);
+            return new ToolCallResult(resultMessage, [], [], [], []);
         }
         catch (Exception ex)
         {
@@ -740,8 +749,57 @@ internal static class SessionToolExecutionPipeline
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             };
-            return new ToolCallResult(errorMessage, [], [], []);
+            return new ToolCallResult(errorMessage, [], [], [], []);
         }
+    }
+
+    private static IReadOnlyList<SerializableMediaReference> MaterializeModelInputFiles(
+        ToolExecutionContext context,
+        string sessionDir,
+        ILogger? logger)
+    {
+        if (context.ModelInputFiles.Count == 0)
+            return [];
+
+        var mediaDir = Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory);
+        Directory.CreateDirectory(mediaDir);
+
+        var refs = new List<SerializableMediaReference>(context.ModelInputFiles.Count);
+        foreach (var file in context.ModelInputFiles)
+        {
+            try
+            {
+                if (!File.Exists(file.FilePath))
+                {
+                    logger?.LogWarning("Model input file not found, skipping: {Path}", file.FilePath);
+                    continue;
+                }
+
+                var info = new FileInfo(file.FilePath);
+                if (info.Length <= 0)
+                    continue;
+
+                var ext = ChatMessageConverter.MimeToExtension(file.MimeType);
+                var fileName = $"{Guid.NewGuid():N}{ext}";
+                var fullPath = Path.Combine(mediaDir, fileName);
+
+                File.Copy(file.FilePath, fullPath);
+
+                refs.Add(new SerializableMediaReference
+                {
+                    RelativePath = fileName,
+                    MimeType = new Netclaw.Security.MimeType(file.MimeType),
+                    Modality = (int)ChatMessageConverter.MimeToModality(file.MimeType),
+                    FileSizeBytes = info.Length
+                });
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogWarning(ex, "Failed to materialize model input file: {Path}", file.FilePath);
+            }
+        }
+
+        return refs;
     }
 
     private static ToolExecutionContext BuildToolExecutionContext(
@@ -750,7 +808,8 @@ internal static class SessionToolExecutionPipeline
         string sessionDir,
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         string? projectDirectory,
-        TurnContext? turnContext)
+        TurnContext? turnContext,
+        ModelModality modelInputModalities)
     {
         // A turn with no authority context carries no trust context — fall closed
         // to the most-restrictive audience. The default is resolved once, here,
@@ -763,7 +822,8 @@ internal static class SessionToolExecutionPipeline
         context.ChannelType = turnContext?.ChannelType?.ToWireValue()
                               ?? (source is null ? null : source.ChannelType.ToWireValue());
         context.SupportsInteractiveApproval = turnContext?.SupportsInteractiveApproval
-                                              ?? source?.ChannelType.SupportsInteractiveApproval();
+                                               ?? source?.ChannelType.SupportsInteractiveApproval();
+        context.ModelInputModalities = modelInputModalities;
         context.SpawnChildActor = spawnChildActor;
         context.ProjectDirectory = projectDirectory;
         return context;
