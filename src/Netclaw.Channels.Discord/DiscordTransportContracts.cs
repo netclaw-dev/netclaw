@@ -55,6 +55,12 @@ public sealed record DiscordGatewayInteraction(
     DiscordMessageId? PromptMessageId = null,
     DiscordReplyChannelId? ReplyChannelId = null);
 
+public sealed record DiscordGatewaySnapshot(
+    bool IsConnected,
+    bool IsReady,
+    string? HealthDetail,
+    DiscordUserId? BotUserId);
+
 public interface IDiscordGatewayClient
 {
     event Func<DiscordGatewayMessage, Task>? MessageReceived;
@@ -67,25 +73,9 @@ public interface IDiscordGatewayClient
     /// </summary>
     event Func<string, Task>? CleanReconnectRequired;
 
-    /// <summary>
-    /// True when the underlying Discord socket reports connected.
-    /// </summary>
-    bool IsConnected { get; }
+    Task<DiscordGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// True only when inbound Discord events are safe to process. Implementations
-    /// must not emit message or interaction events while this is false.
-    /// </summary>
-    bool IsReady { get; }
-
-    /// <summary>
-    /// Operator-facing detail for disconnected or connected-but-not-ready states.
-    /// </summary>
-    string? HealthDetail { get; }
-
-    DiscordUserId? BotUserId { get; }
-
-    Task ConnectAsync(string botToken, CancellationToken cancellationToken = default);
+    Task<DiscordGatewaySnapshot> ConnectAsync(string botToken, CancellationToken cancellationToken = default);
 
     Task DisconnectAsync(CancellationToken cancellationToken = default);
 }
@@ -156,17 +146,16 @@ public sealed class UnconfiguredDiscordGatewayClient : IDiscordGatewayClient
         remove { }
     }
 
-    public bool IsConnected => false;
+    public Task<DiscordGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new DiscordGatewaySnapshot(
+            IsConnected: false,
+            IsReady: false,
+            HealthDetail: "Discord gateway client is not configured.",
+            BotUserId: null));
 
-    public bool IsReady => false;
-
-    public string? HealthDetail => "Discord gateway client is not configured.";
-
-    public DiscordUserId? BotUserId => null;
-
-    public Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
-        => throw new InvalidOperationException(
-            "Discord channel is enabled, but no Discord gateway client is configured.");
+    public Task<DiscordGatewaySnapshot> ConnectAsync(string botToken, CancellationToken cancellationToken = default)
+        => Task.FromException<DiscordGatewaySnapshot>(new InvalidOperationException(
+            "Discord channel is enabled, but no Discord gateway client is configured."));
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default)
         => Task.CompletedTask;

@@ -229,7 +229,12 @@ public sealed class DiscordChannelHealthTests(ITestOutputHelper output) : TestKi
         public Queue<bool> ConnectReadyResults { get; } = new();
         public bool RaiseCleanReconnectDuringFirstConnect { get; init; }
 
-        public async Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
+        public Task<DiscordGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(Snapshot());
+
+        public async Task<DiscordGatewaySnapshot> ConnectAsync(
+            string botToken,
+            CancellationToken cancellationToken = default)
         {
             ConnectCount++;
             IsConnected = true;
@@ -239,6 +244,8 @@ public sealed class DiscordChannelHealthTests(ITestOutputHelper output) : TestKi
 
             if (RaiseCleanReconnectDuringFirstConnect && ConnectCount == 1 && _cleanReconnectRequired is not null)
                 await _cleanReconnectRequired("Discord.Net resumed a previous gateway session.");
+
+            return Snapshot();
         }
 
         public Task DisconnectAsync(CancellationToken cancellationToken = default)
@@ -260,6 +267,9 @@ public sealed class DiscordChannelHealthTests(ITestOutputHelper output) : TestKi
 
             return true;
         }
+
+        private DiscordGatewaySnapshot Snapshot() =>
+            new(IsConnected, IsReady, HealthDetail, BotUserId);
     }
 
     private sealed class FakeHttpClientFactory : IHttpClientFactory

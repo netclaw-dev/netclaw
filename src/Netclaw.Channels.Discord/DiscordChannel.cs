@@ -96,22 +96,24 @@ public sealed class DiscordChannel : IChannel
     /// </summary>
     internal IActorRef? Gateway => _gateway;
 
-    public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
+    public async ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled)
-            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled."));
+            return new ChannelHealth(ChannelHealthStatus.Degraded, "Discord channel disabled.");
 
-        if (_gatewayClient.IsReady)
-            return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
+        var gatewaySnapshot = await _gatewayClient.GetSnapshotAsync(cancellationToken);
 
-        if (_gatewayClient.IsConnected)
-            return ValueTask.FromResult(new ChannelHealth(
+        if (gatewaySnapshot.IsReady)
+            return new ChannelHealth(ChannelHealthStatus.Healthy);
+
+        if (gatewaySnapshot.IsConnected)
+            return new ChannelHealth(
                 ChannelHealthStatus.Degraded,
-                _gatewayClient.HealthDetail ?? _connectFailureDetail ?? "Discord gateway connected but not ready."));
+                gatewaySnapshot.HealthDetail ?? _connectFailureDetail ?? "Discord gateway connected but not ready.");
 
-        return ValueTask.FromResult(new ChannelHealth(
+        return new ChannelHealth(
             ChannelHealthStatus.Disconnected,
-            _connectFailureDetail ?? "Discord gateway disconnected."));
+            _connectFailureDetail ?? gatewaySnapshot.HealthDetail ?? "Discord gateway disconnected.");
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -143,9 +145,9 @@ public sealed class DiscordChannel : IChannel
         try
         {
             // Connect first so BotUserId is available before creating the gateway actor.
-            await _gatewayClient.ConnectAsync(botToken, cancellationToken);
-            EnsureGatewayReadyAfterConnect();
-            CompleteConnectionSetup();
+            var gatewaySnapshot = await _gatewayClient.ConnectAsync(botToken, cancellationToken);
+            EnsureGatewayReadyAfterConnect(gatewaySnapshot);
+            CompleteConnectionSetup(gatewaySnapshot.BotUserId);
             _connectFailureDetail = null;
             _logger.LogInformation("Discord channel connected.");
         }
@@ -159,7 +161,7 @@ public sealed class DiscordChannel : IChannel
     /// Wires up message handling and the gateway actor once a connection
     /// succeeds. Idempotent — safe to call again after a reconnect.
     /// </summary>
-    private void CompleteConnectionSetup()
+    private void CompleteConnectionSetup(DiscordUserId? botUserId)
     {
         if (_gateway is not null)
             return;
@@ -183,7 +185,7 @@ public sealed class DiscordChannel : IChannel
                 AudienceProfiles: _audienceProfiles,
                 ModelCapabilities: _modelCapabilities,
                 Paths: _paths,
-                BotUserId: _gatewayClient.BotUserId,
+                BotUserId: botUserId,
                 PromptInjectionDetector: _promptInjectionDetector,
                 ThreadHistoryFetcher: _threadHistoryFetcher,
                 HttpClient: httpClient)),
@@ -305,9 +307,9 @@ public sealed class DiscordChannel : IChannel
                         ChannelConnectFailureKind.Fatal,
                         "Discord is enabled but no bot token is configured.");
 
-                await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
-                EnsureGatewayReadyAfterConnect();
-                CompleteConnectionSetup();
+                var gatewaySnapshot = await _gatewayClient.ConnectAsync(_options.BotToken.Value, cancellationToken);
+                EnsureGatewayReadyAfterConnect(gatewaySnapshot);
+                CompleteConnectionSetup(gatewaySnapshot.BotUserId);
                 _connectFailureDetail = null;
                 _logger.LogInformation("Discord channel reconnected after a transient failure.");
 
@@ -349,14 +351,14 @@ public sealed class DiscordChannel : IChannel
         }
     }
 
-    private void EnsureGatewayReadyAfterConnect()
+    private static void EnsureGatewayReadyAfterConnect(DiscordGatewaySnapshot gatewaySnapshot)
     {
-        if (_gatewayClient.IsReady)
+        if (gatewaySnapshot.IsReady)
             return;
 
         throw new ChannelConnectException(
             ChannelConnectFailureKind.Transient,
-            _gatewayClient.HealthDetail ?? "Discord gateway connected but did not become ready.");
+            gatewaySnapshot.HealthDetail ?? "Discord gateway connected but did not become ready.");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
