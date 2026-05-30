@@ -28,11 +28,23 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
 
     public void Dispose() => _dir.Dispose();
 
-    private McpToolPermissionsViewModel CreateVm()
+    private McpToolPermissionsViewModel CreateVm(McpToolPermissionsNavigationState? navigationState = null)
     {
         var configuration = new ConfigurationBuilder().Build();
         var daemonApi = new DaemonApi(new NoopHttpClientFactory(), configuration, _paths);
-        return new McpToolPermissionsViewModel(_paths, daemonApi);
+        return new McpToolPermissionsViewModel(_paths, daemonApi, navigationState);
+    }
+
+    [Fact]
+    public void InitializeForTests_AppliesRequestedInitialAudience()
+    {
+        var navigationState = new McpToolPermissionsNavigationState();
+        navigationState.RequestInitialAudience(TrustAudience.Team);
+        var vm = CreateVm(navigationState);
+
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
+
+        Assert.Equal(TrustAudience.Team, vm.SelectedAudience);
     }
 
     [Fact]

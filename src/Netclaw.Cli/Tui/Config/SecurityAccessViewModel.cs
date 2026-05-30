@@ -6,6 +6,7 @@
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
@@ -111,12 +112,16 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
     ];
 
     private readonly NetclawPaths _paths;
+    private readonly McpToolPermissionsNavigationState? _mcpNavigationState;
     private readonly bool[] _enabledFeatures = new bool[FeatureCount];
     private DeploymentPosture? _pendingPosture;
 
-    public SecurityAccessViewModel(NetclawPaths paths)
+    public SecurityAccessViewModel(
+        NetclawPaths paths,
+        McpToolPermissionsNavigationState? mcpNavigationState = null)
     {
         _paths = paths;
+        _mcpNavigationState = mcpNavigationState;
         LoadEnabledFeatures();
     }
 
@@ -403,8 +408,9 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
                 CycleIncomingAttachments(1);
                 return;
             case AudienceProfileRowKind.McpPermissions:
-                StatusMessage.Value = "Run `netclaw mcp permissions` to edit MCP server and tool grants.";
-                RequestRedraw();
+                _mcpNavigationState?.RequestInitialAudience(SelectedAudience);
+                RouteRequested?.Invoke("/mcp-tools");
+                Navigate?.Invoke("/mcp-tools");
                 return;
             case AudienceProfileRowKind.ResetToDefault:
                 ResetSelectedAudienceProfile();

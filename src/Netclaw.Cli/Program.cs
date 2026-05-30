@@ -654,6 +654,8 @@ static async Task RunAsync(string[] args)
             ConfigureConfigServices(builder.Services, builder.Configuration);
             builder.Logging.ClearProviders();
             builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
+            builder.Services.AddSingleton<TuiNavigation>();
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-mcp-tools-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -888,6 +890,8 @@ static async Task RunAsync(string[] args)
         ConfigureConfigServices(builder.Services, builder.Configuration);
         builder.Services.AddSingleton(configPaths);
         builder.Services.AddSingleton(new ConfigDashboardNavigationState());
+        builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
+        builder.Services.AddSingleton<TuiNavigation>();
         builder.Services.AddProviderDescriptors();
         builder.Services.AddHttpClient("OAuthDeviceFlow");
         builder.Services.AddSingleton(sp =>
@@ -917,6 +921,7 @@ static async Task RunAsync(string[] args)
             t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
             t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
             t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
+            t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
         });
 
         using var host = builder.Build();
@@ -1158,7 +1163,11 @@ static async Task RunTerminaHostAsync(IHost host)
 {
     try
     {
-        if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+        var terminaApplication = host.Services.GetService<TerminaApplication>();
+        if (terminaApplication is not null)
+            host.Services.GetService<TuiNavigation>()?.Attach(terminaApplication);
+
+        if (terminaApplication is not null && Console.IsInputRedirected)
         {
             Console.Error.WriteLine(
                 "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");

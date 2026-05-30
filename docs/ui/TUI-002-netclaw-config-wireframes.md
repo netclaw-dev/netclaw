@@ -863,6 +863,8 @@ gets a `Customized` override marker:
 - `Enter` on a checkbox row also toggles (alternative to Space).
 - `←` / `→` on a cycle row moves backward or forward through curated values.
 - `Enter` on a cycle row advances to the next curated value.
+- `Enter` on `MCP grants` opens the MCP permissions TUI with this audience selected.
+- `Esc` from the MCP permissions root returns through Termina history to the launching page.
 - `Reset overrides` replaces the full underlying audience profile, including
   hidden MCP and approval settings, with the current posture baseline mapping.
 

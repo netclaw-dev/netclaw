@@ -8,6 +8,7 @@ using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
+using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using R3;
@@ -28,11 +29,19 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     private readonly NetclawPaths _paths;
     private readonly DaemonApi _daemonApi;
     private bool _initializedForTests;
+    private readonly McpToolPermissionsNavigationState? _navigationState;
+    private readonly TuiNavigation? _navigation;
 
-    public McpToolPermissionsViewModel(NetclawPaths paths, DaemonApi daemonApi)
+    public McpToolPermissionsViewModel(
+        NetclawPaths paths,
+        DaemonApi daemonApi,
+        McpToolPermissionsNavigationState? navigationState = null,
+        TuiNavigation? navigation = null)
     {
         _paths = paths;
         _daemonApi = daemonApi;
+        _navigationState = navigationState;
+        _navigation = navigation;
     }
 
     public ReactiveProperty<ToolPermissionsState> CurrentState { get; } = new(ToolPermissionsState.Loading);
@@ -69,6 +78,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     public override void OnActivated()
     {
         base.OnActivated();
+        ApplyPendingNavigationState();
         if (_initializedForTests) return;
         _ = LoadServersAsync();
     }
@@ -123,6 +133,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     internal void InitializeForTests(McpServerName serverName, IEnumerable<string> tools)
     {
         _initializedForTests = true;
+        ApplyPendingNavigationState();
         SelectedServer = serverName.Value;
         DiscoveredTools.Clear();
         DiscoveredTools.AddRange(tools);
@@ -644,7 +655,13 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         _ => "Personal"
     };
 
-    public void RequestQuit() => Shutdown();
+    public void RequestQuit()
+    {
+        if (_navigation?.TryGoBack() == true)
+            return;
+
+        Shutdown();
+    }
 
     public void GoBack()
     {
@@ -666,6 +683,12 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
     {
         StateVersion.Value++;
         RequestRedraw();
+    }
+
+    private void ApplyPendingNavigationState()
+    {
+        if (_navigationState?.ConsumeInitialAudience() is { } audience)
+            SelectedAudience = audience;
     }
 
     private ToolConfig LoadToolConfig()

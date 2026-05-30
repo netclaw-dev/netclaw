@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
 using Netclaw.Configuration;
@@ -172,6 +173,23 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         Assert.Equal("Roots", writeMode);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.AttachFiles.Mode", out var attachMode));
         Assert.Equal("Roots", attachMode);
+    }
+
+    [Fact]
+    public void Audience_profile_mcp_grants_routes_to_permissions_for_selected_audience()
+    {
+        var navigationState = new McpToolPermissionsNavigationState();
+        using var vm = new SecurityAccessViewModel(Context.Paths, navigationState);
+        string? route = null;
+        vm.RouteRequested = value => route = value;
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.McpPermissions;
+
+        vm.ActivateSelectedAudienceProfileRow();
+
+        Assert.Equal("/mcp-tools", route);
+        Assert.Equal(TrustAudience.Team, navigationState.ConsumeInitialAudience());
     }
 
     [Fact]
