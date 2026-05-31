@@ -25,8 +25,7 @@ namespace Netclaw.Actors.Sessions;
 ///
 /// File handle lifecycle:
 /// - Open once in <see cref="PreStart"/> with append mode + read-share.
-/// - Flush on each write (no auto-flush per line, explicit flush keeps the
-///   handle persistent).
+/// - AutoFlush enabled — each WriteLine flushes immediately.
 /// - Close/dispose in <see cref="PostStop"/> — no retry loop needed since the
 ///   handle is kept open and single-writer is enforced by the actor mailbox.
 /// </summary>
@@ -93,7 +92,6 @@ public sealed class SessionLogActor : ReceiveActor
             var line = $"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}";
 
             _writer?.WriteLine(line);
-            _writer?.Flush();
         }
         catch (Exception ex)
         {
@@ -130,7 +128,6 @@ public sealed class SessionLogActor : ReceiveActor
             if (line is not null)
             {
                 _writer?.WriteLine($"[{_timeProvider.GetUtcNow():o}] {line}");
-                _writer?.Flush();
             }
         }
         catch (Exception ex)
@@ -144,7 +141,6 @@ public sealed class SessionLogActor : ReceiveActor
         try
         {
             _writer?.WriteLine(diagnostic.Line);
-            _writer?.Flush();
         }
         catch (Exception ex)
         {
