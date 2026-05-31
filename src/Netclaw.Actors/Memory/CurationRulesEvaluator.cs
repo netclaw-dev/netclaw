@@ -221,4 +221,57 @@ public static class CurationRulesEvaluator
             null,
             $"auto-resolved ambiguous: content overlap ({contentOverlap:P0}) + anchor similarity ({anchorJaccard:F2})");
     }
+
+    /// <summary>
+    /// Lossless guard for UPDATE decisions. Applying an UPDATE overwrites the target
+    /// memory's body with the proposal's, so it is only safe when the proposal
+    /// preserves the existing content (the existing body is wholly contained in the
+    /// proposal). When it is not preserved, overwriting would silently drop information
+    /// the existing memory holds — so downgrade to <see cref="CurationDecisionKind.Skip"/>
+    /// and keep the existing memory instead. The cost is dropping a narrower or
+    /// divergent proposal's new detail, which is recoverable; destroying accumulated
+    /// content is not. Non-UPDATE decisions pass through unchanged.
+    /// </summary>
+    public static CurationDecision GuardDestructiveUpdate(
+        CurationDecision decision,
+        SQLiteMemoryCurationOperation proposal,
+        IReadOnlyList<ExistingMemoryCandidate> candidates)
+    {
+        if (decision.Kind != CurationDecisionKind.Update)
+            return decision;
+
+        var target = candidates.FirstOrDefault(
+            c => string.Equals(c.DocumentId, decision.TargetDocumentId, StringComparison.Ordinal));
+
+        // No identifiable target (e.g., an LLM-returned id not in the candidate set):
+        // nothing to overwrite and nothing to verify, so leave the decision unchanged.
+        if (target is null || PreservesContent(proposal.Content, target.Content))
+            return decision;
+
+        return new CurationDecision(
+            CurationDecisionKind.Skip,
+            target.DocumentId,
+            null,
+            null,
+            $"update guarded: proposal would not preserve existing content — kept {target.DocumentId}");
+    }
+
+    private static bool PreservesContent(string proposed, string existing)
+    {
+        var existingNorm = NormalizeForContainment(existing);
+        if (existingNorm.Length == 0)
+            return true; // nothing to preserve
+
+        return NormalizeForContainment(proposed).Contains(existingNorm, StringComparison.Ordinal);
+    }
+
+    private static string NormalizeForContainment(string value)
+    {
+        // Lowercase and collapse all whitespace runs to single spaces so formatting
+        // differences don't hide a genuine containment. Case folding happens here so
+        // the Contains check can stay Ordinal.
+        return string.Join(' ', (value ?? string.Empty)
+            .ToLowerInvariant()
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
 }

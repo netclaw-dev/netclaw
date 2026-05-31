@@ -73,6 +73,34 @@ public sealed class CurationPromptBuilderTests
         Assert.Null(CurationPromptBuilder.ParseResponse("UNKNOWN_COMMAND"));
     }
 
+    [Fact]
+    public void ParseResponse_strips_think_block_before_keyword()
+    {
+        // Reasoning models prepend hidden chain-of-thought; the decision must still parse.
+        var decision = CurationPromptBuilder.ParseResponse(
+            "<think>These look similar but the dates differ, so they're distinct.</think>\nCREATE");
+        Assert.NotNull(decision);
+        Assert.Equal(CurationDecisionKind.Create, decision.Kind);
+    }
+
+    [Fact]
+    public void ParseResponse_strips_multiline_think_block_with_inline_keyword()
+    {
+        var decision = CurationPromptBuilder.ParseResponse(
+            "<think>\nstep 1\nstep 2\n</think>UPDATE doc-42");
+        Assert.NotNull(decision);
+        Assert.Equal(CurationDecisionKind.Update, decision.Kind);
+        Assert.Equal("doc-42", decision.TargetDocumentId);
+    }
+
+    [Fact]
+    public void ParseResponse_returns_null_for_unclosed_think_block()
+    {
+        // A truncated reasoning trace (budget exhausted mid-think) yields no decision —
+        // the caller must treat this as "no decision", not parse it into garbage.
+        Assert.Null(CurationPromptBuilder.ParseResponse("<think>reasoning with no closing tag and no answer"));
+    }
+
     // ── BuildUserMessage ────────────────────────────────────────────
 
     [Fact]
