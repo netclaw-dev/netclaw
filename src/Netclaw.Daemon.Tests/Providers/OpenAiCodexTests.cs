@@ -179,7 +179,10 @@ public sealed class OpenAiCodexTests
             Assert.True(result.Success);
             Assert.Null(result.ErrorMessage);
             Assert.NotEmpty(result.Models);
-            Assert.Contains(result.Models, m => m.ModelId.Value == "o3");
+            Assert.Contains(result.Models, m => m.ModelId.Value == "gpt-5.5");
+            Assert.Contains(result.Models, m => m.ModelId.Value == "gpt-5.3-codex-spark");
+            Assert.Equal(ModelModality.Text,
+                result.Models.Single(m => m.ModelId.Value == "gpt-5.3-codex-spark").InputModalities);
 
             // All curated models should have context windows and modalities populated
             Assert.All(result.Models, m =>
@@ -187,8 +190,9 @@ public sealed class OpenAiCodexTests
                 Assert.NotNull(m.ContextWindowTokens);
                 Assert.True(m.ContextWindowTokens > 32_768,
                     $"{m.ModelId} should have context window > 32K, got {m.ContextWindowTokens}");
-                Assert.True(m.InputModalities.HasFlag(ModelModality.Text | ModelModality.Image),
-                    $"{m.ModelId} should accept text+image input");
+                Assert.True(m.InputModalities.HasFlag(ModelModality.Text),
+                    $"{m.ModelId} should accept text input");
+                Assert.Equal(ModelModality.Text, m.OutputModalities);
             });
         }
 
@@ -283,7 +287,7 @@ public sealed class OpenAiCodexTests
             var result = await _resolver.ResolveAsync("gpt-5.3-codex", TestContext.Current.CancellationToken);
 
             Assert.NotNull(result);
-            Assert.Equal(256_000, result.ContextWindowTokens);
+            Assert.Equal(400_000, result.ContextWindowTokens);
             Assert.NotNull(result.InputModalities);
             Assert.True(result.InputModalities.Value.HasFlag(ModelModality.Text | ModelModality.Image));
             Assert.Equal(ModelModality.Text, result.OutputModalities);

@@ -70,26 +70,20 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
     /// Includes context window sizes and modality metadata so the runtime
     /// doesn't fall back to the 32K default.
     /// </summary>
-    // Last updated: 2026-03-18 from https://developers.openai.com/api/docs/models/all
+    // Last updated: 2026-05-31 from https://developers.openai.com/codex/models
+    // and https://developers.openai.com/api/docs/models/all.
     // Run /update-openai-models skill to refresh this list when new models ship.
     internal static readonly DiscoveredModel[] CuratedModels =
     [
-        // Frontier — all accept text+image input, produce text output
-        new() { ModelId = new("gpt-5.4"),      ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5"),        ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5-mini"),   ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5-nano"),   ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-4.1"),      ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-4.1-mini"), ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-4.1-nano"), ContextWindowTokens = 1_047_576, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        // Reasoning — text+image input, text output
-        new() { ModelId = new("o3"),           ContextWindowTokens = 200_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("o3-mini"),      ContextWindowTokens = 200_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("o4-mini"),      ContextWindowTokens = 200_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        // Codex (coding-optimized) — text+image input, text output
-        new() { ModelId = new("gpt-5.3-codex"), ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5.2-codex"), ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5-codex"),   ContextWindowTokens = 256_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        // Codex-recommended ChatGPT sign-in models.
+        new() { ModelId = new("gpt-5.5"),             ContextWindowTokens = 1_050_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = new("gpt-5.4"),             ContextWindowTokens = 1_050_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = new("gpt-5.4-mini"),        ContextWindowTokens = 400_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = new("gpt-5.3-codex"),       ContextWindowTokens = 400_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
+        new() { ModelId = new("gpt-5.3-codex-spark"), ContextWindowTokens = 400_000, InputModalities = ModelModality.Text, OutputModalities = ModelModality.Text },
+
+        // Previous frontier model still listed as a Codex alternative.
+        new() { ModelId = new("gpt-5.2"),             ContextWindowTokens = 400_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
     ];
 
     private const ModelModality TextImage = ModelModality.Text | ModelModality.Image;

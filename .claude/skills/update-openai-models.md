@@ -31,7 +31,7 @@ model list for OAuth-authenticated users.
 
 3. **Update the `CuratedModels` array** in:
    ```
-   src/Netclaw.Configuration/Providers/Descriptors/OpenAiDescriptor.cs
+   src/Netclaw.Providers/OpenAi/OpenAiDescriptor.cs
    ```
 
    The array should be ordered with the most capable/recommended models first.
