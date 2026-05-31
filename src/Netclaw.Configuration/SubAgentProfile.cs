@@ -46,8 +46,20 @@ public sealed record SubAgentProfile
     /// </summary>
     public ModelRole ModelRole { get; init; } = ModelRole.Compaction;
 
-    /// <summary>Wall-clock timeout in seconds for subagent execution.</summary>
+    /// <summary>
+    /// Inter-delta inactivity budget in seconds: the maximum gap between streaming
+    /// deltas once the model has started responding, and the general inactivity
+    /// budget for the tool loop. The generous wait-for-first-token budget is
+    /// <see cref="PrefillTimeoutSeconds"/> (falling back to
+    /// <see cref="SubAgentConfig.PrefillTimeoutSeconds"/>).
+    /// </summary>
     public int TimeoutSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Optional per-agent wait-for-first-delta budget in seconds, covering queue
+    /// wait and cold prefill. Null inherits <see cref="SubAgentConfig.PrefillTimeoutSeconds"/>.
+    /// </summary>
+    public int? PrefillTimeoutSeconds { get; init; }
 
     /// <summary>
     /// Whether successful free-form output should be converted into structured

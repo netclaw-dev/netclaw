@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text;
 using Akka.Actor;
 using Microsoft.Extensions.AI;
 using SessionId = Netclaw.Actors.Protocol.SessionId;
@@ -65,36 +64,36 @@ internal static class SessionLlmInvoker
         long callId,
         CancellationToken cancellationToken)
     {
-        var contents = new List<AIContent>();
-        var updates = new List<ChatResponseUpdate>();
-        var textBuilder = new StringBuilder();
-        var thinkingBuilder = new StringBuilder();
-        string? pendingTextDelta = null;
-        string? pendingThinkingDelta = null;
+        // Per-content dispatch + the buffered-first-delta trick are session-specific
+        // (they stream tokens to the UI and hold the first delta until a second
+        // arrives so a tool-call stream is never partially rendered). The streaming
+        // loop, counting, and response assembly live in StreamingResponseReader.
         var textDeltaCount = 0;
         var thinkingDeltaCount = 0;
+        string? pendingTextDelta = null;
+        string? pendingThinkingDelta = null;
 
-        await foreach (var update in client.GetStreamingResponseAsync(messages, options, cancellationToken))
-        {
-            updates.Add(update);
-            var dispatched = false;
-
-            if (update.Contents is not null)
+        var result = await StreamingResponseReader.ReadAsync(
+            client,
+            messages,
+            options,
+            (update, cls, _) =>
             {
+                // All deltas emitted for this update share its substantive-ness, so the
+                // watchdog promotes off the prefill budget only on real output, not on a
+                // content-free keepalive.
+                var substantive = cls.HasSubstantiveContent;
+                var dispatched = false;
                 foreach (var content in update.Contents)
                 {
                     switch (content)
                     {
                         case TextContent text when !string.IsNullOrEmpty(text.Text):
-                            textBuilder.Append(text.Text);
                             textDeltaCount++;
                             if (textDeltaCount == 1)
                             {
                                 pendingTextDelta = text.Text;
-                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent)
-                                {
-                                    CallId = callId
-                                });
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Substantive = substantive });
                             }
                             else
                             {
@@ -102,25 +101,22 @@ internal static class SessionLlmInvoker
                                 {
                                     self.Tell(new LlmResponseDeltaReceived(new TextContent(pendingTextDelta))
                                     {
-                                        CallId = callId
+                                        CallId = callId,
+                                        Substantive = substantive
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Substantive = substantive });
                                 dispatched = true;
                             }
                             break;
 
                         case TextReasoningContent thinking when !string.IsNullOrEmpty(thinking.Text):
-                            thinkingBuilder.Append(thinking.Text);
                             thinkingDeltaCount++;
                             if (thinkingDeltaCount == 1)
                             {
                                 pendingThinkingDelta = thinking.Text;
-                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent)
-                                {
-                                    CallId = callId
-                                });
+                                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Substantive = substantive });
                             }
                             else
                             {
@@ -128,50 +124,33 @@ internal static class SessionLlmInvoker
                                 {
                                     self.Tell(new LlmResponseDeltaReceived(new TextReasoningContent(pendingThinkingDelta))
                                     {
-                                        CallId = callId
+                                        CallId = callId,
+                                        Substantive = substantive
                                     });
                                 }
 
-                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId });
+                                self.Tell(new LlmResponseDeltaReceived(content) { CallId = callId, Substantive = substantive });
                                 dispatched = true;
                             }
                             break;
-
-                        case FunctionCallContent:
-                            contents.Add(content);
-                            break;
                     }
                 }
-            }
 
-            // No content dispatched — send keepalive to refresh the idle timeout watchdog.
-            if (!dispatched)
-            {
-                self.Tell(new LlmResponseDeltaReceived(EmptyTextContent)
+                // No content dispatched — send keepalive to refresh the watchdog. Carries
+                // the update's substantive flag (e.g. a tool-call-only update is substantive
+                // even though it streams no UI text; a prompt_progress heartbeat is not).
+                if (!dispatched)
                 {
-                    CallId = callId
-                });
-            }
-        }
-
-        if (thinkingBuilder.Length > 0)
-            contents.Add(new TextReasoningContent(thinkingBuilder.ToString()));
-
-        if (textBuilder.Length > 0)
-            contents.Add(new TextContent(textBuilder.ToString()));
-
-        var response = updates.Count > 0
-            ? updates.ToChatResponse()
-            : new ChatResponse(new AiChatMessage(ChatRole.Assistant, contents));
-
-        if (response.Messages.Count == 0)
-            response.Messages.Add(new AiChatMessage(ChatRole.Assistant, contents));
+                    self.Tell(new LlmResponseDeltaReceived(EmptyTextContent) { CallId = callId, Substantive = substantive });
+                }
+            },
+            cancellationToken);
 
         return new LlmResponseReceived
         {
-            Response = response,
-            StreamedText = textDeltaCount > 1,
-            StreamedThinking = thinkingDeltaCount > 1,
+            Response = result.Response,
+            StreamedText = result.Diagnostics.TextDeltaCount > 1,
+            StreamedThinking = result.Diagnostics.ThinkingDeltaCount > 1,
             RecallResult = null,
             CallId = callId
         };

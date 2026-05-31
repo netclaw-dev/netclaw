@@ -3,7 +3,7 @@ name: subagent-authoring
 description: "How to create and troubleshoot file-defined subagents in ~/.netclaw/agents. Load when the user asks to add, edit, or debug subagent definitions, or when a skill routes via metadata.subagent."
 metadata:
   author: netclaw
-  version: "1.2.4"
+  version: "1.3.1"
 ---
 
 # Subagent Authoring
@@ -77,11 +77,19 @@ The markdown body below the closing `---` must also be non-empty.
 |------|---------|-------|
 | `tools` | `[]` | Advisory tool metadata retained for file-format compatibility. Netclaw does not use this as a runtime whitelist. |
 | `modelRole` | `Compaction` | `Main` or `Compaction` (case-insensitive). Invalid values make the file fail loud and skip loading. |
-| `timeoutSeconds` | `60` | Inactivity timeout for subagent execution. The watchdog resets when the subagent makes progress. |
+| `timeoutSeconds` | `60` | Inter-delta inactivity budget: the max gap between streaming deltas once the model is responding, and the general tool-loop inactivity budget. The watchdog resets on each progress signal. |
+| `prefillTimeoutSeconds` | inherits `SubAgents.PrefillTimeoutSeconds` (`1800`) | Generous wait-for-first-token budget covering queue wait and cold prefill. Content-free `prompt_progress` keepalives refresh it, so a slow self-hosted prefill is not mistaken for a hang; the watchdog promotes to `timeoutSeconds` once the first real token arrives. Raise this for heavyweight agents on slow/large-context models. |
 | `visibility` | `user-facing` | Accepts `user-facing`, `UserFacing`, `internal`, or `Internal`. Invalid values make the file fail loud and skip loading. |
 | `emitStructuredFindings` | `false` | When true, successful output is emitted as findings for parent-session review. |
 
 Unknown fields are ignored.
+
+Beyond these per-agent budgets, every sub-agent LLM call is also bounded by a
+config-level **no-progress ceiling** (`SubAgents.NoProgressTimeoutSeconds` in
+`netclaw.json`, default `1200` = 20 min). Unlike `prefillTimeoutSeconds` and
+`timeoutSeconds`, content-free keepalives never refresh it — only real tokens do —
+so a backend that heartbeats forever without producing output is killed once it
+elapses. It is not a per-agent frontmatter field; tune it in `netclaw.json`.
 
 ## Example: valid subagent definition
 
