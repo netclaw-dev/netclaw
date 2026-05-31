@@ -3,7 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Netclaw.Configuration;
+using Netclaw.Media;
 
 namespace Netclaw.Actors.Channels;
 
@@ -12,12 +12,24 @@ namespace Netclaw.Actors.Channels;
 /// </summary>
 public static class AttachmentInlineDecision
 {
-    public static (bool Inlined, string? Note) Resolve(AttachmentCategory category, bool inlineImages)
+    public static (bool Inlined, string? Note) Resolve(MimeType mimeType, AttachmentCategory category, bool inlineImages)
     {
+        if (category == AttachmentCategory.Image)
+        {
+            if (!inlineImages)
+                return (false, AttachmentNotes.ModelMissingImage);
+
+            // Only inline image types the provider can actually ingest as model
+            // input (png/jpeg/gif/webp). Other image formats (e.g. bmp/tiff) are
+            // accepted but delivered path-only, so they never reach the
+            // image-only provider serialization path.
+            return MimeTypeCatalog.IsModelInputSupported(mimeType)
+                ? (true, null)
+                : (false, AttachmentNotes.FormatNotInlineable);
+        }
+
         return category switch
         {
-            AttachmentCategory.Image when inlineImages => (true, null),
-            AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
             AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
             _ => (false, AttachmentNotes.FormatNotInlineable)
         };

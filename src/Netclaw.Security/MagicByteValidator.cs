@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Frozen;
+using Netclaw.Media;
 
 namespace Netclaw.Security;
 
@@ -39,15 +40,6 @@ public static class MagicByteValidator
     private delegate bool SignatureMatcher(ReadOnlySpan<byte> content);
 
     /// <summary>
-    /// Signature rule for a declared MIME type. Extensions are the set of
-    /// filename extensions permitted to carry this MIME; <see cref="Matches"/>
-    /// returns <c>true</c> when the raw bytes satisfy the signature family.
-    /// </summary>
-    private sealed record SignatureRule(
-        FrozenSet<string> Extensions,
-        SignatureMatcher Matches);
-
-    /// <summary>
     /// Matcher that unconditionally accepts any content. Used for text-like
     /// MIMEs that have no signature at offset 0; the executable pre-check
     /// still runs first, so an <c>MZ</c>- or <c>#!</c>-prefixed "text" file
@@ -55,18 +47,21 @@ public static class MagicByteValidator
     /// </summary>
     private static readonly SignatureMatcher AnyContent = static _ => true;
 
-    private static readonly FrozenDictionary<string, SignatureRule> RulesByMime =
-        BuildRules().ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// MIME → byte-signature matcher. The matcher is the only piece the security
+    /// layer owns; the set of filename extensions permitted for each MIME comes
+    /// from <see cref="MimeTypeCatalog"/> (via <see cref="MimeTypeCatalog.ExtensionMatches"/>),
+    /// so the extension table is defined once in the catalog and cannot drift
+    /// against the validator.
+    /// </summary>
+    private static readonly FrozenDictionary<string, SignatureMatcher> SignatureMatchers =
+        BuildMatchers().ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Normalization rules for known MIME type mismatches. Some providers
-    /// (notably Slack) report incorrect MIME types for certain file
-    /// extensions — e.g., <c>.md</c> as <c>text/plain</c> instead of
-    /// <c>text/markdown</c>. This table maps (extension, incorrect-MIME)
-    /// pairs to the canonical MIME type.
+    /// MIME types for which the scanner has a native byte-signature matcher.
+    /// Kept aligned with <see cref="MimeTypeCatalog.GetNativeSignatureValidatedMimeTypes"/>.
     /// </summary>
-    private static readonly FrozenDictionary<(string Extension, string DeclaredMime), string> MimeNormalizationRules =
-        BuildMimeNormalizationRules().ToFrozenDictionary(new ExtensionMimePairComparer());
+    public static IReadOnlyCollection<string> SupportedMimeTypes => SignatureMatchers.Keys;
 
     /// <summary>
     /// Validates a file using only its header bytes and total size. Used by
@@ -118,40 +113,41 @@ public static class MagicByteValidator
                 "File has no extension");
         }
 
-        var effectiveMimeType = NormalizeMimeType(declaredMimeType, extension);
+        var effectiveMimeType = MimeTypeCatalog.NormalizeDeclaredForExtension(declaredMimeType, extension);
 
-        if (!RulesByMime.TryGetValue(effectiveMimeType, out var rule))
+        if (!SignatureMatchers.TryGetValue(effectiveMimeType.Value, out var matcher))
         {
             return ContentScanResult.Rejected(
                 ContentScanError.UnrecognizedFileType,
                 $"MIME type '{effectiveMimeType}' is not supported by the content scanner");
         }
 
-        if (!effectivePolicy.AllowedMimeTypes.Contains(effectiveMimeType))
+        if (!effectivePolicy.AllowedMimeTypes.Contains(effectiveMimeType.Value))
         {
             return ContentScanResult.Rejected(
                 ContentScanError.UnrecognizedFileType,
                 $"MIME type '{effectiveMimeType}' is not allowed by policy");
         }
 
-        if (!rule.Extensions.Contains(extension))
+        if (!MimeTypeCatalog.ExtensionMatches(effectiveMimeType, extension))
         {
             var detected = DetectMimeType(header);
-            if (detected is not null
-                && RulesByMime.TryGetValue(detected, out var detectedRule)
-                && detectedRule.Extensions.Contains(extension)
-                && effectivePolicy.AllowedMimeTypes.Contains(detected))
+            var detectedMimeType = detected is not null ? new MimeType(detected) : (MimeType?)null;
+            if (detectedMimeType is not null
+                && SignatureMatchers.ContainsKey(detectedMimeType.Value.Value)
+                && MimeTypeCatalog.ExtensionMatches(detectedMimeType.Value, extension)
+                && effectivePolicy.AllowedMimeTypes.Contains(detectedMimeType.Value.Value))
             {
-                return ContentScanResult.Allowed(new MimeType(detected));
+                return ContentScanResult.Allowed(detectedMimeType.Value);
             }
 
             return ContentScanResult.Rejected(
                 ContentScanError.MimeTypeMismatch,
                 $"Extension '{extension}' does not match declared type '{effectiveMimeType}'",
-                detected is not null ? new MimeType(detected) : null);
+                detectedMimeType);
         }
 
-        if (!rule.Matches(header))
+        if (!matcher(header))
         {
             var detectedMimeType = DetectMimeType(header);
             return ContentScanResult.Rejected(
@@ -160,7 +156,7 @@ public static class MagicByteValidator
                 detectedMimeType is not null ? new MimeType(detectedMimeType) : null);
         }
 
-        return ContentScanResult.Allowed(new MimeType(effectiveMimeType));
+        return ContentScanResult.Allowed(effectiveMimeType);
     }
 
     /// <summary>
@@ -188,6 +184,8 @@ public static class MagicByteValidator
         if (IsJpeg(content)) return "image/jpeg";
         if (IsGif(content)) return "image/gif";
         if (IsWebp(content)) return "image/webp";
+        if (IsBmp(content)) return "image/bmp";
+        if (IsTiff(content)) return "image/tiff";
         if (IsPdf(content)) return "application/pdf";
         if (IsOle(content)) return "application/x-ole-compound-document";
         if (IsRtf(content)) return "application/rtf";
@@ -219,129 +217,72 @@ public static class MagicByteValidator
         return false;
     }
 
-    // ── Rule table ────────────────────────────────────────────────────────
+    // ── Matcher table ─────────────────────────────────────────────────────
+    // MIME → byte-signature matcher only. Permitted extensions live in
+    // MimeTypeCatalog; this table must stay aligned with the catalog's
+    // native-signature-validated set (enforced by a test).
 
-    private static Dictionary<string, SignatureRule> BuildRules()
+    private static Dictionary<string, SignatureMatcher> BuildMatchers() => new(StringComparer.OrdinalIgnoreCase)
     {
-        var rules = new Dictionary<string, SignatureRule>(StringComparer.OrdinalIgnoreCase)
-        {
-            // Images
-            ["image/png"] = new(Exts(".png"), IsPng),
-            ["image/jpeg"] = new(Exts(".jpg", ".jpeg"), IsJpeg),
-            ["image/gif"] = new(Exts(".gif"), IsGif),
-            ["image/webp"] = new(Exts(".webp"), IsWebp),
+        // Images
+        ["image/png"] = IsPng,
+        ["image/jpeg"] = IsJpeg,
+        ["image/gif"] = IsGif,
+        ["image/webp"] = IsWebp,
+        ["image/bmp"] = IsBmp,
+        ["image/tiff"] = IsTiff,
 
-            // PDF
-            ["application/pdf"] = new(Exts(".pdf"), IsPdf),
+        // PDF
+        ["application/pdf"] = IsPdf,
 
-            // OOXML (ZIP-based) — docx/xlsx/pptx
-            ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] =
-            new(Exts(".docx"), IsZip),
-            ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] =
-            new(Exts(".xlsx"), IsZip),
-            ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] =
-            new(Exts(".pptx"), IsZip),
+        // OOXML (ZIP-based) — docx/xlsx/pptx
+        ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = IsZip,
+        ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] = IsZip,
+        ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] = IsZip,
 
-            // OpenDocument (also ZIP-based)
-            ["application/vnd.oasis.opendocument.text"] = new(Exts(".odt"), IsZip),
-            ["application/vnd.oasis.opendocument.spreadsheet"] = new(Exts(".ods"), IsZip),
-            ["application/vnd.oasis.opendocument.presentation"] = new(Exts(".odp"), IsZip),
+        // OpenDocument (also ZIP-based)
+        ["application/vnd.oasis.opendocument.text"] = IsZip,
+        ["application/vnd.oasis.opendocument.spreadsheet"] = IsZip,
+        ["application/vnd.oasis.opendocument.presentation"] = IsZip,
 
-            // Legacy OLE Compound Document Office formats
-            ["application/msword"] = new(Exts(".doc"), IsOle),
-            ["application/vnd.ms-excel"] = new(Exts(".xls"), IsOle),
-            ["application/vnd.ms-powerpoint"] = new(Exts(".ppt"), IsOle),
+        // Legacy OLE Compound Document Office formats
+        ["application/msword"] = IsOle,
+        ["application/vnd.ms-excel"] = IsOle,
+        ["application/vnd.ms-powerpoint"] = IsOle,
 
-            // Plain/structured text — no signature, but executable pre-check
-            // still blocks MZ / ELF / shebang payloads.
-            ["text/plain"] = new(Exts(".txt", ".log"), AnyContent),
-            ["text/markdown"] = new(Exts(".md", ".markdown"), AnyContent),
-            ["text/csv"] = new(Exts(".csv"), AnyContent),
-            ["text/xml"] = new(Exts(".xml"), AnyContent),
-            ["application/json"] = new(Exts(".json"), AnyContent),
-            ["application/xml"] = new(Exts(".xml"), AnyContent),
-            ["application/yaml"] = new(Exts(".yml", ".yaml"), AnyContent),
-            ["application/x-yaml"] = new(Exts(".yml", ".yaml"), AnyContent),
+        // Plain/structured text — no signature, but executable pre-check
+        // still blocks MZ / ELF / shebang payloads.
+        ["text/plain"] = AnyContent,
+        ["text/markdown"] = AnyContent,
+        ["text/csv"] = AnyContent,
+        ["text/html"] = AnyContent,
+        ["application/json"] = AnyContent,
+        ["application/xml"] = AnyContent,
+        ["application/yaml"] = AnyContent,
 
-            // Rich text
-            ["application/rtf"] = new(Exts(".rtf"), IsRtf),
-            ["text/rtf"] = new(Exts(".rtf"), IsRtf),
+        // Rich text
+        ["application/rtf"] = IsRtf,
 
-            // Archives
-            ["application/zip"] = new(Exts(".zip"), IsZip),
-            ["application/x-zip-compressed"] = new(Exts(".zip"), IsZip),
-            ["application/x-7z-compressed"] = new(Exts(".7z"), Is7z),
-            ["application/gzip"] = new(Exts(".gz", ".tgz"), IsGzip),
-            ["application/x-gzip"] = new(Exts(".gz", ".tgz"), IsGzip),
-            ["application/x-bzip2"] = new(Exts(".bz2"), IsBzip2),
-            ["application/x-xz"] = new(Exts(".xz"), IsXz),
+        // Archives
+        ["application/zip"] = IsZip,
+        ["application/x-7z-compressed"] = Is7z,
+        ["application/gzip"] = IsGzip,
+        ["application/x-bzip2"] = IsBzip2,
+        ["application/x-xz"] = IsXz,
 
-            // Audio
-            ["audio/mpeg"] = new(Exts(".mp3"), IsMp3FrameOrId3),
-            ["audio/mp4"] = new(Exts(".m4a", ".mp4"), IsFtyp),
-            ["audio/x-m4a"] = new(Exts(".m4a"), IsFtyp),
-            ["audio/wav"] = new(Exts(".wav"), IsWav),
-            ["audio/x-wav"] = new(Exts(".wav"), IsWav),
-            ["audio/ogg"] = new(Exts(".ogg", ".oga"), IsOgg),
+        // Audio
+        ["audio/mpeg"] = IsMp3FrameOrId3,
+        ["audio/mp4"] = IsFtyp,
+        ["audio/wav"] = IsWav,
+        ["audio/ogg"] = IsOgg,
 
-            // Video
-            ["video/mp4"] = new(Exts(".mp4", ".m4v"), IsFtyp),
-            ["video/quicktime"] = new(Exts(".mov"), IsFtyp),
-            ["video/webm"] = new(Exts(".webm"), IsEbml),
-            ["video/x-matroska"] = new(Exts(".mkv"), IsEbml),
-            ["video/x-msvideo"] = new(Exts(".avi"), IsAvi)
-        };
-
-        return rules;
-    }
-
-    private static FrozenSet<string> Exts(params string[] extensions) =>
-        extensions.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
-
-    private static Dictionary<(string Extension, string DeclaredMime), string> BuildMimeNormalizationRules()
-    {
-        var rules = new Dictionary<(string, string), string>(new ExtensionMimePairComparer())
-        {
-            // Slack reports .md files as text/plain instead of text/markdown
-            [(".md", "text/plain")] = "text/markdown",
-            [(".markdown", "text/plain")] = "text/markdown",
-
-            // JSON/YAML/CSV/XML sometimes reported as text/plain by various providers
-            [(".json", "text/plain")] = "application/json",
-            [(".yaml", "text/plain")] = "application/yaml",
-            [(".yml", "text/plain")] = "application/yaml",
-            [(".csv", "text/plain")] = "text/csv",
-            [(".xml", "text/plain")] = "text/xml"
-        };
-
-        return rules;
-    }
-
-    private static string NormalizeMimeType(string declaredMimeType, string extension)
-    {
-        if (MimeNormalizationRules.TryGetValue((extension, declaredMimeType), out var correctedMime))
-            return correctedMime;
-        return declaredMimeType;
-    }
-
-    private sealed class ExtensionMimePairComparer : IEqualityComparer<(string, string)>
-    {
-        public bool Equals((string, string) x, (string, string) y) =>
-            StringComparer.OrdinalIgnoreCase.Equals(x.Item1, y.Item1) &&
-            StringComparer.OrdinalIgnoreCase.Equals(x.Item2, y.Item2);
-
-        public int GetHashCode((string, string) obj) =>
-            HashCode.Combine(
-                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Item1),
-                StringComparer.OrdinalIgnoreCase.GetHashCode(obj.Item2));
-    }
-
-    /// <summary>
-    /// Internal helper exposed for <see cref="ContentPolicy"/> to seed its
-    /// default allowlist from the set of MIME types the validator knows how
-    /// to verify, so the two layers stay in sync.
-    /// </summary>
-    internal static IEnumerable<string> GetSupportedMimeTypes() => RulesByMime.Keys;
+        // Video
+        ["video/mp4"] = IsFtyp,
+        ["video/quicktime"] = IsFtyp,
+        ["video/webm"] = IsEbml,
+        ["video/x-matroska"] = IsEbml,
+        ["video/x-msvideo"] = IsAvi
+    };
 
     // ── Signature matchers ────────────────────────────────────────────────
     // Each matcher validates more than the minimum prefix where a cheap
@@ -389,6 +330,30 @@ public static class MagicByteValidator
     private static bool IsWebp(ReadOnlySpan<byte> c) =>
         IsRiff(c) && c.Length >= 12 &&
         c[8] == 0x57 && c[9] == 0x45 && c[10] == 0x42 && c[11] == 0x50;
+
+    /// <summary>
+    /// BMP: <c>BM</c> magic, then the DIB header size (LE uint32 at offset 14)
+    /// must be one of the known header sizes. Validating the DIB size rejects
+    /// arbitrary "BM"-prefixed payloads.
+    /// </summary>
+    private static bool IsBmp(ReadOnlySpan<byte> c)
+    {
+        if (c.Length < 18) return false;
+        if (c[0] != 0x42 || c[1] != 0x4D) return false; // "BM"
+        uint dibHeaderSize = (uint)(c[14] | (c[15] << 8) | (c[16] << 16) | (c[17] << 24));
+        return dibHeaderSize is 12 or 40 or 52 or 56 or 64 or 108 or 124;
+    }
+
+    /// <summary>
+    /// TIFF: little-endian (<c>II</c> + <c>0x2A 0x00</c>) or big-endian
+    /// (<c>MM</c> + <c>0x00 0x2A</c>) byte-order mark plus the 42 magic.
+    /// </summary>
+    private static bool IsTiff(ReadOnlySpan<byte> c)
+    {
+        if (c.Length < 4) return false;
+        return (c[0] == 0x49 && c[1] == 0x49 && c[2] == 0x2A && c[3] == 0x00)
+            || (c[0] == 0x4D && c[1] == 0x4D && c[2] == 0x00 && c[3] == 0x2A);
+    }
 
     private static bool IsWav(ReadOnlySpan<byte> c) =>
         IsRiff(c) && c.Length >= 12 &&

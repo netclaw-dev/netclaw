@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Media;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -17,6 +19,6 @@ public sealed class NullContentScanner : IContentScanner
         string declaredMimeType,
         CancellationToken cancellationToken = default)
     {
-        return Task.FromResult(ContentScanResult.Allowed());
+        return Task.FromResult(ContentScanResult.Allowed(new VerifiedMimeType(declaredMimeType)));
     }
 }

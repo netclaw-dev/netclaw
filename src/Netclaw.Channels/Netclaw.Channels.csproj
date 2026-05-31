@@ -14,6 +14,7 @@
     <PackageReference Include="ModelContextProtocol.Core" />
     <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+    <ProjectReference Include="..\Netclaw.Media\Netclaw.Media.csproj" />
     <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
   </ItemGroup>
 

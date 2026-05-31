@@ -10,6 +10,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -104,7 +105,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             var sizeBytes = TryGetFileLength(authorizedPath);
             return BuildMetadataResponse(
                 authorizedPath,
-                new FileInspection(MimeTypeCatalog.ApplicationOctetStream, AttachmentCategory.Other, sizeBytes, false, null),
+                new FileInspection(MimeType.Default, AttachmentCategory.Other, sizeBytes, false, null),
                 "File is not valid in the detected text encoding. Raw binary output is not returned by file_read.");
         }
         catch (UnauthorizedAccessException)
@@ -121,7 +122,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     {
         var info = new FileInfo(path);
         if (info.Length == 0)
-            return new FileInspection(MimeTypeCatalog.TextPlain, AttachmentCategory.Document, 0, true, StrictUtf8);
+            return new FileInspection(new MimeType(MimeTypeCatalog.TextPlain), AttachmentCategory.Document, 0, true, StrictUtf8);
 
         var sampleLength = (int)Math.Min(info.Length, 4096);
         var buffer = new byte[sampleLength];
@@ -137,16 +138,16 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         var textEncoding = DetectTextEncoding(buffer, extensionMime);
         var looksText = textEncoding is not null;
         var mimeType = ResolveMimeType(path, magicMime, extensionMime, textEncoding);
-        var category = AttachmentCategories.FromMime(mimeType);
+        var category = MimeTypeCatalog.GetCategory(mimeType);
         var isTextLike = looksText && MimeTypeCatalog.IsText(mimeType);
 
         return new FileInspection(mimeType, category, info.Length, isTextLike, isTextLike ? textEncoding : null);
     }
 
-    private static string ResolveMimeType(
+    private static MimeType ResolveMimeType(
         string path,
         string? magicMime,
-        string? extensionMime,
+        MimeType? extensionMime,
         Encoding? textEncoding)
     {
         var looksText = textEncoding is not null;
@@ -155,31 +156,33 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         // container signature proves this is the expected binary family.
         if (MimeTypeCatalog.IsZipBackedOfficePath(path)
             && string.Equals(magicMime, MimeTypeCatalog.ApplicationZip, StringComparison.OrdinalIgnoreCase))
-            return extensionMime!;
+            return extensionMime!.Value;
 
         if (MimeTypeCatalog.IsOleBackedOfficePath(path)
             && string.Equals(magicMime, MimeTypeCatalog.ApplicationOleCompoundDocument, StringComparison.OrdinalIgnoreCase))
-            return extensionMime!;
+            return extensionMime!.Value;
 
-        if (looksText && MimeTypeCatalog.IsText(extensionMime) && IsUtf16OrUtf32(textEncoding))
-            return extensionMime!;
+        if (looksText && extensionMime is not null && MimeTypeCatalog.IsText(extensionMime.Value) && IsUtf16OrUtf32(textEncoding))
+            return extensionMime.Value;
 
         if (magicMime is not null)
-            return magicMime;
+            return new MimeType(magicMime);
 
         if (looksText)
-            return MimeTypeCatalog.IsText(extensionMime) ? extensionMime! : MimeTypeCatalog.TextPlain;
+            return extensionMime is not null && MimeTypeCatalog.IsText(extensionMime.Value)
+                ? extensionMime.Value
+                : new MimeType(MimeTypeCatalog.TextPlain);
 
         // Extensions are only hints. A binary file named `.json` or `.png`
         // must stay metadata-only instead of leaking control bytes or spoofed
         // media into a tool result / model input path.
-        if (MimeTypeCatalog.IsText(extensionMime))
-            return MimeTypeCatalog.ApplicationOctetStream;
+        if (extensionMime is not null && MimeTypeCatalog.IsText(extensionMime.Value))
+            return MimeType.Default;
 
-        if (MimeTypeCatalog.RequiresBinarySignature(extensionMime))
-            return MimeTypeCatalog.ApplicationOctetStream;
+        if (extensionMime is not null && MimeTypeCatalog.RequiresBinarySignature(extensionMime.Value))
+            return MimeType.Default;
 
-        return extensionMime ?? MimeTypeCatalog.ApplicationOctetStream;
+        return extensionMime ?? MimeType.Default;
     }
 
     private string HandleNonTextFile(
@@ -188,7 +191,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         ToolExecutionContext context)
     {
         var inlineImages = context.ModelInputModalities.HasFlag(ModelModality.Image);
-        var (inlined, note) = AttachmentInlineDecision.Resolve(inspection.Category, inlineImages);
+        var (inlined, note) = AttachmentInlineDecision.Resolve(inspection.MimeType, inspection.Category, inlineImages);
 
         if (inspection.Category == AttachmentCategory.Image && inlined)
         {
@@ -232,7 +235,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
                guidance;
     }
 
-    private static Encoding? DetectTextEncoding(ReadOnlySpan<byte> sample, string? extensionMime)
+    private static Encoding? DetectTextEncoding(ReadOnlySpan<byte> sample, MimeType? extensionMime)
     {
         if (sample.Length == 0)
             return StrictUtf8;
@@ -249,7 +252,8 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         if (RawTextControlsAreAcceptable(sample) && CanDecodeUtf8Sample(sample))
             return StrictUtf8;
 
-        return MimeTypeCatalog.IsText(extensionMime)
+        return extensionMime is not null
+               && MimeTypeCatalog.IsText(extensionMime.Value)
                && RawTextControlsAreAcceptable(sample)
                && DecodedTextLooksLikeText(sample, Windows1252)
             ? Windows1252
@@ -470,7 +474,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     }
 
     private sealed record FileInspection(
-        string MimeType,
+        MimeType MimeType,
         AttachmentCategory Category,
         long SizeBytes,
         bool IsTextLike,

@@ -12,6 +12,7 @@ using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Media;
 
 namespace Netclaw.Providers.SelfHosted;
 
@@ -464,14 +465,20 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     break;
 
                 case DataContent data:
-                    var mime = data.MediaType ?? "application/octet-stream";
+                    var mimeType = new MimeType(data.MediaType);
+                    if (!MimeTypeCatalog.IsModelInputSupported(mimeType))
+                    {
+                        throw new InvalidOperationException(
+                            $"OpenAI-compatible image_url serialization only supports image DataContent; received '{mimeType.Value}'.");
+                    }
+
                     var b64 = Convert.ToBase64String(data.Data.ToArray());
                     imageParts.Add(new JsonObject
                     {
                         ["type"] = "image_url",
                         ["image_url"] = new JsonObject
                         {
-                            ["url"] = $"data:{mime};base64,{b64}"
+                            ["url"] = $"data:{mimeType.Value};base64,{b64}"
                         }
                     });
                     break;

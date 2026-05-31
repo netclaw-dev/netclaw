@@ -19,15 +19,16 @@ public static class SessionLogFile
 {
     public const string FileName = "session.log";
 
-    // Bounded retry budget for transient Windows file-sharing conflicts. On NTFS
-    // a concurrent reader holding the file with FileShare.Read (e.g. File.ReadAllText*,
-    // tail-f tools, Search Indexer, AV scan-on-close) blocks any FileAccess.Write
-    // open regardless of the writer's own share mask — share-mode intersection is
-    // bidirectional and the reader's mask must permit Write. The kernel/AV hand-off
-    // window is typically sub-10ms; 10/20/40/80ms backoff covers the long tail
-    // without exceeding an actor's per-message processing budget.
-    private const int MaxAttempts = 4;
-    private static readonly int[] BackoffMs = [10, 20, 40, 80];
+    // Bounded retry budget for transient Windows file-sharing conflicts. On NTFS a
+    // concurrent handle that excludes write (Windows Defender scan-on-close of the
+    // just-written file, Search Indexer, a reader opened with FileShare.Read) blocks
+    // the next FileMode.Append / FileAccess.Write open — share-mode intersection is
+    // mandatory and bidirectional, so the other holder's mask must permit Write.
+    // The AV scan-on-close hand-off is usually sub-100ms but spikes under loaded CI,
+    // so the schedule below waits ~585ms (plus jitter) before giving up — one retry
+    // per backoff entry. Jitter de-correlates retries from a periodic scanner's
+    // cadence; the wait still stays within an actor's per-message processing budget.
+    private static readonly int[] BackoffMs = [10, 25, 50, 100, 200, 200];
 
     public static string GetLogsDirectory(SessionId sessionId, string sessionLogsBasePath)
     {
@@ -61,9 +62,14 @@ public static class SessionLogFile
             }
             catch (Exception ex) when (
                 (ex is IOException || ex is UnauthorizedAccessException)
-                && attempt < MaxAttempts - 1)
+                && attempt < BackoffMs.Length)
             {
-                Thread.Sleep(BackoffMs[attempt]);
+                // Waiting on an external OS resource (the AV/indexer handle) to be
+                // released — the legitimate use of a bounded blocking backoff on the
+                // actor's mailbox thread. Jitter spreads retries so a fixed scanner
+                // cadence cannot phase-lock with the schedule.
+                var baseMs = BackoffMs[attempt];
+                Thread.Sleep(baseMs + Random.Shared.Next(baseMs / 2 + 1));
             }
         }
     }

@@ -13,6 +13,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -825,8 +826,8 @@ internal static class SessionToolExecutionPipeline
                 // is safe. This is the provider-boundary guardrail that keeps
                 // future tools from smuggling arbitrary local bytes into the
                 // next LLM call by setting a convincing MIME string.
-                var mimeType = MimeTypeCatalog.Normalize(file.MimeType);
-                if (!MediaMimeClassifier.TryGetSupportedModelInput(mimeType, out var mediaModality, out var requiredModelModality))
+                var mimeType = file.MimeType;
+                if (!SessionMediaStore.TryGetSupportedModelInput(mimeType, out var mediaModality, out var requiredModelModality))
                 {
                     logger?.LogWarning("Model input file MIME type is not supported, skipping: {MimeType}", mimeType);
                     continue;
@@ -903,7 +904,7 @@ internal static class SessionToolExecutionPipeline
                $"\n[model input media handoff warning: {failedCount} registered media {itemText} could not be attached to the next LLM call]";
     }
 
-    private static bool IsFileMagicCompatible(string path, string mimeType)
+    private static bool IsFileMagicCompatible(string path, MimeType mimeType)
     {
         Span<byte> header = stackalloc byte[64];
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -917,7 +918,7 @@ internal static class SessionToolExecutionPipeline
         }
 
         var detected = MagicByteValidator.DetectMimeType(header[..totalRead]);
-        return string.Equals(detected, mimeType, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(MimeTypeCatalog.Normalize(detected), mimeType.Value, StringComparison.OrdinalIgnoreCase);
     }
 
     private static ToolExecutionContext BuildToolExecutionContext(

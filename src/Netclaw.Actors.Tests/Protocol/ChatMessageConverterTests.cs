@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Media;
 using Netclaw.Tools;
 using Xunit;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
@@ -319,7 +320,7 @@ public class ChatMessageConverterTests
                 new SerializableMediaReference
                 {
                     RelativePath = "test.jpg",
-                    MimeType = new Netclaw.Security.MimeType("image/jpeg"),
+                    MimeType = new Netclaw.Media.MimeType("image/jpeg"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -374,7 +375,7 @@ public class ChatMessageConverterTests
                 new SerializableMediaReference
                 {
                     RelativePath = "nonexistent.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -422,23 +423,27 @@ public class ChatMessageConverterTests
     }
 
     [Fact]
-    public void MimeToExtension_maps_common_types()
+    public void ExtensionFor_maps_common_types()
     {
-        Assert.Equal(".png", ChatMessageConverter.MimeToExtension("image/png"));
-        Assert.Equal(".jpg", ChatMessageConverter.MimeToExtension("image/jpeg"));
-        Assert.Equal(".gif", ChatMessageConverter.MimeToExtension("image/gif"));
-        Assert.Equal(".webp", ChatMessageConverter.MimeToExtension("image/webp"));
-        Assert.Equal(".mp3", ChatMessageConverter.MimeToExtension("audio/mpeg"));
-        Assert.Equal(".bin", ChatMessageConverter.MimeToExtension("application/octet-stream"));
+        Assert.Equal(".png", MimeTypeCatalog.ExtensionFor("image/png"));
+        Assert.Equal(".jpg", MimeTypeCatalog.ExtensionFor("image/jpeg"));
+        Assert.Equal(".gif", MimeTypeCatalog.ExtensionFor("image/gif"));
+        Assert.Equal(".webp", MimeTypeCatalog.ExtensionFor("image/webp"));
+        Assert.Equal(".mp3", MimeTypeCatalog.ExtensionFor("audio/mpeg"));
+        Assert.Equal(".bin", MimeTypeCatalog.ExtensionFor("application/octet-stream"));
     }
 
     [Fact]
-    public void MimeToModality_classifies_correctly()
+    public void TryGetMediaModality_classifies_correctly()
     {
-        Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/png"));
-        Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/jpeg"));
-        Assert.Equal(MediaModality.Audio, ChatMessageConverter.MimeToModality("audio/mpeg"));
-        Assert.Equal(MediaModality.Video, ChatMessageConverter.MimeToModality("video/mp4"));
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("image/png"), out var png));
+        Assert.Equal(MediaModality.Image, png);
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("image/jpeg"), out var jpeg));
+        Assert.Equal(MediaModality.Image, jpeg);
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("audio/mpeg"), out var mp3));
+        Assert.Equal(MediaModality.Audio, mp3);
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("video/mp4"), out var mp4));
+        Assert.Equal(MediaModality.Video, mp4);
     }
 
     // ── Tool call meta extraction tests ──

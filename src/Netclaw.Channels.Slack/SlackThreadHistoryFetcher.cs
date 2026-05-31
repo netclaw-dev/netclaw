@@ -9,10 +9,10 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using SlackNet;
 using SlackNet.WebApi;
-using IOFile = System.IO.File;
 
 namespace Netclaw.Channels.Slack;
 
@@ -225,7 +225,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
             if (files.Count > attachmentPolicy.MaxFilesPerMessage)
             {
                 _logger.LogWarning(
-                    "Skipping {Count} historical Slack attachments on {ChannelId}; limit is {Limit} for audience {Audience}",
+                    "Skipping {Count} historical attachments on {ChannelId}; limit is {Limit} for audience {Audience}",
                     files.Count,
                     channelId.Value,
                     attachmentPolicy.MaxFilesPerMessage,
@@ -291,41 +291,26 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     {
         var downloadUrl = file.UrlPrivateDownload ?? file.UrlPrivate!;
         var filename = file.Name ?? "attachment";
-        var mimeType = file.Mimetype ?? "application/octet-stream";
-        var category = AttachmentCategories.FromMime(mimeType);
+        var declaredMimeType = new DeclaredMimeType(file.Mimetype);
         var sourceKey = BuildHistoricalAttachmentSourceKey(file, downloadUrl);
 
-        if (!policy.Allows(category))
-        {
-            _logger.LogWarning(
-                "Historical Slack attachment {Name} rejected: category {Category} not allowed for {Audience}",
-                filename,
-                category,
-                audience);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment ({mimeType}) category not allowed in {audience}")];
-        }
-
-        if (file.Size > policy.MaxFileBytes)
-        {
-            _logger.LogWarning(
-                "Historical Slack attachment {Name} rejected: size {Size} exceeds {Limit}",
-                filename,
-                file.Size,
-                policy.MaxFileBytes);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" exceeds the {AttachmentIngressFormatting.FormatBytes(policy.MaxFileBytes)} per-file limit")];
-        }
+        if (HistoricalAttachmentIngress.CheckPreDownload(filename, declaredMimeType, file.Size, audience, policy, _logger) is { } preReject)
+            return [preReject];
 
         if (HistoricalAttachmentInbox.TryGetExistingFile(inboxDir, filename, sourceKey, out var existingPath, out var existingSize))
-            return await BuildAcceptedAttachmentContentsAsync(
-                existingPath,
-                filename,
-                mimeType,
-                category,
-                inlineImages,
-                existingSize,
-                cancellationToken);
+        {
+            // Re-scan the cached file so a cache hit goes through the same
+            // verified-MIME/verified-category gate as a fresh download — never
+            // serve the unverified declared MIME.
+            var cached = await HistoricalAttachmentIngress.ScanAndVerifyAsync(
+                _contentScanner, existingPath, filename, declaredMimeType,
+                audience, policy, ContentScanTimeout, _logger, cancellationToken);
+            return cached is HistoricalAttachmentIngress.ScanOutcome.Verified cachedOk
+                ? await AttachmentIngressFormatting.BuildAcceptedContentsAsync(
+                    existingPath, filename, cachedOk.MimeType.Value, cachedOk.Category,
+                    inlineImages, existingSize, cancellationToken)
+                : [((HistoricalAttachmentIngress.ScanOutcome.Rejected)cached).Note];
+        }
 
         AttachmentDownloadResult downloadResult;
         try
@@ -345,7 +330,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         catch (AttachmentTooLargeException ex)
         {
             _logger.LogWarning(
-                "Historical Slack attachment {Name} rejected during download: {Size} exceeds {Limit}",
+                "Historical attachment {Name} rejected during download: {Size} exceeds {Limit}",
                 filename,
                 ex.BytesReceived,
                 ex.MaxBytes);
@@ -354,13 +339,13 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         }
         catch (OperationCanceledException)
         {
-            _logger.LogWarning("Timed out downloading historical Slack attachment {Name}", filename);
+            _logger.LogWarning("Timed out downloading historical attachment {Name}", filename);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" timed out during download")];
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed downloading historical Slack attachment {Name}", filename);
+            _logger.LogWarning(ex, "Failed downloading historical attachment {Name}", filename);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" could not be downloaded")];
         }
@@ -372,36 +357,18 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" downloaded as zero bytes")];
         }
 
-        ContentScanResult scanResult;
-        try
+        var scanOutcome = await HistoricalAttachmentIngress.ScanAndVerifyAsync(
+            _contentScanner, downloadResult.FilePath, filename, declaredMimeType,
+            audience, policy, ContentScanTimeout, _logger, cancellationToken);
+        if (scanOutcome is HistoricalAttachmentIngress.ScanOutcome.Rejected rejected)
         {
-            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            scanCts.CancelAfter(ContentScanTimeout);
-            scanResult = await _contentScanner.ScanFileAsync(
-                downloadResult.FilePath,
-                filename,
-                mimeType,
-                scanCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Historical Slack attachment scan threw for {Name}", filename);
             AttachmentStagingCleanup.TryDelete(downloadResult.FilePath, _logger);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" could not be scanned")];
+            return [rejected.Note];
         }
 
-        if (!scanResult.IsAllowed)
-        {
-            _logger.LogWarning(
-                "Historical Slack attachment {Name} rejected by scanner: {Error} {Message}",
-                filename,
-                scanResult.Error?.ToString(),
-                scanResult.Message ?? string.Empty);
-            AttachmentStagingCleanup.TryDelete(downloadResult.FilePath, _logger);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" was rejected by content scanning: {AttachmentIngressFormatting.EscapeQuoted(scanResult.Message ?? scanResult.Error?.ToString() ?? "unknown error")}")];
-        }
+        var verified = (HistoricalAttachmentIngress.ScanOutcome.Verified)scanOutcome;
+        var verifiedMime = verified.MimeType;
+        var verifiedCategory = verified.Category;
 
         string inboxPath;
         try
@@ -414,48 +381,20 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to promote historical Slack attachment {Name} into inbox", filename);
+            _logger.LogWarning(ex, "Failed to promote historical attachment {Name} into inbox", filename);
             AttachmentStagingCleanup.TryDelete(downloadResult.FilePath, _logger);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(filename)}\" could not be saved to the session inbox")];
         }
 
-        return await BuildAcceptedAttachmentContentsAsync(
+        return await AttachmentIngressFormatting.BuildAcceptedContentsAsync(
             inboxPath,
             filename,
-            mimeType,
-            category,
+            verifiedMime.Value,
+            verifiedCategory,
             inlineImages,
             downloadResult.BytesWritten,
             cancellationToken);
-    }
-
-    private async Task<IReadOnlyList<AIContent>> BuildAcceptedAttachmentContentsAsync(
-        string inboxPath,
-        string filename,
-        string mimeType,
-        AttachmentCategory category,
-        bool inlineImages,
-        long size,
-        CancellationToken cancellationToken)
-    {
-        var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
-        var (inlined, note) = AttachmentIngressFormatting.ResolveInlineDecision(category, inlineImages);
-        var line = new TextContent(AttachmentIngressFormatting.BuildAttachmentLine(
-            filename,
-            mimeType,
-            size,
-            relativePath,
-            inlined,
-            note));
-
-        if (!inlined)
-        {
-            return [line];
-        }
-
-        var bytes = await IOFile.ReadAllBytesAsync(inboxPath, cancellationToken);
-        return [line, new DataContent(bytes, mimeType)];
     }
 
     private HistoricalTrustResult ResolveHistoricalTrust(SlackChannelId channelId, string senderId)
@@ -482,7 +421,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         string? Error);
 
     private static TextContent BuildHistoricalAttachmentRejected(string detail)
-        => new($"[attachment rejected: {detail}]");
+        => HistoricalAttachmentIngress.BuildRejected(detail);
 
     private static string BuildHistoricalAttachmentSourceKey(SlackNet.File file, string downloadUrl)
         => !string.IsNullOrWhiteSpace(file.Id)

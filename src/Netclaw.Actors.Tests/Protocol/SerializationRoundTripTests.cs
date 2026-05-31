@@ -190,13 +190,13 @@ public sealed class SerializationRoundTripTests : TestKit
                 new SerializableMediaReference
                 {
                     RelativePath = "abc123.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 },
                 new SerializableMediaReference
                 {
                     RelativePath = "def456.jpg",
-                    MimeType = new Netclaw.Security.MimeType("image/jpeg"),
+                    MimeType = new Netclaw.Media.MimeType("image/jpeg"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -226,7 +226,7 @@ public sealed class SerializationRoundTripTests : TestKit
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -610,7 +610,7 @@ public sealed class SerializationRoundTripTests : TestKit
         var wrapped = new SerializableMediaReference
         {
             RelativePath = "photo.png",
-            MimeType = new Netclaw.Security.MimeType("image/png"),
+            MimeType = new Netclaw.Media.MimeType("image/png"),
             Modality = (int)MediaModality.Image,
             FileSizeBytes = 4096
         };
@@ -626,7 +626,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(expected, Serialize(wrapped));
 
         var result = RoundTrip(wrapped);
-        Assert.Equal(new Netclaw.Security.MimeType("image/png"), result.MimeType);
+        Assert.Equal(new Netclaw.Media.MimeType("image/png"), result.MimeType);
     }
 
     [Fact]

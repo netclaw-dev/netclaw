@@ -3,26 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-namespace Netclaw.Configuration;
+using Netclaw.Media;
 
-/// <summary>
-/// Coarse policy classes for inbound file attachments. Channel adapters map
-/// MIME types to these classes via <see cref="AttachmentCategories.FromMime"/>,
-/// and per-audience policy allows or denies each class. Categories exist so
-/// operators can reason about attachment trust in human-friendly terms
-/// ("allow images") rather than maintaining MIME-type allowlists.
-/// Unknown or unrecognized MIME types map to <see cref="Other"/> and are
-/// fail-closed at all audiences except <c>Personal</c> by default.
-/// </summary>
-public enum AttachmentCategory
-{
-    Image,
-    Pdf,
-    Document,
-    Archive,
-    Media,
-    Other
-}
+namespace Netclaw.Configuration;
 
 /// <summary>
 /// Per-audience policy for inbound channel attachments. Channel adapters query
@@ -67,81 +50,4 @@ public sealed class ChannelAttachmentPolicy
     };
 
     public bool Allows(AttachmentCategory category) => AllowedCategories.Contains(category);
-}
-
-/// <summary>
-/// Maps MIME types to <see cref="AttachmentCategory"/>. This is the only
-/// place in the codebase that classifies MIME strings; callers that need to
-/// reason about attachment classes SHALL use <see cref="FromMime"/> rather
-/// than open-coding prefix checks.
-/// </summary>
-public static class AttachmentCategories
-{
-    public static AttachmentCategory FromMime(string? mime)
-    {
-        if (string.IsNullOrWhiteSpace(mime))
-            return AttachmentCategory.Other;
-
-        var trimmed = mime.Trim();
-        var semicolon = trimmed.IndexOf(';', StringComparison.Ordinal);
-        if (semicolon >= 0)
-            trimmed = trimmed[..semicolon].Trim();
-
-        if (trimmed.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
-            return AttachmentCategory.Image;
-
-        if (string.Equals(trimmed, "application/pdf", StringComparison.OrdinalIgnoreCase))
-            return AttachmentCategory.Pdf;
-
-        if (trimmed.StartsWith("video/", StringComparison.OrdinalIgnoreCase)
-            || trimmed.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
-            return AttachmentCategory.Media;
-
-        if (IsArchive(trimmed))
-            return AttachmentCategory.Archive;
-
-        if (IsDocument(trimmed))
-            return AttachmentCategory.Document;
-
-        return AttachmentCategory.Other;
-    }
-
-    private static bool IsArchive(string mime) => mime.ToLowerInvariant() switch
-    {
-        "application/zip" => true,
-        "application/x-zip-compressed" => true,
-        "application/gzip" => true,
-        "application/x-gzip" => true,
-        "application/x-7z-compressed" => true,
-        "application/x-bzip2" => true,
-        "application/x-xz" => true,
-        _ => false
-    };
-
-    private static bool IsDocument(string mime)
-    {
-        var lower = mime.ToLowerInvariant();
-
-        if (lower.StartsWith("text/", StringComparison.Ordinal))
-            return true;
-
-        return lower switch
-        {
-            "application/msword" => true,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => true,
-            "application/vnd.ms-excel" => true,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => true,
-            "application/vnd.ms-powerpoint" => true,
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation" => true,
-            "application/vnd.oasis.opendocument.text" => true,
-            "application/vnd.oasis.opendocument.spreadsheet" => true,
-            "application/vnd.oasis.opendocument.presentation" => true,
-            "application/rtf" => true,
-            "application/json" => true,
-            "application/xml" => true,
-            "application/x-yaml" => true,
-            "application/yaml" => true,
-            _ => false
-        };
-    }
 }

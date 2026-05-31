@@ -194,7 +194,7 @@ public abstract class SessionBindingContractTests : TestKit
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("file context") { SessionId = sid },
-            new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = new Netclaw.Security.MimeType("application/pdf") },
+            new FileOutput { SessionId = sid, FilePath = "/tmp/report.pdf", FileName = "report.pdf", MimeType = new Netclaw.Media.MimeType("application/pdf") },
             new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
         ]);
 

@@ -5,47 +5,40 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
-using Netclaw.Security;
+using Netclaw.Media;
 
 namespace Netclaw.Actors.Protocol;
 
-internal static class MediaMimeClassifier
+internal static class SessionMediaStore
 {
     public static bool TryGetMediaModality(string? mimeType, out MediaModality modality)
+        => TryGetMediaModality(new MimeType(mimeType), out modality);
+
+    public static bool TryGetMediaModality(MimeType mimeType, out MediaModality modality)
     {
-        var normalized = MimeTypeCatalog.Normalize(mimeType);
-        if (normalized.StartsWith("image/", StringComparison.Ordinal))
+        switch (MimeTypeCatalog.GetMediaKind(mimeType))
         {
-            modality = MediaModality.Image;
-            return true;
+            case MediaKind.Image:
+                modality = MediaModality.Image;
+                return true;
+            case MediaKind.Audio:
+                modality = MediaModality.Audio;
+                return true;
+            case MediaKind.Video:
+                modality = MediaModality.Video;
+                return true;
+            default:
+                modality = default;
+                return false;
         }
-
-        if (normalized.StartsWith("audio/", StringComparison.Ordinal))
-        {
-            modality = MediaModality.Audio;
-            return true;
-        }
-
-        if (normalized.StartsWith("video/", StringComparison.Ordinal))
-        {
-            modality = MediaModality.Video;
-            return true;
-        }
-
-        modality = default;
-        return false;
     }
 
     public static bool TryGetSupportedModelInput(
-        string? mimeType,
+        MimeType mimeType,
         out MediaModality mediaModality,
         out ModelModality requiredModelModality)
     {
-        if (MimeTypeCatalog.Normalize(mimeType) is
-            MimeTypeCatalog.ImagePng or
-            MimeTypeCatalog.ImageJpeg or
-            MimeTypeCatalog.ImageGif or
-            MimeTypeCatalog.ImageWebp)
+        if (MimeTypeCatalog.IsModelInputSupported(mimeType))
         {
             mediaModality = MediaModality.Image;
             requiredModelModality = ModelModality.Image;
@@ -56,10 +49,7 @@ internal static class MediaMimeClassifier
         requiredModelModality = default;
         return false;
     }
-}
 
-internal static class SessionMediaStore
-{
     public static string GetMediaPath(string sessionDir, string relativePath)
         => Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory, relativePath);
 
@@ -76,8 +66,8 @@ internal static class SessionMediaStore
         if (bytes.Length == 0)
             return null;
 
-        var mimeType = MimeTypeCatalog.Normalize(data.MediaType);
-        if (!MediaMimeClassifier.TryGetMediaModality(mimeType, out var modality))
+        var mimeType = new MimeType(data.MediaType);
+        if (!TryGetMediaModality(mimeType, out var modality))
             return null;
 
         var mediaDir = GetOrCreateMediaDirectory(sessionDir);
@@ -90,30 +80,29 @@ internal static class SessionMediaStore
     public static SerializableMediaReference CopyFile(
         string sourcePath,
         string sessionDir,
-        string mimeType,
+        MimeType mimeType,
         MediaModality modality,
         long fileSizeBytes)
     {
-        var normalizedMime = MimeTypeCatalog.Normalize(mimeType);
         var mediaDir = GetOrCreateMediaDirectory(sessionDir);
-        var fileName = CreateMediaFileName(normalizedMime);
+        var fileName = CreateMediaFileName(mimeType);
         File.Copy(sourcePath, Path.Combine(mediaDir, fileName));
 
-        return CreateReference(fileName, normalizedMime, modality, fileSizeBytes);
+        return CreateReference(fileName, mimeType, modality, fileSizeBytes);
     }
 
-    private static string CreateMediaFileName(string mimeType)
+    private static string CreateMediaFileName(MimeType mimeType)
         => $"{Guid.NewGuid():N}{MimeTypeCatalog.ExtensionFor(mimeType)}";
 
     private static SerializableMediaReference CreateReference(
         string fileName,
-        string mimeType,
+        MimeType mimeType,
         MediaModality modality,
         long fileSizeBytes)
         => new()
         {
             RelativePath = fileName,
-            MimeType = new MimeType(mimeType),
+            MimeType = mimeType,
             Modality = (int)modality,
             FileSizeBytes = fileSizeBytes
         };

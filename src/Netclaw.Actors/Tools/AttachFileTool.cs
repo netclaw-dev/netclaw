@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -85,7 +86,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 
         var rawFilename = args.DisplayName ?? Path.GetFileName(attachPath);
         var sanitizedFilename = FilenameSanitizer.Sanitize(rawFilename);
-        var mimeType = MimeTypeCatalog.FromPathExtension(attachPath) ?? MimeTypeCatalog.ApplicationOctetStream;
+        var mimeType = MimeTypeCatalog.FromPathExtension(attachPath) ?? MimeType.Default;
 
         context.AddFileAttachment(attachPath, sanitizedFilename, mimeType);
         var copiedText = string.Equals(attachPath, resolvedPath, StringComparison.Ordinal)

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Media;
 using System.Text;
 
 namespace Netclaw.Channels;
@@ -42,7 +43,7 @@ public static class ThreadHistoryContentMerger
                         if (hasAttachmentAnnouncement)
                             break;
 
-                        if (data.MediaType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true)
+                        if (MimeTypeCatalog.GetMediaKind(data.MediaType) == MediaKind.Image)
                         {
                             imageCount++;
                         }

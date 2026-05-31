@@ -133,6 +133,25 @@ installers also support `--dry-run` / `-DryRun` on their own — they report
 which binary *would* be installed for the current platform without
 touching the system.
 
+## Logging Conventions
+
+- Carry cross-cutting identity (channel/adapter, session, entity ids) as
+  **structured context via `ILoggingAdapter.WithContext(...)`**, set once where
+  the logger is created — not baked into each message template. Actors already
+  do this (e.g. `Context.GetLogger().WithContext("Adapter", "slack")`).
+- Do **not** prefix the channel/adapter into the message text
+  (`slack_attachment_rejected …`). Emit a plain semantic event
+  (`attachment_rejected …`); the `Adapter` context disambiguates the source.
+  Prefixing double-stamps what the context already carries and forces shared
+  code to take a channel-name parameter purely for logging.
+- Shared/abstracted helpers that take an `ILoggingAdapter` should rely on the
+  caller's enriched context rather than re-passing identity strings.
+- For `Microsoft.Extensions.Logging` (`ILogger<T>`) call sites, the logger
+  **category** already identifies the type; prefer that (or `BeginScope`) over
+  repeating the class/channel name in the message.
+
+See `getakka.net` → Utilities → Logging → "Context enrichment and scopes".
+
 ## Source Control and CI Signals
 
 - `git` repository with active `dev` branch

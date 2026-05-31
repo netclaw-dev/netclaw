@@ -12,6 +12,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+    <ProjectReference Include="..\Netclaw.Media\Netclaw.Media.csproj" />
   </ItemGroup>
 
 </Project>

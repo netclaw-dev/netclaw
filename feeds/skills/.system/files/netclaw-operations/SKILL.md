@@ -592,14 +592,16 @@ configured notification target.
 
 ## Inbound Attachments
 
-When a user sends a file in Slack, Netclaw runs the attachment through an
-ingress pipeline before it reaches the LLM:
+When a user sends a file in Slack, Discord, or Mattermost, Netclaw runs the
+attachment through an ingress pipeline before it reaches the LLM:
 
-1. **Policy gate** — checks audience, file category, and per-message file count
+1. **Policy gate** — uses declared MIME plus filename extension for a provisional
+   catalog-backed category, then checks audience and per-message file count
    against `ChannelAttachmentPolicy`
 2. **Size gate** — rejects files above the per-audience byte limit
 3. **Download** — fetches from Slack's private file API with bot-token auth
-4. **Content scan** — runs the configured `IContentScanner` (e.g. antivirus)
+4. **Content scan** — runs the configured `IContentScanner` and produces a
+   scanner-verified canonical MIME type
 5. **Inbox write** — saves to `~/.netclaw/sessions/{session-id}/inbox/`
 6. **Announcement line** — appends `[attachment]` text to the user turn
 
@@ -611,6 +613,13 @@ The `[attachment]` line format is:
 `inlined="true"` means the file bytes were forwarded to the model as
 `DataContent` (currently image files on image-capable models). `inlined="false"`
 means the model only sees the path reference.
+
+Declared transport MIME is metadata, not proof. Attachment announcements,
+inlined `DataContent`, and model-input handoff use the scanner-verified MIME.
+Unknown image/audio/video subtypes do not get privileged categories by prefix;
+they must be explicitly present in the media catalog. OpenAI-compatible
+providers only serialize image `DataContent` through `image_url` and fail loudly
+if non-image bytes reach that boundary.
 
 `file_read` follows the same file taxonomy as chat attachments. It reads
 text-like files directly, including UTF-8, UTF-16/UTF-32 Unicode text, and

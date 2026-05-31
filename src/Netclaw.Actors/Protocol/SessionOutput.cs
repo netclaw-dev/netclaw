@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 

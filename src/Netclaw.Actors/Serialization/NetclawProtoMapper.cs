@@ -10,6 +10,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Media;
 using Proto = Netclaw.Actors.Serialization.Proto;
 
 namespace Netclaw.Actors.Serialization;
@@ -70,7 +71,7 @@ internal static class NetclawProtoMapper
     internal static SerializableMediaReference FromProto(Proto.SerializableMediaReferenceProto proto) => new()
     {
         RelativePath = proto.RelativePath,
-        MimeType = new Netclaw.Security.MimeType(proto.MimeType),
+        MimeType = new MimeType(proto.MimeType),
         Modality = proto.Modality,
         FileSizeBytes = proto.FileSizeBytes
     };

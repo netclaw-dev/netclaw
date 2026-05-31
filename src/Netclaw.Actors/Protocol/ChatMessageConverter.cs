@@ -6,7 +6,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
-using Netclaw.Security;
+using Netclaw.Media;
 using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -184,15 +184,6 @@ public static class ChatMessageConverter
         };
     }
 
-    internal static string MimeToExtension(string mimeType) => MimeTypeCatalog.ExtensionFor(mimeType);
-
-    internal static MediaModality MimeToModality(string mimeType)
-    {
-        if (MediaMimeClassifier.TryGetMediaModality(mimeType, out var modality))
-            return modality;
-
-        throw new ArgumentException($"Unsupported media MIME type: {mimeType}", nameof(mimeType));
-    }
 
     internal static (ToolCallMeta? Meta, IDictionary<string, object?>? CleanArgs) ExtractMeta(
         IDictionary<string, object?>? arguments) => ToolCallMeta.ExtractFrom(arguments);

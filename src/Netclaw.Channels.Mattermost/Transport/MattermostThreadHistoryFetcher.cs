@@ -13,6 +13,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using IOFile = System.IO.File;
 
@@ -201,7 +202,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             if (message.Attachments.Count > attachmentPolicy.MaxFilesPerMessage)
             {
                 _logger.LogWarning(
-                    "Skipping {Count} historical Mattermost attachments on thread {RootPostId}; limit is {Limit} for audience {Audience}",
+                    "Skipping {Count} historical attachments on thread {RootPostId}; limit is {Limit} for audience {Audience}",
                     message.Attachments.Count,
                     rootPostId.Value,
                     attachmentPolicy.MaxFilesPerMessage,
@@ -260,45 +261,31 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         string stagingDir,
         CancellationToken cancellationToken)
     {
-        var category = AttachmentCategories.FromMime(file.MimeType);
+        var declaredMimeType = new DeclaredMimeType(file.MimeType);
         var sourceKey = BuildHistoricalAttachmentSourceKey(messageId, file);
 
-        if (!policy.Allows(category))
-        {
-            _logger.LogWarning(
-                "Historical Mattermost attachment {Name} rejected: category {Category} not allowed for {Audience}",
-                file.Name,
-                category,
-                audience);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment ({file.MimeType}) category not allowed in {audience}")];
-        }
-
-        if (file.Size > policy.MaxFileBytes)
-        {
-            _logger.LogWarning(
-                "Historical Mattermost attachment {Name} rejected: size {Size} exceeds {Limit}",
-                file.Name,
-                file.Size,
-                policy.MaxFileBytes);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" exceeds the {AttachmentIngressFormatting.FormatBytes(policy.MaxFileBytes)} per-file limit")];
-        }
+        if (HistoricalAttachmentIngress.CheckPreDownload(file.Name, declaredMimeType, file.Size, audience, policy, _logger) is { } preReject)
+            return [preReject];
 
         if (HistoricalAttachmentInbox.TryGetExistingFile(inboxDir, file.Name, sourceKey, out var existingPath, out var existingSize))
-            return await BuildAcceptedAttachmentContentsAsync(
-                existingPath,
-                file.Name,
-                file.MimeType,
-                category,
-                inlineImages,
-                existingSize,
-                cancellationToken);
+        {
+            // Re-scan the cached file so a cache hit goes through the same
+            // verified-MIME/verified-category gate as a fresh download — never
+            // serve the unverified declared MIME.
+            var cached = await HistoricalAttachmentIngress.ScanAndVerifyAsync(
+                _contentScanner, existingPath, file.Name, declaredMimeType,
+                audience, policy, ContentScanTimeout, _logger, cancellationToken);
+            return cached is HistoricalAttachmentIngress.ScanOutcome.Verified cachedOk
+                ? await AttachmentIngressFormatting.BuildAcceptedContentsAsync(
+                    existingPath, file.Name, cachedOk.MimeType.Value, cachedOk.Category,
+                    inlineImages, existingSize, cancellationToken)
+                : [((HistoricalAttachmentIngress.ScanOutcome.Rejected)cached).Note];
+        }
 
         if (!MattermostAttachmentUrlTrust.IsAllowedAttachmentUrl(file.Url, _serverUrl))
         {
             _logger.LogWarning(
-                "Historical Mattermost attachment {Name} rejected: untrusted URL {Url}",
+                "Historical attachment {Name} rejected: untrusted URL {Url}",
                 file.Name,
                 file.Url);
             return [BuildHistoricalAttachmentRejected(
@@ -310,7 +297,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         if (fileId is null)
         {
             _logger.LogWarning(
-                "Historical Mattermost attachment {Name} rejected: could not extract file ID from URL {Url}",
+                "Historical attachment {Name} rejected: could not extract file ID from URL {Url}",
                 file.Name, file.Url);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" has an unrecognized URL format")];
@@ -325,13 +312,13 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         }
         catch (OperationCanceledException)
         {
-            _logger.LogWarning("Timed out downloading historical Mattermost attachment {Name}", file.Name);
+            _logger.LogWarning("Timed out downloading historical attachment {Name}", file.Name);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" timed out during download")];
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed downloading historical Mattermost attachment {Name}", file.Name);
+            _logger.LogWarning(ex, "Failed downloading historical attachment {Name}", file.Name);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" could not be downloaded")];
         }
@@ -349,43 +336,25 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         if (bytesWritten > policy.MaxFileBytes)
         {
             _logger.LogWarning(
-                "Historical Mattermost attachment {Name} rejected during download: {Size} exceeds {Limit}",
+                "Historical attachment {Name} rejected during download: {Size} exceeds {Limit}",
                 file.Name, bytesWritten, policy.MaxFileBytes);
             AttachmentStagingCleanup.TryDelete(stagedPath, _logger);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" exceeded the {AttachmentIngressFormatting.FormatBytes(policy.MaxFileBytes)} per-file limit during download")];
         }
 
-        ContentScanResult scanResult;
-        try
+        var scanOutcome = await HistoricalAttachmentIngress.ScanAndVerifyAsync(
+            _contentScanner, stagedPath, file.Name, declaredMimeType,
+            audience, policy, ContentScanTimeout, _logger, cancellationToken);
+        if (scanOutcome is HistoricalAttachmentIngress.ScanOutcome.Rejected rejected)
         {
-            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            scanCts.CancelAfter(ContentScanTimeout);
-            scanResult = await _contentScanner.ScanFileAsync(
-                stagedPath,
-                file.Name,
-                file.MimeType,
-                scanCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Historical Mattermost attachment scan threw for {Name}", file.Name);
             AttachmentStagingCleanup.TryDelete(stagedPath, _logger);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" could not be scanned")];
+            return [rejected.Note];
         }
 
-        if (!scanResult.IsAllowed)
-        {
-            _logger.LogWarning(
-                "Historical Mattermost attachment {Name} rejected by scanner: {Error} {Message}",
-                file.Name,
-                scanResult.Error?.ToString(),
-                scanResult.Message ?? string.Empty);
-            AttachmentStagingCleanup.TryDelete(stagedPath, _logger);
-            return [BuildHistoricalAttachmentRejected(
-                $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" was rejected by content scanning: {AttachmentIngressFormatting.EscapeQuoted(scanResult.Message ?? scanResult.Error?.ToString() ?? "unknown error")}")];
-        }
+        var verified = (HistoricalAttachmentIngress.ScanOutcome.Verified)scanOutcome;
+        var verifiedMime = verified.MimeType;
+        var verifiedCategory = verified.Category;
 
         string inboxPath;
         try
@@ -398,48 +367,20 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to promote historical Mattermost attachment {Name} into inbox", file.Name);
+            _logger.LogWarning(ex, "Failed to promote historical attachment {Name} into inbox", file.Name);
             AttachmentStagingCleanup.TryDelete(stagedPath, _logger);
             return [BuildHistoricalAttachmentRejected(
                 $"historical attachment \"{AttachmentIngressFormatting.EscapeQuoted(file.Name)}\" could not be saved to the session inbox")];
         }
 
-        return await BuildAcceptedAttachmentContentsAsync(
+        return await AttachmentIngressFormatting.BuildAcceptedContentsAsync(
             inboxPath,
             file.Name,
-            file.MimeType,
-            category,
+            verifiedMime.Value,
+            verifiedCategory,
             inlineImages,
             bytesWritten,
             cancellationToken);
-    }
-
-    private async Task<IReadOnlyList<AIContent>> BuildAcceptedAttachmentContentsAsync(
-        string inboxPath,
-        string filename,
-        string mimeType,
-        AttachmentCategory category,
-        bool inlineImages,
-        long size,
-        CancellationToken cancellationToken)
-    {
-        var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
-        var (inlined, note) = AttachmentIngressFormatting.ResolveInlineDecision(category, inlineImages);
-        var line = new TextContent(AttachmentIngressFormatting.BuildAttachmentLine(
-            filename,
-            mimeType,
-            size,
-            relativePath,
-            inlined,
-            note));
-
-        if (!inlined)
-        {
-            return [line];
-        }
-
-        var bytes = await IOFile.ReadAllBytesAsync(inboxPath, cancellationToken);
-        return [line, new DataContent(bytes, mimeType)];
     }
 
     private AudienceResult ResolveHistoricalAudience(MattermostChannelId channelId)
@@ -613,7 +554,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         => !string.IsNullOrWhiteSpace(post.Text) || post.FileIdentifiers.Count > 0;
 
     private static TextContent BuildHistoricalAttachmentRejected(string detail)
-        => new($"[attachment rejected: {detail}]");
+        => HistoricalAttachmentIngress.BuildRejected(detail);
 
     private static string BuildHistoricalAttachmentSourceKey(string messageId, MattermostFileReference file)
         => $"mattermost:{messageId}:{file.Url}";

@@ -917,7 +917,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                 FilePath = file.FilePath,
                 FileName = file.FileName,
-                MimeType = new Netclaw.Security.MimeType(file.MimeType)
+                MimeType = file.MimeType
             }, OutputFilter.Files);
         }
 
@@ -4364,7 +4364,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TimestampMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
                 FilePath = file.FilePath,
                 FileName = file.FileName,
-                MimeType = new Netclaw.Security.MimeType(file.MimeType)
+                MimeType = file.MimeType
             }, OutputFilter.Files);
         }
 

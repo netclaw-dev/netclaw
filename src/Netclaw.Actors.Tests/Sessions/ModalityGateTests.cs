@@ -73,7 +73,7 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -122,7 +122,7 @@ public class ModalityGateTextOnlyTests : LlmSessionTestBase
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -195,7 +195,7 @@ public class ModalityGateVisionTests : LlmSessionTestBase
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]

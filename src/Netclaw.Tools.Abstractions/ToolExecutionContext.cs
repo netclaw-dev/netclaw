@@ -4,18 +4,19 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Media;
 
 namespace Netclaw.Tools;
 
 /// <summary>
 /// Describes a file a tool wants to add to the next LLM call as model input.
 /// </summary>
-public sealed record ModelInputFileInfo(string FilePath, string FileName, string MimeType);
+public sealed record ModelInputFileInfo(string FilePath, string FileName, MimeType MimeType);
 
 /// <summary>
 /// Describes a file attachment registered by a tool during execution.
 /// </summary>
-public sealed record FileAttachmentInfo(string FilePath, string FileName, string MimeType);
+public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeType MimeType);
 
 /// <summary>
 /// Lightweight subagent activity notification for the tools abstraction layer.
@@ -248,6 +249,9 @@ public sealed class ToolExecutionContext
     /// Register a file attachment to be emitted as <c>FileOutput</c> after tool execution.
     /// </summary>
     public void AddFileAttachment(string filePath, string fileName, string mimeType)
+        => AddFileAttachment(filePath, fileName, new MimeType(mimeType));
+
+    public void AddFileAttachment(string filePath, string fileName, MimeType mimeType)
     {
         _fileAttachments ??= [];
         _fileAttachments.Add(new FileAttachmentInfo(filePath, fileName, mimeType));
@@ -257,6 +261,9 @@ public sealed class ToolExecutionContext
     /// Register a file to be copied into session media and supplied to the model.
     /// </summary>
     public void AddModelInputFile(string filePath, string fileName, string mimeType)
+        => AddModelInputFile(filePath, fileName, new MimeType(mimeType));
+
+    public void AddModelInputFile(string filePath, string fileName, MimeType mimeType)
     {
         _modelInputFiles ??= [];
         _modelInputFiles.Add(new ModelInputFileInfo(filePath, fileName, mimeType));

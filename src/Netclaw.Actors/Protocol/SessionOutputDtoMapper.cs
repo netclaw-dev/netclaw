@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Media;
+
 namespace Netclaw.Actors.Protocol;
 
 /// <summary>
@@ -279,7 +281,7 @@ public static class SessionOutputDtoMapper
                 TimestampMs = dto.TimestampMs,
                 FilePath = dto.FilePath ?? string.Empty,
                 FileName = dto.FileName ?? "file",
-                MimeType = new Netclaw.Security.MimeType(dto.MimeType)
+                MimeType = new MimeType(dto.MimeType)
             },
             SessionOutputTypes.SubAgent => new SubAgentOutput
             {

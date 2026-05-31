@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
+    <ProjectReference Include="../Netclaw.Media/Netclaw.Media.csproj" />
     <ProjectReference Include="../Netclaw.Providers/Netclaw.Providers.csproj" />
     <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj" />
   </ItemGroup>

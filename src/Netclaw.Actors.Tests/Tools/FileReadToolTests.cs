@@ -111,7 +111,7 @@ public class FileReadToolTests : IDisposable
         var modelInput = Assert.Single(context.ModelInputFiles);
         Assert.Equal(filePath, modelInput.FilePath);
         Assert.Equal("diagram.png", modelInput.FileName);
-        Assert.Equal("image/png", modelInput.MimeType);
+        Assert.Equal("image/png", modelInput.MimeType.Value);
     }
 
     [Fact]

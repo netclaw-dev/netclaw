@@ -206,7 +206,7 @@ public class SessionStateTests
         var media = new SerializableMediaReference
         {
             RelativePath = "image.png",
-            MimeType = new Netclaw.Security.MimeType("image/png"),
+            MimeType = new Netclaw.Media.MimeType("image/png"),
             Modality = (int)MediaModality.Image,
             FileSizeBytes = 16
         };

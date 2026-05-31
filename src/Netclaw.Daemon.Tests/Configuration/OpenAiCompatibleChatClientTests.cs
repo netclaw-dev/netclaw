@@ -291,6 +291,19 @@ data: [DONE]
     }
 
     [Fact]
+    public void ToMessage_NonImageDataContent_ThrowsBeforeImageUrlSerialization()
+    {
+        var msg = new ChatMessage(ChatRole.User,
+        [
+            new DataContent(new byte[] { 1, 2, 3 }, "application/pdf")
+        ]);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => OpenAiCompatibleChatClient.ToMessage(msg));
+        Assert.Contains("only supports image DataContent", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("application/pdf", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ToMessage_TextOnly_ProducesSimpleStringContent()
     {
         var msg = new ChatMessage(ChatRole.User, "hello world");
