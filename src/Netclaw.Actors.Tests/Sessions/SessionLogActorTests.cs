@@ -53,13 +53,13 @@ public sealed class SessionLogActorTests : TestKit
 
     /// <summary>
     /// Reads a session log file with the same permissive share mask the writer
-    /// (<see cref="SessionLogFile.AppendLine"/>) uses. A plain
+    /// (<see cref="SessionLogActor"/>) uses. A plain
     /// <see cref="File.ReadAllTextAsync(string, System.Threading.CancellationToken)"/>
     /// opens with <see cref="FileShare.Read"/>, which on Windows denies the
     /// actor's concurrent <see cref="FileAccess.Write"/> append open and can
-    /// starve <c>AppendLine</c>'s bounded retry budget until an audit line is
-    /// silently dropped — making the polling assertion unsatisfiable. Matching
-    /// the writer's mask lets reader and writer coexist.
+    /// starve the writer's I/O until an audit line is silently dropped —
+    /// making the polling assertion unsatisfiable. Matching the writer's mask
+    /// lets reader and writer coexist.
     /// </summary>
     private static async Task<string> ReadLogAsync(string path, CancellationToken cancellationToken)
     {
