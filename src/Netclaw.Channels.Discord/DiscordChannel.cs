@@ -30,6 +30,7 @@ public sealed class DiscordChannel : IChannel
     private readonly TimeProvider _timeProvider;
     private readonly DiscordChannelOptions _options;
     private readonly ILogger<DiscordChannel> _logger;
+
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
     private readonly NetclawPaths _paths;
@@ -120,7 +121,7 @@ public sealed class DiscordChannel : IChannel
     {
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Discord channel disabled by configuration.");
+            _logger.LogInformation("Channel disabled by configuration.");
             return;
         }
 
@@ -149,7 +150,7 @@ public sealed class DiscordChannel : IChannel
             EnsureGatewayReadyAfterConnect(gatewaySnapshot);
             CompleteConnectionSetup(gatewaySnapshot.BotUserId);
             _connectFailureDetail = null;
-            _logger.LogInformation("Discord channel connected.");
+            _logger.LogInformation("Channel connected.");
         }
         catch (Exception ex)
         {
@@ -266,7 +267,7 @@ public sealed class DiscordChannel : IChannel
     private Task HandleCleanReconnectRequiredAsync(string reason)
     {
         _connectFailureDetail = reason;
-        _logger.LogWarning("Discord gateway requested clean reconnect: {Reason}", reason);
+        _logger.LogWarning("Gateway requested clean reconnect: {Reason}", reason);
         StartReconnectLoop(initialDelay: TimeSpan.Zero);
         return Task.CompletedTask;
     }
@@ -311,7 +312,7 @@ public sealed class DiscordChannel : IChannel
                 EnsureGatewayReadyAfterConnect(gatewaySnapshot);
                 CompleteConnectionSetup(gatewaySnapshot.BotUserId);
                 _connectFailureDetail = null;
-                _logger.LogInformation("Discord channel reconnected after a transient failure.");
+                _logger.LogInformation("Channel reconnected after a transient failure.");
 
                 if (Interlocked.Exchange(ref _queuedCleanReconnect, 0) == 1)
                 {

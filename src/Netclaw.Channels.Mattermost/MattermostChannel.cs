@@ -29,6 +29,7 @@ public sealed class MattermostChannel : IChannel
     private readonly TimeProvider _timeProvider;
     private readonly MattermostChannelOptions _options;
     private readonly ILogger<MattermostChannel> _logger;
+
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
     private readonly NetclawPaths _paths;
@@ -109,7 +110,7 @@ public sealed class MattermostChannel : IChannel
     {
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Mattermost channel disabled by configuration.");
+            _logger.LogInformation("Channel disabled by configuration.");
             return;
         }
 
@@ -146,7 +147,7 @@ public sealed class MattermostChannel : IChannel
             await _gatewayClient.ConnectAsync(serverUrl, botToken, cancellationToken);
             CompleteConnectionSetup(serverUrl);
             _connectFailureDetail = null;
-            _logger.LogInformation("Mattermost channel connected.");
+            _logger.LogInformation("Channel connected.");
         }
         catch (Exception ex)
         {
@@ -279,7 +280,7 @@ public sealed class MattermostChannel : IChannel
                 await _gatewayClient.ConnectAsync(_options.ServerUrl, _options.BotToken.Value, cancellationToken);
                 CompleteConnectionSetup(_options.ServerUrl);
                 _connectFailureDetail = null;
-                _logger.LogInformation("Mattermost channel reconnected after a transient failure.");
+                _logger.LogInformation("Channel reconnected after a transient failure.");
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

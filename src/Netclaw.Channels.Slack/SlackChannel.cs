@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackChannel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -38,6 +38,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly TimeProvider _timeProvider;
     private readonly SlackChannelOptions _options;
     private readonly ILogger<SlackChannel> _logger;
+
     private readonly IThreadHistoryFetcher _threadHistoryFetcher;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
@@ -147,7 +148,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     {
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Slack channel disabled by configuration.");
+            _logger.LogInformation("Channel disabled by configuration.");
             return;
         }
 
@@ -189,13 +190,13 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         try
         {
             await ConnectCoreAsync(cancellationToken);
-            _logger.LogInformation("Slack channel connected as user {BotUserId}.", _botUserId);
+            _logger.LogInformation("Channel connected as user {BotUserId}.", _botUserId);
         }
         catch (Exception ex)
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogInformation("Slack channel connect cancelled during shutdown.");
+                _logger.LogInformation("Channel connect cancelled during shutdown.");
                 return;
             }
 
@@ -328,7 +329,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             try
             {
                 await ConnectCoreAsync(cancellationToken);
-                _logger.LogInformation("Slack channel reconnected after a transient failure.");
+                _logger.LogInformation("Channel reconnected after a transient failure.");
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
