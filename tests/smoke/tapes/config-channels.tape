@@ -58,6 +58,16 @@ Type "U09"
 Enter
 Wait+Screen@10s /Allowed users staged/
 
+# Rotate credentials using typed input, not paste.
+Down 2
+Enter
+Wait+Screen@10s /Slack > Credentials/
+Type "xoxb-smoke-typed"
+Tab
+Type "xapp-smoke-typed"
+Enter
+Wait+Screen@10s /Credential changes staged/
+
 # Return to picker and save.
 Escape
 Wait+Screen@10s /Which channels would you like to connect/

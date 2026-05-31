@@ -36,8 +36,8 @@ assert_field '.Slack.AllowDirectMessages' 'false' "$config_json" || :
 assert_field '.Slack.ChannelAudiences.C01' 'public' "$config_json" || :
 assert_field '.Slack.ChannelAudiences.C02' 'team' "$config_json" || :
 assert_field '.Slack.ChannelAudiences.C09' 'team' "$config_json" || :
-assert_field '.Slack.BotToken' 'xoxb-test' "$secrets_json" || :
-assert_field '.Slack.AppToken' 'xapp-test' "$secrets_json" || :
+assert_field '(.Slack.BotToken | startswith("ENC:"))' 'true' "$secrets_json" || :
+assert_field '(.Slack.AppToken | startswith("ENC:"))' 'true' "$secrets_json" || :
 
 if (( assert_fail )); then
   printf -- '--- netclaw.json contents ---\n%s\n' "$config_json" >&2

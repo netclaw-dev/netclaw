@@ -23,6 +23,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private readonly NetclawPaths _paths;
     private readonly TuiNavigation? _navigation;
     private readonly ChannelsConfigPersistenceMapper _mapper = new();
+    private readonly ChannelsEditorValidationAdapter _validator = new();
     private readonly WizardContext _context;
     private readonly HashSet<ChannelType> _knownProviders;
     private readonly Dictionary<ChannelType, Dictionary<string, TrustAudience>> _channelAudiences = [];
@@ -152,10 +153,10 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     public void Save()
     {
-        var validationMessage = _mapper.Validate(Step);
-        if (validationMessage is not null)
+        var validation = ValidateCurrentStep();
+        if (validation.HasErrors)
         {
-            Status.Value = new ConfigStatusMessage(validationMessage, ConfigStatusTone.Error);
+            Status.Value = BuildValidationErrorStatus(validation, "Fix channel validation errors before saving.");
             RequestRedraw();
             return;
         }
@@ -575,6 +576,14 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal void ApplyCredentials()
     {
+        var issue = ValidateCredentialDrafts();
+        if (issue is not null)
+        {
+            Status.Value = new ConfigStatusMessage(issue.Message, ConfigStatusTone.Error);
+            NotifyContentChanged();
+            return;
+        }
+
         switch (_activeAdapterType)
         {
             case ChannelType.Slack:
@@ -596,6 +605,71 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
         Status.Value = new ConfigStatusMessage("Credential changes staged. Press d to save.", ConfigStatusTone.Neutral);
         NotifyContentChanged();
+    }
+
+    private ChannelsEditorValidationResult ValidateCurrentStep()
+        => _validator.Validate(ChannelsEditorModel.FromStep(Step));
+
+    private ChannelsEditorValidationIssue? ValidateCredentialDrafts()
+    {
+        var candidate = ChannelsEditorModel.FromStep(Step);
+        ApplyCredentialDrafts(candidate);
+        var validation = _validator.Validate(candidate);
+        var activeFieldPaths = GetCredentialFieldPaths(_activeAdapterType);
+        return validation.Issues.FirstOrDefault(issue => issue.FieldId is null || activeFieldPaths.Contains(issue.FieldId));
+    }
+
+    private void ApplyCredentialDrafts(ChannelsEditorModel model)
+    {
+        switch (_activeAdapterType)
+        {
+            case ChannelType.Slack:
+                model.Slack.Enabled = true;
+                model.Slack.BotTokenDraft = Normalize(BotTokenInput);
+                model.Slack.AppTokenDraft = Normalize(AppTokenInput);
+                break;
+            case ChannelType.Discord:
+                model.Discord.Enabled = true;
+                model.Discord.BotTokenDraft = Normalize(BotTokenInput);
+                break;
+            case ChannelType.Mattermost:
+                model.Mattermost.Enabled = true;
+                model.Mattermost.ServerUrl = Normalize(ServerUrlInput);
+                model.Mattermost.BotTokenDraft = Normalize(BotTokenInput);
+                model.Mattermost.CallbackUrl = Normalize(CallbackUrlInput);
+                break;
+        }
+    }
+
+    private static IReadOnlySet<string> GetCredentialFieldPaths(ChannelType type)
+        => type switch
+        {
+            ChannelType.Slack => new HashSet<string>(StringComparer.Ordinal)
+            {
+                ChannelsEditorFieldPaths.SlackBotToken,
+                ChannelsEditorFieldPaths.SlackAppToken,
+            },
+            ChannelType.Discord => new HashSet<string>(StringComparer.Ordinal)
+            {
+                ChannelsEditorFieldPaths.DiscordBotToken,
+            },
+            ChannelType.Mattermost => new HashSet<string>(StringComparer.Ordinal)
+            {
+                ChannelsEditorFieldPaths.MattermostServerUrl,
+                ChannelsEditorFieldPaths.MattermostBotToken,
+                ChannelsEditorFieldPaths.MattermostCallbackUrl,
+            },
+            _ => new HashSet<string>(StringComparer.Ordinal),
+        };
+
+    private static ConfigStatusMessage BuildValidationErrorStatus(
+        ChannelsEditorValidationResult validation,
+        string fallbackMessage)
+    {
+        var issue = validation.Issues.FirstOrDefault();
+        return issue is null
+            ? new ConfigStatusMessage(fallbackMessage, ConfigStatusTone.Error)
+            : new ConfigStatusMessage(issue.Message, ConfigStatusTone.Error);
     }
 
     internal void MoveResetConfirmation(int delta)
@@ -1090,42 +1164,6 @@ internal sealed class ChannelsConfigPersistenceMapper
             draft.Mattermost.IsKnown);
     }
 
-    internal string? Validate(ChannelPickerStepViewModel step)
-    {
-        var slack = step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-        if (step.IsAdapterEnabled(ChannelType.Slack))
-        {
-            if (!HasEffectiveSecret(slack.BotToken, slack.HasPersistedBotToken))
-                return "Slack bot token is required.";
-            if (!HasEffectiveSecret(slack.AppToken, slack.HasPersistedAppToken))
-                return "Slack Socket Mode app token is required.";
-            if (!string.IsNullOrWhiteSpace(slack.BotToken)
-                && !slack.BotToken.StartsWith("xoxb-", StringComparison.OrdinalIgnoreCase))
-                return "Slack bot token must start with xoxb-.";
-            if (!string.IsNullOrWhiteSpace(slack.AppToken)
-                && !slack.AppToken.StartsWith("xapp-", StringComparison.OrdinalIgnoreCase))
-                return "Slack app token must start with xapp-.";
-        }
-
-        var discord = step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-        if (step.IsAdapterEnabled(ChannelType.Discord)
-            && !HasEffectiveSecret(discord.BotToken, discord.HasPersistedBotToken))
-            return "Discord bot token is required.";
-
-        var mattermost = step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-        if (step.IsAdapterEnabled(ChannelType.Mattermost))
-        {
-            if (string.IsNullOrWhiteSpace(mattermost.ServerUrl))
-                return "Mattermost server URL is required.";
-            if (!Uri.TryCreate(mattermost.ServerUrl, UriKind.Absolute, out _))
-                return "Mattermost server URL must be an absolute URL.";
-            if (!HasEffectiveSecret(mattermost.BotToken, mattermost.HasPersistedBotToken))
-                return "Mattermost bot token is required.";
-        }
-
-        return null;
-    }
-
     internal SectionContribution BuildContribution(
         ChannelPickerStepViewModel step,
         IReadOnlySet<ChannelType> knownProviders,
@@ -1586,9 +1624,6 @@ internal sealed class ChannelsConfigPersistenceMapper
 
         return string.Join(", ", parts);
     }
-
-    private static bool HasEffectiveSecret(string? draftValue, bool hasPersistedSecret)
-        => !string.IsNullOrWhiteSpace(draftValue) || hasPersistedSecret;
 
     private static void AddKnownProvider(HashSet<ChannelType> knownProviders, ChannelType type, bool isKnown)
     {

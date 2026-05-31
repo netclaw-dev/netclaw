@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui.Config;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -91,13 +92,20 @@ public sealed class DiscordStepView : IWizardStepView
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                    {
+                        callbacks.ClearStatusMessage();
                         callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.DiscordBotTokenRequired);
+                    }
 
-                    callbacks.RequestRedraw();
                     return;
                 }
 
                 vm.BotToken = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);

@@ -53,6 +53,26 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Channels_editor_validator_maps_static_errors_to_fields()
+    {
+        var model = new ChannelsEditorModel
+        {
+            Slack =
+            {
+                Enabled = true,
+                BotTokenDraft = "not-a-slack-token",
+                HasPersistedAppToken = true,
+            }
+        };
+        var validator = new ChannelsEditorValidationAdapter();
+
+        var result = validator.Validate(model);
+
+        var issue = Assert.Single(result.IssuesFor(ChannelsEditorFieldPaths.SlackBotToken));
+        Assert.Equal(ChannelsEditorValidationMessages.SlackBotTokenPrefix, issue.Message);
+    }
+
+    [Fact]
     public void Existing_config_prefills_picker_and_adapter_drafts()
     {
         WriteChannelConfig();

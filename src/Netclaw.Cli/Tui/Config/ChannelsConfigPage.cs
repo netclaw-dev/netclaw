@@ -389,9 +389,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         if (TryOpenConfiguredAdapter(keyInfo))
             return true;
 
-        if (!ViewModel.IsSaved.Value
-            && ViewModel.StepView.CapturesInput
-            && ViewModel.StepView.HandleKeyPress(new KeyPressed(keyInfo)))
+        if (!ViewModel.IsSaved.Value && ViewModel.StepView.HandleKeyPress(new KeyPressed(keyInfo)))
         {
             ViewModel.RequestRedraw();
             return true;
@@ -652,6 +650,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             InvalidateHelp = () => _helpTextNode?.Invalidate(),
             AdvanceStep = ViewModel.GoNext,
             RequestRedraw = ViewModel.RequestRedraw,
+            SetStatusMessage = message => ViewModel.Status.Value = new ConfigStatusMessage(message, ConfigStatusTone.Error),
         };
 
     private void InvalidateAll()

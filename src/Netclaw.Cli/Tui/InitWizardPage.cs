@@ -387,6 +387,7 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             InvalidateHelp = () => _helpTextNode?.Invalidate(),
             AdvanceStep = () => ViewModel.GoNext(),
             RequestRedraw = ViewModel.RequestRedraw,
+            SetStatusMessage = message => ViewModel.Context.StatusMessage.Value = message,
         };
     }
 

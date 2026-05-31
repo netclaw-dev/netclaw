@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui.Config;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -93,18 +94,25 @@ public sealed class SlackStepView : IWizardStepView
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                    {
+                        callbacks.ClearStatusMessage();
                         callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackBotTokenRequired);
+                    }
 
-                    callbacks.RequestRedraw();
                     return;
                 }
 
                 if (!text.StartsWith("xoxb-", StringComparison.OrdinalIgnoreCase))
                 {
-                    callbacks.RequestRedraw();
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackBotTokenPrefix);
                     return;
                 }
                 vm.BotToken = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -135,18 +143,25 @@ public sealed class SlackStepView : IWizardStepView
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     if (vm.HasPersistedAppToken || !string.IsNullOrWhiteSpace(vm.AppToken))
+                    {
+                        callbacks.ClearStatusMessage();
                         callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackAppTokenRequired);
+                    }
 
-                    callbacks.RequestRedraw();
                     return;
                 }
 
                 if (!text.StartsWith("xapp-", StringComparison.OrdinalIgnoreCase))
                 {
-                    callbacks.RequestRedraw();
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.SlackAppTokenPrefix);
                     return;
                 }
                 vm.AppToken = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui.Config;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -93,10 +94,22 @@ public sealed class MattermostStepView : IWizardStepView
         _lastFocusedList = null;
 
         _serverUrlInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.MattermostServerUrlRequired);
+                    return;
+                }
+
+                if (!ChannelsEditorValidator.IsHttpUrl(text.Trim()))
+                {
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.MattermostServerUrlAbsoluteHttp);
+                    return;
+                }
+
                 vm.ServerUrl = text.Trim();
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -122,13 +135,20 @@ public sealed class MattermostStepView : IWizardStepView
                 if (string.IsNullOrWhiteSpace(text))
                 {
                     if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                    {
+                        callbacks.ClearStatusMessage();
                         callbacks.AdvanceStep();
+                    }
+                    else
+                    {
+                        callbacks.ShowValidationError(ChannelsEditorValidationMessages.MattermostBotTokenRequired);
+                    }
 
-                    callbacks.RequestRedraw();
                     return;
                 }
 
                 vm.BotToken = text;
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
@@ -250,7 +270,14 @@ public sealed class MattermostStepView : IWizardStepView
         _callbackUrlInput.Submitted
             .Subscribe(text =>
             {
+                if (!string.IsNullOrWhiteSpace(text) && !ChannelsEditorValidator.IsHttpUrl(text.Trim()))
+                {
+                    callbacks.ShowValidationError(ChannelsEditorValidationMessages.MattermostCallbackUrlAbsoluteHttp);
+                    return;
+                }
+
                 vm.CallbackUrl = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+                callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
