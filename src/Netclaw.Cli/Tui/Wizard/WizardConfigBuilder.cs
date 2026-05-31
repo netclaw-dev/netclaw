@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Tui.Sections;
