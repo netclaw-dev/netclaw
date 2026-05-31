@@ -189,13 +189,14 @@ internal sealed class ScopedFileAccessPolicy
     }
 
     /// <summary>
-    /// Resolves the autonomous filesystem zone for the context from the standard
-    /// path layout: the per-session directory, the current project directory when
-    /// present, and the workspaces directory (operator-configurable via
-    /// <c>Workspaces:Directory</c>, the tree that contains all project workspaces).
-    /// Read access additionally includes the non-sensitive global read roots (skills,
-    /// identity, workspaces) that interactive non-Public audiences already receive;
-    /// write/attach access stays confined to session + project + workspaces.
+    /// Resolves the autonomous filesystem zone from the data already on the
+    /// execution context: the per-session directory and the current project
+    /// directory. Write/attach access is confined to those; read access additionally
+    /// includes the non-sensitive global read roots (skills, identity, workspaces)
+    /// that interactive non-Public audiences already receive, so an autonomous
+    /// session can still read across the project tree but only write within its
+    /// session or current project. No additional plumbing — both fields and the
+    /// cached read roots already exist on this policy.
     /// </summary>
     private IReadOnlyList<string> ResolveAutonomousZone(ToolExecutionContext context, AccessKind accessKind)
     {
@@ -206,9 +207,6 @@ internal sealed class ScopedFileAccessPolicy
 
         if (!string.IsNullOrWhiteSpace(context.ProjectDirectory))
             roots.Add(context.ProjectDirectory);
-
-        if (!string.IsNullOrWhiteSpace(_profileResolver.WorkspacesDirectory))
-            roots.Add(_profileResolver.WorkspacesDirectory);
 
         if (accessKind == AccessKind.Read)
             roots.AddRange(_cachedGlobalReadRoots.Value);

@@ -13,11 +13,11 @@
 
 ## 3. Autonomous filesystem zone (defensive clamp)
 
-- [x] 3.1 Derive the zone from the existing path layout — no new config. Surface `WorkspacesDirectory` via `ToolAudienceProfileResolver.WorkspacesDirectory` (from `NetclawPaths`); session/project come from `ToolExecutionContext`.
-- [x] 3.2 Add `ScopedFileAccessPolicy.ResolveAutonomousZone(context, accessKind)` = `session_dir` + `project_dir` + `WorkspacesDirectory` (+ global read roots for reads), normalized + deduped.
+- [x] 3.1 Derive the zone from data already on the context — no new config, no new accessor. `session_dir`/`project_dir` come from `ToolExecutionContext`; read roots reuse the existing `_cachedGlobalReadRoots`.
+- [x] 3.2 Add `ScopedFileAccessPolicy.ResolveAutonomousZone(context, accessKind)` = `session_dir` + `project_dir` (+ existing global read roots for reads), normalized + deduped.
 - [x] 3.3 Apply the clamp at the single seam — `ScopedFileAccessPolicy.TryResolvePath`'s `Mode.All` short-circuit: for `context.SupportsInteractiveApproval == false`, confine to the zone (with symlink-segment defense); empty zone fails closed. `Mode.Roots`/`Mode.None` audiences keep existing behavior (already ≤ zone). Interactive path unchanged.
-- [x] 3.4 Clamp covers shell (via `TryResolveWritePath`) and all file tools (`file_read`/`file_write`/`file_edit`/`file_list`/`attach_file`) through the shared `TryResolvePath` seam — no per-tool special-casing.
-- [x] 3.5 `AutonomousZoneClampTests`: autonomous Personal denied outside zone (shell-equivalent write AND file_read), permitted inside session/project/workspaces; clamp never widens autonomous Public (stays session-scoped); interactive Personal still `Mode.All` unrestricted; empty zone fails closed.
+- [x] 3.4 Clamp covers shell (via `TryResolveWritePath`) and all file tools (`file_read`/`file_write`/`file_edit`/`file_list`/`attach_file`) through the shared `TryResolvePath` seam — no per-tool special-casing, no constructor/DI changes.
+- [x] 3.5 `AutonomousZoneClampTests`: autonomous Personal denied outside zone (write AND file_read), permitted inside session/project; reads reach workspaces but writes don't (read/write split); clamp never widens autonomous Public (stays session-scoped); interactive Personal still `Mode.All` unrestricted; empty zone fails closed.
 
 ## 4. Tests (Parts A & B)
 

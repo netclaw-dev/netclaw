@@ -96,13 +96,13 @@ downgrade-only guard).
   - *Narrows, never widens.* The zone replaces the `Mode.All` "allow-all" allowance
     and otherwise intersects with the audience's roots, so a more-restricted audience
     (e.g. autonomous Public, session-scoped) is never loosened.
-  - *Non-empty by construction, derived from the existing path layout.* The zone is
-    `session_dir` + `project_dir` (when present) + `WorkspacesDirectory` (the
-    operator-configurable tree that contains all project workspaces). This reuses
-    `NetclawPaths` rather than inventing a new config knob, and is the corrected
-    version of the original trust-zone bug — sourcing roots from the path layout and
-    channel context rather than the audience profile's `WriteFiles.Mode` (which was
-    `All` → empty for Personal).
+  - *Derived from data already on the context.* The write/attach zone is
+    `session_dir` + `project_dir`, both already on `ToolExecutionContext`; reads also
+    reach the existing `_cachedGlobalReadRoots` (skills/identity/workspaces). This
+    reuses what already flows through the seam rather than inventing a config knob or
+    threading `NetclawPaths` through tool constructors, and is the corrected version
+    of the original trust-zone bug — which sourced roots from the audience profile's
+    `WriteFiles.Mode` (`All` → empty for Personal).
   - *Alternative — taint-gating:* confine only turns carrying `PayloadTaint` from
     external input, leaving operator-authored unattended work unrestricted. More
     precise, but `PayloadTaint` is not currently threaded onto `ToolExecutionContext`
@@ -131,12 +131,13 @@ downgrade-only guard).
   to auto-run unattended is simple enough for path extraction to see its paths, and
   a command complex enough to hide its paths (control flow, `python -c`, command
   substitution) is flagged `messy` and fails closed for non-interactive callers.
-- **[Autonomous zone too tight bricks legitimate work; too loose re-leaks]** → The
-  zone always includes `WorkspacesDirectory`, so even a webhook's per-delivery
-  session can do real work across the project tree (not just its scratch
-  `session_dir`). Operators widen by configuring `Workspaces:Directory` — a bounded,
-  existing lever, not a global `trust-verb`. `project_dir` is also included when the
-  channel carries one.
+- **[Autonomous zone too tight bricks legitimate work; too loose re-leaks]** →
+  Reads reach the global read roots (incl. workspaces), so an autonomous session can
+  read across the project tree for triage; writes are confined to `session_dir` +
+  the current `project_dir`. A reminder/webhook scoped to a project (project_dir set)
+  can write there; one with no project writes only to its session scratch — the safe
+  floor. Widening unattended writes beyond the current project is deliberately not a
+  default (it would be the exfil/abuse surface).
 - **[Autonomous clamp partially reverses the shipped `Mode.All`→anywhere shell
   behavior]** → Intended. For non-interactive contexts, path authority comes from
   the channel zone rather than the audience's `Mode.All`; the unification still holds

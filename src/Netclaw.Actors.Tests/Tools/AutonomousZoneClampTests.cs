@@ -111,17 +111,18 @@ public sealed class AutonomousZoneClampTests : IDisposable
     }
 
     [Fact]
-    public void Autonomous_personal_within_workspaces_is_allowed()
+    public void Autonomous_personal_can_read_but_not_write_outside_current_project()
     {
-        // The workspaces directory (operator-configurable via Workspaces:Directory)
-        // is part of the zone — projects live under it, so autonomous agents can do
-        // real work there.
+        // Reads reach the non-sensitive global read roots (incl. workspaces), so an
+        // autonomous session can read across the project tree; writes stay confined
+        // to its session + current project, not the whole workspace tree.
         var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
         var ctx = Ctx(TrustAudience.Personal, autonomous: true);
 
-        var target = Path.Combine(_paths.WorkspacesDirectory, "my-project", "RELEASE_NOTES.md");
+        var sibling = Path.Combine(_paths.WorkspacesDirectory, "other-project", "RELEASE_NOTES.md");
 
-        Assert.True(policy.TryResolveWritePath(target, ctx, out _, out var e), e);
+        Assert.True(policy.TryResolveReadPath(sibling, ctx, out _, out var e), e);
+        Assert.False(policy.TryResolveWritePath(sibling, ctx, out _, out _));
     }
 
     [Fact]
