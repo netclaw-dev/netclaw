@@ -6,6 +6,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
@@ -251,6 +252,29 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         var issues = vm.ValidationSummary.Value.IssuesFor("Search.BraveApiKey");
         Assert.Contains(issues, static issue => issue.Message.Contains("API key", StringComparison.OrdinalIgnoreCase));
         Assert.False(vm.HasPersistedSecret("Search.BraveApiKey"));
+    }
+
+    [Fact]
+    public void Switching_to_zero_config_backend_preserves_existing_brave_secret()
+    {
+        var protector = SecretsProtection.CreateProtector(_paths);
+        var encrypted = protector.Protect("stored-secret");
+        File.WriteAllText(_paths.SecretsPath,
+            "{\n" +
+            "  \"configVersion\": 1,\n" +
+            "  \"Search\": {\n" +
+            $"    \"BraveApiKey\": \"{encrypted}\"\n" +
+            "  }\n" +
+            "}\n");
+        File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1, \"Search\": { \"Backend\": \"brave\" } }");
+
+        using var vm = new SearchConfigEditorViewModel(_paths);
+        vm.SelectBackendForEditing("duckduckgo");
+        vm.SaveWithoutProbeOverride();
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Search.BraveApiKey", out var braveKey));
+        Assert.Equal("stored-secret", ConfigFileHelper.DecryptIfEncrypted(_paths, braveKey?.ToString()));
     }
 
     [Fact]

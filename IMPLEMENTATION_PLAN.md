@@ -195,13 +195,13 @@ Done when:
 
 Done when:
 
-- [ ] A registry/audit test lists config leaf editors and fails when a visible
+- [x] A registry/audit test lists config leaf editors and fails when a visible
   editor lacks round-trip coverage.
-- [ ] The audit requires each visible editor to declare whether it has dynamic
+- [x] The audit requires each visible editor to declare whether it has dynamic
   validation and, if yes, the test class that covers fake-failure behavior.
-- [ ] The audit requires each editor that writes secrets to have blank-preserve,
+- [x] The audit requires each editor that writes secrets to have blank-preserve,
   nonblank-replace, and explicit-delete coverage.
-- [ ] The audit requires each editor that writes runtime-consumed config to name
+- [x] The audit requires each editor that writes runtime-consumed config to name
   the runtime consumer and contract test file.
 
 ### Phase 1: Config Command And Channel Runtime Contracts
