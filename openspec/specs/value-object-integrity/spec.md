@@ -10,9 +10,7 @@ named factories for known constants, and preserve the underlying wire/disk
 format through serializer mapping — making the type system itself the gate
 against passing a wrong-but-same-typed value where a domain-specific identifier
 or label is expected.
-
 ## Requirements
-
 ### Requirement: Identifier and trust-label fields are value-typed
 
 Records that cross an actor boundary SHALL represent identifier and
@@ -97,3 +95,26 @@ other's persisted journal entries and documents.
 - **WHEN** it is written to disk and re-read
 - **THEN** the JSON document stores the bare primitive, not a nested object
 - **AND** the value is read back verbatim
+
+### Requirement: MIME and file-extension values are value-typed
+
+The system SHALL represent MIME type and file-extension values with explicit
+value objects for canonical MIME, declared MIME, verified MIME, and file
+extension where those meanings affect policy, scanning, provider serialization,
+or persistence. These value objects SHALL expose no implicit conversions to or
+from primitive strings.
+
+#### Scenario: Declared MIME cannot be passed as verified MIME
+
+- **WHEN** code supplies a declared MIME value where a verified MIME value is
+  required
+- **THEN** the build fails with a type-mismatch error
+- **AND** the caller must pass through content scanning to obtain verified MIME
+
+#### Scenario: MIME value serializes as primitive string
+
+- **GIVEN** a persisted media reference carries a MIME value object
+- **WHEN** it is serialized through the protobuf mapping
+- **THEN** the serialized MIME field remains the bare MIME string
+- **AND** deserialization reconstructs the MIME value object
+
