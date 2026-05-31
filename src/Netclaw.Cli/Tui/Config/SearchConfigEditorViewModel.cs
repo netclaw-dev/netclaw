@@ -325,6 +325,16 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public void SaveWithoutProbeOverride()
     {
         CancelValidationSpinner();
+        Revalidate();
+        if (_validation.HasErrors)
+        {
+            ActiveDialog.Value = SearchConfigEditorDialog.None;
+            CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+            Status.Value = BuildValidationErrorStatus("Fix structural validation errors before saving this search configuration.");
+            RequestRedraw();
+            return;
+        }
+
         _mapper.Save(_paths, _model);
         ReloadPersistedDraft();
         ActiveDialog.Value = SearchConfigEditorDialog.None;

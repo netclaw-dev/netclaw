@@ -106,12 +106,12 @@
 
 ## 13. Validation model
 
-- [ ] 13.1 Apply generalized pre-save validation to every leaf editor.
-- [ ] 13.2 Validate paths, URIs, auth, binary presence, local references,
+- [x] 13.1 Apply generalized pre-save validation to every leaf editor.
+- [x] 13.2 Validate paths, URIs, auth, binary presence, local references,
   and remote reachability where relevant.
-- [ ] 13.3 Keep structurally invalid config as a hard block.
-- [ ] 13.4 Allow `Save anyway` only for runtime/probe failures.
-- [ ] 13.5 Update planning/tests around `#1151` so validation is framed as
+- [x] 13.3 Keep structurally invalid config as a hard block.
+- [x] 13.4 Allow `Save anyway` only for runtime/probe failures.
+- [x] 13.5 Update planning/tests around `#1151` so validation is framed as
   a cross-editor rule, not just a narrow search regression.
 
 ## 14. Coverage

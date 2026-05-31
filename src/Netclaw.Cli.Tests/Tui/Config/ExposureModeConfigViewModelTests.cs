@@ -91,6 +91,40 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Saving_reverse_proxy_with_loopback_host_blocks_before_persistence()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
+        var configBefore = File.ReadAllText(Context.Paths.NetclawConfigPath);
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.ReverseProxy;
+        vm.Step.Host = "127.0.0.1";
+        vm.Step.TrustedProxies = ["10.0.0.0/24"];
+
+        AdvanceReverseProxyToSave(vm);
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Contains("loopback", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(configBefore, File.ReadAllText(Context.Paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public void Saving_reverse_proxy_with_invalid_trusted_proxy_blocks_before_persistence()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
+        var configBefore = File.ReadAllText(Context.Paths.NetclawConfigPath);
+        using var vm = new ExposureModeConfigViewModel(Context.Paths);
+        vm.Step.SelectedMode = ExposureMode.ReverseProxy;
+        vm.Step.Host = "10.0.0.5";
+        vm.Step.TrustedProxies = ["not-a-proxy"];
+
+        AdvanceReverseProxyToSave(vm);
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Contains("not-a-proxy", vm.Context.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(configBefore, File.ReadAllText(Context.Paths.NetclawConfigPath));
+    }
+
+    [Fact]
     public void Saving_local_mode_preserves_reverse_proxy_values_for_reactivation()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
@@ -157,5 +191,13 @@ public sealed class ExposureModeConfigViewModelTests : WizardStepTestBase
 
         Assert.False(vm.IsSaved.Value);
         Assert.Equal(0, vm.Step.CurrentSubStep);
+    }
+
+    private static void AdvanceReverseProxyToSave(ExposureModeConfigViewModel vm)
+    {
+        vm.GoNext();
+        vm.GoNext();
+        vm.GoNext();
+        vm.GoNext();
     }
 }

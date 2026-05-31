@@ -25,6 +25,8 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
         {
             ["audience-profiles"] = new(
                 nameof(SecurityAccessViewModelTests),
+                StructuralValidationCoverage.NotApplicable(
+                    "Audience Profiles uses curated toggles and cycles; there are no typed paths, URIs, credentials, binaries, references, or reachability probes."),
                 DynamicValidationCoverage.NotApplicable("Audience Profiles edits local ACL/profile config without a runtime probe."),
                 null,
                 new RuntimeConsumerCoverage(
@@ -35,6 +37,10 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                     ])),
             ["channels"] = new(
                 nameof(ChannelsConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("auth", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_slack_token_before_probe)),
+                    new ValidationConceptTest("uri", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_mattermost_url_before_probe)),
+                    new ValidationConceptTest("local-reference", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_rejects_unresolved_slack_channel_name))),
                 DynamicValidationCoverage.Required(
                     nameof(ChannelsConfigViewModelTests),
                     nameof(ChannelsConfigViewModelTests.Save_from_input_surfaces_dynamic_validation_exception_as_status_without_persistence)),
@@ -54,6 +60,8 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                     ])),
             ["enabled-features"] = new(
                 nameof(SecurityAccessViewModelTests),
+                StructuralValidationCoverage.NotApplicable(
+                    "Enabled Features edits boolean toggles from a fixed list without typed paths, URIs, credentials, binaries, references, or reachability probes."),
                 DynamicValidationCoverage.NotApplicable("Enabled Features toggles local boolean runtime flags without a config-time probe."),
                 null,
                 new RuntimeConsumerCoverage(
@@ -63,6 +71,8 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                     ])),
             ["exposure-mode"] = new(
                 nameof(ExposureModeConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("local-reference", nameof(ExposureModeConfigViewModelTests), nameof(ExposureModeConfigViewModelTests.Saving_reverse_proxy_with_invalid_trusted_proxy_blocks_before_persistence))),
                 DynamicValidationCoverage.NotApplicable("Current Exposure Mode tests cover local merge and daemon consumer validation separately."),
                 null,
                 new RuntimeConsumerCoverage(
@@ -74,6 +84,10 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                     ])),
             ["search"] = new(
                 nameof(SearchConfigEditorViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("auth", nameof(SearchConfigEditorViewModelTests), nameof(SearchConfigEditorViewModelTests.Blank_secret_without_existing_value_is_still_structurally_invalid)),
+                    new ValidationConceptTest("uri", nameof(SearchConfigEditorViewModelTests), nameof(SearchConfigEditorViewModelTests.Searxng_endpoint_requires_http_or_https_uri)),
+                    new ValidationConceptTest("override-hard-block", nameof(SearchConfigEditorViewModelTests), nameof(SearchConfigEditorViewModelTests.Save_anyway_blocks_structural_errors_without_persistence))),
                 DynamicValidationCoverage.Required(
                     nameof(SearchConfigEditorViewModelTests),
                     nameof(SearchConfigEditorViewModelTests.Brave_probe_failure_opens_override_dialog_before_save)),
@@ -92,6 +106,8 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                     ])),
             ["security-posture"] = new(
                 nameof(SecurityAccessViewModelTests),
+                StructuralValidationCoverage.NotApplicable(
+                    "Security Posture selects from fixed enum options and emits canonical posture defaults without typed paths, URIs, credentials, binaries, references, or reachability probes."),
                 DynamicValidationCoverage.NotApplicable("Security Posture writes enum/default policy config without a runtime probe."),
                 null,
                 new RuntimeConsumerCoverage(
@@ -141,6 +157,29 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             Assert.False(string.IsNullOrWhiteSpace(coverage.RoundTripTestClass),
                 $"Config editor '{editorId}' must declare a round-trip test class.");
             AssertTestClassExists(coverage.RoundTripTestClass);
+        }
+    }
+
+    [Fact]
+    public void Visible_config_leaf_editors_declare_structural_validation_coverage()
+    {
+        foreach (var editorId in DiscoverVisibleConfigLeafEditorIds())
+        {
+            var coverage = CoverageByEditorId[editorId].StructuralValidation;
+            if (coverage.RequiredConcepts.Count == 0)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(coverage.NotApplicableReason),
+                    $"Config editor '{editorId}' must justify why no structural validation concepts apply.");
+                continue;
+            }
+
+            Assert.Null(coverage.NotApplicableReason);
+            foreach (var (concept, test) in coverage.RequiredConcepts)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(concept),
+                    $"Config editor '{editorId}' has an unnamed structural validation concept.");
+                AssertTestMethodExists(test.TestClass, test.TestMethod);
+            }
         }
     }
 
@@ -271,9 +310,30 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
 
     private sealed record ConfigEditorCoverage(
         string RoundTripTestClass,
+        StructuralValidationCoverage StructuralValidation,
         DynamicValidationCoverage DynamicValidation,
         SecretCoverage? Secrets,
         RuntimeConsumerCoverage RuntimeConsumer);
+
+    private sealed record StructuralValidationCoverage(
+        IReadOnlyDictionary<string, ValidationTest> RequiredConcepts,
+        string? NotApplicableReason)
+    {
+        public static StructuralValidationCoverage Required(params ValidationConceptTest[] tests)
+            => new(
+                tests.ToDictionary(static test => test.Concept, static test => test.ValidationTest, StringComparer.Ordinal),
+                null);
+
+        public static StructuralValidationCoverage NotApplicable(string reason)
+            => new(new Dictionary<string, ValidationTest>(StringComparer.Ordinal), reason);
+    }
+
+    private sealed record ValidationConceptTest(string Concept, string TestClass, string TestMethod)
+    {
+        public ValidationTest ValidationTest { get; } = new(TestClass, TestMethod);
+    }
+
+    private sealed record ValidationTest(string TestClass, string TestMethod);
 
     private sealed record DynamicValidationCoverage(
         bool HasDynamicValidation,

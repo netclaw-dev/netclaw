@@ -55,6 +55,13 @@ public sealed class ExposureModeConfigViewModel : ReactiveViewModel
             return;
         }
 
+        if (_step.GetStructuralValidationError() is { } validationError)
+        {
+            _context.StatusMessage.Value = validationError;
+            NotifyContentChanged();
+            return;
+        }
+
         _orchestrator.WriteConfig();
         IsSaved.Value = true;
         _context.StatusMessage.Value = "Exposure mode saved.";

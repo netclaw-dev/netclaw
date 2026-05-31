@@ -287,6 +287,23 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
     public IWizardStepViewModel CreateEditor(IServiceProvider services)
         => new ExposureModeStepViewModel(includeWebhookToggle: false);
 
+    internal string? GetStructuralValidationError()
+    {
+        if (SelectedMode != ExposureMode.ReverseProxy)
+            return null;
+
+        var host = string.IsNullOrWhiteSpace(Host) ? DefaultReverseProxyHost : Host.Trim();
+        if (DaemonExposureValidator.IsLoopbackHost(host))
+            return $"Daemon.Host '{host}' is loopback and cannot be used for reverse-proxy exposure.";
+
+        if (TrustedProxies.Count == 0)
+            return "Daemon.TrustedProxies must contain at least one IP address or CIDR for reverse-proxy exposure.";
+
+        return DaemonExposureValidator.TryGetInvalidTrustedProxy(TrustedProxies, out var error)
+            ? error
+            : null;
+    }
+
     public SectionContribution BuildContribution(IWizardStepViewModel editor)
     {
         var vm = (ExposureModeStepViewModel)editor;

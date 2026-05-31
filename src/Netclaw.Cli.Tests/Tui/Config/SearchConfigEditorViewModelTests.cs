@@ -335,6 +335,37 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Searxng_endpoint_requires_http_or_https_uri()
+    {
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.SetFieldValue("Search.Backend", "searxng");
+        var result = vm.CommitField("Search.SearXngEndpoint", "ftp://search.example.com");
+
+        Assert.False(result.Success);
+        Assert.Contains(result.Issues,
+            static issue => issue.Message.Contains("http:// or https://", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("ftp://search.example.com", vm.FieldValues["Search.SearXngEndpoint"].Value);
+    }
+
+    [Fact]
+    public void Save_anyway_blocks_structural_errors_without_persistence()
+    {
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        using var vm = new SearchConfigEditorViewModel(_paths);
+
+        vm.SetFieldValue("Search.Backend", "brave");
+        vm.SaveWithoutProbeOverride();
+
+        Assert.Equal(SearchConfigEditorDialog.None, vm.ActiveDialog.Value);
+        Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Contains("API key", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(File.Exists(_paths.SecretsPath));
+    }
+
+    [Fact]
     public void Preserved_state_supports_in_memory_draft_edits()
     {
         using var vm = new SearchConfigEditorViewModel(_paths);

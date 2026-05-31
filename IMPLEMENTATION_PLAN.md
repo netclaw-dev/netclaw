@@ -247,16 +247,16 @@ Done when:
 
 Done when:
 
-- [ ] Every `netclaw config` leaf has typed structural validation before save.
-- [ ] Runtime/probe validation is run where the leaf writes values consumed by
+- [x] Every `netclaw config` leaf has typed structural validation before save.
+- [x] Runtime/probe validation is run where the leaf writes values consumed by
   runtime startup, ACL, transport, tools, or daemon exposure.
-- [ ] Structurally invalid config is a hard block.
-- [ ] `Save anyway` exists only for transient runtime/probe failures, never for
+- [x] Structurally invalid config is a hard block.
+- [x] `Save anyway` exists only for transient runtime/probe failures, never for
   schema violations, missing required security fields, or unresolved canonical
   IDs.
-- [ ] Tests prove invalid path, URI, auth, binary, local-reference, and
+- [x] Tests prove invalid path, URI, auth, binary, local-reference, and
   reachability failures where those concepts apply.
-- [ ] Smoke assertions check semantic preservation and canonical output, not
+- [x] Smoke assertions check semantic preservation and canonical output, not
   byte-identical JSON.
 
 #### Task 1.3: Complete `Security & Access` config area

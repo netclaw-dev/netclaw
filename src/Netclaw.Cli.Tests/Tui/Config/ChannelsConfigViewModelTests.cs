@@ -198,6 +198,56 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Save_blocks_invalid_slack_token_before_probe()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var slackProbe = new FakeSlackProbe();
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.Step.LoadAdapterState(ChannelType.Slack, enabled: true, summary: "configured", adapter =>
+        {
+            var slack = (SlackStepViewModel)adapter;
+            slack.SlackEnabled = true;
+            slack.BotToken = "not-a-slack-token";
+            slack.AppToken = "xapp-test";
+            slack.ChannelNamesInput = "netclaw-support";
+        });
+
+        vm.Save();
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal("Slack bot token must start with xoxb-.", vm.Status.Value.Text);
+        Assert.Equal(0, slackProbe.ResolveCallCount);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(File.Exists(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public void Save_blocks_invalid_mattermost_url_before_probe()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var mattermostProbe = new FakeMattermostProbe();
+        using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
+        vm.Step.LoadAdapterState(ChannelType.Mattermost, enabled: true, summary: "configured", adapter =>
+        {
+            var mattermost = (MattermostStepViewModel)adapter;
+            mattermost.MattermostEnabled = true;
+            mattermost.ServerUrl = "not-a-url";
+            mattermost.BotToken = "mattermost-token";
+            mattermost.ChannelIdsInput = "town-square";
+        });
+
+        vm.Save();
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal("Mattermost server URL must be an absolute http:// or https:// URL.", vm.Status.Value.Text);
+        Assert.Equal(0, mattermostProbe.ResolveCallCount);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(File.Exists(_paths.SecretsPath));
+    }
+
+    [Fact]
     public void Back_from_saved_returns_to_channel_picker()
     {
         WriteChannelConfig();

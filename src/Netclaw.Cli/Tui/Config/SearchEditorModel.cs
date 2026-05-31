@@ -50,9 +50,9 @@ internal sealed class SearchEditorValidator : IValidateOptions<SearchEditorModel
             {
                 errors.Add("SearXNG requires an endpoint URL.");
             }
-            else if (!Uri.TryCreate(options.SearXng.Endpoint, UriKind.Absolute, out _))
+            else if (!IsHttpUrl(options.SearXng.Endpoint))
             {
-                errors.Add("SearXNG endpoint must be an absolute URL.");
+                errors.Add("SearXNG endpoint must be an absolute http:// or https:// URL.");
             }
         }
 
@@ -60,6 +60,10 @@ internal sealed class SearchEditorValidator : IValidateOptions<SearchEditorModel
             ? ValidateOptionsResult.Fail(errors)
             : ValidateOptionsResult.Success;
     }
+
+    private static bool IsHttpUrl(string value)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri)
+           && uri.Scheme is "http" or "https";
 }
 
 internal sealed class SearchEditorPersistenceMapper
