@@ -99,7 +99,7 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
         => _replyClient.Posts.Select(p => p.Text).ToList();
 
     protected override void ClearPostedTexts()
-        => _replyClient.Posts.Clear();
+        => _replyClient.Clear();
 
     protected override void SetReplyClientThrows(Exception ex)
         => _replyClient.ThrowOnPost = ex;
@@ -272,6 +272,13 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
 
         var firstActor = CreateBindingActor(sid, initialPipeline, detector);
         await AwaitAssertAsync(() => Assert.Single(_replyClient.Posts), cancellationToken: ct);
+        // The transport post is recorded before the actor persists prompt
+        // tracking. Round-trip through the mailbox before stopping so recovery
+        // observes the persisted post id instead of racing the persist callback.
+        await firstActor.Ask<ActorIdentity>(
+            new Identify("prompt-tracking-persisted"),
+            TimeSpan.FromSeconds(3),
+            ct);
 
         var stopProbe = CreateTestProbe("mattermost-recovered-text-stop");
         stopProbe.Watch(firstActor);

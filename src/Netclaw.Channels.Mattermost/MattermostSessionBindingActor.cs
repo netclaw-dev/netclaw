@@ -153,10 +153,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             {
                 await EnsureInitializedAsync();
                 Become(Hydrating);
-                // Do NOT UnstashAll here. PerformHydration is already in the
-                // mailbox (sent from the RecoveryCompleted handler) and will be
-                // processed next by the Hydrating behavior. Stashed live
-                // inbounds stay stashed until Hydrating transitions to Active.
+                // RecoveryCompleted can beat pipeline initialization on slower
+                // dispatchers and get stashed here. Move it into Hydrating so
+                // one-shot hydration cannot strand the actor in startup; live
+                // inbounds are re-stashed by Hydrating until hydration finishes.
+                Stash.UnstashAll();
             }
             catch (Exception ex)
             {

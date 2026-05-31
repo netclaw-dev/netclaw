@@ -16,6 +16,8 @@ namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
 public sealed class RecordingSessionPipeline : ISessionPipeline
 {
+    private readonly object _feedbackLock = new();
+    private readonly List<IWithSessionId> _recordedFeedback = [];
     private readonly Func<SessionId, IReadOnlyList<SessionOutput>> _outputFactory;
     private readonly bool _reactive;
 
@@ -44,7 +46,11 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     }
 
     public SessionPipelineOptions? CapturedOptions { get; private set; }
-    public List<IWithSessionId> RecordedFeedback { get; } = [];
+    public IReadOnlyList<IWithSessionId> RecordedFeedback
+    {
+        get { lock (_feedbackLock) return _recordedFeedback.ToList(); }
+    }
+
     public ConcurrentQueue<ChannelInput> CapturedInputs { get; } = new();
     public Func<IWithSessionId, CancellationToken, Task<ICommandReply>>? ResponseFactory { get; set; }
 
@@ -119,13 +125,13 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
 
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
-        RecordedFeedback.Add(feedback);
+        lock (_feedbackLock) _recordedFeedback.Add(feedback);
         return Task.CompletedTask;
     }
 
     public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
-        RecordedFeedback.Add(feedback);
+        lock (_feedbackLock) _recordedFeedback.Add(feedback);
         var response = ResponseFactory?.Invoke(feedback, ct)
             ?? Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
         return response;
