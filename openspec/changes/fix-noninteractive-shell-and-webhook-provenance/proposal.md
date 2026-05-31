@@ -35,15 +35,15 @@ established channel → session → {sub-agent, reminder} provenance model.
   Personal audience authorize any path, an unattended session that processes a
   hostile payload (e.g. a webhook) could otherwise be steered to read arbitrary
   out-of-zone files via a read-only "safe verb" (whose auto-approval inspects the
-  verb and cwd, not the path argument). The zone — session directory, project
-  directory, and operator-configured roots — substitutes for the human approval
-  backstop that autonomous channels lack. The clamp narrows only (never widens a
-  scoped audience) and is applied at a single seam in `ScopedFileAccessPolicy` so it
-  covers shell and the file tools together.
-- A new `ToolConfig.AutonomousZoneRoots` setting lets operators extend the zone
-  (token-aware: `{session_dir}` implicit, `{project_dir}`, `{workspaces_dir}`,
-  literals). **BREAKING:** none — defaults preserve current interactive behavior;
-  autonomous sessions move from "unrestricted under Personal" to "zone-confined".
+  verb and cwd, not the path argument). The zone — derived from the existing path
+  layout: session directory, current project directory, and the workspaces
+  directory (operator-configurable via `Workspaces:Directory`) — substitutes for the
+  human approval backstop that autonomous channels lack. The clamp narrows only
+  (never widens a scoped audience) and is applied at a single seam in
+  `ScopedFileAccessPolicy` so it covers shell and the file tools together. No new
+  config surface — the operator's breadth lever is the existing `Workspaces:Directory`.
+  **BREAKING:** none — defaults preserve current interactive behavior; autonomous
+  sessions move from "unrestricted under Personal" to "zone-confined".
 - No change to the hard-deny list, protected-path policy (`ToolPathPolicy`), the
   Personal-only shell gate, the approval gate, or interactive filesystem behavior.
 
@@ -84,10 +84,8 @@ established channel → session → {sub-agent, reminder} provenance model.
   `src/Netclaw.Actors/Tools/ScopedFileAccessPolicy.cs` (`TryResolvePath` — the
   `Mode.All` short-circuit) applies the zone for `SupportsInteractiveApproval == false`
   contexts; zone roots resolve from `ToolExecutionContext.SessionDirectory` /
-  `ProjectDirectory` plus a new `ToolConfig.AutonomousZoneRoots` setting via
-  `ToolAudienceProfileResolver`. Adding `AutonomousZoneRoots` requires updating
-  `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` (Config Schema
-  Sync Rule).
+  `ProjectDirectory` plus `NetclawPaths.WorkspacesDirectory` (surfaced via
+  `ToolAudienceProfileResolver.WorkspacesDirectory`). No new config or schema change.
 - **Security:** Net posture is unchanged or tightened. Config/secrets/keys/webhooks
   remain protected by `ToolPathPolicy` (audience-independent, applies to shell and
   file tools). Per-audience file confinement is unchanged. Webhook provenance closes

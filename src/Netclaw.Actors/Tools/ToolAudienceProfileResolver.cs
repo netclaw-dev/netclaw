@@ -150,6 +150,13 @@ internal sealed class ToolAudienceProfileResolver
         return ResolvePathToken(trimmed);
     }
 
+    /// <summary>
+    /// Exposes the configured workspaces directory (operator-configurable via
+    /// <c>Workspaces:Directory</c>) for callers that build filesystem zones from the
+    /// standard path layout. Null when no <see cref="NetclawPaths"/> is available.
+    /// </summary>
+    public string? WorkspacesDirectory => _paths?.WorkspacesDirectory;
+
     private static TrustAudience ResolveAudience(ToolExecutionContext? context)
         => SecurityPolicyDefaults.ResolveAudienceWithFallback(context?.Audience, context?.SessionId);
 

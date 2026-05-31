@@ -13,11 +13,11 @@
 
 ## 3. Autonomous filesystem zone (defensive clamp)
 
-- [ ] 3.1 Add `ToolConfig.AutonomousZoneRoots` (token-aware list; `{session_dir}` implicit, `{project_dir}`, `{workspaces_dir}`, literals) and update `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` (Config Schema Sync Rule).
-- [ ] 3.2 Add `ToolAudienceProfileResolver.ResolveAutonomousRoots(context)` resolving the configured roots (reuse the existing `ResolveToken` machinery; add a `{project_dir}` token sourced from `context.ProjectDirectory`).
-- [ ] 3.3 Apply the clamp at the single seam — `ScopedFileAccessPolicy.TryResolvePath`'s `Mode.All` short-circuit: for `context.SupportsInteractiveApproval == false`, confine to the autonomous zone (`session_dir` + `project_dir` + configured roots); `Mode.All` → zone, `Mode.Roots` → audience roots ∩ zone, `Mode.None` → deny; empty zone fails closed. Interactive path unchanged.
-- [ ] 3.4 Verify the clamp covers shell (via `TryResolveWritePath`) and all file tools (`file_read`/`file_write`/`file_edit`/`file_list`/`attach_file`) through the shared `TryResolvePath` seam — no per-tool special-casing.
-- [ ] 3.5 Tests: autonomous Personal denied outside zone (shell AND file_read), permitted inside zone; clamp never widens autonomous Public (stays session-scoped); interactive Personal still `Mode.All` unrestricted; operator `AutonomousZoneRoots` extends the zone.
+- [x] 3.1 Derive the zone from the existing path layout — no new config. Surface `WorkspacesDirectory` via `ToolAudienceProfileResolver.WorkspacesDirectory` (from `NetclawPaths`); session/project come from `ToolExecutionContext`.
+- [x] 3.2 Add `ScopedFileAccessPolicy.ResolveAutonomousZone(context, accessKind)` = `session_dir` + `project_dir` + `WorkspacesDirectory` (+ global read roots for reads), normalized + deduped.
+- [x] 3.3 Apply the clamp at the single seam — `ScopedFileAccessPolicy.TryResolvePath`'s `Mode.All` short-circuit: for `context.SupportsInteractiveApproval == false`, confine to the zone (with symlink-segment defense); empty zone fails closed. `Mode.Roots`/`Mode.None` audiences keep existing behavior (already ≤ zone). Interactive path unchanged.
+- [x] 3.4 Clamp covers shell (via `TryResolveWritePath`) and all file tools (`file_read`/`file_write`/`file_edit`/`file_list`/`attach_file`) through the shared `TryResolvePath` seam — no per-tool special-casing.
+- [x] 3.5 `AutonomousZoneClampTests`: autonomous Personal denied outside zone (shell-equivalent write AND file_read), permitted inside session/project/workspaces; clamp never widens autonomous Public (stays session-scoped); interactive Personal still `Mode.All` unrestricted; empty zone fails closed.
 
 ## 4. Tests (Parts A & B)
 

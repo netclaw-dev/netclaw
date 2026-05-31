@@ -63,6 +63,16 @@ internal sealed class ScopedFileAccessPolicy
 
         if (access.Mode == ToolFilesystemMode.All)
         {
+            // Autonomous (non-interactive) channels have no human approval backstop,
+            // so an unrestricted audience is confined to the autonomous zone
+            // (session + project + operator-configured roots) instead of being
+            // granted blanket filesystem access. Interactive channels keep the
+            // blanket grant — the live approval gate is their backstop. This is the
+            // single seam that covers shell (via TryResolveWritePath) and every file
+            // tool at once.
+            if (context.SupportsInteractiveApproval == false)
+                return TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+
             error = string.Empty;
             return true;
         }
@@ -138,6 +148,75 @@ internal sealed class ScopedFileAccessPolicy
         }
 
         return roots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    /// <summary>
+    /// Confines an autonomous (non-interactive) session whose audience would
+    /// otherwise grant unrestricted (<see cref="ToolFilesystemMode.All"/>) access to
+    /// the autonomous zone. Fails closed when the zone is empty (the session
+    /// directory is normally always present, so this is a defensive guard).
+    /// </summary>
+    private bool TryResolveWithinAutonomousZone(
+        string fullPath,
+        ToolExecutionContext context,
+        AccessKind accessKind,
+        out string error)
+    {
+        var zone = ResolveAutonomousZone(context, accessKind);
+        if (zone.Count == 0)
+        {
+            error = "Error: autonomous session has no accessible file roots.";
+            return false;
+        }
+
+        foreach (var root in zone)
+        {
+            if (!PathUtility.IsWithinRoot(fullPath, root))
+                continue;
+
+            if (PathUtility.ContainsSymlinkSegment(root, fullPath))
+            {
+                error = "Error: autonomous session may not access files through symlinked paths inside its zone.";
+                return false;
+            }
+
+            error = string.Empty;
+            return true;
+        }
+
+        error = "Error: autonomous session may only access files inside its session directory, project directory, or configured autonomous roots.";
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves the autonomous filesystem zone for the context from the standard
+    /// path layout: the per-session directory, the current project directory when
+    /// present, and the workspaces directory (operator-configurable via
+    /// <c>Workspaces:Directory</c>, the tree that contains all project workspaces).
+    /// Read access additionally includes the non-sensitive global read roots (skills,
+    /// identity, workspaces) that interactive non-Public audiences already receive;
+    /// write/attach access stays confined to session + project + workspaces.
+    /// </summary>
+    private IReadOnlyList<string> ResolveAutonomousZone(ToolExecutionContext context, AccessKind accessKind)
+    {
+        var roots = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
+            roots.Add(context.SessionDirectory);
+
+        if (!string.IsNullOrWhiteSpace(context.ProjectDirectory))
+            roots.Add(context.ProjectDirectory);
+
+        if (!string.IsNullOrWhiteSpace(_profileResolver.WorkspacesDirectory))
+            roots.Add(_profileResolver.WorkspacesDirectory);
+
+        if (accessKind == AccessKind.Read)
+            roots.AddRange(_cachedGlobalReadRoots.Value);
+
+        return roots
+            .Select(PathUtility.Normalize)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private static TrustAudience ResolveAudience(ToolExecutionContext context)

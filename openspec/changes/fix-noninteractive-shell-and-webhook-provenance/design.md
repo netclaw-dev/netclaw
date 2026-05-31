@@ -96,11 +96,13 @@ downgrade-only guard).
   - *Narrows, never widens.* The zone replaces the `Mode.All` "allow-all" allowance
     and otherwise intersects with the audience's roots, so a more-restricted audience
     (e.g. autonomous Public, session-scoped) is never loosened.
-  - *Non-empty by construction.* The zone is `session_dir` (+ `project_dir` when
-    present, + operator-configured `AutonomousZoneRoots`). This is the corrected
-    version of the original trust-zone bug — sourcing roots from the channel context
-    rather than the audience profile's `WriteFiles.Mode` (which was `All` → empty
-    for Personal).
+  - *Non-empty by construction, derived from the existing path layout.* The zone is
+    `session_dir` + `project_dir` (when present) + `WorkspacesDirectory` (the
+    operator-configurable tree that contains all project workspaces). This reuses
+    `NetclawPaths` rather than inventing a new config knob, and is the corrected
+    version of the original trust-zone bug — sourcing roots from the path layout and
+    channel context rather than the audience profile's `WriteFiles.Mode` (which was
+    `All` → empty for Personal).
   - *Alternative — taint-gating:* confine only turns carrying `PayloadTaint` from
     external input, leaving operator-authored unattended work unrestricted. More
     precise, but `PayloadTaint` is not currently threaded onto `ToolExecutionContext`
@@ -129,11 +131,12 @@ downgrade-only guard).
   to auto-run unattended is simple enough for path extraction to see its paths, and
   a command complex enough to hide its paths (control flow, `python -c`, command
   substitution) is flagged `messy` and fails closed for non-interactive callers.
-- **[Autonomous zone too tight bricks legitimate work; too loose re-leaks]** → A
-  webhook's per-delivery session may have only `session_dir`, which can be too tight
-  for useful triage. Mitigation: `ToolConfig.AutonomousZoneRoots` lets operators
-  extend the zone with bounded, path-scoped roots (not a global `trust-verb`), and
-  `project_dir` is included when the channel carries one.
+- **[Autonomous zone too tight bricks legitimate work; too loose re-leaks]** → The
+  zone always includes `WorkspacesDirectory`, so even a webhook's per-delivery
+  session can do real work across the project tree (not just its scratch
+  `session_dir`). Operators widen by configuring `Workspaces:Directory` — a bounded,
+  existing lever, not a global `trust-verb`. `project_dir` is also included when the
+  channel carries one.
 - **[Autonomous clamp partially reverses the shipped `Mode.All`→anywhere shell
   behavior]** → Intended. For non-interactive contexts, path authority comes from
   the channel zone rather than the audience's `Mode.All`; the unification still holds

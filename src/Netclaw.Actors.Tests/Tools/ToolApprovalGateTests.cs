@@ -723,13 +723,15 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_unrestricted_audience_proceeds_to_approval()
+    public void Non_interactive_pathless_shell_no_longer_false_denies()
     {
-        // Regression for #1244: the real ShellTrustZonePolicy must authorize ANY
-        // path for the Personal audience (WriteFiles.Mode == All), so a
-        // non-interactive shell command no longer false-denies with
-        // shell_no_trust_zone_roots — it falls through to the approval gate, which
-        // fails closed for non-interactive callers unless pre-approved.
+        // Regression for #1244: the old empty-roots check denied EVERY
+        // non-interactive Personal shell command (including path-less ones) with
+        // shell_no_trust_zone_roots, because GetTrustZoneRoots returned [] for
+        // Personal (WriteFiles.Mode == All). With the real policy a path-less
+        // command now extracts no path tokens and falls through to the approval
+        // gate. (Path-bearing out-of-zone commands are confined by the autonomous
+        // zone — see AutonomousZoneClampTests.)
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
@@ -753,7 +755,7 @@ public sealed class ToolApprovalGateTests
         var ctx = PersonalContext(supportsApproval: false);
 
         var decision = policy.AuthorizeInvocation(tool, ctx,
-            new Dictionary<string, object?> { ["command"] = "cat /etc/hostname" });
+            new Dictionary<string, object?> { ["command"] = "git status" });
 
         Assert.Null(decision.DenyReason);
         Assert.True(decision.NeedsApproval);
