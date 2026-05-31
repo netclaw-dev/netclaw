@@ -316,4 +316,68 @@ public sealed class CurationRulesEvaluatorTests
 
         Assert.Null(decision);
     }
+
+    // ── GuardDestructiveUpdate (lossless update guard) ──────────────
+
+    [Fact]
+    public void GuardDestructiveUpdate_downgrades_to_skip_when_proposal_drops_existing_content()
+    {
+        // Existing memory is rich; proposal is narrower and would clobber it.
+        var target = MakeCandidate(docId: "doc-rich",
+            content: "Widget specs: 16 cores, 64GB RAM, 2 NICs. Pricing on file. Vendor contacts listed.");
+        var proposal = MakeProposal(content: "Widget pricing is TBD as of Q2.");
+        var update = new CurationDecision(CurationDecisionKind.Update, "doc-rich", null, null, "rules: newer");
+
+        var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(update, proposal, [target]);
+
+        Assert.Equal(CurationDecisionKind.Skip, guarded.Kind);
+        Assert.Equal("doc-rich", guarded.TargetDocumentId);
+    }
+
+    [Fact]
+    public void GuardDestructiveUpdate_allows_update_when_proposal_is_a_superset()
+    {
+        var target = MakeCandidate(docId: "doc-1", content: "Latest version is 1.5.62.");
+        var proposal = MakeProposal(content: "Latest version is 1.5.62. Released with the new serializer.");
+        var update = new CurationDecision(CurationDecisionKind.Update, "doc-1", null, null, "rules: newer");
+
+        var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(update, proposal, [target]);
+
+        Assert.Equal(CurationDecisionKind.Update, guarded.Kind);
+    }
+
+    [Fact]
+    public void GuardDestructiveUpdate_ignores_whitespace_and_case_when_checking_preservation()
+    {
+        var target = MakeCandidate(docId: "doc-1", content: "Config   path:\n/etc/app/config");
+        var proposal = MakeProposal(content: "config path: /etc/app/config and it is read-only.");
+        var update = new CurationDecision(CurationDecisionKind.Update, "doc-1", null, null, "rules: newer");
+
+        var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(update, proposal, [target]);
+
+        Assert.Equal(CurationDecisionKind.Update, guarded.Kind);
+    }
+
+    [Fact]
+    public void GuardDestructiveUpdate_passes_non_update_decisions_through_unchanged()
+    {
+        var proposal = MakeProposal();
+        var target = MakeCandidate();
+        foreach (var kind in new[] { CurationDecisionKind.Create, CurationDecisionKind.Skip, CurationDecisionKind.Consolidate })
+        {
+            var decision = new CurationDecision(kind, target.DocumentId, null, null, "test");
+            Assert.Equal(kind, CurationRulesEvaluator.GuardDestructiveUpdate(decision, proposal, [target]).Kind);
+        }
+    }
+
+    [Fact]
+    public void GuardDestructiveUpdate_leaves_update_unchanged_when_target_not_in_candidates()
+    {
+        var proposal = MakeProposal(content: "anything");
+        var update = new CurationDecision(CurationDecisionKind.Update, "doc-missing", null, null, "test");
+
+        var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(update, proposal, [MakeCandidate(docId: "doc-other")]);
+
+        Assert.Equal(CurationDecisionKind.Update, guarded.Kind);
+    }
 }
