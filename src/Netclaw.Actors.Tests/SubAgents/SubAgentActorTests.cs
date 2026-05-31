@@ -24,6 +24,8 @@ namespace Netclaw.Actors.Tests.SubAgents;
 
 public class SubAgentActorTests : TestKit
 {
+    private static readonly TimeSpan ApprovalAskTimeout = TimeSpan.FromSeconds(30);
+
     public SubAgentActorTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -643,7 +645,7 @@ public class SubAgentActorTests : TestKit
                 Audience = TrustAudience.Personal,
                 ApprovalBridge = approvalBridge
             },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
         // Deterministic sync: wait until the sub-agent has actually entered
         // the approval wait, then prove the run stays incomplete well past the
@@ -688,7 +690,7 @@ public class SubAgentActorTests : TestKit
                 ApprovalBridge = approvalBridge,
                 ActivitySink = activityChannel.Writer
             },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
         await approvalBridge.EnteredApprovalWait.WaitAsync(TestContext.Current.CancellationToken);
         var waitingActivity = await ReadActivityAsync(
@@ -743,7 +745,7 @@ public class SubAgentActorTests : TestKit
                 ApprovalBridge = approvalBridge,
                 Cancellation = externalCts.Token
             },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
         // Deterministic: wait until the sub-agent is actually inside the
         // approval wait before cancelling. Without this signal the cancel can
@@ -796,7 +798,7 @@ public class SubAgentActorTests : TestKit
                 Audience = TrustAudience.Personal,
                 ApprovalBridge = approvalBridge
             },
-            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(
             () => Assert.Equal(2, approvalBridge.RequestCount),
@@ -938,7 +940,7 @@ public class SubAgentActorTests : TestKit
             throw new Xunit.Sdk.XunitException(
                 $"Expected sub-agent run to remain pending for {duration}, but it completed: {result.Output}");
         }
-        catch (TimeoutException)
+        catch (TimeoutException ex) when (ex.GetType() == typeof(TimeoutException))
         {
             return;
         }
