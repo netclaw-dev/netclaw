@@ -217,26 +217,26 @@ Purpose: finish the active config work all the way through runtime semantics.
 
 Done when:
 
-- [ ] Slack channel names entered in config are resolved through Slack before
+- [x] Slack channel names entered in config are resolved through Slack before
   persistence.
-- [ ] Slack `AllowedChannelIds` persists canonical Slack channel IDs (`C...` or
+- [x] Slack `AllowedChannelIds` persists canonical Slack channel IDs (`C...` or
   `G...`) and never unresolved display names.
-- [ ] Slack channel audience keys are remapped to resolved channel IDs.
-- [ ] Discord channel IDs are checked through `IDiscordProbe.ResolveChannelIdsAsync`
+- [x] Slack channel audience keys are remapped to resolved channel IDs.
+- [x] Discord channel IDs are checked through `IDiscordProbe.ResolveChannelIdsAsync`
   before save.
-- [ ] Mattermost channel IDs are checked through a Mattermost config-time probe
+- [x] Mattermost channel IDs are checked through a Mattermost config-time probe
   before save.
-- [ ] Unresolved Slack, Discord, and Mattermost channel targets block save with
+- [x] Unresolved Slack, Discord, and Mattermost channel targets block save with
   visible errors.
-- [ ] Existing configured secrets can be used for validation without prompting
+- [x] Existing configured secrets can be used for validation without prompting
   on re-entry.
-- [ ] Tests cover Slack name -> ID resolution, Slack unresolved name rejection,
+- [x] Tests cover Slack name -> ID resolution, Slack unresolved name rejection,
   Discord unresolved ID rejection, Mattermost unresolved ID rejection, and secret
   preservation.
-- [ ] Native smoke `./scripts/smoke/run-smoke.sh config-channels` passes with
+- [x] Native smoke `./scripts/smoke/run-smoke.sh config-channels` passes with
   semantic assertions on canonical persisted values.
-- [ ] Docker POC image is rebuilt and `netclaw-config-poc-local` is relaunched
-  when this task is used for live verification.
+- [x] Docker POC image rebuild/relaunch was not used for this task's verification;
+  native smoke provided the L3 gate.
 
 #### Task 1.2: Finish generalized config leaf validation
 

@@ -417,6 +417,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.Save();
 
         Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal("xoxb-test", slackProbe.LastBotToken);
         Assert.Equal(["netclaw-support"], slackProbe.LastResolvedNames);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
