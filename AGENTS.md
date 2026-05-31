@@ -131,6 +131,17 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
   `TimeProvider.System` in production. Standardize on `DateTimeOffset`, not
   `DateTime`. Usage: `_timeProvider.GetUtcNow()` returns `DateTimeOffset`,
   `.ToUnixTimeMilliseconds()` for persistence timestamps.
+- **Reuse before you add — look for existing constructs before creating new
+  ones.** Before introducing a new config knob, constructor parameter, field,
+  interface, or helper, check what already carries the data you need — especially
+  what is *already flowing through the seam you're editing* (the execution
+  context, an injected policy, an existing `*Paths`/`*Config` type). A new
+  construct that parallels an existing one is a defect: it duplicates state,
+  drifts from the original, and forces plumbing (threading a value through N
+  constructors) that the existing path already solved. Anchor the design on the
+  data already present at the call site; if you find yourself adding plumbing to
+  feed a new construct, stop — the value is usually already reachable. Adding a
+  new construct is justified only when no existing one fits and you can name why.
 - **NEVER add implicit conversions to/from primitive types on value objects.**
   Value objects exist to prevent accidental misuse — an implicit conversion back
   to the primitive defeats the purpose. Use `.Value` for explicit access and
