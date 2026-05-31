@@ -6,10 +6,11 @@
 #   ./ralph-opencode.sh 10                   # Run 10 iterations
 #   ./ralph-opencode.sh --model <m>          # Run with model override
 #   ./ralph-opencode.sh --postmortem-model <m>
+#   ./ralph-opencode.sh --variant high       # Run with model variant override
 #   ./ralph-opencode.sh --review-interval 3  # Run adversarial review every 3 iterations
 #   ./ralph-opencode.sh --model <m> 10
-#   RALPH_MODEL=openai/gpt-4.5 ./ralph-opencode.sh
-#   ./ralph-opencode.sh --model openai/gpt-5.2-codex --postmortem-model github-copilot/claude-opus-4.5 9
+#   RALPH_MODEL=openai/gpt-5.5 RALPH_VARIANT=xhigh ./ralph-opencode.sh
+#   ./ralph-opencode.sh --model openai/gpt-5.5 --variant xhigh --postmortem-model github-copilot/claude-opus-4.5 --postmortem-variant max 9
 #   Postmortem runs automatically after the loop.
 #
 # Each iteration is a FRESH OpenCode context window.
@@ -24,38 +25,59 @@ trap 'echo ""; echo "RALPH loop interrupted."; exit 130' INT TERM
 
 PLAN_FILE="IMPLEMENTATION_PLAN.md"
 ITERATIONS=5
-MODEL="${RALPH_MODEL:-github-copilot/claude-opus-4.5}"
+MODEL="${RALPH_MODEL:-openai/gpt-5.5}"
+VARIANT="${RALPH_VARIANT:-xhigh}"
 POSTMORTEM_MODEL="${RALPH_POSTMORTEM_MODEL:-$MODEL}"
+POSTMORTEM_VARIANT="${RALPH_POSTMORTEM_VARIANT:-$VARIANT}"
 REVIEW_INTERVAL="${RALPH_REVIEW_INTERVAL:-0}"  # 0 = disabled
 L3_GATE_ENABLED="${RALPH_L3_GATE:-true}"       # Block commits without L3 evidence
 L3_GATE_BYPASS=false
 
-# --- arg parsing (allow: [--model X] [--review-interval N] [iterations]) ---
+# --- arg parsing (allow: [--model X] [--variant X] [--review-interval N] [iterations]) ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model|-m)
       if [[ $# -lt 2 ]]; then
         echo "Missing value for $1"
-        echo "Usage: $0 [--model <model>] [--postmortem-model <model>] [--review-interval N] [--skip-l3-gate] [iterations]"
+        echo "Usage: $0 [--model <model>] [--variant <variant>] [--postmortem-model <model>] [--postmortem-variant <variant>] [--review-interval N] [--skip-l3-gate] [iterations]"
         exit 1
       fi
       MODEL="$2"
       POSTMORTEM_MODEL="${RALPH_POSTMORTEM_MODEL:-$MODEL}"
       shift 2
       ;;
+    --variant)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for $1"
+        echo "Usage: $0 [--model <model>] [--variant <variant>] [--postmortem-model <model>] [--postmortem-variant <variant>] [--review-interval N] [--skip-l3-gate] [iterations]"
+        exit 1
+      fi
+      VARIANT="$2"
+      POSTMORTEM_VARIANT="${RALPH_POSTMORTEM_VARIANT:-$VARIANT}"
+      shift 2
+      ;;
     --postmortem-model)
       if [[ $# -lt 2 ]]; then
         echo "Missing value for $1"
-        echo "Usage: $0 [--model <model>] [--postmortem-model <model>] [--review-interval N] [--skip-l3-gate] [iterations]"
+        echo "Usage: $0 [--model <model>] [--variant <variant>] [--postmortem-model <model>] [--postmortem-variant <variant>] [--review-interval N] [--skip-l3-gate] [iterations]"
         exit 1
       fi
       POSTMORTEM_MODEL="$2"
       shift 2
       ;;
+    --postmortem-variant)
+      if [[ $# -lt 2 ]]; then
+        echo "Missing value for $1"
+        echo "Usage: $0 [--model <model>] [--variant <variant>] [--postmortem-model <model>] [--postmortem-variant <variant>] [--review-interval N] [--skip-l3-gate] [iterations]"
+        exit 1
+      fi
+      POSTMORTEM_VARIANT="$2"
+      shift 2
+      ;;
     --review-interval)
       if [[ $# -lt 2 ]]; then
         echo "Missing value for $1"
-        echo "Usage: $0 [--model <model>] [--postmortem-model <model>] [--review-interval N] [--skip-l3-gate] [iterations]"
+        echo "Usage: $0 [--model <model>] [--variant <variant>] [--postmortem-model <model>] [--postmortem-variant <variant>] [--review-interval N] [--skip-l3-gate] [iterations]"
         exit 1
       fi
       REVIEW_INTERVAL="$2"
@@ -72,7 +94,7 @@ while [[ $# -gt 0 ]]; do
         shift
       else
         echo "Unknown arg: $1"
-        echo "Usage: $0 [--model <model>] [--postmortem-model <model>] [--review-interval N] [--skip-l3-gate] [iterations]"
+        echo "Usage: $0 [--model <model>] [--variant <variant>] [--postmortem-model <model>] [--postmortem-variant <variant>] [--review-interval N] [--skip-l3-gate] [iterations]"
         exit 1
       fi
       ;;
@@ -93,7 +115,9 @@ mkdir -p "$RUN_DIR"
 echo "=========================================="
 echo "  RALPH Loop (OpenCode)"
 echo "  Model: $MODEL"
+echo "  Variant: $VARIANT"
 echo "  Postmortem Model: $POSTMORTEM_MODEL"
+echo "  Postmortem Variant: $POSTMORTEM_VARIANT"
 echo "  Review Interval: $REVIEW_INTERVAL (0=disabled)"
 echo "  L3 Gate: $L3_GATE_ENABLED (bypass=$L3_GATE_BYPASS)"
 echo "  Iterations: $ITERATIONS"
@@ -121,7 +145,9 @@ LAST_REVIEW_COMMIT="$START_COMMIT"
   echo "Run ID: $RUN_ID"
   echo "Branch: $BRANCH"
   echo "Model: $MODEL"
+  echo "Variant: $VARIANT"
   echo "Postmortem model: $POSTMORTEM_MODEL"
+  echo "Postmortem variant: $POSTMORTEM_VARIANT"
   echo "Review interval: $REVIEW_INTERVAL"
   echo "Run start commit: $START_COMMIT"
   echo "Started: $(date)"
@@ -149,7 +175,7 @@ run_mid_review() {
     [[ -f "$f" ]] && prior_reviews="$prior_reviews\n- $f"
   done
 
-  if ! opencode run --model "$POSTMORTEM_MODEL" "Run a full adversarial review using the adversarial review skill.
+  if ! opencode run --model "$POSTMORTEM_MODEL" --variant "$POSTMORTEM_VARIANT" "Run a full adversarial review using the adversarial review skill.
 
 ## Context
 - RUN_ID: $RUN_ID
@@ -343,7 +369,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
   ITER_LOG="${RUN_DIR}/iter-${ITER_PAD}.md"
   ITER_START_COMMIT=$(git rev-parse HEAD)
 
-  if ! opencode run --model "$MODEL" "You are running RALPH iteration $i.
+  if ! opencode run --model "$MODEL" --variant "$VARIANT" "You are running RALPH iteration $i.
 
 ## Run Metadata (MUST USE)
 - RUN_ID: $RUN_ID
@@ -485,7 +511,7 @@ echo ""
 echo "Running postmortem (skill): ralph-after-action"
 # Note: OpenCode doesn't have OpenProse plugin, so we invoke the skill directly.
 # This runs sequentially. For parallel execution, use ralph.sh with Claude Code.
-if ! opencode run --model "$POSTMORTEM_MODEL" "/ralph-after-action RUN_ID=$RUN_ID RUN_DIR=$RUN_DIR branch=$(git branch --show-current)"; then
+if ! opencode run --model "$POSTMORTEM_MODEL" --variant "$POSTMORTEM_VARIANT" "/ralph-after-action RUN_ID=$RUN_ID RUN_DIR=$RUN_DIR branch=$(git branch --show-current)"; then
   POSTMORTEM_EXIT=$?
   echo ""
   echo "Postmortem exited with code $POSTMORTEM_EXIT"
