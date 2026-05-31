@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
+
 namespace Netclaw.Cli.Daemon;
 
 /// <summary>
@@ -20,14 +22,43 @@ internal static class ContextWindowResolution
         if (configuredContextWindow is > 0)
             return configuredContextWindow.Value;
 
-        var status = await daemon.GetStatusAsync()
-            ?? throw new InvalidOperationException(
+        DaemonRuntimeStatus.Response? status;
+        try
+        {
+            status = await daemon.GetStatusAsync();
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new DaemonUnavailableException(daemon.Endpoint, ex);
+        }
+        catch (TaskCanceledException ex)
+        {
+            throw new DaemonUnavailableException(daemon.Endpoint, ex);
+        }
+
+        if (status is null)
+            throw new InvalidOperationException(
                 "Daemon returned empty status. Cannot resolve effective context window. " +
                 "Set Models.Main.ContextWindow in netclaw.json or ensure the daemon is healthy.");
+
         return status.Model?.ContextWindow is > 0 and var daemonCw
             ? daemonCw
             : throw new InvalidOperationException(
                 $"Daemon reported no context window for model '{modelId}'. " +
                 "Set Models.Main.ContextWindow in netclaw.json.");
     }
+}
+
+internal sealed class DaemonUnavailableException : InvalidOperationException
+{
+    public DaemonUnavailableException(string endpoint, Exception innerException)
+        : base(
+            $"Could not reach the Netclaw daemon at {endpoint}. " +
+            "Start it with 'netclaw daemon start' or run 'netclaw doctor' for diagnostics.",
+            innerException)
+    {
+        Endpoint = endpoint;
+    }
+
+    public string Endpoint { get; }
 }

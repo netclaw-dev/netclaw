@@ -65,12 +65,15 @@ public sealed class ContextWindowResolutionTests
     }
 
     [Fact]
-    public async Task NullConfig_DaemonOffline_Throws()
+    public async Task NullConfig_DaemonOffline_ThrowsDaemonUnavailable()
     {
         var daemon = CreateDaemonApi(_ => throw new HttpRequestException("connection refused"));
 
-        await Assert.ThrowsAsync<HttpRequestException>(
+        var ex = await Assert.ThrowsAsync<DaemonUnavailableException>(
             () => ContextWindowResolution.ResolveAsync(null, daemon, "qwen3:30b"));
+
+        Assert.Contains("Could not reach the Netclaw daemon", ex.Message);
+        Assert.Contains("netclaw daemon start", ex.Message);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────

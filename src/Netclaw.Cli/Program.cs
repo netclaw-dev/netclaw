@@ -1040,20 +1040,29 @@ static void WriteCrashLog(Exception ex)
 // AddTermina, which also registers TerminaApplication) drives an interactive
 // terminal: spawned by shell_execute or fed piped stdin it would render but
 // never receive a quit key — an un-killable subprocess. Fail fast in that case.
-// Non-Termina hosts (headless mode) carry no TerminaApplication and run unguarded.
+// Daemon connectivity failures are handled here because the chat route can
+// resolve daemon-backed services while TerminaApplication is being constructed.
 static async Task RunTerminaHostAsync(IHost host)
 {
-    if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+    try
     {
-        Console.Error.WriteLine(
-            "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
-        Console.Error.WriteLine(
-            "Non-interactive alternatives: 'netclaw sessions --once [--json]' or 'netclaw chat -p \"...\"'.");
-        Environment.ExitCode = 1;
-        return;
-    }
+        if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+        {
+            Console.Error.WriteLine(
+                "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
+            Console.Error.WriteLine(
+                "Non-interactive alternatives: 'netclaw sessions --once [--json]' or 'netclaw chat -p \"...\"'.");
+            Environment.ExitCode = 1;
+            return;
+        }
 
-    await host.RunAsync();
+        await host.RunAsync();
+    }
+    catch (DaemonUnavailableException ex)
+    {
+        Console.Error.WriteLine($"netclaw: {ex.Message}");
+        Environment.ExitCode = 1;
+    }
 }
 
 static void WriteDaemonResult(DaemonResult result)
