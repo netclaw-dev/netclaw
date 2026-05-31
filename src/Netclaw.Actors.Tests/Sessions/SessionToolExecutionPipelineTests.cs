@@ -388,6 +388,73 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
+    public async Task Streaming_tool_result_persists_model_input_media_references_on_tool_message()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(imagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var executor = new ModelInputFileExecutor(imagePath);
+        var probe = CreateTestProbe("streaming-model-input-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+            new SessionId("D1/streaming-model-input-file-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: dir.Path,
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(3),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            streamToolResults: true,
+            modelInputModalities: ModelModality.Text | ModelModality.Image,
+            ct: TestContext.Current.CancellationToken);
+
+        var single = await probe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await probe.ExpectMsgAsync<ToolExecutionBatchCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var mediaRef = Assert.Single(single.Result.ModelInputMediaReferences);
+        var persistedMediaRef = Assert.Single(single.Result.Message.MediaReferences);
+        Assert.Equal(mediaRef.RelativePath, persistedMediaRef.RelativePath);
+        Assert.Equal("image/png", persistedMediaRef.MimeType.Value);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_batch_limit_is_enforced_across_registered_files()
+    {
+        using var dir = new DisposableTempDir();
+        var firstImagePath = Path.Combine(dir.Path, "first.png");
+        var secondImagePath = Path.Combine(dir.Path, "second.png");
+        await File.WriteAllBytesAsync(firstImagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(secondImagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var context = new ToolExecutionContext("D1/model-input-budget-test", dir.Path)
+        {
+            Audience = TrustAudience.Personal,
+            ModelInputModalities = ModelModality.Text | ModelModality.Image
+        };
+        context.AddModelInputFile(firstImagePath, "first.png", "image/png");
+        context.AddModelInputFile(secondImagePath, "second.png", "image/png");
+        var budget = new ModelInputBatchBudget(FakePngBytes.Length);
+
+        var result = SessionToolExecutionPipeline.MaterializeModelInputFiles(
+            context,
+            dir.Path,
+            logger: null,
+            batchBudget: budget);
+
+        Assert.Equal(2, result.RequestedCount);
+        Assert.Single(result.MediaReferences);
+    }
+
+    [Fact]
     public async Task Tool_model_input_file_without_matching_modality_is_skipped()
     {
         using var dir = new DisposableTempDir();

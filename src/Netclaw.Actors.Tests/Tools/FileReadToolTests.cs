@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Telemetry;
@@ -53,6 +54,47 @@ public class FileReadToolTests : IDisposable
         var result = await _tool.ExecuteAsync(args, CreatePersonalContext(), CancellationToken.None);
 
         Assert.Equal("public static class Program { }", result);
+    }
+
+    [Fact]
+    public async Task Read_utf16_text_with_bom_returns_content()
+    {
+        var filePath = Path.Combine(_dir.Path, "notes.txt");
+        const string expected = "first line\nsecond line";
+        await File.WriteAllTextAsync(filePath, expected, Encoding.Unicode, TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public async Task Read_windows1252_text_extension_returns_content()
+    {
+        var filePath = Path.Combine(_dir.Path, "notes.txt");
+        var bytes = new byte[]
+        {
+            (byte)'c', (byte)'a', (byte)'f', 0xE9, (byte)' ', 0x93,
+            (byte)'q', (byte)'u', (byte)'o', (byte)'t', (byte)'e', (byte)'d',
+            0x94, (byte)' ', 0x97, (byte)' ', (byte)'d', (byte)'o', (byte)'n', (byte)'e'
+        };
+        await File.WriteAllBytesAsync(filePath, bytes, TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Equal("caf\u00E9 \u201Cquoted\u201D \u2014 done", result);
+    }
+
+    [Fact]
+    public async Task Read_utf8_text_with_split_sample_boundary_returns_content()
+    {
+        var filePath = Path.Combine(_dir.Path, "boundary.txt");
+        var expected = new string('a', 4095) + "\u20AC after boundary";
+        await File.WriteAllTextAsync(filePath, expected, StrictUtf8NoBom, TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Equal(expected, result);
     }
 
     [Fact]
@@ -457,6 +499,8 @@ public class FileReadToolTests : IDisposable
         0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1,
         0x00, 0x01, 0x02, 0x03
     ];
+
+    private static readonly Encoding StrictUtf8NoBom = new UTF8Encoding(false, true);
 
     private sealed class FakeMetrics : ISessionMetrics
     {

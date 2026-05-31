@@ -16,6 +16,7 @@ using Netclaw.Actors.Tests.Memory;
 using ApprovalOptionKeys = Netclaw.Actors.Protocol.ApprovalOptionKeys;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -226,6 +227,45 @@ public class SubAgentActorTests : TestKit
         Assert.NotNull(fakeTool.LastContext);
         // Second LLM call returns text (tool calls only on first call)
         Assert.Contains("Response #2", result.Output);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_image_is_attached_to_subagent_followup_call()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(imagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var fakeTool = new FakeNetclawTool(
+            "load_image",
+            "image loaded",
+            onExecute: context => context.AddModelInputFile(imagePath, "diagram.png", "image/png"));
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [new FunctionCallContent("call-image", "load_image")]
+        };
+        var definition = CreateDefinition([fakeTool]);
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Inspect the image.",
+                Timeout = TimeSpan.FromSeconds(5),
+                Audience = TrustAudience.Personal,
+                ParentSessionDirectory = dir.Path,
+                ModelInputModalities = ModelModality.Text | ModelModality.Image
+            },
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.NotNull(fakeTool.LastContext);
+        Assert.True(fakeTool.LastContext!.ModelInputModalities.HasFlag(ModelModality.Image));
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        var nudge = Assert.Single(fakeClient.LastReceivedMessages!, message =>
+            message.Role == ChatRole.User
+            && message.Text.Contains("media", StringComparison.OrdinalIgnoreCase));
+        var data = Assert.Single(nudge.Contents.OfType<DataContent>());
+        Assert.Equal("image/png", data.MediaType);
     }
 
     [Fact]
@@ -1179,6 +1219,12 @@ public class SubAgentActorTests : TestKit
         public object? GetService(Type serviceType, object? serviceKey = null) => null;
         public void Dispose() { }
     }
+
+    private static readonly byte[] FakePngBytes =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
+    ];
 }
 
 /// <summary>

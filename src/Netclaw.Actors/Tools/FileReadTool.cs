@@ -16,7 +16,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Reads UTF-8 text files and inspects non-text files without returning raw bytes.
+/// Reads text files and inspects non-text files without returning raw bytes.
 /// </summary>
 [NetclawTool(ToolName,
     "Read text files or inspect non-text files. Images can be loaded for visual inspection when the active model supports image input; PDFs/media/archives return metadata and guidance. For large text files, use Offset and Limit to read sections.",
@@ -26,6 +26,11 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     public const string ToolName = "file_read";
     private const long MaxModelInputFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+    private static readonly Encoding StrictUtf16Le = new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
+    private static readonly Encoding StrictUtf16Be = new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
+    private static readonly Encoding StrictUtf32Le = new UTF32Encoding(bigEndian: false, byteOrderMark: true, throwOnInvalidCharacters: true);
+    private static readonly Encoding StrictUtf32Be = new UTF32Encoding(bigEndian: true, byteOrderMark: true, throwOnInvalidCharacters: true);
+    private static readonly Encoding Windows1252 = new Windows1252Encoding();
 
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
@@ -82,23 +87,25 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             if (!inspection.IsTextLike)
                 return HandleNonTextFile(authorizedPath, inspection, context);
 
+            var encoding = inspection.TextEncoding ?? StrictUtf8;
             if (offset.HasValue || limit.HasValue)
             {
-                var lines = await ReadLinesAsync(authorizedPath, offset ?? 1, limit, _config.MaxOutputChars, ct);
+                var lines = await ReadLinesAsync(authorizedPath, encoding, offset ?? 1, limit, _config.MaxOutputChars, ct);
                 RecordSkillReadIfApplicable(authorizedPath);
                 return lines;
             }
 
-            var content = await File.ReadAllTextAsync(authorizedPath, StrictUtf8, ct);
+            var content = await File.ReadAllTextAsync(authorizedPath, encoding, ct);
             RecordSkillReadIfApplicable(authorizedPath);
             return TruncateFileOutput(content, _config.MaxOutputChars);
         }
         catch (DecoderFallbackException)
         {
+            var sizeBytes = TryGetFileLength(authorizedPath);
             return BuildMetadataResponse(
                 authorizedPath,
-                new FileInspection("application/octet-stream", AttachmentCategory.Other, new FileInfo(authorizedPath).Length, false),
-                "File is not valid UTF-8 text. Raw binary output is not returned by file_read.");
+                new FileInspection("application/octet-stream", AttachmentCategory.Other, sizeBytes, false, null),
+                "File is not valid in the detected text encoding. Raw binary output is not returned by file_read.");
         }
         catch (UnauthorizedAccessException)
         {
@@ -114,7 +121,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     {
         var info = new FileInfo(path);
         if (info.Length == 0)
-            return new FileInspection("text/plain", AttachmentCategory.Document, 0, true);
+            return new FileInspection("text/plain", AttachmentCategory.Document, 0, true, StrictUtf8);
 
         var sampleLength = (int)Math.Min(info.Length, 4096);
         var buffer = new byte[sampleLength];
@@ -127,20 +134,22 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         var magicMime = MagicByteValidator.DetectMimeType(buffer.AsSpan(0, Math.Min(buffer.Length, 64)));
         var extensionMime = GuessMimeType(path);
-        var looksText = LooksLikeText(buffer);
-        var mimeType = ResolveMimeType(path, magicMime, extensionMime, looksText);
+        var textEncoding = DetectTextEncoding(buffer, extensionMime);
+        var looksText = textEncoding is not null;
+        var mimeType = ResolveMimeType(path, magicMime, extensionMime, textEncoding);
         var category = AttachmentCategories.FromMime(mimeType);
         var isTextLike = looksText && IsTextMime(mimeType);
 
-        return new FileInspection(mimeType, category, info.Length, isTextLike);
+        return new FileInspection(mimeType, category, info.Length, isTextLike, isTextLike ? textEncoding : null);
     }
 
     private static string ResolveMimeType(
         string path,
         string? magicMime,
         string? extensionMime,
-        bool looksText)
+        Encoding? textEncoding)
     {
+        var looksText = textEncoding is not null;
         // ZIP/OLE Office containers should be explained as documents, not as
         // generic archives or OLE blobs. The extension is only trusted after the
         // container signature proves this is the expected binary family.
@@ -149,6 +158,9 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         if (IsOleBackedOfficeDocument(path)
             && string.Equals(magicMime, "application/x-ole-compound-document", StringComparison.OrdinalIgnoreCase))
+            return extensionMime!;
+
+        if (looksText && IsTextMime(extensionMime) && IsUtf16OrUtf32(textEncoding))
             return extensionMime!;
 
         if (magicMime is not null)
@@ -219,7 +231,149 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
                guidance;
     }
 
-    private static bool LooksLikeText(ReadOnlySpan<byte> sample)
+    private static Encoding? DetectTextEncoding(ReadOnlySpan<byte> sample, string? extensionMime)
+    {
+        if (sample.Length == 0)
+            return StrictUtf8;
+
+        if (TryDetectBomEncoding(sample, out var bomEncoding, out var bomLength))
+            return DecodedTextLooksLikeText(sample[bomLength..], bomEncoding) ? bomEncoding : null;
+
+        if (TryDetectUtf16WithoutBom(sample, out var utf16Encoding)
+            && DecodedTextLooksLikeText(sample, utf16Encoding))
+        {
+            return utf16Encoding;
+        }
+
+        if (RawTextControlsAreAcceptable(sample) && CanDecodeUtf8Sample(sample))
+            return StrictUtf8;
+
+        return IsTextMime(extensionMime)
+               && RawTextControlsAreAcceptable(sample)
+               && DecodedTextLooksLikeText(sample, Windows1252)
+            ? Windows1252
+            : null;
+    }
+
+    private static bool TryDetectBomEncoding(
+        ReadOnlySpan<byte> sample,
+        out Encoding encoding,
+        out int bomLength)
+    {
+        if (sample.Length >= 4)
+        {
+            if (sample[0] == 0xFF && sample[1] == 0xFE && sample[2] == 0x00 && sample[3] == 0x00)
+            {
+                encoding = StrictUtf32Le;
+                bomLength = 4;
+                return true;
+            }
+
+            if (sample[0] == 0x00 && sample[1] == 0x00 && sample[2] == 0xFE && sample[3] == 0xFF)
+            {
+                encoding = StrictUtf32Be;
+                bomLength = 4;
+                return true;
+            }
+        }
+
+        if (sample.Length >= 3 && sample[0] == 0xEF && sample[1] == 0xBB && sample[2] == 0xBF)
+        {
+            encoding = StrictUtf8;
+            bomLength = 3;
+            return true;
+        }
+
+        if (sample.Length >= 2)
+        {
+            if (sample[0] == 0xFF && sample[1] == 0xFE)
+            {
+                encoding = StrictUtf16Le;
+                bomLength = 2;
+                return true;
+            }
+
+            if (sample[0] == 0xFE && sample[1] == 0xFF)
+            {
+                encoding = StrictUtf16Be;
+                bomLength = 2;
+                return true;
+            }
+        }
+
+        encoding = StrictUtf8;
+        bomLength = 0;
+        return false;
+    }
+
+    private static bool TryDetectUtf16WithoutBom(ReadOnlySpan<byte> sample, out Encoding encoding)
+    {
+        var pairs = Math.Min(sample.Length / 2, 256);
+        if (pairs < 4)
+        {
+            encoding = StrictUtf8;
+            return false;
+        }
+
+        var evenNul = 0;
+        var oddNul = 0;
+        for (var i = 0; i < pairs * 2; i += 2)
+        {
+            if (sample[i] == 0)
+                evenNul++;
+            if (sample[i + 1] == 0)
+                oddNul++;
+        }
+
+        if (oddNul >= pairs / 2 && evenNul <= Math.Max(1, pairs / 20))
+        {
+            encoding = StrictUtf16Le;
+            return true;
+        }
+
+        if (evenNul >= pairs / 2 && oddNul <= Math.Max(1, pairs / 20))
+        {
+            encoding = StrictUtf16Be;
+            return true;
+        }
+
+        encoding = StrictUtf8;
+        return false;
+    }
+
+    private static bool CanDecodeUtf8Sample(ReadOnlySpan<byte> sample)
+    {
+        var decoder = StrictUtf8.GetDecoder();
+        var bytes = sample.ToArray();
+        var chars = new char[StrictUtf8.GetMaxCharCount(bytes.Length)];
+        try
+        {
+            decoder.Convert(bytes, 0, bytes.Length, chars, 0, chars.Length, flush: false, out _, out _, out _);
+            return true;
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    private static bool DecodedTextLooksLikeText(ReadOnlySpan<byte> sample, Encoding encoding)
+    {
+        var decoder = encoding.GetDecoder();
+        var bytes = sample.ToArray();
+        var chars = new char[encoding.GetMaxCharCount(bytes.Length)];
+        try
+        {
+            decoder.Convert(bytes, 0, bytes.Length, chars, 0, chars.Length, flush: false, out _, out var charsUsed, out _);
+            return TextControlsAreAcceptable(chars.AsSpan(0, charsUsed));
+        }
+        catch (DecoderFallbackException)
+        {
+            return false;
+        }
+    }
+
+    private static bool RawTextControlsAreAcceptable(ReadOnlySpan<byte> sample)
     {
         if (sample.Length == 0)
             return true;
@@ -230,22 +384,29 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             if (b == 0)
                 return false;
 
-            if (b < 0x20 && b is not ((byte)'\n') and not ((byte)'\r') and not ((byte)'\t'))
+            if (b < 0x20 && b is not ((byte)'\n') and not ((byte)'\r') and not ((byte)'\t') and not 0x1B)
                 controlCount++;
         }
 
-        if (controlCount > Math.Max(1, sample.Length / 20))
-            return false;
+        return controlCount <= Math.Max(1, sample.Length / 20);
+    }
 
-        try
-        {
-            StrictUtf8.GetString(sample);
+    private static bool TextControlsAreAcceptable(ReadOnlySpan<char> sample)
+    {
+        if (sample.Length == 0)
             return true;
-        }
-        catch (DecoderFallbackException)
+
+        var controlCount = 0;
+        foreach (var c in sample)
         {
-            return false;
+            if (c == '\0')
+                return false;
+
+            if (char.IsControl(c) && c is not '\n' and not '\r' and not '\t' and not '\u001B')
+                controlCount++;
         }
+
+        return controlCount <= Math.Max(1, sample.Length / 20);
     }
 
     private static bool IsTextMime(string? mimeType)
@@ -264,6 +425,14 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             "application/yaml" => true,
             _ => false
         };
+    }
+
+    private static bool IsUtf16OrUtf32(Encoding? encoding)
+    {
+        return ReferenceEquals(encoding, StrictUtf16Le)
+               || ReferenceEquals(encoding, StrictUtf16Be)
+               || ReferenceEquals(encoding, StrictUtf32Le)
+               || ReferenceEquals(encoding, StrictUtf32Be);
     }
 
     private static bool RequiresBinarySignature(string? mimeType)
@@ -322,7 +491,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             ".ppt" => "application/vnd.ms-powerpoint",
             ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             ".rtf" => "application/rtf",
-            ".txt" => "text/plain",
+            ".txt" or ".log" => "text/plain",
             ".md" => "text/markdown",
             ".csv" => "text/csv",
             ".html" or ".htm" => "text/html",
@@ -358,13 +527,18 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     }
 
     private static async Task<string> ReadLinesAsync(
-        string path, int startLine, int? maxLines, int maxChars, CancellationToken ct)
+        string path,
+        Encoding encoding,
+        int startLine,
+        int? maxLines,
+        int maxChars,
+        CancellationToken ct)
     {
         var sb = new StringBuilder();
         var lineNumber = 0;
         var linesRead = 0;
 
-        using var reader = new StreamReader(path, StrictUtf8);
+        using var reader = new StreamReader(path, encoding, detectEncodingFromByteOrderMarks: true);
         while (await reader.ReadLineAsync(ct) is { } line)
         {
             lineNumber++;
@@ -390,7 +564,88 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         string MimeType,
         AttachmentCategory Category,
         long SizeBytes,
-        bool IsTextLike);
+        bool IsTextLike,
+        Encoding? TextEncoding);
+
+    private static long TryGetFileLength(string path)
+    {
+        try
+        {
+            return new FileInfo(path).Length;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0;
+        }
+    }
+
+    private sealed class Windows1252Encoding : Encoding
+    {
+        private static readonly char[] C1Map =
+        [
+            '\u20AC', '\u0081', '\u201A', '\u0192', '\u201E', '\u2026', '\u2020', '\u2021',
+            '\u02C6', '\u2030', '\u0160', '\u2039', '\u0152', '\u008D', '\u017D', '\u008F',
+            '\u0090', '\u2018', '\u2019', '\u201C', '\u201D', '\u2022', '\u2013', '\u2014',
+            '\u02DC', '\u2122', '\u0161', '\u203A', '\u0153', '\u009D', '\u017E', '\u0178'
+        ];
+
+        public override string WebName => "windows-1252";
+
+        public override int GetByteCount(char[] chars, int index, int count) => count;
+
+        public override int GetBytes(
+            char[] chars,
+            int charIndex,
+            int charCount,
+            byte[] bytes,
+            int byteIndex)
+        {
+            for (var i = 0; i < charCount; i++)
+                bytes[byteIndex + i] = EncodeChar(chars[charIndex + i]);
+
+            return charCount;
+        }
+
+        public override int GetCharCount(byte[] bytes, int index, int count) => count;
+
+        public override int GetChars(
+            byte[] bytes,
+            int byteIndex,
+            int byteCount,
+            char[] chars,
+            int charIndex)
+        {
+            for (var i = 0; i < byteCount; i++)
+                chars[charIndex + i] = DecodeByte(bytes[byteIndex + i]);
+
+            return byteCount;
+        }
+
+        public override int GetMaxByteCount(int charCount) => charCount;
+
+        public override int GetMaxCharCount(int byteCount) => byteCount;
+
+        private static char DecodeByte(byte b)
+        {
+            return b is >= 0x80 and <= 0x9F
+                ? C1Map[b - 0x80]
+                : (char)b;
+        }
+
+        private static byte EncodeChar(char c)
+        {
+            if (c <= 0x7F || c is >= '\u00A0' and <= '\u00FF')
+                return (byte)c;
+
+            for (var i = 0; i < C1Map.Length; i++)
+            {
+                if (C1Map[i] == c)
+                    return (byte)(0x80 + i);
+            }
+
+            return (byte)'?';
+        }
+    }
 
     private void RecordSkillReadIfApplicable(string authorizedPath)
     {

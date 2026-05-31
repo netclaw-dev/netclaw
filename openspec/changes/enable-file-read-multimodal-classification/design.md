@@ -43,10 +43,12 @@ binary payloads in `FunctionResultContent`.
 ### D2. Model-visible images use a side channel
 
 When `file_read` reads an image and the active model supports image input, the
-tool registers a model-input file on `ToolExecutionContext`. The session tool
-pipeline copies that file into the session `media/` directory and returns
-`SerializableMediaReference` records alongside the normal text tool result. After
-the tool result is recorded, `LlmSessionActor` appends a system nudge carrying
+tool registers a model-input file on `ToolExecutionContext`. The session and
+sub-agent tool pipelines copy that file into the session `media/` directory and
+return `SerializableMediaReference` records alongside the normal text tool
+result. Main-session streaming tool results persist those refs on the tool-result
+message so journal replay can recreate the media nudge. After all sibling tool
+results are present, the session or sub-agent loop appends a system nudge carrying
 those media references so the next LLM call sees the image through the existing
 `ChatMessageConverter` path.
 
@@ -70,8 +72,10 @@ and unknown binaries say the bytes are not readable as text.
 - A tool-result side channel adds one more shape to `ToolExecutionContext`, but it
   mirrors the existing `FileAttachmentInfo` side channel and keeps tool results
   string-only.
-- Text detection must not break code-file reads with unfamiliar extensions. The
-  implementation should treat valid UTF-8 without binary control bytes as text
-  even when the MIME type is unknown.
+- Text detection must not break code-file reads with unfamiliar extensions or
+  common user-authored text encodings. The implementation should treat valid
+  UTF-8 without binary control bytes as text even when the MIME type is unknown,
+  and should recognize UTF-16/UTF-32 Unicode plus Windows-1252 when the extension
+  is text-like.
 - Image files are copied into `media/`; this duplicates bytes for files already
   under `inbox/`, but keeps the LLM boundary simple and path-local.

@@ -29,6 +29,34 @@ internal sealed record ToolCallResult(
     IReadOnlyList<CompletedSubAgentRun> CompletedSubAgentRuns,
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings);
 
+internal sealed record ModelInputMaterializationResult(
+    IReadOnlyList<SerializableMediaReference> MediaReferences,
+    int RequestedCount);
+
+internal sealed class ModelInputBatchBudget(long maxBytes)
+{
+    private readonly object _sync = new();
+    private long _reservedBytes;
+
+    public bool TryReserve(long sizeBytes)
+    {
+        lock (_sync)
+        {
+            if (_reservedBytes + sizeBytes > maxBytes)
+                return false;
+
+            _reservedBytes += sizeBytes;
+            return true;
+        }
+    }
+
+    public void Release(long sizeBytes)
+    {
+        lock (_sync)
+            _reservedBytes = Math.Max(0, _reservedBytes - sizeBytes);
+    }
+}
+
 /// <summary>
 /// Async pipeline for parallel tool execution. Runs on the thread pool and
 /// sends results back to the session actor via <c>self.Tell()</c>.
@@ -73,6 +101,7 @@ internal static class SessionToolExecutionPipeline
             // independent -- e.g. two file_edit calls on the same file -- so
             // file-mutating tools serialize their read-modify-write per target
             // path via FileMutationGate to avoid lost-update races here.
+            var modelInputBudget = new ModelInputBatchBudget(MaxModelInputBatchBytes);
             var tasks = toolCalls.Select(async tc =>
             {
                 var result = await ExecuteSingleToolAsync(
@@ -105,7 +134,8 @@ internal static class SessionToolExecutionPipeline
                     decisionOverride is not null && decisionOverride.TryGetValue(tc.CallId, out var overrideDecision)
                         ? overrideDecision
                         : null,
-                    turnContext);
+                    turnContext,
+                    modelInputBudget);
                 if (streamToolResults)
                     self.Tell(new ToolExecutionSingleCompleted(result));
                 return result;
@@ -173,7 +203,8 @@ internal static class SessionToolExecutionPipeline
         ModelModality modelInputModalities = ModelModality.Text,
         IReadOnlyList<string>? oneTimeApprovalPreSeed = null,
         ApprovalDecision? decisionOverride = null,
-        TurnContext? turnContext = null)
+        TurnContext? turnContext = null,
+        ModelInputBatchBudget? modelInputBudget = null)
     {
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
         tc = cleanedTc;
@@ -529,20 +560,26 @@ internal static class SessionToolExecutionPipeline
             });
         }
 
+        modelInputBudget ??= new ModelInputBatchBudget(MaxModelInputBatchBytes);
+        var modelInputMaterialization = MaterializeModelInputFiles(context, sessionDir, logger, modelInputBudget);
         resultText = ClampToolResult(resultText, maxInlineToolResultChars);
-        var modelInputMediaReferences = MaterializeModelInputFiles(context, sessionDir, logger);
+        if (modelInputMaterialization.RequestedCount > modelInputMaterialization.MediaReferences.Count)
+            resultText = AppendModelInputHandoffWarning(
+                resultText,
+                modelInputMaterialization.RequestedCount - modelInputMaterialization.MediaReferences.Count);
 
         var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,
             Content = resultText,
             ToolCallId = new ToolCallId(tc.CallId),
-            Name = tc.Name
+            Name = tc.Name,
+            MediaReferences = modelInputMaterialization.MediaReferences
         };
 
         return new ToolCallResult(
             message,
-            modelInputMediaReferences,
+            modelInputMaterialization.MediaReferences,
             context.FileAttachments,
             completedRuns,
             acceptedFindings);
@@ -757,21 +794,31 @@ internal static class SessionToolExecutionPipeline
         }
     }
 
-    private static IReadOnlyList<SerializableMediaReference> MaterializeModelInputFiles(
+    internal static ModelInputMaterializationResult MaterializeModelInputFiles(
         ToolExecutionContext context,
         string sessionDir,
-        ILogger? logger)
+        ILogger? logger,
+        ModelInputBatchBudget? batchBudget = null)
     {
         if (context.ModelInputFiles.Count == 0)
-            return [];
+            return new ModelInputMaterializationResult([], 0);
 
         var mediaDir = Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory);
-        Directory.CreateDirectory(mediaDir);
+        try
+        {
+            Directory.CreateDirectory(mediaDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger?.LogWarning(ex, "Failed to create model input media directory: {Path}", mediaDir);
+            return new ModelInputMaterializationResult([], context.ModelInputFiles.Count);
+        }
 
         var refs = new List<SerializableMediaReference>(context.ModelInputFiles.Count);
-        var totalBytes = 0L;
+        batchBudget ??= new ModelInputBatchBudget(MaxModelInputBatchBytes);
         foreach (var file in context.ModelInputFiles)
         {
+            var reservedBytes = 0L;
             try
             {
                 // Treat tool-registered model input as a request, not proof it
@@ -802,7 +849,10 @@ internal static class SessionToolExecutionPipeline
 
                 var info = new FileInfo(file.FilePath);
                 if (info.Length <= 0)
+                {
+                    logger?.LogWarning("Model input file is empty, skipping: {Path}", file.FilePath);
                     continue;
+                }
 
                 if (info.Length > MaxModelInputFileBytes)
                 {
@@ -810,17 +860,21 @@ internal static class SessionToolExecutionPipeline
                     continue;
                 }
 
-                if (totalBytes + info.Length > MaxModelInputBatchBytes)
+                if (!batchBudget.TryReserve(info.Length))
                 {
                     logger?.LogWarning("Model input file would exceed batch size limit, skipping: {Path}", file.FilePath);
                     continue;
                 }
+
+                reservedBytes = info.Length;
 
                 if (!IsFileMagicCompatible(file.FilePath, mimeType))
                 {
                     logger?.LogWarning(
                         "Model input file MIME type does not match detected bytes, skipping: {Path}",
                         file.FilePath);
+                    batchBudget.Release(reservedBytes);
+                    reservedBytes = 0;
                     continue;
                 }
 
@@ -829,7 +883,6 @@ internal static class SessionToolExecutionPipeline
                 var fullPath = Path.Combine(mediaDir, fileName);
 
                 File.Copy(file.FilePath, fullPath);
-                totalBytes += info.Length;
 
                 refs.Add(new SerializableMediaReference
                 {
@@ -841,11 +894,20 @@ internal static class SessionToolExecutionPipeline
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                if (reservedBytes > 0)
+                    batchBudget.Release(reservedBytes);
                 logger?.LogWarning(ex, "Failed to materialize model input file: {Path}", file.FilePath);
             }
         }
 
-        return refs;
+        return new ModelInputMaterializationResult(refs, context.ModelInputFiles.Count);
+    }
+
+    internal static string AppendModelInputHandoffWarning(string resultText, int failedCount)
+    {
+        var itemText = failedCount == 1 ? "file" : "files";
+        return resultText +
+               $"\n[model input media handoff warning: {failedCount} registered media {itemText} could not be attached to the next LLM call]";
     }
 
     private static string NormalizeModelInputMime(string? mimeType)
@@ -883,8 +945,16 @@ internal static class SessionToolExecutionPipeline
     {
         Span<byte> header = stackalloc byte[64];
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-        var read = stream.Read(header);
-        var detected = MagicByteValidator.DetectMimeType(header[..read]);
+        var totalRead = 0;
+        while (totalRead < header.Length)
+        {
+            var read = stream.Read(header[totalRead..]);
+            if (read == 0)
+                break;
+            totalRead += read;
+        }
+
+        var detected = MagicByteValidator.DetectMimeType(header[..totalRead]);
         return string.Equals(detected, mimeType, StringComparison.OrdinalIgnoreCase);
     }
 

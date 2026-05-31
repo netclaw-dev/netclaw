@@ -10,9 +10,11 @@ using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
@@ -214,6 +216,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             };
             _toolExecutionContext.Boundary = msg.Boundary;
             _toolExecutionContext.ChannelType = msg.ChannelType;
+            _toolExecutionContext.ModelInputModalities = msg.ModelInputModalities;
             _toolExecutionContext.ProjectDirectory = msg.ParentProjectDirectory;
             _toolExecutionContext.SupportsInteractiveApproval = _approvalBridge is not null;
             _aiTools = ResolveExposedAiTools();
@@ -357,6 +360,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _log.Info("SubAgent [{AgentName}] tool [{ToolName}] result: {Result}",
                     _definition.Name, result.Name ?? "unknown", SecretOutputRedactor.Redact(preview));
             }
+
+            AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
             var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _maxToolIterations);
             var dupNudge = _turnState.CheckForDuplicates();
@@ -684,6 +689,22 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, $"[system: {nudge}]"));
     }
 
+    private void AddModelInputMediaNudge(IReadOnlyList<SerializableMediaReference> mediaReferences)
+    {
+        if (mediaReferences.Count == 0)
+            return;
+
+        var itemText = mediaReferences.Count == 1 ? "file" : "files";
+        var message = new SerializableChatMessage
+        {
+            Role = Protocol.ChatRole.User,
+            Content = $"[system: A tool loaded {mediaReferences.Count} media {itemText} for model-visible inspection. " +
+                      "Use the attached media along with the tool result to complete the delegated task.]",
+            MediaReferences = mediaReferences
+        };
+        _history.Add(ChatMessageConverter.ToAiMessage(message, _toolExecutionContext.SessionDirectory));
+    }
+
     /// <summary>
     /// Compose the initial user message for the subagent. When <paramref name="runtimeContext"/>
     /// is present, prefixes a <c>Context:</c> block ahead of the <c>Task:</c> block so the
@@ -944,19 +965,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         try
         {
+            var modelInputBudget = new ModelInputBatchBudget(ChannelAttachmentPolicy.DefaultMaxFileBytes);
             var tasks = toolCalls.Select(async tc =>
             {
                 var toolContext = CreatePerToolExecutionContext(executionContext);
                 try
                 {
                     var result = await executor.ExecuteAsync(tc, toolContext, ct);
-                    return new SerializableChatMessage
-                    {
-                        Role = Protocol.ChatRole.Tool,
-                        Content = result,
-                        ToolCallId = new ToolCallId(tc.CallId),
-                        Name = tc.Name
-                    };
+                    return BuildToolResult(tc, result, toolContext, modelInputBudget);
                 }
                 catch (ToolApprovalRequiredException approvalEx)
                     when (approvalBridge is not null)
@@ -1010,25 +1026,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         retryContext.SetOneTimeApprovedPatterns(ctx.Patterns);
 
                         var result = await executor.ExecuteAsync(tc, retryContext, ct);
-                        return new SerializableChatMessage
-                        {
-                            Role = Protocol.ChatRole.Tool,
-                            Content = result,
-                            ToolCallId = new ToolCallId(tc.CallId),
-                            Name = tc.Name
-                        };
+                        return BuildToolResult(tc, result, retryContext, modelInputBudget);
                     }
 
                     var reason = decision == ParentApprovalDecision.TimedOut
                         ? "Tool access denied: approval_timed_out"
                         : "Tool access denied: approval_denied_by_user";
-                    return new SerializableChatMessage
-                    {
-                        Role = Protocol.ChatRole.Tool,
-                        Content = reason,
-                        ToolCallId = new ToolCallId(tc.CallId),
-                        Name = tc.Name
-                    };
+                    return BuildToolResult(tc, reason, toolContext, modelInputBudget);
                 }
                 catch (ToolApprovalRequiredException)
                 {
@@ -1054,20 +1058,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (Exception ex)
                 {
-                    return new SerializableChatMessage
-                    {
-                        Role = Protocol.ChatRole.Tool,
-                        Content = $"Error: {ex.Message}",
-                        ToolCallId = new ToolCallId(tc.CallId),
-                        Name = tc.Name
-                    };
+                    return BuildToolResult(tc, $"Error: {ex.Message}", toolContext, modelInputBudget);
                 }
             });
 
             var results = await Task.WhenAll(tasks);
             self.Tell(new ToolExecutionCompleted
             {
-                ToolResults = [.. results]
+                ToolResults = [.. results.Select(r => r.Message)],
+                ModelInputMediaReferences = [.. results.SelectMany(r => r.ModelInputMediaReferences)]
             });
         }
         catch (Exception ex)
@@ -1083,6 +1082,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Boundary = source.Boundary,
             RequestedTimeoutSeconds = source.RequestedTimeoutSeconds,
             ChannelType = source.ChannelType,
+            ModelInputModalities = source.ModelInputModalities,
             ProjectDirectory = source.ProjectDirectory,
             InheritedCwd = source.InheritedCwd,
             SupportsInteractiveApproval = source.SupportsInteractiveApproval,
@@ -1090,6 +1090,52 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             SpawnChildActor = source.SpawnChildActor,
             ApprovalBridge = source.ApprovalBridge
         };
+
+    private static SubAgentToolCallResult BuildToolResult(
+        FunctionCallContent toolCall,
+        string resultText,
+        ToolExecutionContext toolContext,
+        ModelInputBatchBudget modelInputBudget)
+    {
+        var materialization = MaterializeModelInputFiles(toolContext, modelInputBudget);
+        if (materialization.RequestedCount > materialization.MediaReferences.Count)
+        {
+            resultText = SessionToolExecutionPipeline.AppendModelInputHandoffWarning(
+                resultText,
+                materialization.RequestedCount - materialization.MediaReferences.Count);
+        }
+
+        return new SubAgentToolCallResult(
+            new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = resultText,
+                ToolCallId = new ToolCallId(toolCall.CallId),
+                Name = toolCall.Name
+            },
+            materialization.MediaReferences);
+    }
+
+    private static ModelInputMaterializationResult MaterializeModelInputFiles(
+        ToolExecutionContext toolContext,
+        ModelInputBatchBudget modelInputBudget)
+    {
+        if (toolContext.ModelInputFiles.Count == 0)
+            return new ModelInputMaterializationResult([], 0);
+
+        if (string.IsNullOrWhiteSpace(toolContext.SessionDirectory))
+            return new ModelInputMaterializationResult([], toolContext.ModelInputFiles.Count);
+
+        return SessionToolExecutionPipeline.MaterializeModelInputFiles(
+            toolContext,
+            toolContext.SessionDirectory,
+            logger: null,
+            modelInputBudget);
+    }
+
+    private sealed record SubAgentToolCallResult(
+        SerializableChatMessage Message,
+        IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences);
 
     private static string BuildSystemPrompt(SubAgentDefinition definition)
     {

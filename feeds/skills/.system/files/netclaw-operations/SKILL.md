@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.8.2"
+  version: "2.8.3"
 ---
 
 # Netclaw Operations
@@ -604,11 +604,12 @@ The `[attachment]` line format is:
 means the model only sees the path reference.
 
 `file_read` follows the same file taxonomy as chat attachments. It reads
-text-like files directly. For images, it can load the file for visual inspection
-when the active model supports image input. For PDFs, audio/video, archives,
-binary documents, and unknown binaries, it returns metadata plus explicit
-guidance; it does not perform PDF extraction, OCR, transcription, keyframe
-extraction, or raw binary output.
+text-like files directly, including UTF-8, UTF-16/UTF-32 Unicode text, and
+common Windows-1252 text files. For images, it can load the file for visual
+inspection when the active model or delegated sub-agent supports image input.
+For PDFs, audio/video, archives, binary documents, and unknown binaries, it
+returns metadata plus explicit guidance; it does not perform PDF extraction,
+OCR, transcription, keyframe extraction, or raw binary output.
 
 **Historical thread backfill** follows the same download/scan flow for all
 file types (not just images) — PDFs and other documents from prior thread

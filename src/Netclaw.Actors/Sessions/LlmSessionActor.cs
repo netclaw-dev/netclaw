@@ -3173,15 +3173,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ApplyToolCallRecorded(ToolCallRecorded evt)
     {
+        var alreadyRecorded = false;
         if (evt.ToolResult.ToolCallId is { } toolCallId)
         {
             _activeToolBatch.RecordCompleted(toolCallId.Value);
 
             if (ParkedToolBatchHistory.HasToolResult(_state.History, toolCallId.Value))
-                return;
+                alreadyRecorded = true;
         }
 
-        _state = _state with { History = _state.History.Add(evt.ToolResult) };
+        if (!alreadyRecorded)
+        {
+            _state = _state with { History = _state.History.Add(evt.ToolResult) };
+            if (evt.ToolResult.MediaReferences.Count > 0)
+                _pendingModelInputMediaReferences.AddRange(evt.ToolResult.MediaReferences);
+
+            if (_activeToolBatch.HasAllResults)
+            {
+                AddModelInputMediaNudge(_pendingModelInputMediaReferences);
+                _pendingModelInputMediaReferences.Clear();
+            }
+        }
     }
 
     private void HandleToolInteractionRequestDispatch(ToolInteractionRequestDispatch dispatch)
@@ -4356,8 +4368,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.Files);
         }
 
-        if (result.ModelInputMediaReferences.Count > 0)
-            _pendingModelInputMediaReferences.AddRange(result.ModelInputMediaReferences);
+        // Streaming tool results persist media references on ToolCallRecorded;
+        // ApplyToolCallRecorded recreates the nudge during journal replay.
     }
 
     private void AddModelInputMediaNudge(IReadOnlyList<SerializableMediaReference> mediaReferences)

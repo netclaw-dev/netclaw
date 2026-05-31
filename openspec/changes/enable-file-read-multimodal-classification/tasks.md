@@ -8,7 +8,7 @@
 ## 2. File-read implementation
 
 - [x] 2.1 Add MIME/category inspection to `file_read` without breaking existing
-  UTF-8 text/code reads.
+  text/code reads, including common non-UTF-8 encodings.
 - [x] 2.2 Return metadata/guidance instead of raw binary for PDF, audio/video,
   archive, binary document, and unknown binary files.
 - [x] 2.3 Add image handoff from `file_read` through `ToolExecutionContext`, the
@@ -17,7 +17,7 @@
 ## 3. Tests, docs, and verification
 
 - [x] 3.1 Add or update tests for text reads, binary guidance, image handoff, and
-  image unsupported-model behavior.
+  image unsupported-model behavior, including streaming and sub-agent handoff.
 - [x] 3.2 Update the Netclaw operations system skill guidance for inbound
   attachments and `file_read` behavior.
 - [x] 3.3 Run targeted tests for tools/session media behavior.

@@ -85,6 +85,12 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     public string? ChannelType { get; init; }
 
     /// <summary>
+    /// Input modalities supported by the model selected for this sub-agent run.
+    /// Tools use this to decide whether model-visible media handoff is allowed.
+    /// </summary>
+    public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
+
+    /// <summary>
     /// Parent session's session directory snapshot when the subagent was spawned.
     /// </summary>
     public string? ParentSessionDirectory { get; init; }
