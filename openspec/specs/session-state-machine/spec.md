@@ -1,4 +1,18 @@
-## ADDED Requirements
+# session-state-machine Specification
+
+## Purpose
+
+The session-state-machine capability defines the explicit lifecycle of a Netclaw
+session actor. Each session tracks a single `SessionPhase` and moves between
+phases only through validated transitions, so that turn processing, context
+compaction, idle passivation, coordinated restart-drain, and outstanding tool
+approval prompts all interact through one well-defined state machine rather than
+ad-hoc flags. The state machine guarantees that illegal transitions fail loudly,
+that every transition is observable, and that tool-interaction responses are
+never silently dropped because the session moved out of `Processing` while an
+approval prompt was outstanding.
+
+## Requirements
 
 ### Requirement: Explicit session phase lifecycle
 

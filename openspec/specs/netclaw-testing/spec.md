@@ -1,4 +1,11 @@
-## MODIFIED Requirements
+# netclaw-testing Specification
+
+## Purpose
+
+Define test categorization and CI requirements for provider-independent
+verification.
+
+## Requirements
 
 ### Requirement: CI-required tests are provider-independent
 
@@ -19,3 +26,18 @@ offline fakes, fixtures, or deterministic simulators.
 - **WHEN** required test suites run
 - **THEN** Discord adapter and approval fallback behavior are validated offline
 - **AND** required suites pass without external Discord dependencies
+
+### Requirement: Optional live smoke tests
+
+The system SHALL support optional smoke tests against live endpoints.
+
+#### Scenario: Developer runs live smoke test
+
+- **WHEN** a developer invokes smoke tests explicitly
+- **THEN** live provider checks execute and report actionable diagnostics
+
+#### Scenario: Tailscale-only Ollama server not reachable in CI
+
+- **GIVEN** Ollama server is only reachable on Tailscale
+- **WHEN** CI runs without Tailscale connectivity
+- **THEN** CI-required test suites still pass because live smoke tests are not required

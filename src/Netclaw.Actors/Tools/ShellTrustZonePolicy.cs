@@ -10,9 +10,10 @@ namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Implements <see cref="IShellTrustZonePolicy"/> by delegating to
-/// <see cref="ScopedFileAccessPolicy"/> for root resolution. Returns the
-/// write-access roots for the context — shell commands are treated as having
-/// write-equivalent privilege since they can modify files.
+/// <see cref="ScopedFileAccessPolicy"/>. Shell commands are treated as having
+/// write-equivalent privilege, so a path is authorized exactly when
+/// <c>file_write</c> would authorize it — unifying the two surfaces on one
+/// interpretation of the audience's write filesystem mode.
 /// </summary>
 public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
 {
@@ -28,6 +29,13 @@ public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
         _fileAccessPolicy = fileAccessPolicy;
     }
 
-    public IReadOnlyList<string> GetTrustZoneRoots(ToolExecutionContext context)
-        => _fileAccessPolicy.GetRootsForContext(context, ScopedFileAccessPolicy.AccessKind.Write);
+    // Shell paths are checked against the stricter WRITE rules even for read-only
+    // commands: a shell command can write, so we treat every path token as
+    // write-level. Deliberately over-cautious — e.g. a non-interactive `cat` of a
+    // skills file is denied here even though the read-only file_read tool would
+    // allow it (the read zone includes the global read roots, the write zone does
+    // not). This is a known capability gap, not a security hole; making the check
+    // verb-aware (read-verbs against the read zone) is a possible follow-up.
+    public bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context)
+        => _fileAccessPolicy.TryResolveWritePath(fullPath, context, out _, out _);
 }

@@ -1,4 +1,10 @@
-## ADDED Requirements
+# session-config-decomposition Specification
+
+## Purpose
+
+Decompose the monolithic `SessionConfig` and the `LlmSessionActor`'s large constructor into cohesive, separately-resolvable types. Runtime-derived model properties move into a standalone `ModelCapabilities` record, internal tuning constants move into a nested `SessionTuning` record, and the slimmed `SessionConfig` exposes only user-facing operational settings with `TimeSpan` timeouts. The Session configuration section is schema-validated with `additionalProperties: false`, and the session actor's dependencies are grouped into composite DI records to reduce constructor sprawl.
+
+## Requirements
 
 ### Requirement: ModelCapabilities as standalone type
 

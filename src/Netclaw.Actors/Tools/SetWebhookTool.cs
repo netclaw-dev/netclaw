@@ -37,7 +37,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         string? DeliveryIdHeaderName = null,
         [property: Description("Optional comma-separated event allowlist.")]
         string? Events = null,
-        [property: Description("Audience: 'Public', 'Team', or 'Personal'.")]
+        [property: Description("Audience: 'Public', 'Team', or 'Personal'. Omit to inherit the creating session/channel audience. A route may not exceed the creator's audience.")]
         string? Audience = null,
         [property: Description("Optional notification instructions appended to the route overlay.")]
         string? NotifyInstructions = null,
@@ -57,7 +57,15 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         _store = store;
     }
 
+    // Context-less invocation falls back to ToolExecutionContext.Empty, whose
+    // audience is Public (the lowest privilege). A missing context can therefore
+    // only make a webhook LESS powerful, never accidentally grant it more — the
+    // escalation guard in TryResolveAudience is keyed off creatorAudience, and
+    // Public is the floor.
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
+        => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
+
+    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
             return Task.FromResult($"Error: {routeError}");
@@ -70,7 +78,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         if (!Enum.TryParse<WebhookVerifierKind>(args.VerificationKind, ignoreCase: true, out var verificationKind))
             return Task.FromResult("Error: 'verificationKind' must be 'Hmac' or 'HeaderSecret'.");
 
-        if (!TryParseAudience(args.Audience, out var audience, out var audienceError))
+        if (!TryResolveAudience(args.Audience, context.Audience, out var audience, out var audienceError))
             return Task.FromResult(audienceError!);
 
         var definition = new WebhookRouteConfig
@@ -108,24 +116,43 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         return Task.FromResult($"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration.");
     }
 
-    private static bool TryParseAudience(string? value, out TrustAudience audience, out string? error)
+    /// <summary>
+    /// Resolves the route's audience from the optional explicit argument, falling
+    /// back to the creating context's audience (transitive provenance, mirroring
+    /// <c>set_reminder</c>). A route may not be minted above the creator's
+    /// authority — downgrade-only, mirroring
+    /// <c>ReminderManagerActor.ValidateRequestedAudience</c>. A context-less
+    /// invocation carries <see cref="ToolExecutionContext.Empty"/>'s
+    /// <see cref="TrustAudience.Public"/>, so it cannot escalate. (Routes defined
+    /// directly in config never reach this tool; they keep
+    /// <c>WebhooksConfig.Audience</c>'s <see cref="TrustAudience.Public"/> default.)
+    /// </summary>
+    private static bool TryResolveAudience(string? requested, TrustAudience creatorAudience, out TrustAudience audience, out string? error)
     {
-        if (string.IsNullOrWhiteSpace(value))
+        if (string.IsNullOrWhiteSpace(requested))
         {
-            audience = TrustAudience.Public;
+            audience = creatorAudience;
             error = null;
             return true;
         }
 
-        if (Enum.TryParse<TrustAudience>(value, ignoreCase: true, out audience))
+        if (!SecurityPolicyDefaults.TryParseAudience(requested, out var parsed))
         {
-            error = null;
-            return true;
+            audience = creatorAudience;
+            error = "Error: 'audience' must be Public, Team, or Personal.";
+            return false;
         }
 
-        audience = TrustAudience.Public;
-        error = "Error: 'audience' must be Public, Team, or Personal.";
-        return false;
+        if (parsed > creatorAudience)
+        {
+            audience = creatorAudience;
+            error = $"Error: Requested audience '{parsed.ToWireValue()}' exceeds creator authority ({creatorAudience.ToWireValue()}).";
+            return false;
+        }
+
+        audience = parsed;
+        error = null;
+        return true;
     }
 
     private static List<string> ParseEvents(string? value)

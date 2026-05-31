@@ -185,11 +185,13 @@ If the user has already trusted the verb in a previous session, no action is
 needed — `(verb, null)` grants persist in `tool-approvals.json` across daemon
 restarts.
 
-**Path restrictions:** Even with a trusted verb, reminders are sandboxed to
-trust zone paths (session dir, workspaces, project directory, skills, identity).
-`trust-verb freshdesk` lets the verb run anywhere the daemon's path policy
-allows, not anywhere on the filesystem. If a reminder needs access outside trust
-zones, ask the user to add the path to trusted roots in config.
+**Path restrictions:** A trusted verb runs wherever the creating audience's
+file-access policy allows — the same scoping `file_write` uses. A Personal
+reminder/webhook (the default when created from a Personal session) has
+unrestricted filesystem access; a Team or Public one is confined to its session
+directory — and cannot run `shell_execute` at all, since shell is Personal-only.
+Protected paths — `secrets.json`, `.netclaw/keys`, `config/webhooks` — are always
+denied regardless of audience or pre-approval.
 
 **If a reminder fails with `command_not_pre_approved`:** The verb is not in the
 approval store as a global wildcard. Run
@@ -542,6 +544,12 @@ Use the dedicated tools instead of generic file tools when available:
 When using `set_webhook`, use `delivery_required` (bool, default `true`) to
 control required notification behavior. `notify_policy` is deprecated.
 
+`set_webhook` inherits the audience of the channel/session that created it when
+`audience` is omitted — the same provenance model as reminders. A route cannot be
+minted with a broader audience than the creator holds; downgrading is always
+allowed. A webhook created from a Team channel runs as Team (and therefore cannot
+run `shell_execute`); one created from a Personal CLI session runs as Personal.
+
 Route files are secret-bearing config because they may contain inline
 verification secrets. Treat `config/webhooks` like `secrets.json` and avoid
 broad file reads/writes there unless the user explicitly wants raw config work.
@@ -555,9 +563,10 @@ Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
 
 **Approval gate:** Webhooks run without a human — they cannot prompt for
-approval. The same rules as reminders apply: commands must be pre-approved in
-`tool-approvals.json` and path arguments must be within trust zones. See
-"Approval Requirements for Reminders and Webhooks" in the Scheduling section.
+approval. The same rules as reminders apply: shell commands must be pre-approved
+in `tool-approvals.json`, and path arguments are scoped by the route's audience
+the same way `file_write` is. See "Approval Requirements for Reminders and
+Webhooks" in the Scheduling section.
 
 ### Webhook observability
 

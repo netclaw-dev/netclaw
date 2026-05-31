@@ -108,8 +108,7 @@ as failed.
 
 ### Requirement: Human-facing notification target opens channel-native session
 
-When a webhook execution decides to notify an interactive channel, the
-notification target SHALL use the channel adapter's normal session model. For
+When a webhook execution decides to notify an interactive channel, the notification target SHALL use the channel adapter's normal session model. For
 Slack, this means opening a Slack-native thread/session rather than rebinding
 the original webhook session onto the Slack thread.
 
@@ -213,8 +212,7 @@ the existing operational notification sink so route failures are never silent.
 
 ### Requirement: Webhook rejections emit structured logs and counters
 
-Every webhook ingress outcome — accepted, rejected, filtered, or rate-limited —
-SHALL increment a durable in-process counter and emit a structured daemon log
+Every webhook ingress outcome — accepted, rejected, filtered, or rate-limited — SHALL increment a durable in-process counter and emit a structured daemon log
 line with at minimum the route name, outcome reason, client remote IP, and
 delivery identifier (when available). Rejection paths SHALL NOT emit outbound
 operational notification alerts, to avoid spamming operator channels on

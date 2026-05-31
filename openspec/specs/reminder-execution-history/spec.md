@@ -9,8 +9,7 @@ written, retained, trimmed, and exposed to operators and the agent.
 
 ### Requirement: Execution record written per run
 
-On completion of each reminder execution (success or failure), the system
-SHALL append one structured record to
+On completion of each reminder execution (success or failure), the system SHALL append one structured record to
 `~/.netclaw/reminders/{reminderId}.history.jsonl`. The record SHALL contain:
 `firedAt` (ISO 8601 UTC), `success` (bool), `durationMs` (int),
 `sessionId` (string, format `reminder/{id}/{firedAtMs}`), and `errorMessage`

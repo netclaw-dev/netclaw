@@ -1,4 +1,18 @@
-## ADDED Requirements
+# netclaw-discord-socket Specification
+
+## Purpose
+
+Netclaw SHALL support Discord as a first-class chat ingress/egress transport with
+operational parity to Slack Socket Mode. This capability defines the Discord
+gateway adapter — its connection lifecycle and health reporting, fail-closed
+configuration validation, normalization of inbound Discord events into
+`SendUserMessage` with deterministic thread-aware session identity, ACL-gated
+dispatch, reply targeting back to the originating Discord context, text-first
+slash command compatibility without requiring Discord app-command registration,
+and interactive tool-approval handling that prefers Discord interaction controls
+while always supporting a deterministic text fallback.
+
+## Requirements
 
 ### Requirement: Discord gateway adapter lifecycle and health
 
