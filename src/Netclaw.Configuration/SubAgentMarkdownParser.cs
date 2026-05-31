@@ -89,6 +89,7 @@ public sealed class SubAgentFrontmatter
     public List<string>? Tools { get; set; }
     public string? ModelRole { get; set; }
     public int? TimeoutSeconds { get; set; }
+    public int? PrefillTimeoutSeconds { get; set; }
     public bool? EmitStructuredFindings { get; set; }
     public string? Visibility { get; set; }
 }

@@ -301,6 +301,85 @@ public class FileSubAgentDefinitionLoaderTests : IDisposable
     }
 
     [Fact]
+    public void LoadAll_rejects_out_of_range_timeout_overrides_with_warnings()
+    {
+        // Non-positive timeoutSeconds would throw when armed on the scheduler; an
+        // out-of-range value silently exceeds the documented ceiling. The frontmatter
+        // path bypasses JSON-schema validation, so the loader must fail loud here.
+        WriteAgent("zero-timeout.md", """
+            ---
+            name: zero-timeout
+            description: Non-positive inter-delta budget
+            timeoutSeconds: 0
+            ---
+
+            body
+            """);
+
+        WriteAgent("negative-timeout.md", """
+            ---
+            name: negative-timeout
+            description: Negative inter-delta budget
+            timeoutSeconds: -5
+            ---
+
+            body
+            """);
+
+        WriteAgent("huge-timeout.md", """
+            ---
+            name: huge-timeout
+            description: Inter-delta budget beyond the 600s ceiling
+            timeoutSeconds: 999
+            ---
+
+            body
+            """);
+
+        WriteAgent("huge-prefill.md", """
+            ---
+            name: huge-prefill
+            description: Prefill budget beyond the ceiling
+            prefillTimeoutSeconds: 999999
+            ---
+
+            body
+            """);
+
+        // In range — must still load.
+        WriteAgent("valid-overrides.md", """
+            ---
+            name: valid-overrides
+            description: Valid overrides
+            timeoutSeconds: 90
+            prefillTimeoutSeconds: 600
+            ---
+
+            body
+            """);
+
+        var results = _loader.LoadAll();
+
+        var profile = Assert.Single(results);
+        Assert.Equal("valid-overrides", profile.Name);
+        Assert.Equal(90, profile.TimeoutSeconds);
+        Assert.Equal(600, profile.PrefillTimeoutSeconds);
+
+        Assert.Contains(_logger.Warnings, w =>
+            w.Contains("zero-timeout.md", StringComparison.Ordinal)
+            && w.Contains("timeoutSeconds", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(_logger.Warnings, w =>
+            w.Contains("negative-timeout.md", StringComparison.Ordinal)
+            && w.Contains("timeoutSeconds", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(_logger.Warnings, w =>
+            w.Contains("huge-timeout.md", StringComparison.Ordinal)
+            && w.Contains("timeoutSeconds", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(_logger.Warnings, w =>
+            w.Contains("huge-prefill.md", StringComparison.Ordinal)
+            && w.Contains("prefillTimeoutSeconds", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void RefreshIfChanged_detects_valid_edits_and_reloads_profiles()
     {
         var path = WriteAgent("reloadable.md", """

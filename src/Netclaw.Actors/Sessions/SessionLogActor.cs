@@ -20,8 +20,14 @@ namespace Netclaw.Actors.Sessions;
 /// computed by <see cref="SessionLogFile"/>.
 ///
 /// Log files live at <c>{sessionLogsBase}/{sanitized_id}/session.log</c> — a
-/// tree deliberately separate from the agent-accessible session working
+/// tree deliberately separate from the agent-visible session working
 /// directory so the LLM cannot read its own audit trail via the file_read tool.
+///
+/// File handle lifecycle:
+/// - Open once in <see cref="PreStart"/> with append mode + read-share.
+/// - AutoFlush enabled — each WriteLine flushes immediately.
+/// - Close/dispose in <see cref="PostStop"/> — no retry loop needed since the
+///   handle is kept open and single-writer is enforced by the actor mailbox.
 /// </summary>
 public sealed class SessionLogActor : ReceiveActor
 {
@@ -30,6 +36,7 @@ public sealed class SessionLogActor : ReceiveActor
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _idleTimeout;
     private readonly ILoggingAdapter _log = Context.GetLogger();
+    private StreamWriter? _writer;
 
     public static Props CreateProps(SessionId sessionId, string sessionLogsBasePath, TimeProvider timeProvider, TimeSpan? idleTimeout = null) =>
         Props.Create(() => new SessionLogActor(sessionId, sessionLogsBasePath, timeProvider, idleTimeout ?? TimeSpan.FromMinutes(10)));
@@ -49,7 +56,30 @@ public sealed class SessionLogActor : ReceiveActor
 
     protected override void PreStart()
     {
+        base.PreStart();
         Context.SetReceiveTimeout(_idleTimeout);
+
+        var logPath = SessionLogFile.GetLogPath(_sessionId, _sessionLogsBasePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+
+        // Open once: append mode + read-share so concurrent readers (tail, diagnostics, tests)
+        // can open the file without conflicting with our writer handle.
+        // FileShare.Delete also lets log rotation / Directory.Delete proceed on Windows.
+        var stream = new FileStream(
+            logPath,
+            FileMode.Append,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            useAsync: false);
+
+        _writer = new StreamWriter(stream) { AutoFlush = true };
+    }
+
+    protected override void PostStop()
+    {
+        _writer?.Dispose();
+        base.PostStop();
     }
 
     private void OnUserMessage(SendUserMessage msg)
@@ -59,14 +89,12 @@ public sealed class SessionLogActor : ReceiveActor
             var mediaNote = msg.MediaReferences.Count > 0
                 ? $" (+{msg.MediaReferences.Count} media)"
                 : string.Empty;
-            SessionLogFile.AppendLine(_sessionId, _sessionLogsBasePath,
-                $"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}");
+            var line = $"[{_timeProvider.GetUtcNow():o}] User: {TextTruncation.EllipsisAppend(msg.Content, 1000)}{mediaNote}";
+
+            _writer?.WriteLine(line);
         }
         catch (Exception ex)
         {
-            // AppendLine retries transient IO failures internally; reaching this
-            // catch means the audit line was lost. Audit-trail loss is a real
-            // production fault — log loudly, not at Debug.
             _log.Warning(ex, "Dropped user message audit line for {SessionId}", _sessionId.Value);
         }
     }
@@ -99,8 +127,7 @@ public sealed class SessionLogActor : ReceiveActor
 
             if (line is not null)
             {
-                SessionLogFile.AppendLine(_sessionId, _sessionLogsBasePath,
-                    $"[{_timeProvider.GetUtcNow():o}] {line}");
+                _writer?.WriteLine($"[{_timeProvider.GetUtcNow():o}] {line}");
             }
         }
         catch (Exception ex)
@@ -113,7 +140,7 @@ public sealed class SessionLogActor : ReceiveActor
     {
         try
         {
-            SessionLogFile.AppendLine(_sessionId, _sessionLogsBasePath, diagnostic.Line);
+            _writer?.WriteLine(diagnostic.Line);
         }
         catch (Exception ex)
         {

@@ -166,9 +166,8 @@ public sealed class ConfigSchemaDoctorCheckTests
                 "AutoRecallMaxItems": 5
               },
               "SubAgents": {
-                "DefaultTimeoutSeconds": 60,
-                "StoreMemoryTimeoutSeconds": 300,
-                "SearchMemoriesTimeoutSeconds": 45
+                "PrefillTimeoutSeconds": 1800,
+                "NoProgressTimeoutSeconds": 1200
               }
             }
             """, TestContext.Current.CancellationToken);
@@ -286,7 +285,7 @@ public sealed class ConfigSchemaDoctorCheckTests
             {
               "configVersion": 1,
               "SubAgents": {
-                "DefaultTimeoutSeconds": 2
+                "PrefillTimeoutSeconds": 2
               }
             }
             """, TestContext.Current.CancellationToken);
@@ -309,7 +308,7 @@ public sealed class ConfigSchemaDoctorCheckTests
             {
               "configVersion": 1,
               "SubAgents": {
-                "StoreMemoryTimeoutSeconds": 999
+                "PrefillTimeoutSeconds": 99999
               }
             }
             """, TestContext.Current.CancellationToken);

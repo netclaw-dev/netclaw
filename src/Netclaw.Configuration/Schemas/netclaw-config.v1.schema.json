@@ -184,6 +184,13 @@
           "default": 1800,
           "description": "Maximum time in seconds to wait for the first streaming delta from the LLM. Covers queue wait and prompt prefill on self-hosted backends. After the first delta, the watchdog switches to FirstTokenTimeoutSeconds."
         },
+        "NoProgressTimeoutSeconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200,
+          "default": 1200,
+          "description": "Hard ceiling in seconds on time without substantive output. Reset only by real streaming tokens — content-free keepalives never extend it — so a backend that heartbeats forever without producing a token is killed once this elapses. Catches a wedged stream the prefill/first-token liveness watchdog cannot, because keepalives refresh those."
+        },
         "CompactionThreshold": {
           "type": "number",
           "minimum": 0.1,
@@ -508,26 +515,19 @@
           "default": true,
           "description": "When false, the subagent subsystem is disabled."
         },
-        "DefaultTimeoutSeconds": {
+        "PrefillTimeoutSeconds": {
           "type": "integer",
           "minimum": 5,
-          "maximum": 600,
-          "default": 60,
-          "description": "Default subagent timeout when no tool-specific override exists."
+          "maximum": 3600,
+          "default": 1800,
+          "description": "Generous wait-for-first-delta budget (seconds) covering queue wait and cold prefill for sub-agent LLM calls, mirroring Session.PrefillTimeoutSeconds. Content-free prompt_progress keepalives refresh it; after the first substantive delta the per-agent inter-delta budget applies. A per-agent definition may override via prefillTimeoutSeconds frontmatter."
         },
-        "StoreMemoryTimeoutSeconds": {
+        "NoProgressTimeoutSeconds": {
           "type": "integer",
-          "minimum": 5,
-          "maximum": 600,
-          "default": 180,
-          "description": "Timeout for the store_memory curation subagent."
-        },
-        "SearchMemoriesTimeoutSeconds": {
-          "type": "integer",
-          "minimum": 5,
-          "maximum": 600,
-          "default": 30,
-          "description": "Timeout for the search_memories retrieval subagent."
+          "minimum": 60,
+          "maximum": 7200,
+          "default": 1200,
+          "description": "Hard ceiling (seconds) on time without substantive output for sub-agent LLM calls, mirroring Session.NoProgressTimeoutSeconds. Reset only by real streaming tokens — content-free keepalives never extend it — so a backend that heartbeats forever without producing a token is killed once this elapses."
         }
       },
       "additionalProperties": false

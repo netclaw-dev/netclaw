@@ -82,6 +82,18 @@ public sealed record SessionConfig
     public TimeSpan PrefillTimeout { get; init; } = TimeSpan.FromSeconds(1800);
 
     /// <summary>
+    /// Hard ceiling on time without substantive output. Reset only by real
+    /// streaming tokens — content-free <c>prompt_progress</c> keepalives never
+    /// extend it — so a backend that heartbeats forever without producing a token
+    /// is killed once this elapses. This is the progress-aware bound that catches a
+    /// wedged stream the liveness watchdog (<see cref="PrefillTimeout"/> /
+    /// <see cref="FirstTokenTimeout"/>) cannot, because keepalives refresh those.
+    /// Because it is only reset by real output, it also caps the
+    /// wait-for-first-token window.
+    /// </summary>
+    public TimeSpan NoProgressTimeout { get; init; } = TimeSpan.FromSeconds(1200);
+
+    /// <summary>
     /// Internal tuning constants. Bindable from config for development/testing
     /// but not part of the documented operator surface.
     /// </summary>
@@ -113,6 +125,9 @@ public sealed record SessionConfig
             PrefillTimeout = raw.PrefillTimeoutSeconds > 0
                 ? TimeSpan.FromSeconds(raw.PrefillTimeoutSeconds)
                 : TimeSpan.FromSeconds(1800),
+            NoProgressTimeout = raw.NoProgressTimeoutSeconds > 0
+                ? TimeSpan.FromSeconds(raw.NoProgressTimeoutSeconds)
+                : TimeSpan.FromSeconds(1200),
             Tuning = tuning,
         };
     }
@@ -165,5 +180,6 @@ public sealed record SessionConfig
         public int SidecarLlmTimeoutSeconds { get; init; } = 90;
         public int FirstTokenTimeoutSeconds { get; init; }
         public int PrefillTimeoutSeconds { get; init; }
+        public int NoProgressTimeoutSeconds { get; init; }
     }
 }

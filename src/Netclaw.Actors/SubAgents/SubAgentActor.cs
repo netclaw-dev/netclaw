@@ -37,7 +37,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 {
     internal const int DefaultMaxToolIterations = 30;
     private const string EmptyResponseMarker = "(no response)";
-    private const string TimeoutTimerKey = "subagent-timeout";
     private const string MalformedFinalOutputMessage = "Subagent produced malformed final output: it emitted unexecuted tool calls as text. This was not a timeout.";
     private const string MalformedFinalOutputNudge =
         "The previous response emitted unexecuted tool-call markup as plain text. "
@@ -91,7 +90,27 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private IParentApprovalBridge? _approvalBridge;
     private ChannelWriter<ToolActivityUpdate>? _activitySink;
-    private TimeSpan _inactivityBudget;
+
+    // Default wait-for-first-delta budget when the spawn message carries none
+    // (direct/test callers). Mirrors SessionConfig.PrefillTimeout so an unset
+    // prefill never collapses to the tighter inter-delta budget — that collapse
+    // would silently reintroduce the cold-prefill timeout this watchdog exists
+    // to prevent.
+    private static readonly TimeSpan DefaultPrefillBudget = TimeSpan.FromSeconds(1800);
+
+    // Two-phase inactivity watchdog, shared with the main session path
+    // (LlmSessionActor). The watchdog starts each LLM call on the generous
+    // _prefillBudget (content-free keepalives refresh it so a slow cold prefill
+    // is not mistaken for a hang) and promotes to the tighter _interDeltaBudget
+    // on the first substantive delta. _anyContentStreamed tracks whether the
+    // current call has produced real output yet. _noProgressBudget is the
+    // keepalive-immune ceiling reset only by real tokens — it bounds a backend
+    // that heartbeats forever without producing output (null = unbounded).
+    private readonly ProcessingWatchdog _watchdog = new();
+    private TimeSpan _interDeltaBudget;
+    private TimeSpan _prefillBudget;
+    private TimeSpan? _noProgressBudget;
+    private bool _anyContentStreamed;
 
     public ITimerScheduler Timers { get; set; } = null!;
     private CancellationTokenRegistration _externalCancellationRegistration;
@@ -225,12 +244,18 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             var self = Self; // Capture before callback — Self requires active actor context
             _externalCancellationRegistration = msg.Cancellation.Register(() => self.Tell(SubAgentCancelled.Instance));
 
-            // The run is bounded by an inactivity watchdog re-armed on every
-            // progress event (LLM response, tool batch, streaming ping), so a
-            // sub-agent making progress is never killed and a stalled one is.
+            // The run is bounded by a two-phase inactivity watchdog re-armed on
+            // every progress event (LLM response, tool batch, streaming delta,
+            // keepalive) plus a keepalive-immune no-progress deadline. A sub-agent
+            // making real progress is never killed; a stalled one (no bytes) or a
+            // wedged one (keepalives but no tokens) is. FireLlmCall arms both. An
+            // unset prefill defaults to the session budget rather than collapsing
+            // to the inter-delta budget; an unset no-progress deadline is
+            // unbounded (only direct/test callers leave it unset).
             _activitySink = msg.ActivitySink;
-            _inactivityBudget = msg.Timeout;
-            ArmInactivityTimer();
+            _interDeltaBudget = msg.Timeout;
+            _prefillBudget = msg.PrefillTimeout > TimeSpan.Zero ? msg.PrefillTimeout : DefaultPrefillBudget;
+            _noProgressBudget = msg.NoProgressTimeout > TimeSpan.Zero ? msg.NoProgressTimeout : null;
 
             // Build initial conversation: system prompt (from file, verbatim) + task as user message.
             // If the caller supplied runtime context, prefix it onto the user message so the
@@ -238,8 +263,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.System, BuildSystemPrompt(_definition)));
             _history.Add(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.User, BuildUserMessage(msg.RuntimeContext, msg.Task)));
 
-            _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, timeout={Timeout})",
-                _definition.Name, _aiTools.Count, msg.Timeout);
+            _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
+                _definition.Name, _aiTools.Count, _prefillBudget, _interDeltaBudget,
+                _noProgressBudget?.ToString() ?? "unbounded");
 
             FireLlmCall();
             Become(Processing);
@@ -250,7 +276,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         Receive<LlmResponseReceived>(msg =>
         {
-            ArmInactivityTimer();
+            // The streaming call finished; re-baseline to the inter-delta budget for
+            // the synchronous processing that follows (tool dispatch or completion).
+            RestartWatchdog(_interDeltaBudget);
             var response = msg.Response;
             var lastMessage = response.Messages[^1];
             var analysis = LlmResponseClassifier.Analyze(lastMessage);
@@ -421,8 +449,32 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             Complete(false, "Subagent cancelled by parent");
         });
 
-        Receive<SubAgentTimeout>(_ =>
+        Receive<ProcessingWatchdogExpired>(msg =>
         {
+            // Ignore a stale expiry from a watchdog operation that has since been
+            // re-armed. Only Start bumps the operation id; a keepalive/promote
+            // reschedules the same id, and Stop clears the operation name.
+            if (!_watchdog.IsCurrent(msg))
+                return;
+
+            if (msg.NoProgress)
+            {
+                // The keepalive-immune deadline fired: the backend streamed
+                // heartbeats (or nothing) for the full no-progress budget without a
+                // single substantive token. Unlike a liveness tick this gets no
+                // approval suppression or grace — it is only armed during an active
+                // LLM stream and is never refreshed by keepalives, so reaching it
+                // means a genuine wedge.
+                var noProgress = _noProgressBudget?.TotalSeconds ?? 0;
+                _executionCts?.Cancel();
+                _watchdog.Stop(Timers);
+                _log.Warning(
+                    "SubAgent [{AgentName}] timed out: no substantive output for {Budget:F0}s after {Iterations} tool iterations",
+                    _definition.Name, noProgress, _turnState.ToolIterationCount);
+                Complete(false, $"Subagent timed out: no substantive output for {noProgress:F0}s.");
+                return;
+            }
+
             if (_toolExecutionWatchdogState == ToolExecutionWatchdogState.WaitingForParentApproval)
             {
                 _log.Debug(
@@ -438,26 +490,31 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     "SubAgent [{AgentName}] watchdog tick granted one-cycle grace while tool execution resolves whether parent approval is needed",
                     _definition.Name);
                 _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
-                ArmInactivityTimer();
+                RestartWatchdog(_interDeltaBudget);
                 return;
             }
 
+            // Report the budget that was actually in force: the prefill budget
+            // while still waiting for the first token, else the inter-delta budget.
+            var activeBudget = _anyContentStreamed ? _interDeltaBudget : _prefillBudget;
             _executionCts?.Cancel();
+            _watchdog.Stop(Timers);
             _log.Warning(
-                "SubAgent [{AgentName}] timed out: no activity for {Budget}s after {Iterations} tool iterations",
-                _definition.Name, _inactivityBudget.TotalSeconds, _turnState.ToolIterationCount);
-            Complete(false, $"Subagent timed out: no activity for {_inactivityBudget.TotalSeconds:F0}s.");
+                "SubAgent [{AgentName}] timed out: no activity for {Budget}s ({Phase}) after {Iterations} tool iterations",
+                _definition.Name, activeBudget.TotalSeconds,
+                _anyContentStreamed ? "inter-delta" : "prefill", _turnState.ToolIterationCount);
+            Complete(false, $"Subagent timed out: no activity for {activeBudget.TotalSeconds:F0}s.");
         });
 
         Receive<SubAgentApprovalWaitStarted>(_ =>
         {
-            // Cancel the inactivity timer outright on first wait — re-armed
-            // by SubAgentApprovalWaitCompleted when the last wait clears. The
-            // SubAgentTimeout handler's WaitingForParentApproval state check is
-            // belt-and-braces for a stale timer fire that arrived ahead of
-            // this message in the mailbox.
+            // Stop the watchdog outright on first wait — re-armed by
+            // SubAgentApprovalWaitCompleted when the last wait clears. The
+            // ProcessingWatchdogExpired handler's WaitingForParentApproval state
+            // check is belt-and-braces for a stale timer fire that arrived ahead
+            // of this message in the mailbox.
             if (_pendingApprovalWaits == 0)
-                Timers.Cancel(TimeoutTimerKey);
+                _watchdog.Stop(Timers);
 
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.WaitingForParentApproval;
             _pendingApprovalWaits++;
@@ -492,8 +549,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 RecordProgress("approval resolved");
         });
 
-        // Throttled liveness ping from a streaming LLM call — progress, even
-        // before the full response message arrives.
+        // Liveness ping from a streaming LLM call — progress, even before the
+        // full response message arrives. Keepalives (content-free heartbeats)
+        // refresh whichever budget is in force; the first substantive delta
+        // promotes from the generous prefill budget to the tighter inter-delta
+        // budget. This is the two-phase behavior shared with the main session.
         Receive<SubAgentStreamPing>(msg =>
         {
             _log.Debug(
@@ -501,8 +561,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 + $"updates={msg.UpdateCount} emptyUpdates={msg.EmptyUpdateCount} "
                 + $"text={msg.TextDeltaCount}/{msg.TextChars}ch "
                 + $"thinking={msg.ThinkingDeltaCount}/{msg.ThinkingChars}ch "
-                + $"toolCalls={msg.ToolCallDeltaCount} finishReason={msg.FinishReason ?? "null"}");
-            RecordProgress("the model is responding");
+                + $"toolCalls={msg.ToolCallDeltaCount} finishReason={msg.FinishReason ?? "null"} "
+                + $"substantive={msg.IsSubstantive}");
+
+            // Same two-phase policy as the main session: keepalives refresh the
+            // current budget, the first substantive delta promotes off prefill.
+            _anyContentStreamed = _watchdog.OnStreamProgress(
+                msg.IsSubstantive,
+                _anyContentStreamed,
+                _prefillBudget,
+                _interDeltaBudget,
+                Timers);
+
+            EmitActivity("the model is responding");
         });
     }
 
@@ -545,7 +616,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private void FireLlmCall(bool forceNoTools = false)
     {
         _turnState.ForceNoToolsActive = forceNoTools;
-        RecordProgress("calling the model");
+        // Each LLM call starts fresh on the generous prefill budget; the watchdog
+        // promotes to the inter-delta budget on the first substantive delta. The
+        // no-progress deadline is armed alongside it and only real tokens reset it.
+        _anyContentStreamed = false;
+        StartLlmCallWatchdog();
+        EmitActivity("calling the model");
         var self = Self;
         var client = _chatClient;
         var messages = new List<AiChatMessage>(_history);
@@ -585,9 +661,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
     private void Complete(bool success, string output)
     {
-        // Idempotent guard: a stale SubAgentTimeout or other handler can land
-        // after Complete has already run (Tell from a thread-pool finally races
-        // mailbox-thread Stop). The second call would send a duplicate
+        // Idempotent guard: a stale ProcessingWatchdogExpired or other handler can
+        // land after Complete has already run (Tell from a thread-pool finally
+        // races mailbox-thread Stop). The second call would send a duplicate
         // SubAgentResult and log a misleading "completed" line. The first
         // caller wins; subsequent calls are no-ops.
         if (_completed) return;
@@ -597,7 +673,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _pendingApprovalWaits = 0;
         _executionCts?.Cancel();
         _externalCts?.Cancel();
-        Timers.Cancel(TimeoutTimerKey);
+        _watchdog.Stop(Timers);
         _externalCancellationRegistration.Dispose();
         _executionCts?.Dispose();
         _externalCts?.Dispose();
@@ -624,9 +700,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         Context.Stop(Self);
     }
 
-    /// <summary>Re-arm the inactivity watchdog (Akka replaces the same-key timer).</summary>
-    private void ArmInactivityTimer()
-        => Timers.StartSingleTimer(TimeoutTimerKey, SubAgentTimeout.Instance, _inactivityBudget);
+    /// <summary>
+    /// Arm the watchdog for a fresh LLM streaming call: the generous prefill
+    /// liveness budget plus the keepalive-immune no-progress deadline that bounds
+    /// a backend streaming heartbeats without producing real tokens.
+    /// </summary>
+    private void StartLlmCallWatchdog()
+        => _watchdog.Start(ProcessingWatchdog.LlmCall, _prefillBudget, Timers, _noProgressBudget);
+
+    /// <summary>
+    /// (Re)start the liveness watchdog on the given budget without a no-progress
+    /// deadline — used to re-baseline between streaming calls (tool dispatch,
+    /// post-approval). Clears any stale no-progress deadline from the prior call.
+    /// </summary>
+    private void RestartWatchdog(TimeSpan budget)
+        => _watchdog.Start(ProcessingWatchdog.LlmCall, budget, Timers);
 
     /// <summary>Emit a liveness/progress item to the spawning tool's stream, if any.</summary>
     private void EmitActivity(string phase, bool suspendsInactivityWatchdog = false)
@@ -635,10 +723,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             SuspendsInactivityWatchdog = suspendsInactivityWatchdog
         });
 
-    /// <summary>Record forward progress: re-arm the inactivity watchdog and emit activity.</summary>
+    /// <summary>
+    /// Record forward progress in the tool loop / post-approval: re-baseline the
+    /// inter-delta watchdog and emit activity. Uses <see cref="RestartWatchdog"/>
+    /// (Start, not Refresh) so it still arms after an approval wait stopped the
+    /// watchdog entirely.
+    /// </summary>
     private void RecordProgress(string phase)
     {
-        ArmInactivityTimer();
+        RestartWatchdog(_interDeltaBudget);
         EmitActivity(phase);
     }
 
@@ -767,80 +860,50 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             // (e.g., Qwen emits <think> blocks that surface as TextReasoningContent
             // only in streaming mode), leaving the assistant message with no
             // TextContent and causing the subagent to report empty "(no response)".
-            var updates = new List<ChatResponseUpdate>();
+            // The loop, counting, and response assembly are shared with the main
+            // session path via StreamingResponseReader.
             var pingThrottle = Stopwatch.StartNew();
-            int updateCount = 0;
-            int emptyUpdateCount = 0;
-            int textDeltaCount = 0;
-            int textChars = 0;
-            int thinkingDeltaCount = 0;
-            int thinkingChars = 0;
-            int toolCallDeltaCount = 0;
-            string? finishReason = null;
-            await foreach (var update in client.GetStreamingResponseAsync(messages, options, ct))
-            {
-                updates.Add(update);
-                updateCount++;
-                if (update.Contents.Count == 0 && update.FinishReason is null)
-                    emptyUpdateCount++;
-                if (update.FinishReason is not null)
-                    finishReason = update.FinishReason.ToString();
 
-                foreach (var content in update.Contents)
+            var result = await StreamingResponseReader.ReadAsync(
+                client,
+                messages,
+                options,
+                (_, cls, diag) =>
                 {
-                    switch (content)
+                    // Always surface the first substantive delta promptly so the
+                    // watchdog can promote off the generous prefill budget;
+                    // otherwise throttle pings. Keepalives are forwarded too (the
+                    // actor refreshes whichever budget is in force) so a healthy
+                    // slow prefill is never mistaken for a hang.
+                    if (cls.IsFirstSubstantive || pingThrottle.Elapsed >= StreamPingInterval)
                     {
-                        case TextContent text:
-                            textDeltaCount++;
-                            textChars += text.Text?.Length ?? 0;
-                            break;
-                        case TextReasoningContent reasoning:
-                            thinkingDeltaCount++;
-                            thinkingChars += reasoning.Text?.Length ?? 0;
-                            break;
-                        case FunctionCallContent:
-                            toolCallDeltaCount++;
-                            break;
+                        pingThrottle.Restart();
+                        self.Tell(new SubAgentStreamPing(
+                            callId,
+                            diag.UpdateCount,
+                            diag.EmptyUpdateCount,
+                            diag.TextDeltaCount,
+                            diag.TextChars,
+                            diag.ThinkingDeltaCount,
+                            diag.ThinkingChars,
+                            diag.ToolCallDeltaCount,
+                            diag.FinishReason,
+                            IsSubstantive: cls.HasSubstantiveContent));
                     }
-                }
-
-                // Content-free keepalives only prove the socket is alive; they
-                // do not prove the model is making progress. Re-arm the
-                // watchdog only for substantive deltas so provider heartbeat
-                // loops cannot keep a sub-agent alive forever.
-                if (IsSubstantiveStreamingUpdate(update) && pingThrottle.Elapsed >= StreamPingInterval)
-                {
-                    pingThrottle.Restart();
-                    self.Tell(new SubAgentStreamPing(
-                        callId,
-                        updateCount,
-                        emptyUpdateCount,
-                        textDeltaCount,
-                        textChars,
-                        thinkingDeltaCount,
-                        thinkingChars,
-                        toolCallDeltaCount,
-                        finishReason));
-                }
-            }
-
-            var response = updates.ToChatResponse();
-            if (response.Messages.Count == 0)
-            {
-                response = new ChatResponse(new AiChatMessage(Microsoft.Extensions.AI.ChatRole.Assistant, []));
-            }
+                },
+                ct);
 
             self.Tell(new LlmResponseReceived
             {
-                Response = response,
+                Response = result.Response,
                 CallId = callId,
-                StreamUpdateCount = updateCount,
-                EmptyStreamUpdateCount = emptyUpdateCount,
-                StreamTextDeltaCount = textDeltaCount,
-                StreamTextChars = textChars,
-                StreamThinkingDeltaCount = thinkingDeltaCount,
-                StreamThinkingChars = thinkingChars,
-                StreamToolCallDeltaCount = toolCallDeltaCount
+                StreamUpdateCount = result.Diagnostics.UpdateCount,
+                EmptyStreamUpdateCount = result.Diagnostics.EmptyUpdateCount,
+                StreamTextDeltaCount = result.Diagnostics.TextDeltaCount,
+                StreamTextChars = result.Diagnostics.TextChars,
+                StreamThinkingDeltaCount = result.Diagnostics.ThinkingDeltaCount,
+                StreamThinkingChars = result.Diagnostics.ThinkingChars,
+                StreamToolCallDeltaCount = result.Diagnostics.ToolCallDeltaCount
             });
         }
         catch (Exception ex)
@@ -876,29 +939,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         var normalized = text.ReplaceLineEndings("\\n");
         return normalized.Length <= maxChars ? normalized : normalized[..maxChars] + "...";
-    }
-
-    internal static bool IsSubstantiveStreamingUpdate(ChatResponseUpdate update)
-    {
-        if (update.FinishReason is not null)
-            return true;
-
-        foreach (var content in update.Contents)
-        {
-            switch (content)
-            {
-                case TextContent text when !string.IsNullOrEmpty(text.Text):
-                case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text):
-                case FunctionCallContent:
-                    return true;
-                case UsageContent:
-                    break;
-                default:
-                    return true;
-            }
-        }
-
-        return false;
     }
 
     internal static bool ContainsUnexecutedToolCallMarkup(string text)
@@ -1146,13 +1186,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return string.Concat(basePrompt.TrimEnd(), "\n\n", HeadlessExecutionContract);
     }
 
-    /// <summary>Singleton inactivity-watchdog marker message.</summary>
-    private sealed class SubAgentTimeout
-    {
-        public static readonly SubAgentTimeout Instance = new();
-        private SubAgentTimeout() { }
-    }
-
     private sealed class SubAgentCancelled
     {
         public static readonly SubAgentCancelled Instance = new();
@@ -1169,8 +1202,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     /// <summary>
     /// Sent by <see cref="ExecuteToolsAsync"/> immediately before awaiting the
     /// parent approval bridge. Increments the in-flight approval-wait counter
-    /// so <see cref="SubAgentTimeout"/> ignores stale timer ticks
-    /// while a human is deciding.
+    /// so the <see cref="ProcessingWatchdogExpired"/> handler ignores stale timer
+    /// ticks while a human is deciding.
     /// </summary>
     private sealed class SubAgentApprovalWaitStarted
     {
@@ -1190,7 +1223,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         private SubAgentApprovalWaitCompleted() { }
     }
 
-    /// <summary>Throttled self-message: the streaming LLM call is still producing output.</summary>
+    /// <summary>
+    /// Throttled self-message: the streaming LLM call is still alive.
+    /// <see cref="IsSubstantive"/> is false for content-free keepalives, so the
+    /// watchdog refreshes the current budget on them but only promotes off the
+    /// prefill budget on real output.
+    /// </summary>
     private sealed record SubAgentStreamPing(
         long CallId,
         int UpdateCount,
@@ -1200,7 +1238,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         int ThinkingDeltaCount,
         int ThinkingChars,
         int ToolCallDeltaCount,
-        string? FinishReason);
+        string? FinishReason,
+        bool IsSubstantive);
 
     // ── Reuse LlmSessionActor's internal message types ──
     // These are internal to Netclaw.Actors so accessible here.

@@ -29,6 +29,7 @@ public sealed class SubAgentSpawner
     private readonly ToolAccessPolicy _toolAccessPolicy;
     private readonly IToolApprovalService? _approvalService;
     private readonly ISystemPromptProvider _promptProvider;
+    private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger<SubAgentSpawner> _logger;
 
     public SubAgentSpawner(
@@ -37,13 +38,15 @@ public sealed class SubAgentSpawner
         ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService,
         ISystemPromptProvider promptProvider,
-        ILogger<SubAgentSpawner> logger)
+        ILogger<SubAgentSpawner> logger,
+        SubAgentConfig? subAgentConfig = null)
     {
         _chatClientProvider = chatClientProvider;
         _toolRegistry = toolRegistry;
         _toolAccessPolicy = toolAccessPolicy;
         _approvalService = approvalService;
         _promptProvider = promptProvider;
+        _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger;
     }
 
@@ -113,6 +116,9 @@ public sealed class SubAgentSpawner
 
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
+        var prefillTimeout = TimeSpan.FromSeconds(
+            profile.PrefillTimeoutSeconds ?? _subAgentConfig.PrefillTimeoutSeconds);
+        var noProgressTimeout = TimeSpan.FromSeconds(_subAgentConfig.NoProgressTimeoutSeconds);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
@@ -136,6 +142,8 @@ public sealed class SubAgentSpawner
                     Task = task,
                     RuntimeContext = runtimeContext,
                     Timeout = subAgentTimeout,
+                    PrefillTimeout = prefillTimeout,
+                    NoProgressTimeout = noProgressTimeout,
                     SessionScopeId = subAgentScopeId,
                     Audience = context.Audience,
                     Boundary = context.Boundary,
@@ -151,12 +159,16 @@ public sealed class SubAgentSpawner
                     // pass a real sink so parent tool liveness sees progress.
                     ActivitySink = activitySink
                 },
-                // No Ask timeout: a healthy run is inactivity-bounded, not
-                // wall-clock-bounded (like the parent LLM session), so any finite
-                // ceiling could pre-empt a legitimately long run. A stalled run
-                // self-completes via the sub-agent's inactivity watchdog; a wedged
-                // run is cancelled through ct — the spawning tool call's token,
-                // governed by the parent's per-call watchdog.
+                // No Ask timeout: a healthy run is bounded by the sub-agent's own
+                // watchdogs, not by wall-clock, so any finite ceiling here could
+                // pre-empt a legitimately long run. The sub-agent self-completes on
+                // two internal budgets: the liveness watchdog (no bytes at all,
+                // including keepalives) and the no-progress deadline (keepalives but
+                // no real tokens for NoProgressTimeoutSeconds). ct — the spawning
+                // tool call's token — only adds parent-turn / user cancellation on
+                // top; note the parent's own per-call watchdog does NOT bound a
+                // keepalive wedge, because the sub-agent emits liveness activity on
+                // every keepalive, which refreshes it.
                 timeout: Timeout.InfiniteTimeSpan,
                 cancellationToken: ct);
 

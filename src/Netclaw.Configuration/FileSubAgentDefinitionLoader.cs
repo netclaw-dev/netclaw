@@ -219,6 +219,26 @@ public sealed class FileSubAgentDefinitionLoader
             return null;
         }
 
+        // Validate timeout overrides against the same bounds the JSON config schema
+        // enforces. Fail loud rather than letting an out-of-range value flow to
+        // ITimerScheduler (a non-positive timeout throws) or silently exceed the
+        // documented ceiling — the frontmatter path bypasses schema validation.
+        if (frontmatter.TimeoutSeconds is { } timeoutSeconds && timeoutSeconds is < 5 or > 600)
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has invalid timeoutSeconds {Value} (expected 5–600) — skipping",
+                frontmatter.Name, filePath, timeoutSeconds);
+            return null;
+        }
+
+        if (frontmatter.PrefillTimeoutSeconds is { } prefillSeconds && prefillSeconds is < 5 or > 3600)
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has invalid prefillTimeoutSeconds {Value} (expected 5–3600) — skipping",
+                frontmatter.Name, filePath, prefillSeconds);
+            return null;
+        }
+
         return new SubAgentProfile
         {
             Name = frontmatter.Name.Trim(),
@@ -227,6 +247,7 @@ public sealed class FileSubAgentDefinitionLoader
             ToolNames = tools,
             ModelRole = modelRole,
             TimeoutSeconds = frontmatter.TimeoutSeconds ?? 60,
+            PrefillTimeoutSeconds = frontmatter.PrefillTimeoutSeconds,
             EmitStructuredFindings = frontmatter.EmitStructuredFindings ?? false,
             Visibility = visibility
         };

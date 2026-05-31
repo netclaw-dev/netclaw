@@ -11,8 +11,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using System.Threading.Channels;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.Memory;
+using Netclaw.Actors.Tests.Sessions;
 using ApprovalOptionKeys = Netclaw.Actors.Protocol.ApprovalOptionKeys;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -992,7 +994,17 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient));
 
         var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent { Task = "Slow task", Timeout = TimeSpan.FromMilliseconds(500) , Audience = TrustAudience.Personal },
+            // No first token ever arrives, so the prefill liveness budget governs;
+            // set it small so the stalled call fails fast. (An unset prefill now
+            // defaults to the generous 1800s session budget rather than collapsing
+            // to Timeout, so Timeout alone no longer bounds the wait-for-first-token.)
+            new RunSubAgent
+            {
+                Task = "Slow task",
+                Timeout = TimeSpan.FromMilliseconds(500),
+                PrefillTimeout = TimeSpan.FromMilliseconds(500),
+                Audience = TrustAudience.Personal
+            },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -1000,28 +1012,112 @@ public class SubAgentActorTests : TestKit
         Assert.Empty(result.Findings);
     }
 
+    // The two-phase promote/refresh policy (keepalives refresh the prefill budget;
+    // the first substantive delta promotes to the inter-delta budget) is proven
+    // deterministically in ProcessingWatchdogTests — no wall-clock, no Task.Delay.
+    // The actor-level test below only verifies that when the watchdog timer fires
+    // the sub-agent completes with the right failure; it parks the stream so the
+    // real watchdog timer is the only thing that can end the call (nothing races it).
+
     [Fact]
-    public void Keepalive_only_streaming_updates_are_not_substantive_progress()
+    public async Task Silent_prefill_times_out_at_the_prefill_ceiling()
     {
-        Assert.False(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
-        {
-            Role = ChatRole.Assistant
-        }));
-        Assert.False(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
-        {
-            Role = ChatRole.Assistant,
-            Contents = [new UsageContent(new UsageDetails())]
-        }));
-        Assert.True(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
-        {
-            Role = ChatRole.Assistant,
-            Contents = [new TextContent("working")]
-        }));
-        Assert.True(SubAgentActor.IsSubstantiveStreamingUpdate(new ChatResponseUpdate
-        {
-            Role = ChatRole.Assistant,
-            Contents = [new FunctionCallContent("call-1", "inspect_context")]
-        }));
+        // The model never produces a first token (the stream parks). The prefill
+        // ceiling bounds the call even though the inter-delta budget is large.
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), new ParkingChatClient()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Silent prefill",
+                Timeout = TimeSpan.FromSeconds(30),         // inter-delta — not the governing budget here
+                PrefillTimeout = TimeSpan.FromSeconds(2),   // the budget under test
+                Audience = TrustAudience.Personal
+            },
+            TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains("timed out", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task No_progress_deadline_kills_a_call_that_never_produces_a_token()
+    {
+        // The keepalive-immune deadline is the governing bound here: the liveness
+        // prefill budget is generous, but the stream never produces a substantive
+        // token, so the no-progress deadline fires first and reports the
+        // no-substantive-output reason. (That keepalives refresh the liveness timer
+        // yet never reset this deadline is proven in ProcessingWatchdogTests.)
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), new ParkingChatClient()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Task = "Wedged",
+                Timeout = TimeSpan.FromSeconds(30),           // inter-delta — not governing
+                PrefillTimeout = TimeSpan.FromSeconds(30),    // liveness — generous, not governing
+                NoProgressTimeout = TimeSpan.FromSeconds(2),  // the budget under test
+                Audience = TrustAudience.Personal
+            },
+            TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+        Assert.False(result.Success);
+        Assert.Contains("no substantive output", result.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Classify_distinguishes_keepalives_from_substantive_progress()
+    {
+        // Content-free heartbeat (e.g. prompt_progress) — a keepalive, not substantive.
+        var empty = StreamingResponseReader.Classify(
+            new ChatResponseUpdate { Role = ChatRole.Assistant },
+            anySubstantiveSeen: false);
+        Assert.False(empty.HasSubstantiveContent);
+        Assert.False(empty.IsFirstSubstantive);
+
+        // Usage-only chunk — still a keepalive (stats, no model output).
+        var usageOnly = StreamingResponseReader.Classify(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new UsageContent(new UsageDetails())] },
+            anySubstantiveSeen: false);
+        Assert.False(usageOnly.HasSubstantiveContent);
+
+        // First real text delta — substantive and first.
+        var text = StreamingResponseReader.Classify(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("working")] },
+            anySubstantiveSeen: false);
+        Assert.True(text.HasSubstantiveContent);
+        Assert.True(text.IsFirstSubstantive);
+
+        // Tool-call content is substantive.
+        var toolCall = StreamingResponseReader.Classify(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new FunctionCallContent("call-1", "inspect_context")] },
+            anySubstantiveSeen: false);
+        Assert.True(toolCall.HasSubstantiveContent);
+
+        // A finish-reason-only update ends the call — substantive, not a keepalive.
+        var finishOnly = StreamingResponseReader.Classify(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, FinishReason = ChatFinishReason.Stop },
+            anySubstantiveSeen: false);
+        Assert.True(finishOnly.HasSubstantiveContent);
+
+        // A non-text content type (e.g. data/image, or a provider error/refusal) is
+        // real output, not a heartbeat — must remain substantive so it promotes the
+        // watchdog off the prefill budget.
+        var nonText = StreamingResponseReader.Classify(
+            new ChatResponseUpdate
+            {
+                Role = ChatRole.Assistant,
+                Contents = [new DataContent(new byte[] { 1, 2, 3 }, "application/octet-stream")]
+            },
+            anySubstantiveSeen: false);
+        Assert.True(nonText.HasSubstantiveContent);
+
+        // Substantive content after we've already seen output is not "first".
+        var laterText = StreamingResponseReader.Classify(
+            new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("more")] },
+            anySubstantiveSeen: true);
+        Assert.True(laterText.HasSubstantiveContent);
+        Assert.False(laterText.IsFirstSubstantive);
     }
 
     [Fact]
@@ -1316,6 +1412,33 @@ internal sealed class FakeChatClient : IChatClient
             cancellationToken.ThrowIfCancellationRequested();
             yield return update;
         }
+    }
+
+    public object? GetService(Type serviceType, object? serviceKey = null) => null;
+    public void Dispose() { }
+}
+
+/// <summary>
+/// Streaming-only fake that emits no updates and parks until the consumer cancels
+/// (i.e. the sub-agent's watchdog fires). No <c>Task.Delay</c>: the only timing is
+/// the real watchdog timer, which nothing races, so the watchdog behavior under
+/// test (prefill liveness ceiling, no-progress deadline) is deterministic.
+/// </summary>
+internal sealed class ParkingChatClient : IChatClient
+{
+    public Task<ChatResponse> GetResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("ParkingChatClient is streaming-only.");
+
+    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? options = null,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        await TestStreamingHelpers.ParkUntilCancelledAsync(cancellationToken);
+        yield break;
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
