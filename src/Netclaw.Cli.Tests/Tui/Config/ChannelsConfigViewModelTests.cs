@@ -20,6 +20,20 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
 
+    public static TheoryData<ChannelType, string, string[]> ResetConnectionCases { get; } = new()
+    {
+        { ChannelType.Slack, "Slack", ["Slack.BotToken", "Slack.AppToken"] },
+        { ChannelType.Discord, "Discord", ["Discord.BotToken"] },
+        { ChannelType.Mattermost, "Mattermost", ["Mattermost.BotToken"] }
+    };
+
+    public static TheoryData<ChannelType> ChannelTypes { get; } = new()
+    {
+        ChannelType.Slack,
+        ChannelType.Discord,
+        ChannelType.Mattermost
+    };
+
     public ChannelsConfigViewModelTests()
     {
         _paths = new NetclawPaths(_dir.Path);
@@ -291,29 +305,45 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal("xapp-test", ConfigFileHelper.DecryptIfEncrypted(_paths, appToken?.ToString()));
     }
 
-    [Fact]
-    public void Reset_connection_deletes_config_section_and_secrets_on_save()
+    [Theory]
+    [MemberData(nameof(ResetConnectionCases))]
+    public void Reset_connection_deletes_config_section_and_secrets_immediately(
+        ChannelType type,
+        string configSection,
+        string[] secretPaths)
     {
-        WriteChannelConfig();
-        WriteChannelSecrets();
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
         using var vm = CreateViewModel();
-        vm.OpenAdapterManagement(ChannelType.Slack);
-        var resetIndex = vm.GetManagementMenuItems()
-            .Select((item, index) => (item, index))
-            .Single(entry => entry.item.Action == ChannelsManagementAction.ResetConnection)
-            .index;
-        vm.MoveManagementMenu(resetIndex);
-        vm.ActivateManagementMenuItem();
-        vm.MoveResetConfirmation(1);
 
-        vm.ApplyResetConfirmation();
-        vm.Save();
+        ConfirmReset(vm, type);
 
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        Assert.False(ConfigFileHelper.TryGetPathValue(config, "Slack", out _));
+        Assert.False(ConfigFileHelper.TryGetPathValue(config, configSection, out _));
         var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
-        Assert.False(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out _));
-        Assert.False(ConfigFileHelper.TryGetPathValue(secrets, "Slack.AppToken", out _));
+        foreach (var secretPath in secretPaths)
+            Assert.False(ConfigFileHelper.TryGetPathValue(secrets, secretPath, out _));
+        Assert.True(vm.IsSaved.Value);
+        Assert.Equal($"{type} reset saved.", vm.Status.Value.Text);
+    }
+
+    [Theory]
+    [MemberData(nameof(ChannelTypes))]
+    public void Reset_connection_survives_reopening_channels_editor_without_outer_save(
+        ChannelType type)
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        using (var vm = CreateViewModel())
+        {
+            ConfirmReset(vm, type);
+        }
+
+        using var reopened = CreateViewModel();
+
+        Assert.False(reopened.Step.IsAdapterKnown(type));
+        Assert.False(reopened.Step.IsAdapterEnabled(type));
+        Assert.Null(reopened.Step.GetAdapterSummary(GetAdapterIndex(reopened, type)));
     }
 
     [Theory]
@@ -344,6 +374,25 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
     private ChannelsConfigViewModel CreateViewModel()
         => new(_paths, new FakeSlackProbe(), new FakeDiscordProbe());
+
+    private static void ConfirmReset(ChannelsConfigViewModel vm, ChannelType type)
+    {
+        vm.OpenAdapterManagement(type);
+        var resetIndex = vm.GetManagementMenuItems()
+            .Select((item, index) => (item, index))
+            .Single(entry => entry.item.Action == ChannelsManagementAction.ResetConnection)
+            .index;
+        vm.MoveManagementMenu(resetIndex);
+        vm.ActivateManagementMenuItem();
+        vm.MoveResetConfirmation(1);
+        vm.ApplyResetConfirmation();
+    }
+
+    private static int GetAdapterIndex(ChannelsConfigViewModel vm, ChannelType type)
+        => vm.Step.Adapters
+            .Select((adapter, index) => (adapter.Type, index))
+            .Single(entry => entry.Type == type)
+            .index;
 
     private static string[] ToStringArray(object? raw)
         => Assert.IsType<object[]>(raw).Select(static value => value switch

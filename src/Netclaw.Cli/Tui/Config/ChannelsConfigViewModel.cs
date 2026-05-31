@@ -26,7 +26,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private readonly WizardContext _context;
     private readonly HashSet<ChannelType> _knownProviders;
     private readonly Dictionary<ChannelType, Dictionary<string, TrustAudience>> _channelAudiences = [];
-    private readonly HashSet<ChannelType> _resetProviders = [];
     private ChannelType _activeAdapterType = ChannelType.Slack;
     private string? _editingAudienceId;
     private string? _editingAudienceLabel;
@@ -166,7 +165,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             Step,
             _knownProviders,
             _channelAudiences,
-            _resetProviders,
             _context.SelectedPosture ?? DeploymentPosture.Personal));
         session.Save();
 
@@ -175,7 +173,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         foreach (var provider in savedDraft.KnownProviders)
             _knownProviders.Add(provider);
 
-        _resetProviders.Clear();
         LoadAudienceDrafts(savedDraft);
         Step.OnEnter(_context, NavigationDirection.Forward);
         _mapper.ApplyToStep(Step, savedDraft);
@@ -616,12 +613,24 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
         }
 
-        _resetProviders.Add(_activeAdapterType);
-        _knownProviders.Remove(_activeAdapterType);
-        _channelAudiences.Remove(_activeAdapterType);
-        Step.ResetAdapterState(_activeAdapterType);
+        var resetType = _activeAdapterType;
+        var resetName = ActiveAdapterName;
+        var session = new ConfigEditorSession(_paths);
+        session.Apply(_mapper.BuildResetContribution(resetType));
+        session.Save();
+
+        var savedDraft = _mapper.Load(_paths);
+        _knownProviders.Clear();
+        foreach (var provider in savedDraft.KnownProviders)
+            _knownProviders.Add(provider);
+
+        LoadAudienceDrafts(savedDraft);
+        Step.OnEnter(_context, NavigationDirection.Forward);
+        _mapper.ApplyToStep(Step, savedDraft);
+        _activeAdapterType = resetType;
         Screen.Value = ChannelsConfigScreen.Picker;
-        Status.Value = new ConfigStatusMessage($"{ActiveAdapterName} reset staged. Press d to save.", ConfigStatusTone.Warning);
+        IsSaved.Value = true;
+        Status.Value = new ConfigStatusMessage($"{resetName} reset saved.", ConfigStatusTone.Success);
         NotifyContentChanged();
     }
 
@@ -1026,8 +1035,20 @@ internal sealed record CredentialFieldSpec(
     string Placeholder,
     string? Hint);
 
+internal sealed record ChannelPersistenceSpec(
+    string ConfigSection,
+    IReadOnlyList<string> SecretPaths);
+
 internal sealed class ChannelsConfigPersistenceMapper
 {
+    private static readonly IReadOnlyDictionary<ChannelType, ChannelPersistenceSpec> ChannelSpecs =
+        new Dictionary<ChannelType, ChannelPersistenceSpec>
+        {
+            [ChannelType.Slack] = new ChannelPersistenceSpec("Slack", ["Slack.BotToken", "Slack.AppToken"]),
+            [ChannelType.Discord] = new ChannelPersistenceSpec("Discord", ["Discord.BotToken"]),
+            [ChannelType.Mattermost] = new ChannelPersistenceSpec("Mattermost", ["Mattermost.BotToken"])
+        };
+
     internal ChannelsConfigDraft Load(NetclawPaths paths)
     {
         var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
@@ -1109,7 +1130,6 @@ internal sealed class ChannelsConfigPersistenceMapper
         ChannelPickerStepViewModel step,
         IReadOnlySet<ChannelType> knownProviders,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
-        IReadOnlySet<ChannelType> resetProviders,
         DeploymentPosture posture)
     {
         var fields = new List<SectionFieldAction>();
@@ -1121,7 +1141,6 @@ internal sealed class ChannelsConfigPersistenceMapper
             step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack),
             knownProviders.Contains(ChannelType.Slack),
             channelAudiences,
-            resetProviders,
             posture);
         AddDiscordContribution(
             fields,
@@ -1129,7 +1148,6 @@ internal sealed class ChannelsConfigPersistenceMapper
             step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord),
             knownProviders.Contains(ChannelType.Discord),
             channelAudiences,
-            resetProviders,
             posture);
         AddMattermostContribution(
             fields,
@@ -1137,8 +1155,16 @@ internal sealed class ChannelsConfigPersistenceMapper
             step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost),
             knownProviders.Contains(ChannelType.Mattermost),
             channelAudiences,
-            resetProviders,
             posture);
+
+        return new SectionContribution(fields, secrets);
+    }
+
+    internal SectionContribution BuildResetContribution(ChannelType type)
+    {
+        var fields = new List<SectionFieldAction>();
+        var secrets = new List<SectionSecretAction>();
+        AddResetActions(fields, secrets, type);
 
         return new SectionContribution(fields, secrets);
     }
@@ -1253,17 +1279,8 @@ internal sealed class ChannelsConfigPersistenceMapper
         SlackStepViewModel vm,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
-        IReadOnlySet<ChannelType> resetProviders,
         DeploymentPosture posture)
     {
-        if (resetProviders.Contains(ChannelType.Slack))
-        {
-            fields.Add(new SectionFieldAction("Slack", SectionFieldActionKind.Delete));
-            secrets.Add(new SectionSecretAction("Slack.BotToken", SectionSecretActionKind.Delete));
-            secrets.Add(new SectionSecretAction("Slack.AppToken", SectionSecretActionKind.Delete));
-            return;
-        }
-
         if (!vm.SlackEnabled)
         {
             if (knownProvider)
@@ -1294,16 +1311,8 @@ internal sealed class ChannelsConfigPersistenceMapper
         DiscordStepViewModel vm,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
-        IReadOnlySet<ChannelType> resetProviders,
         DeploymentPosture posture)
     {
-        if (resetProviders.Contains(ChannelType.Discord))
-        {
-            fields.Add(new SectionFieldAction("Discord", SectionFieldActionKind.Delete));
-            secrets.Add(new SectionSecretAction("Discord.BotToken", SectionSecretActionKind.Delete));
-            return;
-        }
-
         if (!vm.DiscordEnabled)
         {
             if (knownProvider)
@@ -1330,16 +1339,8 @@ internal sealed class ChannelsConfigPersistenceMapper
         MattermostStepViewModel vm,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
-        IReadOnlySet<ChannelType> resetProviders,
         DeploymentPosture posture)
     {
-        if (resetProviders.Contains(ChannelType.Mattermost))
-        {
-            fields.Add(new SectionFieldAction("Mattermost", SectionFieldActionKind.Delete));
-            secrets.Add(new SectionSecretAction("Mattermost.BotToken", SectionSecretActionKind.Delete));
-            return;
-        }
-
         if (!vm.MattermostEnabled)
         {
             if (knownProvider)
@@ -1373,6 +1374,19 @@ internal sealed class ChannelsConfigPersistenceMapper
             secrets.Add(new SectionSecretAction(path, SectionSecretActionKind.Set, new SensitiveString(normalized)));
         else if (hasPersistedSecret)
             secrets.Add(new SectionSecretAction(path, SectionSecretActionKind.Preserve));
+    }
+
+    private static void AddResetActions(
+        List<SectionFieldAction> fields,
+        List<SectionSecretAction> secrets,
+        ChannelType type)
+    {
+        if (!ChannelSpecs.TryGetValue(type, out var spec))
+            return;
+
+        fields.Add(new SectionFieldAction(spec.ConfigSection, SectionFieldActionKind.Delete));
+        foreach (var secretPath in spec.SecretPaths)
+            secrets.Add(new SectionSecretAction(secretPath, SectionSecretActionKind.Delete));
     }
 
     private static void SetArrayOrDelete(List<SectionFieldAction> fields, string path, IReadOnlyList<string> values)

@@ -420,9 +420,8 @@ this first pass.
 
 The same menu is used for Slack, Discord, and Mattermost. Disable/enable only
 changes `<Adapter>.Enabled`; dormant channel fields and stored credentials are
-preserved. Reset stages deletion of the adapter config section and secrets,
-then returns to the picker. The deletion is written only when the operator
-saves from the picker.
+preserved. Reset is immediate: confirming reset deletes the adapter config
+section and its secrets before returning to the picker/saved screen.
 
 ### 3.3 Channels and permissions
 

@@ -254,7 +254,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             var field = fields[i];
             var input = EnsureCredentialInput(field);
             if (i == ViewModel.CredentialFieldIndex)
-                input.OnFocused();
+                Focus.SetFocus(input);
 
             layout = layout
                 .WithChild(new TextNode($"  {field.Label}:").WithForeground(i == ViewModel.CredentialFieldIndex ? Color.Cyan : Color.White))
@@ -273,7 +273,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         var layout = Layouts.Vertical()
             .WithChild(Header($"  Reset {ViewModel.ActiveAdapterName} connection?"))
             .WithChild(Hint($"  This removes {ViewModel.ActiveAdapterName} credentials, allowed channels, allowed users,"))
-            .WithChild(Hint("  DM settings, and channel permission mappings after you save."))
+            .WithChild(Hint("  DM settings, and channel permission mappings immediately."))
             .WithChild(Layouts.Empty().Height(1));
 
         for (var i = 0; i < options.Length; i++)
@@ -303,7 +303,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                     ChannelsConfigScreen.AllowedUsers => "  Use comma-separated user IDs. Blank means unrestricted users in allowed channels.",
                     ChannelsConfigScreen.DirectMessages => "  Space toggles DMs. Left/right changes the DM audience.",
                     ChannelsConfigScreen.RotateCredentials => "  Blank secret fields preserve existing secrets. Tab switches fields.",
-                    ChannelsConfigScreen.ResetConfirm => "  Reset is staged until you save channel settings.",
+                    ChannelsConfigScreen.ResetConfirm => "  Reset writes immediately when confirmed.",
                     _ => string.Empty
                 };
                 return (ILayoutNode)new TextNode(help).WithForeground(Color.Gray);
@@ -623,11 +623,9 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         }
 
         var field = fields[ViewModel.CredentialFieldIndex];
-        if (_credentialInputs.TryGetValue(field.Key, out var input))
-        {
-            input.HandleInput(keyInfo);
-            StageCredentialInput(field);
-        }
+        var input = EnsureCredentialInput(field);
+        input.HandleInput(keyInfo);
+        StageCredentialInput(field);
     }
 
     private void HandleResetConfirmKey(ConsoleKeyInfo keyInfo)

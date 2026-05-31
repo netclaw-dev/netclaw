@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Channels;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Config;
+using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Termina;
@@ -55,6 +57,35 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         Assert.NotNull(getChannelsVm());
         Assert.Equal("/config", app.CurrentPath);
+    }
+
+    [Fact]
+    public async Task Channels_RotateCredentials_AcceptsTypedSecretInput()
+    {
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        dashboardVm.SelectedIndex.Value = dashboardVm.Items
+            .Select((item, index) => (item, index))
+            .Single(entry => entry.item.Label == "Channels")
+            .index;
+        dashboardVm.ActivateSelected();
+
+        input.EnqueueKey(ConsoleKey.Enter); // Open configured Slack management.
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter); // Rotate credentials.
+        input.EnqueueString("xoxb-typed-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        var slack = channelsVm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        Assert.Equal("xoxb-typed-token", slack.BotToken);
+        Assert.Equal("Credential changes staged. Press d to save.", channelsVm.Status.Value.Text);
     }
 
     private TerminaApplication CreateHeadlessApp(
