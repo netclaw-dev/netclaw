@@ -39,11 +39,15 @@ downgrade-only guard).
   shared resolution for shell and file tools.
 - Bring webhook route creation into the existing audience-provenance model
   (inherit creator audience, downgrade-only escalation guard).
+- Confine autonomous (non-interactive) sessions to a filesystem zone so the
+  unified `Mode.All` path authorization cannot be combined with the safe-verb
+  auto-approval to read arbitrary out-of-zone files unattended.
 
 **Non-Goals:**
 
-- Sandboxing shell execution. Real OS-level confinement is `ShellExecutionMode`
-  `SandboxOnly` + a backend; this change does not build or rely on it.
+- OS-level shell sandboxing. The autonomous zone is path-argument confinement, not
+  process isolation; real OS confinement is `ShellExecutionMode.SandboxOnly` + a
+  backend, which this change does not build or rely on.
 - Enabling shell for non-Personal audiences (the Personal-only gate is unchanged).
 - Deleting the trust-zone mechanism, changing the hard-deny list, `ToolPathPolicy`
   (protected paths), per-audience file confinement, or the approval gate.
@@ -73,6 +77,40 @@ downgrade-only guard).
   and the webhook registration boundary validates against escalation
   (downgrade-only) the same way `ReminderManagerActor.ValidateRequestedAudience`
   does. Config-defined routes keep `Public` as the fail-closed default.
+- **Autonomous filesystem clamp (the human-backstop substitute).** Unifying shell
+  with the file-access policy means an unrestricted (`Mode.All`) Personal audience
+  authorizes any path. Combined with the pre-existing safe-verb short-circuit
+  (`ScopedShellSafeVerbPolicy.AllShortCircuit`), which auto-approves a read-only verb
+  based on the *cwd* and never inspects the command's *path arguments*, an
+  unattended session processing a hostile payload (a webhook) could be steered to
+  auto-read arbitrary out-of-zone files (`cat ~/.ssh/id_rsa`). The fix is to confine
+  autonomous (`SupportsInteractiveApproval == false`) sessions to a filesystem zone:
+  - *Axis is interactivity, not audience.* The clamp keys on the absence of a human
+    approval backstop, which is exactly `SupportsInteractiveApproval`. It is the
+    substitute for the human a non-interactive channel cannot summon.
+  - *Single seam.* Because shell now routes through `TryResolveWritePath` and every
+    file tool through `TryResolvePath`, the clamp lives at one place —
+    `ScopedFileAccessPolicy.TryResolvePath`'s `Mode.All` short-circuit — and covers
+    all filesystem tools at once. Confining only shell would move the vector to
+    `file_read`.
+  - *Narrows, never widens.* The zone replaces the `Mode.All` "allow-all" allowance
+    and otherwise intersects with the audience's roots, so a more-restricted audience
+    (e.g. autonomous Public, session-scoped) is never loosened.
+  - *Non-empty by construction.* The zone is `session_dir` (+ `project_dir` when
+    present, + operator-configured `AutonomousZoneRoots`). This is the corrected
+    version of the original trust-zone bug — sourcing roots from the channel context
+    rather than the audience profile's `WriteFiles.Mode` (which was `All` → empty
+    for Personal).
+  - *Alternative — taint-gating:* confine only turns carrying `PayloadTaint` from
+    external input, leaving operator-authored unattended work unrestricted. More
+    precise, but `PayloadTaint` is not currently threaded onto `ToolExecutionContext`
+    (only `TurnContext`/`SourceProvenance`), so it needs new plumbing. Deferred —
+    the folder zone uses fields already on the context and is simpler/predictable.
+  - *Alternative — narrow the safe-verb list for autonomous:* rejected. For a
+    non-interactive channel there is no prompt to fall back to, so removing a verb
+    deletes the capability outright, and the only recovery (`trust-verb cat`) grants
+    that verb *everywhere* — broader than the hole being closed. Restricting folders
+    instead preserves capability and makes the recovery a bounded "add a root".
 
 ## Risks / Trade-offs
 
@@ -87,7 +125,19 @@ downgrade-only guard).
   validated audience. Documented in `netclaw-operations`.
 - **[Path-token validation is a heuristic, not a sandbox]** → Unchanged from today;
   explicitly a non-goal. The approval gate and protected-path policy are the real
-  controls.
+  controls. Note the heuristic is robust *in combination*: a command simple enough
+  to auto-run unattended is simple enough for path extraction to see its paths, and
+  a command complex enough to hide its paths (control flow, `python -c`, command
+  substitution) is flagged `messy` and fails closed for non-interactive callers.
+- **[Autonomous zone too tight bricks legitimate work; too loose re-leaks]** → A
+  webhook's per-delivery session may have only `session_dir`, which can be too tight
+  for useful triage. Mitigation: `ToolConfig.AutonomousZoneRoots` lets operators
+  extend the zone with bounded, path-scoped roots (not a global `trust-verb`), and
+  `project_dir` is included when the channel carries one.
+- **[Autonomous clamp partially reverses the shipped `Mode.All`→anywhere shell
+  behavior]** → Intended. For non-interactive contexts, path authority comes from
+  the channel zone rather than the audience's `Mode.All`; the unification still holds
+  for interactive sessions and for the single resolution seam.
 
 ## Migration Plan
 
