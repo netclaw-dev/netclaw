@@ -104,7 +104,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             var sizeBytes = TryGetFileLength(authorizedPath);
             return BuildMetadataResponse(
                 authorizedPath,
-                new FileInspection("application/octet-stream", AttachmentCategory.Other, sizeBytes, false, null),
+                new FileInspection(MimeTypeCatalog.ApplicationOctetStream, AttachmentCategory.Other, sizeBytes, false, null),
                 "File is not valid in the detected text encoding. Raw binary output is not returned by file_read.");
         }
         catch (UnauthorizedAccessException)
@@ -121,7 +121,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     {
         var info = new FileInfo(path);
         if (info.Length == 0)
-            return new FileInspection("text/plain", AttachmentCategory.Document, 0, true, StrictUtf8);
+            return new FileInspection(MimeTypeCatalog.TextPlain, AttachmentCategory.Document, 0, true, StrictUtf8);
 
         var sampleLength = (int)Math.Min(info.Length, 4096);
         var buffer = new byte[sampleLength];
@@ -133,12 +133,12 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         }
 
         var magicMime = MagicByteValidator.DetectMimeType(buffer.AsSpan(0, Math.Min(buffer.Length, 64)));
-        var extensionMime = GuessMimeType(path);
+        var extensionMime = MimeTypeCatalog.FromPathExtension(path);
         var textEncoding = DetectTextEncoding(buffer, extensionMime);
         var looksText = textEncoding is not null;
         var mimeType = ResolveMimeType(path, magicMime, extensionMime, textEncoding);
         var category = AttachmentCategories.FromMime(mimeType);
-        var isTextLike = looksText && IsTextMime(mimeType);
+        var isTextLike = looksText && MimeTypeCatalog.IsText(mimeType);
 
         return new FileInspection(mimeType, category, info.Length, isTextLike, isTextLike ? textEncoding : null);
     }
@@ -153,32 +153,33 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         // ZIP/OLE Office containers should be explained as documents, not as
         // generic archives or OLE blobs. The extension is only trusted after the
         // container signature proves this is the expected binary family.
-        if (IsZipBackedOfficeDocument(path) && string.Equals(magicMime, "application/zip", StringComparison.OrdinalIgnoreCase))
+        if (MimeTypeCatalog.IsZipBackedOfficePath(path)
+            && string.Equals(magicMime, MimeTypeCatalog.ApplicationZip, StringComparison.OrdinalIgnoreCase))
             return extensionMime!;
 
-        if (IsOleBackedOfficeDocument(path)
-            && string.Equals(magicMime, "application/x-ole-compound-document", StringComparison.OrdinalIgnoreCase))
+        if (MimeTypeCatalog.IsOleBackedOfficePath(path)
+            && string.Equals(magicMime, MimeTypeCatalog.ApplicationOleCompoundDocument, StringComparison.OrdinalIgnoreCase))
             return extensionMime!;
 
-        if (looksText && IsTextMime(extensionMime) && IsUtf16OrUtf32(textEncoding))
+        if (looksText && MimeTypeCatalog.IsText(extensionMime) && IsUtf16OrUtf32(textEncoding))
             return extensionMime!;
 
         if (magicMime is not null)
             return magicMime;
 
         if (looksText)
-            return IsTextMime(extensionMime) ? extensionMime! : "text/plain";
+            return MimeTypeCatalog.IsText(extensionMime) ? extensionMime! : MimeTypeCatalog.TextPlain;
 
         // Extensions are only hints. A binary file named `.json` or `.png`
         // must stay metadata-only instead of leaking control bytes or spoofed
         // media into a tool result / model input path.
-        if (IsTextMime(extensionMime))
-            return "application/octet-stream";
+        if (MimeTypeCatalog.IsText(extensionMime))
+            return MimeTypeCatalog.ApplicationOctetStream;
 
-        if (RequiresBinarySignature(extensionMime))
-            return "application/octet-stream";
+        if (MimeTypeCatalog.RequiresBinarySignature(extensionMime))
+            return MimeTypeCatalog.ApplicationOctetStream;
 
-        return extensionMime ?? "application/octet-stream";
+        return extensionMime ?? MimeTypeCatalog.ApplicationOctetStream;
     }
 
     private string HandleNonTextFile(
@@ -196,7 +197,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
                 return BuildMetadataResponse(
                     authorizedPath,
                     inspection,
-                    $"Image exceeds the {FormatBytes(MaxModelInputFileBytes)} model-input handoff limit. Raw binary output is not returned by file_read.");
+                    $"Image exceeds the {ByteSizeFormatter.Format(MaxModelInputFileBytes)} model-input handoff limit. Raw binary output is not returned by file_read.");
             }
 
             context.AddModelInputFile(authorizedPath, Path.GetFileName(authorizedPath), inspection.MimeType);
@@ -227,7 +228,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         return $"File is not readable as plain text.\n" +
                $"Path: {path}\n" +
                $"Type: {inspection.MimeType} ({inspection.Category})\n" +
-               $"Size: {FormatBytes(inspection.SizeBytes)}\n" +
+               $"Size: {ByteSizeFormatter.Format(inspection.SizeBytes)}\n" +
                guidance;
     }
 
@@ -248,7 +249,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         if (RawTextControlsAreAcceptable(sample) && CanDecodeUtf8Sample(sample))
             return StrictUtf8;
 
-        return IsTextMime(extensionMime)
+        return MimeTypeCatalog.IsText(extensionMime)
                && RawTextControlsAreAcceptable(sample)
                && DecodedTextLooksLikeText(sample, Windows1252)
             ? Windows1252
@@ -409,24 +410,6 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         return controlCount <= Math.Max(1, sample.Length / 20);
     }
 
-    private static bool IsTextMime(string? mimeType)
-    {
-        if (string.IsNullOrWhiteSpace(mimeType))
-            return false;
-
-        if (mimeType.StartsWith("text/", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return mimeType.ToLowerInvariant() switch
-        {
-            "application/json" => true,
-            "application/xml" => true,
-            "application/x-yaml" => true,
-            "application/yaml" => true,
-            _ => false
-        };
-    }
-
     private static bool IsUtf16OrUtf32(Encoding? encoding)
     {
         return ReferenceEquals(encoding, StrictUtf16Le)
@@ -434,80 +417,6 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
                || ReferenceEquals(encoding, StrictUtf32Le)
                || ReferenceEquals(encoding, StrictUtf32Be);
     }
-
-    private static bool RequiresBinarySignature(string? mimeType)
-    {
-        if (string.IsNullOrWhiteSpace(mimeType))
-            return false;
-
-        return AttachmentCategories.FromMime(mimeType) is
-            AttachmentCategory.Image or
-            AttachmentCategory.Pdf or
-            AttachmentCategory.Document or
-            AttachmentCategory.Archive or
-            AttachmentCategory.Media;
-    }
-
-    private static bool IsZipBackedOfficeDocument(string path)
-    {
-        return Path.GetExtension(path).ToLowerInvariant() switch
-        {
-            ".docx" or ".xlsx" or ".pptx" or ".odt" or ".ods" or ".odp" => true,
-            _ => false
-        };
-    }
-
-    private static bool IsOleBackedOfficeDocument(string path)
-    {
-        return Path.GetExtension(path).ToLowerInvariant() switch
-        {
-            ".doc" or ".xls" or ".ppt" => true,
-            _ => false
-        };
-    }
-
-    private static string? GuessMimeType(string path)
-    {
-        return Path.GetExtension(path).ToLowerInvariant() switch
-        {
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            ".svg" => "image/svg+xml",
-            ".pdf" => "application/pdf",
-            ".mp3" => "audio/mpeg",
-            ".wav" => "audio/wav",
-            ".ogg" => "audio/ogg",
-            ".mp4" => "video/mp4",
-            ".webm" => "video/webm",
-            ".zip" => "application/zip",
-            ".gz" => "application/gzip",
-            ".7z" => "application/x-7z-compressed",
-            ".doc" => "application/msword",
-            ".docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".xls" => "application/vnd.ms-excel",
-            ".xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".ppt" => "application/vnd.ms-powerpoint",
-            ".pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-            ".rtf" => "application/rtf",
-            ".txt" or ".log" => "text/plain",
-            ".md" => "text/markdown",
-            ".csv" => "text/csv",
-            ".html" or ".htm" => "text/html",
-            ".json" => "application/json",
-            ".xml" => "application/xml",
-            ".yml" or ".yaml" => "application/yaml",
-            _ => null
-        };
-    }
-
-    private static string FormatBytes(long size) => size switch
-    {
-        >= 1024L * 1024L => $"{size / (1024d * 1024d):F1} MiB",
-        >= 1024L => $"{size / 1024d:F1} KiB",
-        _ => $"{size} bytes"
-    };
 
     private static string TruncateFileOutput(string content, int maxChars)
     {

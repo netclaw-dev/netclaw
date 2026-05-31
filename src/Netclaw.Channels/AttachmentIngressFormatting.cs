@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using System.Text;
 
 namespace Netclaw.Channels;
@@ -69,13 +70,5 @@ public static class AttachmentIngressFormatting
         => AttachmentInlineDecision.Resolve(category, inlineImages);
 
     public static string FormatBytes(long size)
-    {
-        const long Mib = 1024 * 1024;
-        const long Kib = 1024;
-        if (size >= Mib)
-            return $"{size / (double)Mib:F1} MiB";
-        if (size >= Kib)
-            return $"{size / (double)Kib:F1} KiB";
-        return $"{size} bytes";
-    }
+        => ByteSizeFormatter.Format(size);
 }

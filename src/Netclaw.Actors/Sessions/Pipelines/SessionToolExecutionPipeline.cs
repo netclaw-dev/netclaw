@@ -803,13 +803,13 @@ internal static class SessionToolExecutionPipeline
         if (context.ModelInputFiles.Count == 0)
             return new ModelInputMaterializationResult([], 0);
 
-        var mediaDir = Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory);
         try
         {
-            Directory.CreateDirectory(mediaDir);
+            SessionMediaStore.GetOrCreateMediaDirectory(sessionDir);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            var mediaDir = Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory);
             logger?.LogWarning(ex, "Failed to create model input media directory: {Path}", mediaDir);
             return new ModelInputMaterializationResult([], context.ModelInputFiles.Count);
         }
@@ -825,8 +825,8 @@ internal static class SessionToolExecutionPipeline
                 // is safe. This is the provider-boundary guardrail that keeps
                 // future tools from smuggling arbitrary local bytes into the
                 // next LLM call by setting a convincing MIME string.
-                var mimeType = NormalizeModelInputMime(file.MimeType);
-                if (!TryGetSupportedModelInputModality(mimeType, out var mediaModality, out var requiredModelModality))
+                var mimeType = MimeTypeCatalog.Normalize(file.MimeType);
+                if (!MediaMimeClassifier.TryGetSupportedModelInput(mimeType, out var mediaModality, out var requiredModelModality))
                 {
                     logger?.LogWarning("Model input file MIME type is not supported, skipping: {MimeType}", mimeType);
                     continue;
@@ -878,19 +878,12 @@ internal static class SessionToolExecutionPipeline
                     continue;
                 }
 
-                var ext = ChatMessageConverter.MimeToExtension(mimeType);
-                var fileName = $"{Guid.NewGuid():N}{ext}";
-                var fullPath = Path.Combine(mediaDir, fileName);
-
-                File.Copy(file.FilePath, fullPath);
-
-                refs.Add(new SerializableMediaReference
-                {
-                    RelativePath = fileName,
-                    MimeType = new MimeType(mimeType),
-                    Modality = (int)mediaModality,
-                    FileSizeBytes = info.Length
-                });
+                refs.Add(SessionMediaStore.CopyFile(
+                    file.FilePath,
+                    sessionDir,
+                    mimeType,
+                    mediaModality,
+                    info.Length));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -908,37 +901,6 @@ internal static class SessionToolExecutionPipeline
         var itemText = failedCount == 1 ? "file" : "files";
         return resultText +
                $"\n[model input media handoff warning: {failedCount} registered media {itemText} could not be attached to the next LLM call]";
-    }
-
-    private static string NormalizeModelInputMime(string? mimeType)
-    {
-        var normalized = string.IsNullOrWhiteSpace(mimeType)
-            ? MimeType.DefaultValue
-            : mimeType.Trim();
-        var semicolon = normalized.IndexOf(';', StringComparison.Ordinal);
-        if (semicolon >= 0)
-            normalized = normalized[..semicolon].Trim();
-
-        return string.Equals(normalized, "image/jpg", StringComparison.OrdinalIgnoreCase)
-            ? "image/jpeg"
-            : normalized.ToLowerInvariant();
-    }
-
-    private static bool TryGetSupportedModelInputModality(
-        string mimeType,
-        out MediaModality mediaModality,
-        out ModelModality requiredModelModality)
-    {
-        if (mimeType is "image/png" or "image/jpeg" or "image/gif" or "image/webp")
-        {
-            mediaModality = MediaModality.Image;
-            requiredModelModality = ModelModality.Image;
-            return true;
-        }
-
-        mediaModality = default;
-        requiredModelModality = default;
-        return false;
     }
 
     private static bool IsFileMagicCompatible(string path, string mimeType)

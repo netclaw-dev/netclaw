@@ -405,6 +405,23 @@ public class ChatMessageConverterTests
     }
 
     [Fact]
+    public void FromAiMessage_ignores_unknown_DataContent_media_type()
+    {
+        using var tempDir = new TempSessionDir();
+        var contents = new List<AIContent>
+        {
+            new TextContent("Unknown bytes"),
+            new DataContent(new byte[] { 1, 2, 3 }, "application/octet-stream")
+        };
+        var ai = new AiChatMessage(AiChatRole.User, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
+
+        Assert.Equal("Unknown bytes", msg.Content);
+        Assert.Empty(msg.MediaReferences);
+    }
+
+    [Fact]
     public void MimeToExtension_maps_common_types()
     {
         Assert.Equal(".png", ChatMessageConverter.MimeToExtension("image/png"));

@@ -85,7 +85,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 
         var rawFilename = args.DisplayName ?? Path.GetFileName(attachPath);
         var sanitizedFilename = FilenameSanitizer.Sanitize(rawFilename);
-        var mimeType = GuessMimeType(attachPath);
+        var mimeType = MimeTypeCatalog.FromPathExtension(attachPath) ?? MimeTypeCatalog.ApplicationOctetStream;
 
         context.AddFileAttachment(attachPath, sanitizedFilename, mimeType);
         var copiedText = string.Equals(attachPath, resolvedPath, StringComparison.Ordinal)
@@ -141,26 +141,4 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         return destination;
     }
 
-    private static string GuessMimeType(string path)
-    {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext switch
-        {
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            ".svg" => "image/svg+xml",
-            ".pdf" => "application/pdf",
-            ".txt" => "text/plain",
-            ".json" => "application/json",
-            ".csv" => "text/csv",
-            ".md" => "text/markdown",
-            ".html" or ".htm" => "text/html",
-            ".mp3" => "audio/mpeg",
-            ".wav" => "audio/wav",
-            ".mp4" => "video/mp4",
-            _ => "application/octet-stream"
-        };
-    }
 }

@@ -329,29 +329,11 @@ public sealed class SessionPipeline : ISessionPipeline
         if (dataContents.Count > 0)
         {
             var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory);
-            var mediaDir = Path.Combine(sessionDir, SessionDirectoryHelper.MediaSubdirectory);
-            Directory.CreateDirectory(mediaDir);
-
             foreach (var data in dataContents)
             {
-                var bytes = data.Data.ToArray();
-                if (bytes.Length == 0)
-                    continue;
-
-                var mimeType = data.MediaType ?? "application/octet-stream";
-                var ext = ChatMessageConverter.MimeToExtension(mimeType);
-                var fileName = $"{Guid.NewGuid():N}{ext}";
-                var fullPath = Path.Combine(mediaDir, fileName);
-
-                File.WriteAllBytes(fullPath, bytes);
-
-                mediaRefs.Add(new SerializableMediaReference
-                {
-                    RelativePath = fileName,
-                    MimeType = new Netclaw.Security.MimeType(mimeType),
-                    Modality = (int)ChatMessageConverter.MimeToModality(mimeType),
-                    FileSizeBytes = bytes.Length
-                });
+                var mediaRef = SessionMediaStore.WriteDataContent(data, sessionDir);
+                if (mediaRef is not null)
+                    mediaRefs.Add(mediaRef);
             }
         }
 
