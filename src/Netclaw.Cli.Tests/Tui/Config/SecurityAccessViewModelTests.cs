@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
@@ -227,6 +229,55 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Reset_to_posture_default_clears_hidden_mcp_and_approval_settings()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" },
+              "Tools": {
+                "AudienceProfiles": {
+                  "Team": {
+                    "ToolsMode": "Allowlist",
+                    "AllowedTools": ["file_read", "file_list", "attach_file"],
+                    "McpServersMode": "All",
+                    "AllowedMcpServers": ["memorizer"],
+                    "McpServerToolGrants": {
+                      "memorizer": ["search_memories", "get"]
+                    },
+                    "ApprovalPolicy": {
+                      "DefaultMode": "Deny",
+                      "ToolOverrides": {
+                        "shell_execute": "Approval"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.ResetToDefault;
+
+        vm.ActivateSelectedAudienceProfileRow();
+
+        var root = JsonSerializer.Deserialize<SecurityAccessConfigRoot>(
+            File.ReadAllText(Context.Paths.NetclawConfigPath),
+            JsonDefaults.ConfigRead);
+        Assert.NotNull(root);
+        var team = root.Tools.AudienceProfiles.Team;
+        Assert.Contains(ToolAudienceProfileToolCatalog.WebSearch, team.AllowedTools);
+        Assert.Equal(ToolProfileMode.Allowlist, team.McpServersMode);
+        Assert.Null(team.McpServerToolGrants);
+        Assert.Null(team.ApprovalPolicy);
+        Assert.Empty(team.AllowedMcpServers);
+    }
+
+    [Fact]
     public void Enabled_features_summary_treats_missing_flags_as_enabled()
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath,
@@ -293,5 +344,10 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
 
         var exposure = vm.Items.Single(static item => item.Label == "Exposure Mode");
         Assert.Equal("Cloudflare Tunnel", exposure.Summary);
+    }
+
+    private sealed class SecurityAccessConfigRoot
+    {
+        public ToolConfig Tools { get; set; } = new();
     }
 }

@@ -17,9 +17,12 @@ config_json="$(read_config_json)"
 
 assert_field '.Tools.AudienceProfiles.Team.ToolsMode' 'Allowlist' "$config_json" || :
 assert_field '.Tools.AudienceProfiles.Team.AllowedTools | index("file_read") != null' 'true' "$config_json" || :
-assert_field '.Tools.AudienceProfiles.Team.AllowedTools | index("web_search") == null' 'true' "$config_json" || :
-assert_field '.Tools.AudienceProfiles.Team.AllowedTools | index("web_fetch") == null' 'true' "$config_json" || :
+assert_field '.Tools.AudienceProfiles.Team.AllowedTools | index("web_search") != null' 'true' "$config_json" || :
+assert_field '.Tools.AudienceProfiles.Team.AllowedTools | index("web_fetch") != null' 'true' "$config_json" || :
+assert_field '.Tools.AudienceProfiles.Team.McpServersMode' 'Allowlist' "$config_json" || :
+assert_field '(.Tools.AudienceProfiles.Team.AllowedMcpServers | length)' '0' "$config_json" || :
 assert_field '.Tools.AudienceProfiles.Team.McpServerToolGrants' 'null' "$config_json" || :
+assert_field '.Tools.AudienceProfiles.Team.ApprovalPolicy' 'null' "$config_json" || :
 
 if (( assert_fail )); then
   printf -- '--- netclaw.json contents ---\n%s\n' "$config_json" >&2

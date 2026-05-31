@@ -1,15 +1,22 @@
 # config-audience.tape - edit Audience Profiles from netclaw config.
 #
 # Exercises:
-#   netclaw config -> Security & Access -> Audience Profiles -> Team
-# and verifies curated per-audience tool toggles persist without exposing raw MCP editing.
+#   netclaw config -> Security & Access -> Audience Profiles -> Team -> reset
+# and verifies reset restores the full posture baseline, including hidden MCP /
+# approval settings that are not recreated in this editor.
 
 Output "/tmp/tape-config-audience.gif"
 
-# Seed minimal Team config; Audience Profiles should resolve from the system posture.
+# Seed Team config with customized visible tools plus hidden MCP/approval fields.
 Type "mkdir -p $NETCLAW_HOME/config"
 Enter
-Type "posture=Team; jq -n --arg posture $posture '{configVersion:1,Security:{DeploymentPosture:$posture}}' > $NETCLAW_HOME/config/netclaw.json"
+Type "export posture=Team mode=Allowlist mcp_mode=All deny=Deny approval=Approval"
+Enter
+Type "export file_read=file_read file_list=file_list attach_file=attach_file"
+Enter
+Type "export memorizer=memorizer search_memories=search_memories get=get shell_execute=shell_execute"
+Enter
+Type "jq -n '{configVersion:1,Security:{DeploymentPosture:$ENV.posture},Tools:{AudienceProfiles:{Team:{ToolsMode:$ENV.mode,AllowedTools:[$ENV.file_read,$ENV.file_list,$ENV.attach_file],McpServersMode:$ENV.mcp_mode,AllowedMcpServers:[$ENV.memorizer],McpServerToolGrants:{($ENV.memorizer):[$ENV.search_memories,$ENV.get]},ApprovalPolicy:{DefaultMode:$ENV.deny,ToolOverrides:{($ENV.shell_execute):$ENV.approval}}}}}}' > $NETCLAW_HOME/config/netclaw.json"
 Enter
 
 Type "netclaw config"
@@ -19,7 +26,7 @@ Down 8
 Enter
 Wait+Screen@10s /Security & Access/
 
-# Open Audience Profiles, edit Team, disable Web access.
+# Open Audience Profiles, edit Team, then reset the full profile.
 Down 2
 Enter
 Wait+Screen@10s /System default posture: Team/
@@ -29,11 +36,11 @@ Enter
 Wait+Screen@10s /Audience Profile: Team/
 Down
 Space
-Wait+Screen@10s /\[ \] Web/
-Down 4
-Wait+Screen@10s /\[◀ Session only/
-Down
-Wait+Screen@10s /Common work files: images/
+Wait+Screen@10s /\[✓\] Web/
+Down 7
+Wait+Screen@10s /Reset overrides/
+Enter
+Wait+Screen@10s /Team overrides reset to the Team posture baseline/
 Escape
 Wait+Screen@10s /System default posture: Team/
 Escape

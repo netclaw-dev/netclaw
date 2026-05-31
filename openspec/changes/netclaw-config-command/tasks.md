@@ -50,40 +50,40 @@
 
 ## 8. Security & Access area
 
-- [ ] 8.1 Add `Security & Access` sub-page.
-- [ ] 8.2 Include Security Posture, Enabled Features, Audience Profiles,
+- [x] 8.1 Add `Security & Access` sub-page.
+- [x] 8.2 Include Security Posture, Enabled Features, Audience Profiles,
   and Exposure Mode.
-- [ ] 8.3 Keep posture values to `Personal`, `Team`, and `Public` only.
+- [x] 8.3 Keep posture values to `Personal`, `Team`, and `Public` only.
 
 ## 9. Security Posture leaf
 
-- [ ] 9.1 Keep Security Posture distinct from Enabled Features and
+- [x] 9.1 Keep Security Posture distinct from Enabled Features and
   Audience Profiles.
-- [ ] 9.2 When posture changes to Team or Public, continue into Enabled
+- [x] 9.2 When posture changes to Team or Public, continue into Enabled
   Features.
-- [ ] 9.3 When posture changes to Personal, skip the Enabled Features
+- [x] 9.3 When posture changes to Personal, skip the Enabled Features
   continuation.
-- [ ] 9.4 Support overwrite/reset behavior that resets the full underlying
+- [x] 9.4 Support overwrite/reset behavior that resets the full underlying
   audience profile when requested.
 
 ## 10. Enabled Features leaf
 
-- [ ] 10.1 Implement Enabled Features as deployment-wide runtime
+- [x] 10.1 Implement Enabled Features as deployment-wide runtime
   enablement.
-- [ ] 10.2 Do not represent Enabled Features as per-audience policy.
-- [ ] 10.3 Cover runtime-enablement editing with substantive round-trip and
+- [x] 10.2 Do not represent Enabled Features as per-audience policy.
+- [x] 10.3 Cover runtime-enablement editing with substantive round-trip and
   smoke tests.
 
 ## 11. Audience Profiles leaf
 
-- [ ] 11.1 Implement Audience Profiles as a curated high-level editor.
-- [ ] 11.2 Remove per-audience feature toggles from this editor.
-- [ ] 11.3 Remove per-audience shell mode from this editor.
-- [ ] 11.4 Limit editable concerns to Tool Access (non-MCP), File Access,
+- [x] 11.1 Implement Audience Profiles as a curated high-level editor.
+- [x] 11.2 Remove per-audience feature toggles from this editor.
+- [x] 11.3 Remove per-audience shell mode from this editor.
+- [x] 11.4 Limit editable concerns to Tool Access (non-MCP), File Access,
   Incoming Attachments, and Reset to posture default.
-- [ ] 11.5 Ensure reset/overwrite resets the full underlying audience
+- [x] 11.5 Ensure reset/overwrite resets the full underlying audience
   profile, including hidden MCP and approval settings.
-- [ ] 11.6 Route MCP access/grants/approval editing to
+- [x] 11.6 Route MCP access/grants/approval editing to
   `netclaw mcp permissions` instead of recreating it here.
 
 ## 12. Exposure Mode leaf

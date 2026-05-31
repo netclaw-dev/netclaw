@@ -268,22 +268,39 @@ Done when:
 
 Done when:
 
-- [ ] `Security & Access` contains Security Posture, Enabled Features, Audience
+- [x] `Security & Access` contains Security Posture, Enabled Features, Audience
   Profiles, and Exposure Mode.
-- [ ] Security Posture remains distinct from runtime Enabled Features and
+- [x] Security Posture remains distinct from runtime Enabled Features and
   Audience Profiles.
-- [ ] Team/Public posture continues into Enabled Features; Personal posture does
+- [x] Team/Public posture continues into Enabled Features; Personal posture does
   not force that continuation.
-- [ ] Audience Profiles expose only curated high-level controls: Tool Access
+- [x] Audience Profiles expose only curated high-level controls: Tool Access
   (non-MCP), File Access, Incoming Attachments, Reset to posture default.
-- [ ] Reset to posture default resets the full underlying audience profile,
+- [x] Reset to posture default resets the full underlying audience profile,
   including hidden MCP and approval settings.
-- [ ] MCP permissions route to `netclaw mcp permissions`; they are not recreated
+- [x] MCP permissions route to `netclaw mcp permissions`; they are not recreated
   in this editor.
-- [ ] Tests cover round-trip, hidden-field reset semantics, and ACL consumer
+- [x] Tests cover round-trip, hidden-field reset semantics, and ACL consumer
   expectations.
-- [ ] Native config smoke covers at least one posture change and one audience
+- [x] Native config smoke covers at least one posture change and one audience
   profile reset with semantic assertions.
+
+#### Human Review Checkpoint: Security & Access config editor
+
+Stop here after Task 1.3 is completed, verified, and committed. Do not continue
+into Task 1.4 until a human has spot-checked the live `netclaw config` Security
+& Access experience in a real terminal.
+
+Human smoke focus:
+
+- Security Posture reads clearly and continues to Enabled Features for Team and
+  Public, but not for Personal.
+- Audience Profiles expose only curated controls and route MCP grants to
+  `netclaw mcp permissions`.
+- Reset overrides visibly restores the posture baseline and the persisted JSON
+  clears hidden MCP and approval overrides.
+- Exposure Mode is visible from Security & Access, but deeper Exposure Mode
+  behavior remains Task 1.4 work.
 
 #### Task 1.4: Complete Exposure Mode config leaf
 
