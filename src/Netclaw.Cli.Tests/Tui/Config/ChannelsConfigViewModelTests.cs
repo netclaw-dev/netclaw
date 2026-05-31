@@ -432,6 +432,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     {
         WriteChannelConfig();
         WriteChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var slackProbe = new FakeSlackProbe
         {
             NextResolutionResult = new SlackChannelResolutionResult(
@@ -452,6 +454,51 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal("Slack channel not found: #fart", vm.Status.Value.Text);
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public async Task SaveAsync_surfaces_dynamic_validation_exception_to_awaited_caller()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            ResolutionException = new InvalidOperationException("Slack lookup exploded")
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        slack.ChannelNamesInput = "netclaw-support";
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => vm.SaveAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("Slack lookup exploded", ex.Message);
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+    }
+
+    [Fact]
+    public async Task Save_from_input_surfaces_dynamic_validation_exception_as_status_without_persistence()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+        var slackProbe = new FakeSlackProbe
+        {
+            ResolutionException = new InvalidOperationException("Slack lookup exploded")
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        slack.ChannelNamesInput = "netclaw-support";
+
+        await vm.SaveFromInputAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("Channel settings save failed: Slack lookup exploded", vm.Status.Value.Text);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -459,6 +506,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var discordProbe = new FakeDiscordProbe
         {
             NextResolutionResult = new DiscordChannelResolutionResult(
@@ -477,6 +526,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Equal(1, discordProbe.ResolveCallCount);
         Assert.Equal("discord-token", discordProbe.LastBotToken);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -484,6 +535,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     {
         WriteAllChannelConfig();
         WriteAllChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
         var mattermostProbe = new FakeMattermostProbe
         {
             NextResolutionResult = new MattermostChannelResolutionResult(
@@ -503,6 +556,8 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal(1, mattermostProbe.ResolveCallCount);
         Assert.Equal("https://mattermost.example.com", mattermostProbe.LastServerUrl);
         Assert.Equal("mattermost-token", mattermostProbe.LastBotToken);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     private ChannelsConfigViewModel CreateViewModel(

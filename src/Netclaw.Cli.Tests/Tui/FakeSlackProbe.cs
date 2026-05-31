@@ -51,6 +51,8 @@ public sealed class FakeSlackProbe : ISlackProbe
     /// </summary>
     public TimeSpan? DelayBeforeResult { get; set; }
 
+    public Exception? ResolutionException { get; set; }
+
     public async Task<SlackProbeResult> ProbeAsync(string botToken, CancellationToken ct = default)
     {
         ProbeCallCount++;
@@ -66,6 +68,9 @@ public sealed class FakeSlackProbe : ISlackProbe
         ResolveCallCount++;
         LastBotToken = botToken;
         LastResolvedNames = channelNames;
+        if (ResolutionException is not null)
+            throw ResolutionException;
+
         if (DelayBeforeResult.HasValue)
             await Task.Delay(DelayBeforeResult.Value, ct);
         return NextResolutionResult;

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -51,6 +52,36 @@ public sealed class ExposureModeConfigPageTests : IDisposable
             $"Expected active exposure-mode legend in terminal output. Screen:\n{terminal}");
         Assert.True(terminal.Contains("[x] Reverse Proxy"),
             $"Expected saved reverse-proxy mode checkbox in terminal output. Screen:\n{terminal}");
+    }
+
+    [Fact]
+    public async Task ReverseProxySetup_AcceptsPastedHostAndTrustedProxyInput()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+            {
+              "configVersion": 1,
+              "Daemon": {
+                "ExposureMode": "local"
+              }
+            }
+            """);
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.A, false, false, true);
+        input.EnqueueKey(ConsoleKey.Backspace);
+        input.EnqueuePaste("10.0.0.10");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("10.0.0.0/24");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("10.0.0.10", vm.Step.Host);
+        Assert.Equal(["10.0.0.0/24"], vm.Step.TrustedProxies);
     }
 
     private (VirtualTerminal Terminal, TerminaApplication App, ExposureModeConfigViewModel Vm)

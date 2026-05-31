@@ -205,11 +205,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NotifyContentChanged();
     }
 
-    private async Task SaveFromInputAsync()
+    internal async Task SaveFromInputAsync(CancellationToken ct = default)
     {
         try
         {
-            await SaveAsync();
+            await SaveAsync(ct);
         }
         catch (Exception ex)
         {

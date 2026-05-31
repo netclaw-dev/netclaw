@@ -125,6 +125,8 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     [Fact]
     public async Task Brave_probe_failure_opens_override_dialog_before_save()
     {
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsExistedBefore = File.Exists(_paths.SecretsPath);
         using var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>
             new HttpResponseMessage(HttpStatusCode.Unauthorized)));
 
@@ -136,6 +138,31 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
         Assert.Equal(SearchConfigEditorDialog.ProbeWarning, vm.ActiveDialog.Value);
         Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
         Assert.Contains("authentication failed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsExistedBefore, File.Exists(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public async Task SubmitCurrentConfigurationAsync_surfaces_persistence_exception_to_awaited_caller()
+    {
+        using var vm = CreateBraveEditorWithSuccessfulProbe();
+        ReplaceConfigFileWithDirectory();
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => vm.SubmitCurrentConfigurationAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Submit_from_input_surfaces_persistence_exception_as_status()
+    {
+        using var vm = CreateBraveEditorWithSuccessfulProbe();
+        ReplaceConfigFileWithDirectory();
+
+        await vm.SubmitCurrentConfigurationFromInputAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Contains("Search settings save failed", vm.Status.Value.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -317,6 +344,24 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
     {
         public HttpClient CreateClient(string name)
             => new(new StubHttpMessageHandler(handler));
+    }
+
+    private SearchConfigEditorViewModel CreateBraveEditorWithSuccessfulProbe()
+    {
+        var vm = new SearchConfigEditorViewModel(_paths, new StubHttpClientFactory(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"web\":{\"results\":[]}}", Encoding.UTF8, "application/json"),
+            }));
+        vm.SelectBackendForEditing("brave");
+        vm.StageFieldValue("Search.BraveApiKey", "good-key");
+        return vm;
+    }
+
+    private void ReplaceConfigFileWithDirectory()
+    {
+        File.Delete(_paths.NetclawConfigPath);
+        Directory.CreateDirectory(_paths.NetclawConfigPath);
     }
 
     private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler

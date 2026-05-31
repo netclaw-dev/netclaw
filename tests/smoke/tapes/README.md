@@ -70,8 +70,11 @@ that breaks them.
    `Wait+Screen /…/` for an anchor in the next view.
 
 6. **Pair each non-trivial tape with an assertion.** Place a sibling
-   script at `tests/smoke/assertions/<tape-name>.sh`. The wrapper
-   invokes it with `NETCLAW_HOME` and `NETCLAW_SMOKE_CLI` exported.
+    script at `tests/smoke/assertions/<tape-name>.sh`. The wrapper
+    invokes it with `NETCLAW_HOME` and `NETCLAW_SMOKE_CLI` exported.
+    Config-writing tapes (`init-wizard`, `provider-add`,
+    `provider-rename`, and `config-*`) require an executable assertion;
+    the harness fails if it is missing or not executable.
 
 ## Anatomy
 

@@ -174,16 +174,16 @@ explicit `NOW` tasks 3.1, 4.2, and 5.2-5.3.
 
 Done when:
 
-- [ ] Every config/TUI task touching text input includes headless typed-input
+- [x] Every config/TUI task touching text input includes headless typed-input
   tests for typed characters, paste, Tab, Enter, Escape, and re-entry when
   applicable.
-- [ ] Every config leaf with dynamic validation has a fake-failure test proving
+- [x] Every config leaf with dynamic validation has a fake-failure test proving
   validation runs before persistence and leaves files unchanged.
-- [ ] Every config leaf ported from init/old editor paths has an existing-config
+- [x] Every config leaf ported from init/old editor paths has an existing-config
   load/round-trip test covering dormant values and persisted secrets.
-- [ ] Every smoke tape with config writes has an assertion script that checks
+- [x] Every smoke tape with config writes has an assertion script that checks
   canonical semantic output, not only screenshots or text.
-- [ ] Any async UI save/test action has a direct awaitable test path plus
+- [x] Any async UI save/test action has a direct awaitable test path plus
   fire-and-forget exception surfacing.
 
 #### Task 0.5: Add audit tests for plan-critical config editors

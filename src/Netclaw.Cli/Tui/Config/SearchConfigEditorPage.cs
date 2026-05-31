@@ -7,6 +7,7 @@ using R3;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Workflow;
 using Termina.Extensions;
+using Termina.Input;
 using Termina.Layout;
 using Termina.Reactive;
 using Termina.Rendering;
@@ -47,6 +48,15 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         ViewModel.ValidationSummary.Subscribe(_ => _contentNode?.Invalidate())
             .DisposeWith(Subscriptions);
         ViewModel.ValidationSpinnerTick.Subscribe(_ => _contentNode?.Invalidate())
+            .DisposeWith(Subscriptions);
+    }
+
+    protected override void OnBound()
+    {
+        base.OnBound();
+
+        ViewModel.Input.OfType<IInputEvent, PasteEvent>()
+            .Subscribe(HandlePaste)
             .DisposeWith(Subscriptions);
     }
 
@@ -281,7 +291,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             if (keyInfo.Key == ConsoleKey.Enter)
             {
                 StageActiveInput();
-                _ = ViewModel.SubmitCurrentConfigurationAsync();
+                _ = ViewModel.SubmitCurrentConfigurationFromInputAsync();
                 return true;
             }
 
@@ -296,6 +306,20 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         }
 
         return true;
+    }
+
+    private void HandlePaste(PasteEvent paste)
+    {
+        if (ViewModel.CurrentScreen.Value != SearchConfigEditorScreen.Entry
+            || _textInput is null
+            || _textInputFieldPath is null)
+        {
+            return;
+        }
+
+        _textInput.HandlePaste(paste);
+        ViewModel.StageFieldValue(_textInputFieldPath, _textInput.Text);
+        ViewModel.RequestRedraw();
     }
 
     private void BeginProviderSelection()

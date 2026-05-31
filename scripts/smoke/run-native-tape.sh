@@ -68,6 +68,13 @@ preamble="${TAPE_PREAMBLE:-${TAPES_DIR}/preamble.tape}"
 body="${TAPE_BODY_DIR:-${TAPES_DIR}}/${TAPE_NAME}.tape"
 assertion="${ASSERT_DIR}/${TAPE_NAME}.sh"
 
+requires_assertion=false
+case "$TAPE_NAME" in
+  init-wizard|provider-add|provider-rename|config-*)
+    requires_assertion=true
+    ;;
+esac
+
 if [[ ! -f "$preamble" ]]; then
   echo "ERROR: preamble not found at $preamble" >&2
   exit 1
@@ -166,7 +173,15 @@ if [[ -x "$assertion" ]]; then
     exit "$assert_status"
   fi
 elif [[ -f "$assertion" ]]; then
+  if [[ "$requires_assertion" == "true" ]]; then
+    echo "FAIL: $assertion exists but is not executable; config-writing tapes require semantic assertions." >&2
+    exit 1
+  fi
+
   echo "WARNING: $assertion exists but is not executable; skipping." >&2
+elif [[ "$requires_assertion" == "true" ]]; then
+  echo "FAIL: missing semantic assertion script for config-writing tape ${TAPE_NAME}: ${assertion}" >&2
+  exit 1
 fi
 
 echo "==> ${TAPE_NAME}: OK"

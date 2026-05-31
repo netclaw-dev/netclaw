@@ -4,6 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -71,8 +75,30 @@ public sealed class SearchConfigEditorPageTests : IDisposable
             $"Expected provider selection screen after Esc from saved state. Screen:\n{terminal}");
     }
 
+    [Fact]
+    public async Task BraveEntry_AcceptsTypedAndPastedApiKeyInput()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input, new StubHttpClientFactory(_ =>
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"web\":{\"results\":[]}}", Encoding.UTF8, "application/json"),
+            }));
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("BSA-");
+        input.EnqueuePaste("pasted-key");
+        input.EnqueueKey(ConsoleKey.LeftArrow);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("BSA-pasted-key", vm.FieldValues["Search.BraveApiKey"].Value);
+    }
+
     private (VirtualTerminal Terminal, TerminaApplication App, SearchConfigEditorViewModel Vm)
-        CreateHeadlessApp(out VirtualInputSource input)
+        CreateHeadlessApp(out VirtualInputSource input, IHttpClientFactory? httpClientFactory = null)
     {
         var terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
@@ -90,7 +116,7 @@ public sealed class SearchConfigEditorPageTests : IDisposable
                 _ => new SearchConfigEditorPage(),
                 _ =>
                 {
-                    capturedVm = new SearchConfigEditorViewModel(_paths);
+                    capturedVm = new SearchConfigEditorViewModel(_paths, httpClientFactory);
                     return capturedVm;
                 });
         });
@@ -99,5 +125,17 @@ public sealed class SearchConfigEditorPageTests : IDisposable
         var app = sp.GetRequiredService<TerminaApplication>();
 
         return (terminal, app, capturedVm!);
+    }
+
+    private sealed class StubHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name)
+            => new(new StubHttpMessageHandler(handler));
+    }
+
+    private sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => Task.FromResult(handler(request));
     }
 }

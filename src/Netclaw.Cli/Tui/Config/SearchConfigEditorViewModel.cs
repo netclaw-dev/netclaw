@@ -307,6 +307,21 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public async Task SaveAsync(CancellationToken ct = default)
         => await SubmitCurrentConfigurationAsync(ct);
 
+    internal async Task SubmitCurrentConfigurationFromInputAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            await SubmitCurrentConfigurationAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            CancelValidationSpinner();
+            CurrentScreen.Value = SearchConfigEditorScreen.Entry;
+            Status.Value = new ConfigStatusMessage($"Search settings save failed: {ex.Message}", ConfigStatusTone.Error);
+            RequestRedraw();
+        }
+    }
+
     public void SaveWithoutProbeOverride()
     {
         CancelValidationSpinner();

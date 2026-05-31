@@ -124,6 +124,27 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
     }
 
     [Fact]
+    public async Task Channels_AddChannel_AcceptsPastedChannelInput()
+    {
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Open configured Slack management.
+        input.EnqueueKey(ConsoleKey.DownArrow); // Add channel.
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("#pasted-channel");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "pasted-channel" && !row.IsAddAction);
+        Assert.Equal("Added pasted-channel. Press d to save.", channelsVm.Status.Value.Text);
+    }
+
+    [Fact]
     public async Task Channels_FirstTimeSlackBotToken_ShowsValidationError()
     {
         WriteEmptyChannelFiles();
