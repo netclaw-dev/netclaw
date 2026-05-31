@@ -10,9 +10,10 @@ namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Implements <see cref="IShellTrustZonePolicy"/> by delegating to
-/// <see cref="ScopedFileAccessPolicy"/> for root resolution. Returns the
-/// write-access roots for the context — shell commands are treated as having
-/// write-equivalent privilege since they can modify files.
+/// <see cref="ScopedFileAccessPolicy"/>. Shell commands are treated as having
+/// write-equivalent privilege, so a path is authorized exactly when
+/// <c>file_write</c> would authorize it — unifying the two surfaces on one
+/// interpretation of the audience's write filesystem mode.
 /// </summary>
 public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
 {
@@ -28,6 +29,6 @@ public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
         _fileAccessPolicy = fileAccessPolicy;
     }
 
-    public IReadOnlyList<string> GetTrustZoneRoots(ToolExecutionContext context)
-        => _fileAccessPolicy.GetRootsForContext(context, ScopedFileAccessPolicy.AccessKind.Write);
+    public bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context)
+        => _fileAccessPolicy.TryResolveWritePath(fullPath, context, out _, out _);
 }

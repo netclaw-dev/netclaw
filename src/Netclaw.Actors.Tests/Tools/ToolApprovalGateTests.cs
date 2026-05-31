@@ -722,6 +722,43 @@ public sealed class ToolApprovalGateTests
         Assert.Equal("shell_trust_zone_policy_not_configured", decision.DenyReason);
     }
 
+    [Fact]
+    public void Non_interactive_shell_with_unrestricted_audience_proceeds_to_approval()
+    {
+        // Regression for #1244: the real ShellTrustZonePolicy must authorize ANY
+        // path for the Personal audience (WriteFiles.Mode == All), so a
+        // non-interactive shell command no longer false-denies with
+        // shell_no_trust_zone_roots — it falls through to the approval gate, which
+        // fails closed for non-interactive callers unless pre-approved.
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["shell_execute"] = ToolApprovalMode.Approval
+            }
+        };
+
+        // Real policy — Personal profile resolves WriteFiles.Mode == All.
+        var trustZone = new ShellTrustZonePolicy(config);
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            shellTrustZonePolicy: trustZone);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: false);
+
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = "cat /etc/hostname" });
+
+        Assert.Null(decision.DenyReason);
+        Assert.True(decision.NeedsApproval);
+    }
+
     private static string CreateTrustZoneRoot(string tempDir)
     {
         var root = Path.Combine(tempDir, ".netclaw", "workspaces");
@@ -750,13 +787,17 @@ public sealed class ToolApprovalGateTests
             shellTrustZonePolicy: trustZone);
     }
 
+    // Simulates a Mode.Roots audience: a path is write-authorized iff it falls
+    // within one of the configured roots (the same IsWithinAnyRoot semantics the
+    // real ScopedFileAccessPolicy applies for Mode.Roots).
     private sealed class FakeShellTrustZonePolicy : IShellTrustZonePolicy
     {
         private readonly IReadOnlyList<string> _roots;
 
         public FakeShellTrustZonePolicy(IReadOnlyList<string> roots) => _roots = roots;
 
-        public IReadOnlyList<string> GetTrustZoneRoots(ToolExecutionContext context) => _roots;
+        public bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context)
+            => PathUtility.IsWithinAnyRoot(fullPath, _roots);
     }
 
     // ── v2 candidate-verb extraction (replaces v1 directory-root extraction) ──

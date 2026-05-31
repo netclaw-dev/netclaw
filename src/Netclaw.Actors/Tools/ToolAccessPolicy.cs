@@ -172,26 +172,25 @@ public sealed class ToolAccessPolicy
     }
 
     /// <summary>
-    /// For non-interactive channels, validates that all path-like arguments in a shell
-    /// command fall within the trust zone roots for the channel's audience. Returns a
-    /// deny decision if any path escapes, or null if all paths are within bounds.
+    /// For non-interactive channels, validates that the working directory and all
+    /// path-like arguments in a shell command are write-authorized for the channel's
+    /// audience, using the same audience-scoped resolution as <c>file_write</c>
+    /// (<c>Mode.All</c> ⇒ unrestricted, <c>Mode.Roots</c> ⇒ confined to roots,
+    /// <c>Mode.None</c> ⇒ denied). Returns a deny decision if any path escapes, or
+    /// null if all paths are within bounds.
     /// </summary>
     private ToolAccessDecision? EnforceShellTrustZones(
         string shellCommand,
         string? workingDirectory,
         ToolExecutionContext context)
     {
-        var roots = _shellTrustZonePolicy!.GetTrustZoneRoots(context);
-        if (roots.Count == 0)
-            return ToolAccessDecision.Deny("shell_no_trust_zone_roots");
-
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             var expandedWorkingDirectory = PathUtility.ExpandAndNormalize(workingDirectory, workingDirectory: null);
             if (expandedWorkingDirectory is null)
                 return ToolAccessDecision.Deny("shell_invalid_working_directory");
 
-            if (!PathUtility.IsWithinAnyRoot(expandedWorkingDirectory, roots))
+            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expandedWorkingDirectory, context))
                 return ToolAccessDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
@@ -205,7 +204,7 @@ public sealed class ToolAccessPolicy
             if (expanded is null)
                 continue;
 
-            if (!PathUtility.IsWithinAnyRoot(expanded, roots))
+            if (!_shellTrustZonePolicy!.IsShellWritePathAuthorized(expanded, context))
                 return ToolAccessDecision.Deny("shell_path_outside_trust_zone");
         }
 
