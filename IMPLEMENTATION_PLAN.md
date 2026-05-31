@@ -153,13 +153,17 @@ Done when:
 
 Done when:
 
-- [ ] Document the critical producer/consumer pairs in this plan or a linked
+- [x] Document the critical producer/consumer pairs in this plan or a linked
   spec, including config editor -> runtime options, channel events -> ACL,
   scheduler -> delivery gateway, tool schemas -> model/tool dispatcher, and
   memory persistence -> prompt assembly.
-- [ ] For each pair, identify the canonical representation and the test file
+- [x] For each pair, identify the canonical representation and the test file
   that proves it.
-- [ ] Add missing tests or add explicit `NOW` tasks for gaps.
+- [x] Add missing tests or add explicit `NOW` tasks for gaps.
+
+Inventory: `docs/spec/SPEC-010-testing-and-smoke-strategy.md` -> Critical
+Producer/Consumer Contract Inventory. Remaining proof gaps are assigned to
+explicit `NOW` tasks 3.1, 4.2, and 5.2-5.3.
 
 #### Task 0.4: Automate recent regression classes
 
