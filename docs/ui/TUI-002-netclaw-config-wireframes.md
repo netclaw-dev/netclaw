@@ -391,9 +391,11 @@ secret; entering a new value replaces it.
 stored credentials. The daemon ignores those fields while the adapter is
 disabled.
 
-**Validation:** Save blocks missing required credentials for enabled adapters
-and invalid Mattermost server URLs. Connection probes remain doctor-owned in
-this first pass.
+**Validation:** Save blocks missing required credentials for enabled adapters,
+invalid Mattermost server URLs, and unresolved channel targets. Slack channel
+names entered as `#name` or `name` are resolved through Slack before save and
+persisted as Slack channel IDs. Discord and Mattermost channel IDs are checked
+with their provider APIs before the config merge is written.
 
 ### 3.2 Adapter management menu
 

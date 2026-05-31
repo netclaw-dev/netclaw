@@ -224,6 +224,37 @@ ${prior_reviews:-  (none — this is the first review)}
   return 0
 }
 
+verify_signed_iteration_commit() {
+  local before_commit=$1
+  local after_commit
+  after_commit=$(git rev-parse HEAD)
+
+  if [[ "$after_commit" == "$before_commit" ]]; then
+    echo "Iteration did not create a commit; skipping signature check."
+    return 0
+  fi
+
+  local signature_status
+  signature_status=$(git log -1 --format=%G? "$after_commit")
+  case "$signature_status" in
+    G|U)
+      echo "Signed commit verified: $after_commit (status=$signature_status)"
+      ;;
+    *)
+      echo ""
+      echo "=========================================="
+      echo "  SIGNED COMMIT GATE FAILED"
+      echo "=========================================="
+      echo ""
+      echo "Latest commit is not GPG-signed or has an invalid signature."
+      echo "Commit: $after_commit"
+      echo "Signature status: $signature_status"
+      echo "Do not bypass signing. Fix GPG signing and rerun."
+      return 1
+      ;;
+  esac
+}
+
 # Function to verify L3 evidence if L3 was claimed
 verify_l3_evidence() {
   local iter_log=$1
@@ -245,27 +276,22 @@ verify_l3_evidence() {
 
   local missing_evidence=()
 
-  # Check for application running evidence
-  if ! grep -qi "aspire run\|dotnet run\|npm start\|yarn dev\|Application Started\|resources healthy\|Server started\|listening on" "$iter_log" 2>/dev/null; then
-    missing_evidence+=("Application running (start command with evidence)")
+  # Netclaw L3 means a native smoke/interactive CLI proof, not just web-route checks.
+  if ! grep -qi "run-smoke.sh\|native smoke\|VHS\|tape:" "$iter_log" 2>/dev/null; then
+    missing_evidence+=("Native smoke evidence (run-smoke.sh, VHS, or named tape)")
   fi
 
-  # Check for routes checked evidence
-  if ! grep -qi "Routes Checked\|Routes checked\|Route.*200\|Route.*rendered" "$iter_log" 2>/dev/null; then
-    missing_evidence+=("Routes navigated (Routes Checked section)")
+  if ! grep -qi "All smoke checks passed\|assertions passed\|: OK\|smoke.*passed" "$iter_log" 2>/dev/null; then
+    missing_evidence+=("Smoke result and assertion outcome")
   fi
 
-  # Check for console errors evidence
-  if ! grep -qi "Console errors: none\|Console errors:.*none\|no console errors" "$iter_log" 2>/dev/null; then
-    # Also check if they documented errors (which is valid if they then fix them)
-    if ! grep -qi "Console errors:" "$iter_log" 2>/dev/null; then
-      missing_evidence+=("Console errors checked (Console errors: none)")
-    fi
+  if ! grep -qi "semantic assertion\|assertion script\|canonical\|persisted.*value\|config.*assert" "$iter_log" 2>/dev/null; then
+    missing_evidence+=("Semantic assertion evidence, not only screen text")
   fi
 
-  # Check for viewport evidence
-  if ! grep -qi "Viewport.*pass\|viewport check\|1024.*1280.*1920\|1024px\|viewport sanity" "$iter_log" 2>/dev/null; then
-    missing_evidence+=("Viewport sanity check (1024/1280/1920)")
+  if grep -q "Level: L4" "$iter_log" 2>/dev/null && \
+     ! grep -qi "Aspire\|Docker\|container.*healthy\|resources healthy\|live provider\|demo smoke" "$iter_log" 2>/dev/null; then
+    missing_evidence+=("L4 runtime evidence (Aspire, Docker, live provider, or demo smoke)")
   fi
 
   if [[ ${#missing_evidence[@]} -gt 0 ]]; then
@@ -280,7 +306,7 @@ verify_l3_evidence() {
       echo "    - $item"
     done
     echo ""
-    echo "  Per ralph-loop.md L3 Verification Checklist, these are MANDATORY when claiming L3."
+    echo "  Per IMPLEMENTATION_PLAN.md Automation-First QA Floor, these are MANDATORY when claiming L3/L4."
     echo ""
     echo "  Options:"
     echo "    1. Fix the iteration to include proper L3 evidence"
@@ -315,6 +341,7 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
   ITER_PAD=$(printf "%02d" "$i")
   ITER_LOG="${RUN_DIR}/iter-${ITER_PAD}.md"
+  ITER_START_COMMIT=$(git rev-parse HEAD)
 
   if ! opencode run --model "$MODEL" "You are running RALPH iteration $i.
 
@@ -333,56 +360,71 @@ for ((i=1; i<=ITERATIONS; i++)); do
 ## Instructions (ONE TASK ONLY)
 
 1) Find the next incomplete task in IMPLEMENTATION_PLAN.md:
-   - Look for '### Task:' blocks with unchecked 'Done when:' items
+   - Look for '#### Task N.N:' blocks with unchecked 'Done when:' items
    - Work on the FIRST incomplete task you find
    - A task is complete only when ALL its Done-when checkboxes are satisfied
 
 2) Determine MODE from Task Routing in AGENTS.md/CLAUDE.md (engineering/ux/marketing/ops/etc.)
 
-3) Load relevant skills from .claude/skills/:
-   - REQUIRED for code: testing-strategy.md (if present — integration vs unit; no fakes)
-   - REQUIRED: ralph-loop.md (process discipline)
-   - If UI impacted: ui-smoke-validation.md (or follow UI validation policy)
+3) Apply IMPLEMENTATION_PLAN.md quality gates:
+   - Identify the downstream consumer for any config/event/message/tool/schema/persistence output
+   - Prove canonical representation at the producer/consumer boundary
+   - Add negative-path coverage for invalid, unresolved, denied, malformed, or missing inputs
+   - For TUI input: add headless typed-key coverage and native smoke for critical flows
+   - For dynamic validation: add fake-failure tests proving save is blocked before persistence
+   - For old config migration/porting: add load/round-trip tests from old shape to runtime-consumed shape
+
+4) Load relevant skills from .claude/skills/:
+   - REQUIRED for code: testing-strategy.md (if present)
+   - REQUIRED: ralph-loop.md (process discipline, if present)
+   - If UI impacted: ui-smoke-validation.md (or follow IMPLEMENTATION_PLAN.md TUI gate)
    - If schema/events touched: extend-only-design.md (if present)
 
-4) BEFORE coding: choose Verification Level (L0-L4) and state why:
+5) BEFORE coding: choose Verification Level (L0-L4) and state why:
    - I/O coordination (DB/HTTP/actors/external) => L2+ (integration tests required)
-   - UI or UI dependency changed => L3+ (UI smoke / Playwright required)
+   - TUI/config/init changes => L3+ (native smoke required)
+   - Live provider/demo/container proof => L4
 
-5) Implement to satisfy ALL unchecked Done-when criteria for the chosen task.
+6) Implement to satisfy ALL unchecked Done-when criteria for the chosen task.
 
-6) Verify (must match chosen level):
+7) Verify (must match chosen level):
    - Minimum: build + test (language-appropriate commands)
-   - If Level >= L3: run UI smoke/Playwright and check for console errors
+   - If Level >= L3: run native smoke and semantic assertion scripts
    - Follow any additional quality gates from AGENTS.md/CLAUDE.md
 
-7) FLIGHT RECORDER (MANDATORY):
+8) FLIGHT RECORDER (MANDATORY):
    - Write $ITER_LOG BEFORE committing.
    - Include:
-     - Task selected (exact title)
-     - Surface area classification
-     - Verification level chosen + reason
-     - Skills consulted
-     - Commands run + outcomes
-     - Deviations/skips + justification
-     - Follow-ups noticed but deferred + why
+      - Task selected (exact title)
+      - Surface area classification
+      - Verification level chosen + reason
+      - Producer/consumer contract identified (or why none applies)
+      - Skills consulted
+      - Commands run + outcomes
+      - Positive behavior verified
+      - Negative behavior verified
+      - Runtime/smoke/eval evidence or explicit blocker
+      - Deviations/skips + justification
+      - Follow-ups noticed but deferred + why
    - If you claim a command was run, it must appear in the log with outcome.
    - 'Log or it didn't happen.'
 
-8) If verification passes:
-   - Commit to the current feature branch with a descriptive message
+9) If verification passes:
+   - Commit to the current feature branch with a descriptive message using git commit -S
    - Update IMPLEMENTATION_PLAN.md checkboxes in the SAME commit
    - Update TOOLING.md if you used or discovered a new tool/resource
+   - Never use --no-gpg-sign
 
-9) Stop at checkpoints (UI approval, architecture decisions, credential setup) and ask the user if needed.
+10) Stop at checkpoints (UI approval, architecture decisions, credential setup) and ask the user if needed.
 
-10) Exit - do NOT continue to additional tasks.
+11) Exit - do NOT continue to additional tasks.
 
 ## Constraints (Constitution)
 - ONE iteration = ONE task block
 - Never commit to dev/main/master
+- Never create unsigned commits
 - Follow constraints from AGENTS.md/CLAUDE.md
-- Test against real infrastructure (per testing-strategy)
+- Automate all proof that can reasonably be automated; manual testing is last-mile only
 "; then
     EXIT_CODE=$?
     echo ""
@@ -393,6 +435,11 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
   echo ""
   echo "Iteration $i complete"
+
+  if ! verify_signed_iteration_commit "$ITER_START_COMMIT"; then
+    echo "RALPH loop paused due to signed commit gate failure at iteration $i"
+    exit 1
+  fi
 
   # Run L3 verification gate if L3 was claimed
   if ! verify_l3_evidence "$ITER_LOG"; then
@@ -432,7 +479,7 @@ echo "=========================================="
 
 echo ""
 echo "Remaining incomplete tasks:"
-grep -B5 '^\- \[ \]' "$PLAN_FILE" | grep '### Task:' | head -5 || echo "(none or legacy format)"
+grep -B5 '^\- \[ \]' "$PLAN_FILE" | grep -E '#### Task [0-9]+\.[0-9]+:' | head -5 || echo "(none or legacy format)"
 
 echo ""
 echo "Running postmortem (skill): ralph-after-action"

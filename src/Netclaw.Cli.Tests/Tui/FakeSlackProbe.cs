@@ -64,6 +64,7 @@ public sealed class FakeSlackProbe : ISlackProbe
         string botToken, IReadOnlyList<string> channelNames, CancellationToken ct = default)
     {
         ResolveCallCount++;
+        LastBotToken = botToken;
         LastResolvedNames = channelNames;
         if (DelayBeforeResult.HasValue)
             await Task.Delay(DelayBeforeResult.Value, ct);

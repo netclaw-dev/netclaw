@@ -21,6 +21,7 @@ using Netclaw.Cli.Discord;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Cli.Reminder;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
@@ -131,6 +132,7 @@ static async Task RunAsync(string[] args)
         {
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
             builder.Services.AddDoctorChecks();
         }
 
@@ -159,6 +161,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton<DeviceFlowServiceFactory>();
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
 
             // Init wizard + chat page dependencies (daemon lifecycle + SignalR)
             var initPaths = new NetclawPaths();
@@ -895,6 +898,7 @@ static async Task RunAsync(string[] args)
         builder.Services.AddProviderDescriptors();
         builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
         builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+        builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
         builder.Services.AddHttpClient("OAuthDeviceFlow");
         builder.Services.AddSingleton(sp =>
             new OAuthDeviceFlowService(
@@ -938,6 +942,7 @@ static async Task RunAsync(string[] args)
             ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
             doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
             doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+            doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
             doctorBuilder.Services.AddDoctorChecks();
             doctorBuilder.Logging.ClearProviders();
             doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);

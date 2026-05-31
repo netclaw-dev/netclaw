@@ -147,10 +147,13 @@ internal static class ChannelsEditorFieldPaths
 {
     internal const string SlackBotToken = "Slack.BotToken";
     internal const string SlackAppToken = "Slack.AppToken";
+    internal const string SlackAllowedChannelIds = "Slack.AllowedChannelIds";
     internal const string DiscordBotToken = "Discord.BotToken";
+    internal const string DiscordAllowedChannelIds = "Discord.AllowedChannelIds";
     internal const string MattermostServerUrl = "Mattermost.ServerUrl";
     internal const string MattermostBotToken = "Mattermost.BotToken";
     internal const string MattermostCallbackUrl = "Mattermost.CallbackUrl";
+    internal const string MattermostAllowedChannelIds = "Mattermost.AllowedChannelIds";
 }
 
 internal static class ChannelsEditorValidationMessages

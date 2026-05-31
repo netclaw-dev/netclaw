@@ -5,7 +5,10 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using Netclaw.Actors.Channels;
+using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Discord;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -392,8 +395,124 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal("team", ToStringDictionary(audiencesRaw)[newChannelId]);
     }
 
-    private ChannelsConfigViewModel CreateViewModel()
-        => new(_paths, new FakeSlackProbe(), new FakeDiscordProbe());
+    [Fact]
+    public void Save_resolves_slack_channel_names_to_ids_and_remaps_audiences()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("netclaw-support", "C09")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "netclaw-support";
+
+        vm.ApplyAddChannel();
+        vm.Save();
+
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(["netclaw-support"], slackProbe.LastResolvedNames);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
+        Assert.Equal(["C01", "C02", "C03", "C09"], ToStringArray(channelsRaw));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var audiencesRaw));
+        var audiences = ToStringDictionary(audiencesRaw);
+        Assert.Equal("team", audiences["C09"]);
+        Assert.DoesNotContain("netclaw-support", audiences.Keys);
+    }
+
+    [Fact]
+    public void Save_rejects_unresolved_slack_channel_name()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                false,
+                null,
+                [],
+                ["fart"])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "fart";
+
+        vm.ApplyAddChannel();
+        vm.Save();
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal("Slack channel not found: #fart", vm.Status.Value.Text);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+    }
+
+    [Fact]
+    public void Save_rejects_unresolved_discord_channel_id()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                false,
+                null,
+                [],
+                ["987654321"])
+        };
+        using var vm = CreateViewModel(discordProbe: discordProbe);
+        vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).ChannelIdsInput = "987654321";
+
+        vm.Save();
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal("Discord channel ID not found: 987654321", vm.Status.Value.Text);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Equal(1, discordProbe.ResolveCallCount);
+        Assert.Equal("discord-token", discordProbe.LastBotToken);
+    }
+
+    [Fact]
+    public void Save_rejects_unresolved_mattermost_channel_id()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var mattermostProbe = new FakeMattermostProbe
+        {
+            NextResolutionResult = new MattermostChannelResolutionResult(
+                false,
+                null,
+                [],
+                ["bogus"])
+        };
+        using var vm = CreateViewModel(mattermostProbe: mattermostProbe);
+        vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).ChannelIdsInput = "bogus";
+
+        vm.Save();
+
+        Assert.False(vm.IsSaved.Value);
+        Assert.Equal("Mattermost channel ID not found: bogus", vm.Status.Value.Text);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Equal(1, mattermostProbe.ResolveCallCount);
+        Assert.Equal("https://mattermost.example.com", mattermostProbe.LastServerUrl);
+        Assert.Equal("mattermost-token", mattermostProbe.LastBotToken);
+    }
+
+    private ChannelsConfigViewModel CreateViewModel(
+        FakeSlackProbe? slackProbe = null,
+        FakeDiscordProbe? discordProbe = null,
+        FakeMattermostProbe? mattermostProbe = null)
+        => new(_paths,
+            slackProbe ?? new FakeSlackProbe(),
+            discordProbe ?? new FakeDiscordProbe(),
+            mattermostProbe ?? new FakeMattermostProbe());
 
     private static void ConfirmReset(ChannelsConfigViewModel vm, ChannelType type)
     {

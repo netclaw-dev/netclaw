@@ -8,6 +8,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Discord;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
@@ -21,6 +22,9 @@ namespace Netclaw.Cli.Tui.Config;
 public sealed class ChannelsConfigViewModel : ReactiveViewModel
 {
     private readonly NetclawPaths _paths;
+    private readonly ISlackProbe _slackProbe;
+    private readonly IDiscordProbe _discordProbe;
+    private readonly IMattermostProbe _mattermostProbe;
     private readonly TuiNavigation? _navigation;
     private readonly ChannelsConfigPersistenceMapper _mapper = new();
     private readonly ChannelsEditorValidationAdapter _validator = new();
@@ -41,9 +45,13 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NetclawPaths paths,
         ISlackProbe slackProbe,
         IDiscordProbe discordProbe,
+        IMattermostProbe mattermostProbe,
         TuiNavigation? navigation = null)
     {
         _paths = paths;
+        _slackProbe = slackProbe;
+        _discordProbe = discordProbe;
+        _mattermostProbe = mattermostProbe;
         _navigation = navigation;
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         Step = new ChannelPickerStepViewModel(slackProbe, discordProbe)
@@ -122,7 +130,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
         }
 
-        Save();
+        _ = SaveFromInputAsync();
     }
 
     public void GoBack()
@@ -152,11 +160,25 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     }
 
     public void Save()
+        => SaveAsync().GetAwaiter().GetResult();
+
+    public async Task SaveAsync(CancellationToken ct = default)
     {
         var validation = ValidateCurrentStep();
         if (validation.HasErrors)
         {
             Status.Value = BuildValidationErrorStatus(validation, "Fix channel validation errors before saving.");
+            RequestRedraw();
+            return;
+        }
+
+        Status.Value = new ConfigStatusMessage("Validating channel access...", ConfigStatusTone.Neutral);
+        RequestRedraw();
+
+        var dynamicValidation = await ValidateChannelAccessAsync(ct);
+        if (dynamicValidation.HasErrors)
+        {
+            Status.Value = BuildValidationErrorStatus(dynamicValidation, "Fix channel validation errors before saving.");
             RequestRedraw();
             return;
         }
@@ -181,6 +203,19 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Screen.Value = ChannelsConfigScreen.Picker;
         Status.Value = new ConfigStatusMessage("Channels saved.", ConfigStatusTone.Success);
         NotifyContentChanged();
+    }
+
+    private async Task SaveFromInputAsync()
+    {
+        try
+        {
+            await SaveAsync();
+        }
+        catch (Exception ex)
+        {
+            Status.Value = new ConfigStatusMessage($"Channel settings save failed: {ex.Message}", ConfigStatusTone.Error);
+            RequestRedraw();
+        }
     }
 
     internal bool TryOpenSelectedAdapterManagement()
@@ -610,6 +645,190 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private ChannelsEditorValidationResult ValidateCurrentStep()
         => _validator.Validate(ChannelsEditorModel.FromStep(Step));
 
+    private async Task<ChannelsEditorValidationResult> ValidateChannelAccessAsync(CancellationToken ct)
+    {
+        var issues = new List<ChannelsEditorValidationIssue>();
+
+        var slackIssue = await ValidateSlackChannelsAsync(ct);
+        if (slackIssue is not null)
+            issues.Add(slackIssue);
+
+        var discordIssue = await ValidateDiscordChannelsAsync(ct);
+        if (discordIssue is not null)
+            issues.Add(discordIssue);
+
+        var mattermostIssue = await ValidateMattermostChannelsAsync(ct);
+        if (mattermostIssue is not null)
+            issues.Add(mattermostIssue);
+
+        return issues.Count == 0
+            ? ChannelsEditorValidationResult.Empty
+            : new ChannelsEditorValidationResult(issues);
+    }
+
+    private async Task<ChannelsEditorValidationIssue?> ValidateSlackChannelsAsync(CancellationToken ct)
+    {
+        if (!Step.IsAdapterEnabled(ChannelType.Slack))
+            return null;
+
+        var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        var configuredChannels = ParseCsv(slack.ChannelNamesInput, trimHash: true);
+        var namesToResolve = configuredChannels
+            .Where(static channel => !IsSlackChannelId(channel))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        if (namesToResolve.Length == 0)
+            return null;
+
+        var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(botToken))
+            return Error(ChannelsEditorFieldPaths.SlackBotToken, ChannelsEditorValidationMessages.SlackBotTokenRequired);
+
+        var result = await _slackProbe.ResolveChannelNamesAsync(botToken, namesToResolve, ct);
+        slack.LastChannelResolution = result;
+
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel lookup failed: {result.ErrorMessage}");
+
+        if (result.Unresolved.Count > 0)
+            return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack {FormatNotFound(result.Unresolved, "channel", "channels", prefix: "#")}");
+
+        if (!result.Success)
+            return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, "Slack channel lookup failed.");
+
+        var resolvedByName = result.Resolved.ToDictionary(
+            static channel => channel.Name,
+            static channel => channel.Id,
+            StringComparer.OrdinalIgnoreCase);
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var resolvedChannels = new List<string>();
+
+        foreach (var channel in configuredChannels)
+        {
+            if (IsSlackChannelId(channel))
+            {
+                resolvedChannels.Add(channel);
+                continue;
+            }
+
+            if (!resolvedByName.TryGetValue(channel, out var channelId))
+                return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel not found: #{channel}");
+
+            resolvedChannels.Add(channelId);
+            remap[channel] = channelId;
+        }
+
+        SetChannelIds(ChannelType.Slack, [.. resolvedChannels.Distinct(StringComparer.Ordinal)]);
+        RemapChannelAudiences(ChannelType.Slack, remap);
+        UpdateAdapterPickerSummary(ChannelType.Slack);
+        return null;
+    }
+
+    private async Task<ChannelsEditorValidationIssue?> ValidateDiscordChannelsAsync(CancellationToken ct)
+    {
+        if (!Step.IsAdapterEnabled(ChannelType.Discord))
+            return null;
+
+        var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+        var channelIds = ParseCsv(discord.ChannelIdsInput, trimHash: true);
+        if (channelIds.Count == 0)
+            return null;
+
+        var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(botToken))
+            return Error(ChannelsEditorFieldPaths.DiscordBotToken, ChannelsEditorValidationMessages.DiscordBotTokenRequired);
+
+        var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
+        discord.LastChannelResolution = result;
+
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord channel lookup failed: {result.ErrorMessage}");
+
+        if (result.Unresolved.Count > 0)
+            return Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord {FormatNotFound(result.Unresolved, "channel ID", "channel IDs")}");
+
+        if (!result.Success)
+            return Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, "Discord channel lookup failed.");
+
+        return null;
+    }
+
+    private async Task<ChannelsEditorValidationIssue?> ValidateMattermostChannelsAsync(CancellationToken ct)
+    {
+        if (!Step.IsAdapterEnabled(ChannelType.Mattermost))
+            return null;
+
+        var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+        var channelIds = ParseCsv(mattermost.ChannelIdsInput, trimHash: true);
+        if (channelIds.Count == 0)
+            return null;
+
+        var serverUrl = Normalize(mattermost.ServerUrl);
+        if (string.IsNullOrWhiteSpace(serverUrl))
+            return Error(ChannelsEditorFieldPaths.MattermostServerUrl, ChannelsEditorValidationMessages.MattermostServerUrlRequired);
+
+        var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(botToken))
+            return Error(ChannelsEditorFieldPaths.MattermostBotToken, ChannelsEditorValidationMessages.MattermostBotTokenRequired);
+
+        var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost channel lookup failed: {result.ErrorMessage}");
+
+        if (result.Unresolved.Count > 0)
+            return Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost {FormatNotFound(result.Unresolved, "channel ID", "channel IDs")}");
+
+        if (!result.Success)
+            return Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, "Mattermost channel lookup failed.");
+
+        return null;
+    }
+
+    private static ChannelsEditorValidationIssue Error(string fieldId, string message)
+        => new(fieldId, message, ConfigValidationSeverity.Error);
+
+    private static string FormatNotFound(
+        IReadOnlyList<string> values,
+        string singular,
+        string plural,
+        string prefix = "")
+    {
+        var label = values.Count == 1 ? singular : plural;
+        var list = string.Join(", ", values.Select(value => $"{prefix}{value}"));
+        return $"{label} not found: {list}";
+    }
+
+    private string? GetEffectiveSecret(string path, string? draftValue, bool hasPersistedSecret)
+    {
+        var normalized = Normalize(draftValue);
+        if (!string.IsNullOrWhiteSpace(normalized))
+            return normalized;
+
+        if (!hasPersistedSecret)
+            return null;
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        return ConfigFileHelper.TryGetPathValue(secrets, path, out var value)
+            ? Normalize(ConfigFileHelper.DecryptIfEncrypted(_paths, value?.ToString()))
+            : null;
+    }
+
+    private void RemapChannelAudiences(ChannelType type, IReadOnlyDictionary<string, string> remap)
+    {
+        if (remap.Count == 0 || !_channelAudiences.TryGetValue(type, out var audiences))
+            return;
+
+        foreach (var (oldId, newId) in remap)
+        {
+            if (!audiences.TryGetValue(oldId, out var audience))
+                continue;
+
+            audiences.Remove(oldId);
+            audiences.TryAdd(newId, audience);
+        }
+    }
+
     private ChannelsEditorValidationIssue? ValidateCredentialDrafts()
     {
         var candidate = ChannelsEditorModel.FromStep(Step);
@@ -1002,6 +1221,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private static string? NormalizeChannelId(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim().TrimStart('#');
+
+    private static bool IsSlackChannelId(string value)
+        => value.Length > 1
+           && value[0] is 'C' or 'G'
+           && value.Skip(1).All(static ch => char.IsUpper(ch) || char.IsDigit(ch));
 
     private static string? Normalize(string? value)
         => string.IsNullOrWhiteSpace(value) ? null : value.Trim();

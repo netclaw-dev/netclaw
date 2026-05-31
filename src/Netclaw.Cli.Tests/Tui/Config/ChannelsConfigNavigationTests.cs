@@ -365,7 +365,12 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 _ => new ChannelsConfigPage(),
                 _ =>
                 {
-                    capturedChannelsVm = new ChannelsConfigViewModel(_paths, new FakeSlackProbe(), new FakeDiscordProbe(), tuiNavigation);
+                    capturedChannelsVm = new ChannelsConfigViewModel(
+                        _paths,
+                        new FakeSlackProbe(),
+                        new FakeDiscordProbe(),
+                        new FakeMattermostProbe(),
+                        tuiNavigation);
                     return capturedChannelsVm;
                 });
         });
