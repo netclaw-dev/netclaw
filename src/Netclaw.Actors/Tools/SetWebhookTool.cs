@@ -57,6 +57,11 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         _store = store;
     }
 
+    // Context-less invocation falls back to ToolExecutionContext.Empty, whose
+    // audience is Public (the lowest privilege). A missing context can therefore
+    // only make a webhook LESS powerful, never accidentally grant it more — the
+    // escalation guard in TryResolveAudience is keyed off creatorAudience, and
+    // Public is the floor.
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 

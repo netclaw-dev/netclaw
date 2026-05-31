@@ -29,6 +29,13 @@ public sealed class ShellTrustZonePolicy : IShellTrustZonePolicy
         _fileAccessPolicy = fileAccessPolicy;
     }
 
+    // Shell paths are checked against the stricter WRITE rules even for read-only
+    // commands: a shell command can write, so we treat every path token as
+    // write-level. Deliberately over-cautious — e.g. a non-interactive `cat` of a
+    // skills file is denied here even though the read-only file_read tool would
+    // allow it (the read zone includes the global read roots, the write zone does
+    // not). This is a known capability gap, not a security hole; making the check
+    // verb-aware (read-verbs against the read zone) is a possible follow-up.
     public bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context)
         => _fileAccessPolicy.TryResolveWritePath(fullPath, context, out _, out _);
 }
