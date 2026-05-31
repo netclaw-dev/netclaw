@@ -79,8 +79,8 @@ public sealed class ChannelPickerStepView : IWizardStepView
 
         var hasConfigured = _vm.AnyAdapterConfigured;
         var hintText = hasConfigured
-            ? "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [e] Edit configured channel    [d] Done — continue to next step"
-            : "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [d] Done — continue to next step";
+            ? $"  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel    [d] Done - {_vm.DoneActionText}"
+            : $"  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [d] Done - {_vm.DoneActionText}";
 
         layout = layout.WithChild(new TextNode(hintText).WithForeground(Color.BrightBlack));
 

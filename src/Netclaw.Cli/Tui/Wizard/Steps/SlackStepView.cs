@@ -88,9 +88,17 @@ public sealed class SlackStepView : IWizardStepView
         _lastFocusedList = null;
 
         _botTokenInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                        callbacks.AdvanceStep();
+
+                    callbacks.RequestRedraw();
+                    return;
+                }
+
                 if (!text.StartsWith("xoxb-", StringComparison.OrdinalIgnoreCase))
                 {
                     callbacks.RequestRedraw();
@@ -101,9 +109,14 @@ public sealed class SlackStepView : IWizardStepView
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Slack Bot Token:").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_botTokenInput, "Bot Token"));
+
+        if (vm.HasPersistedBotToken)
+            layout = layout.WithChild(new TextNode("  (configured - leave blank to keep)").WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildAppTokenSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)
@@ -117,9 +130,17 @@ public sealed class SlackStepView : IWizardStepView
         _lastFocusedList = null;
 
         _appTokenInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    if (vm.HasPersistedAppToken || !string.IsNullOrWhiteSpace(vm.AppToken))
+                        callbacks.AdvanceStep();
+
+                    callbacks.RequestRedraw();
+                    return;
+                }
+
                 if (!text.StartsWith("xapp-", StringComparison.OrdinalIgnoreCase))
                 {
                     callbacks.RequestRedraw();
@@ -130,9 +151,14 @@ public sealed class SlackStepView : IWizardStepView
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Slack App Token (Socket Mode):").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_appTokenInput, "App Token"));
+
+        if (vm.HasPersistedAppToken)
+            layout = layout.WithChild(new TextNode("  (configured - leave blank to keep)").WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildChannelNamesSubStep(SlackStepViewModel vm, StepViewCallbacks callbacks)

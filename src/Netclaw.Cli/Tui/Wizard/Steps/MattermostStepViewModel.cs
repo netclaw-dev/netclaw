@@ -42,6 +42,7 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
 
     public string? ServerUrl { get; set; }
     public string? BotToken { get; set; }
+    public bool HasPersistedBotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public bool RestrictToSpecificUsers { get; set; }

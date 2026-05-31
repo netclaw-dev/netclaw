@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
@@ -89,7 +90,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 _ => new ChannelsConfigPage(),
                 _ =>
                 {
-                    capturedChannelsVm = new ChannelsConfigViewModel(_paths, tuiNavigation);
+                    capturedChannelsVm = new ChannelsConfigViewModel(_paths, new FakeSlackProbe(), new FakeDiscordProbe(), tuiNavigation);
                     return capturedChannelsVm;
                 });
         });

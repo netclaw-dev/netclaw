@@ -31,6 +31,7 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     private readonly List<ChannelAdapterEntry> _adapters;
     private readonly Dictionary<ChannelType, bool> _enabled = [];
     private readonly Dictionary<ChannelType, string> _summaries = [];
+    private readonly HashSet<ChannelType> _knownAdapters = [];
 
     public ChannelPickerStepViewModel(ISlackProbe slackProbe, IDiscordProbe discordProbe)
     {
@@ -70,15 +71,71 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     }
     internal IWizardStepViewModel? ActiveAdapterVm => _activeAdapter?.Vm;
     internal IWizardStepView? ActiveAdapterView => _activeAdapter?.View;
+    internal ChannelType? ActiveAdapterType => _activeAdapter?.Type;
+    internal ChannelType SelectedAdapterType => _adapters[CursorIndex].Type;
+    internal string SelectedAdapterDisplayName => _adapters[CursorIndex].DisplayName;
+
+    internal string DoneActionText { get; set; } = "continue to next step";
+    internal bool PreserveDisabledAdapterDrafts { get; set; }
 
     internal bool IsAdapterEnabled(int index) =>
         index >= 0 && index < _adapters.Count && _enabled[_adapters[index].Type];
+
+    internal bool IsAdapterEnabled(ChannelType type) =>
+        _enabled.TryGetValue(type, out var enabled) && enabled;
+
+    internal bool IsAdapterKnown(ChannelType type) => _knownAdapters.Contains(type);
+
+    internal TAdapter GetAdapterViewModel<TAdapter>(ChannelType type)
+        where TAdapter : class, IWizardStepViewModel
+        => _adapters.Single(a => a.Type == type).Vm as TAdapter
+           ?? throw new InvalidOperationException($"Channel adapter '{type}' is not a {typeof(TAdapter).Name}.");
+
+    internal void LoadAdapterState(
+        ChannelType type,
+        bool enabled,
+        string? summary,
+        Action<IWizardStepViewModel> configure,
+        bool isKnown = false)
+    {
+        var adapter = _adapters.Single(a => a.Type == type);
+        _enabled[type] = enabled;
+        SetChildEnabled(adapter, enabled);
+        configure(adapter.Vm);
+
+        if (isKnown)
+            _knownAdapters.Add(type);
+        else
+            _knownAdapters.Remove(type);
+
+        if (summary is null)
+            _summaries.Remove(type);
+        else
+            _summaries[type] = summary;
+    }
+
+    internal void ResetAdapterState(ChannelType type)
+    {
+        var adapter = _adapters.Single(a => a.Type == type);
+        _enabled[type] = false;
+        _knownAdapters.Remove(type);
+        _summaries.Remove(type);
+        ResetChildConfig(adapter);
+    }
 
     internal string? GetAdapterSummary(int index) =>
         index >= 0 && index < _adapters.Count &&
         _summaries.TryGetValue(_adapters[index].Type, out var summary)
             ? summary
             : null;
+
+    internal void SetAdapterSummary(ChannelType type, string? summary)
+    {
+        if (summary is null)
+            _summaries.Remove(type);
+        else
+            _summaries[type] = summary;
+    }
 
     internal bool AnyAdapterConfigured => _summaries.Count > 0;
 
@@ -89,17 +146,27 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
 
         if (_enabled[adapter.Type])
         {
-            // Toggling OFF — clear config
+            // Config-editor toggles disable without throwing away dormant setup.
             _enabled[adapter.Type] = false;
-            _summaries.Remove(adapter.Type);
-            ResetChildConfig(adapter);
+            SetChildEnabled(adapter, false);
+            if (PreserveDisabledAdapterDrafts && _knownAdapters.Contains(adapter.Type))
+            {
+                _summaries[adapter.Type] = "disabled, saved setup";
+            }
+            else
+            {
+                _summaries.Remove(adapter.Type);
+                ResetChildConfig(adapter);
+            }
         }
         else
         {
-            // Toggling ON — enter sub-flow
             _enabled[adapter.Type] = true;
             SetChildEnabled(adapter, true);
-            EnterSubFlow(adapter);
+            if (PreserveDisabledAdapterDrafts && _knownAdapters.Contains(adapter.Type))
+                _summaries[adapter.Type] = ComputeSummary(adapter);
+            else
+                EnterSubFlow(adapter);
         }
     }
 
@@ -223,6 +290,7 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     {
         var adapter = _activeAdapter!;
         _summaries[adapter.Type] = ComputeSummary(adapter);
+        _knownAdapters.Add(adapter.Type);
         _mode = Mode.Picker;
         _activeAdapter = null;
     }

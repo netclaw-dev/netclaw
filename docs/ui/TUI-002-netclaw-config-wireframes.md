@@ -346,20 +346,133 @@ to stderr and exits non-zero.
 
 ## Config.3 — Channels
 
-### 3.1 Channels sub-page
+### 3.1 Channels picker
 
 ```
 ╭─ Channels ──────────────────────────────────────────────────╮
 │                                                             │
-│  ▸ Slack                    3 channels, 2 users             │
-│    Discord                  not configured                  │
-│    Mattermost               not configured                  │
+│  Which channels would you like to connect?                  │
 │                                                             │
-│  [ Open ]    [ Back ]                                       │
+│   ▶ [✓] Slack                2 channels, 1 user             │
+│     [ ] Discord              disabled, saved setup          │
+│     [ ] Mattermost                                         │
 │                                                             │
-│ ↑/↓ navigate · Enter open · Esc back                        │
+│  ↑/↓ to navigate, Space to toggle, Enter to open selected.  │
+│  Unconfigured adapters open first-time setup. Configured    │
+│  adapters open management without prompting for credentials.│
+│                                                             │
+│ ↑/↓ navigate · Space toggle · Enter open · d save           │
 ╰─────────────────────────────────────────────────────────────╯
 ```
+
+Unconfigured adapters reuse the original `netclaw init` sub-flow visuals:
+
+- Slack: bot token -> Socket Mode app token -> channel names/IDs -> DMs ->
+  user access choice -> allowed user IDs when restricted.
+- Discord: bot token -> channel IDs -> DMs -> user access choice -> allowed
+  user IDs when restricted.
+- Mattermost: server URL -> bot token -> channel IDs -> DMs -> user access
+  choice -> allowed user IDs when restricted -> optional callback URL.
+
+**Save model:** First-time setup sub-flows update in-memory state, then drop
+the operator directly into Channels & Permissions so every new channel gets an
+explicit audience before save. Disk write happens only when the operator
+returns to the picker and presses `d`/Done. The save uses the shared
+config-editor merge pipeline, preserving unrelated config and secrets.
+
+**Secret reentrancy:** Configured adapters do not ask for credentials on
+normal re-entry. Secret fields are shown only from first-time setup or explicit
+Rotate credentials. If a stored secret exists, the field shows
+`(configured - leave blank to keep)`. Blank submission preserves the existing
+secret; entering a new value replaces it.
+
+**Disabled adapters:** Toggling off a previously configured adapter writes
+`<Adapter>.Enabled = false` and preserves dormant channel/user fields plus
+stored credentials. The daemon ignores those fields while the adapter is
+disabled.
+
+**Validation:** Save blocks missing required credentials for enabled adapters
+and invalid Mattermost server URLs. Connection probes remain doctor-owned in
+this first pass.
+
+### 3.2 Adapter management menu
+
+```
+╭─ Channels ──────────────────────────────────────────────────╮
+│                                                             │
+│  Slack is configured.                                       │
+│  enabled · bot token configured · app token configured ·    │
+│  2 channels · 1 user · DMs disabled                         │
+│                                                             │
+│  What would you like to do?                                 │
+│                                                             │
+│   ▶ Manage channels and permissions                         │
+│     Add a Slack channel                                     │
+│     Manage allowed users                                    │
+│     Direct messages                                         │
+│     Rotate credentials                                      │
+│     Disable Slack                                           │
+│     Reset Slack connection                                  │
+│                                                             │
+│ ↑/↓ navigate · Enter select · Esc Channels                  │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+The same menu is used for Slack, Discord, and Mattermost. Disable/enable only
+changes `<Adapter>.Enabled`; dormant channel fields and stored credentials are
+preserved. Reset stages deletion of the adapter config section and secrets,
+then returns to the picker. The deletion is written only when the operator
+saves from the picker.
+
+### 3.3 Channels and permissions
+
+```
+╭─ Channels ──────────────────────────────────────────────────╮
+│                                                             │
+│  Slack > Channels & Permissions                             │
+│  Configure allowed channels and their audience/trust level. │
+│                                                             │
+│   ▶ C01                    C01                [◀ Team     ▶]│
+│     C02                    C02                [◀ Team     ▶]│
+│     Direct messages        dm                 [◀ Personal ▶]│
+│     + Add channel                                           │
+│                                                             │
+│  Audience controls which tools and data this channel can use│
+│                                                             │
+│ ↑/↓ navigate · ←/→ audience · Enter edit · a add · d remove │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+Channel rows write `<Adapter>.AllowedChannelIds` and
+`<Adapter>.ChannelAudiences[channelId]`. The DM row writes
+`<Adapter>.AllowDirectMessages` plus `<Adapter>.ChannelAudiences["dm"]`.
+Removing a channel removes both the channel ID and its audience mapping. DM
+audience is preserved when DMs are disabled so re-enabling DMs restores the
+operator's last chosen audience.
+
+### 3.4 Credentials and reset
+
+```
+╭─ Channels ──────────────────────────────────────────────────╮
+│                                                             │
+│  Slack > Credentials                                        │
+│  Secret fields are blank by design. Leave blank to keep     │
+│  existing secrets.                                          │
+│                                                             │
+│  Bot token:                                                 │
+│  ╭─ Bot token ────────────────────────────────────────────╮ │
+│  │                                                       │ │
+│  ╰───────────────────────────────────────────────────────╯ │
+│  configured - leave blank to keep                         │
+│                                                             │
+│ Tab field · Enter apply · Esc menu                         │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+Slack exposes bot token and Socket Mode app token. Discord exposes bot token.
+Mattermost exposes server URL, bot token, and optional callback URL. Blank
+secret submissions preserve existing secrets; non-blank secret submissions
+replace only that secret.
 
 ---
 
@@ -434,160 +547,6 @@ based on `ConfigFileHelper.SecretPresent(...)`.
 
 **Doctor checks** (`RelevantDoctorChecks`): `ConfigSchemaDoctorCheck`,
 `SearchBackendDoctorCheck`.
-
----
-
-## Config.3.2 — Slack Channels
-
-### 3.2.1 Main editor
-
-```
-╭─ Slack Channels ────────────────────────────────────────────╮
-│                                                             │
-│  Bot token:                                                 │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│  (configured — leave blank to keep)                         │
-│                                                             │
-│  App token (Socket Mode):                                   │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│  (configured — leave blank to keep)                         │
-│                                                             │
-│  Allowed channels:           3 configured  →                │
-│  Allowed users:              2 configured  →                │
-│  DMs enabled:                [ X ] yes                      │
-│  Audience profile:           Personal                       │
-│                                                             │
-│  [ Save ]    [ Cancel ]    [ Test connection ]              │
-│  [ Remove credentials ]                                     │
-│                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-Sub-pages:
-- "Allowed channels" → 3.2.2 list editor.
-- "Allowed users" → 3.2.3 list editor.
-
-### 3.2.2 Allowed channels list (T2)
-
-```
-╭─ Slack Channels › Allowed channel IDs ──────────────────────╮
-│                                                             │
-│  ▸ C01ABCDE                                                 │
-│    C01FGHIJ                                                 │
-│    C01KLMNO                                                 │
-│                                                             │
-│    + Add channel ID                                         │
-│                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Enter edit · d remove · Esc cancel           │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-`Save` here is "apply to in-memory state and return to 3.2.1." Disk write
-happens when 3.2.1 itself saves.
-
-### 3.2.3 Allowed users list
-
-Same shape as 2.2 with user IDs. Uses `IdentifierItemEditor`.
-
-### 3.2.4 Test connection (inline banner)
-
-Runs the existing Slack probe logic from `SlackStepViewModel`; result
-rendered in an inline banner above the action row:
-
-```
-│  ╭─ Connection test ──────────────────────────────────────╮ │
-│  │ ✓ Bot token valid (workspace: petabridge)              │ │
-│  │ ✓ Socket Mode app token valid                          │ │
-│  │ ✓ Bot has access to 3 of 3 configured channels         │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-```
-
-Failure shape:
-
-```
-│  ╭─ Connection test ──────────────────────────────────────╮ │
-│  │ ✗ Bot token invalid: 401 invalid_auth                  │ │
-│  │   Check `xoxb-` token in the Slack app config          │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-```
-
-Test results never modify config; they're advisory before Save.
-
-### 3.2.5 Remove credentials confirm (T5)
-
-```
-╭─ Remove Slack credentials? ─────────────────────────────────╮
-│                                                             │
-│  This deletes both the Slack bot token and the Socket       │
-│  Mode app token from secrets.json. Slack will be            │
-│  disconnected until you re-enter both. Allowed channels     │
-│  and users are preserved in netclaw.json.                   │
-│                                                             │
-│  ▸ [ Cancel ]    [ Yes, remove ]                            │
-│                                                             │
-│ Default: Cancel (Esc or Enter)                              │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-**Doctor checks:** `ConfigSchemaDoctorCheck`, `SlackAuthDoctorCheck`,
-`SlackAclDoctorCheck`.
-
----
-
-## Config.3.3 — Discord Channels
-
-Structurally identical to 2.x except:
-- Single token field (bot token only; no app token).
-- Otherwise: allowed channels list, allowed users list, DMs toggle,
-  audience profile, test connection, remove credentials.
-
-(Layouts identical to 3.2.1–3.2.5 with the App token row removed.)
-
-**Doctor checks:** `ConfigSchemaDoctorCheck`, `DiscordAuthDoctorCheck`.
-
----
-
-## Config.3.4 — Mattermost Channels
-
-Structurally identical to 2.x plus:
-- `Server URL` text field at the top.
-- Same token, channels, users, DMs, audience profile, test connection,
-  remove credentials.
-
-```
-╭─ Mattermost Channels ───────────────────────────────────────╮
-│                                                             │
-│  Server URL:                                                │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │ https://chat.example.com                               │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  Bot token:                                                 │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│  (configured — leave blank to keep)                         │
-│                                                             │
-│  Allowed channels:           5 configured  →                │
-│  Allowed users:              3 configured  →                │
-│  DMs enabled:                [ X ] yes                      │
-│  Audience profile:           Team                           │
-│                                                             │
-│  [ Save ]    [ Cancel ]    [ Test connection ]              │
-│  [ Remove credentials ]                                     │
-│                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-**Doctor checks:** `ConfigSchemaDoctorCheck`, `MattermostAuthDoctorCheck`.
 
 ---
 

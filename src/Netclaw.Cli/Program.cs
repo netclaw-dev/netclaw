@@ -893,6 +893,8 @@ static async Task RunAsync(string[] args)
         builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
         builder.Services.AddSingleton<TuiNavigation>();
         builder.Services.AddProviderDescriptors();
+        builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+        builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
         builder.Services.AddHttpClient("OAuthDeviceFlow");
         builder.Services.AddSingleton(sp =>
             new OAuthDeviceFlowService(

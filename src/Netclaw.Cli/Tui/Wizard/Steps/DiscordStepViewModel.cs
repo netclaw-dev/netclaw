@@ -41,6 +41,7 @@ public sealed class DiscordStepViewModel : IWizardStepViewModel, IChannelAdapter
         ParseChannelIds(ChannelIdsInput).Count;
 
     public string? BotToken { get; set; }
+    public bool HasPersistedBotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public bool RestrictToSpecificUsers { get; set; }

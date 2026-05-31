@@ -117,17 +117,30 @@ public sealed class MattermostStepView : IWizardStepView
         _lastFocusedList = null;
 
         _botTokenInput.Submitted
-            .Where(text => !string.IsNullOrWhiteSpace(text))
             .Subscribe(text =>
             {
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
+                        callbacks.AdvanceStep();
+
+                    callbacks.RequestRedraw();
+                    return;
+                }
+
                 vm.BotToken = text;
                 callbacks.AdvanceStep();
             })
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode("  Mattermost Bot Token:").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_botTokenInput, "Bot Token"));
+
+        if (vm.HasPersistedBotToken)
+            layout = layout.WithChild(new TextNode("  (configured - leave blank to keep)").WithForeground(Color.BrightBlack));
+
+        return layout;
     }
 
     private ILayoutNode BuildChannelIdsSubStep(MattermostStepViewModel vm, StepViewCallbacks callbacks)
