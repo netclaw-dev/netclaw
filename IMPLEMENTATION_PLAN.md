@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -408,15 +408,15 @@ Done when:
 
 Done when:
 
-- [ ] Skill Sources contains External Skills and Skill Feeds.
-- [ ] Skill Source validation covers paths, URIs, auth, and reachability where
+- [x] Skill Sources contains External Skills and Skill Feeds.
+- [x] Skill Source validation covers paths, URIs, auth, and reachability where
   relevant.
-- [ ] Telemetry & Alerting contains Telemetry and Outbound Webhooks only in this
+- [x] Telemetry & Alerting contains Telemetry and Outbound Webhooks only in this
   pass.
-- [ ] Delivery-policy tuning stays parked.
-- [ ] Tests prove semantic round-trip, secret preservation, invalid URI/path
+- [x] Delivery-policy tuning stays parked.
+- [x] Tests prove semantic round-trip, secret preservation, invalid URI/path
   rejection, and runtime consumer binding where applicable.
-- [ ] Smoke tapes exercise both areas or document why an existing smoke covers
+- [x] Smoke tapes exercise both areas or document why an existing smoke covers
   the route.
 
 #### Human Review Checkpoint: Complete config surface

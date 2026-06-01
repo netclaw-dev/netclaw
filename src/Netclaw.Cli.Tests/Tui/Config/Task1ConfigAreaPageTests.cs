@@ -61,6 +61,40 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         Assert.Equal("40", vm.TimeoutDraft.Value);
     }
 
+    [Fact]
+    public async Task Skill_sources_page_accepts_typed_and_pasted_path_input()
+    {
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        input.EnqueueString("/tmp/netclaw-");
+        input.EnqueuePaste("skills");
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("/tmp/netclaw-skills", vm.ExternalDirectoryDraft.Value);
+    }
+
+    [Fact]
+    public async Task Telemetry_alerting_page_accepts_typed_and_pasted_values()
+    {
+        var app = CreateTelemetryAlertingApp(out var input, out var vm);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueString("http://");
+        input.EnqueuePaste("127.0.0.1:4318");
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueuePaste("https://alerts.example.test/hook");
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal("http://127.0.0.1:4318", vm.OtlpEndpointDraft.Value);
+        Assert.Equal("https://alerts.example.test/hook", vm.OutboundWebhookUrlDraft.Value);
+    }
+
     private TerminaApplication CreateWorkspacesApp(out VirtualInputSource input, out WorkspacesConfigViewModel vm)
     {
         var terminal = new VirtualTerminal(120, 40);
@@ -105,5 +139,57 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var sp = services.BuildServiceProvider();
         vm = capturedVm!;
         return sp.GetRequiredService<TerminaApplication>();
+    }
+
+    private TerminaApplication CreateSkillSourcesApp(out VirtualInputSource input, out SkillSourcesConfigViewModel vm)
+    {
+        var terminal = new VirtualTerminal(120, 40);
+        var virtualInput = new VirtualInputSource();
+        input = virtualInput;
+        var capturedVm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe());
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IAnsiTerminal>(terminal);
+        services.AddTerminaVirtualInput(virtualInput);
+        services.AddTermina("/skill-sources", builder =>
+        {
+            builder.RegisterRoute<SkillSourcesConfigPage, SkillSourcesConfigViewModel>(
+                "/skill-sources",
+                _ => new SkillSourcesConfigPage(),
+                _ => capturedVm);
+        });
+
+        var sp = services.BuildServiceProvider();
+        vm = capturedVm!;
+        return sp.GetRequiredService<TerminaApplication>();
+    }
+
+    private TerminaApplication CreateTelemetryAlertingApp(out VirtualInputSource input, out TelemetryAlertingConfigViewModel vm)
+    {
+        var terminal = new VirtualTerminal(120, 40);
+        var virtualInput = new VirtualInputSource();
+        input = virtualInput;
+        var capturedVm = new TelemetryAlertingConfigViewModel(_paths);
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IAnsiTerminal>(terminal);
+        services.AddTerminaVirtualInput(virtualInput);
+        services.AddTermina("/telemetry-alerting", builder =>
+        {
+            builder.RegisterRoute<TelemetryAlertingConfigPage, TelemetryAlertingConfigViewModel>(
+                "/telemetry-alerting",
+                _ => new TelemetryAlertingConfigPage(),
+                _ => capturedVm);
+        });
+
+        var sp = services.BuildServiceProvider();
+        vm = capturedVm!;
+        return sp.GetRequiredService<TerminaApplication>();
+    }
+
+    private sealed class FakeSkillFeedProbe : ISkillFeedReachabilityProbe
+    {
+        public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
+            => new(true, "reachable");
     }
 }

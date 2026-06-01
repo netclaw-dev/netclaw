@@ -37,16 +37,16 @@
 
 ## 6. Skill Sources area
 
-- [ ] 6.1 Add `Skill Sources` sub-page containing External Skills and
+- [x] 6.1 Add `Skill Sources` sub-page containing External Skills and
   Skill Feeds.
-- [ ] 6.2 Keep validation for paths, URIs, auth, and reachability aligned
+- [x] 6.2 Keep validation for paths, URIs, auth, and reachability aligned
   to the generalized save-validation rule.
 
 ## 7. Telemetry & Alerting area
 
-- [ ] 7.1 Add `Telemetry & Alerting` sub-page.
-- [ ] 7.2 Include Telemetry and Outbound Webhooks only in this pass.
-- [ ] 7.3 Defer delivery-policy tuning.
+- [x] 7.1 Add `Telemetry & Alerting` sub-page.
+- [x] 7.2 Include Telemetry and Outbound Webhooks only in this pass.
+- [x] 7.3 Defer delivery-policy tuning.
 
 ## 8. Security & Access area
 

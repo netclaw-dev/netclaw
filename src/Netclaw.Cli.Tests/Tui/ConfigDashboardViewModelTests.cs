@@ -84,7 +84,9 @@ public sealed class ConfigDashboardViewModelTests
 
     [Theory]
     [InlineData("Inbound Webhooks", "/inbound-webhooks")]
+    [InlineData("Skill Sources", "/skill-sources")]
     [InlineData("Browser Automation", "/browser-automation")]
+    [InlineData("Telemetry & Alerting", "/telemetry-alerting")]
     [InlineData("Workspaces Directory", "/workspaces")]
     public void Task1_config_areas_route_to_dedicated_pages(string label, string expectedRoute)
     {
@@ -109,15 +111,4 @@ public sealed class ConfigDashboardViewModelTests
         Assert.True(vm.ShutdownRequestedForTest);
     }
 
-    [Theory]
-    [InlineData("Skill Sources")]
-    [InlineData("Telemetry & Alerting")]
-    public void Placeholder_sections_report_not_implemented_status(string label)
-    {
-        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
-
-        vm.Activate(vm.Items.Single(item => item.Label == label));
-
-        Assert.Contains("not implemented yet", vm.StatusMessage.Value, StringComparison.OrdinalIgnoreCase);
-    }
 }

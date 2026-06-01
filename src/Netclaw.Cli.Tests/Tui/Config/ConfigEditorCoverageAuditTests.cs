@@ -109,6 +109,30 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                         "src/Netclaw.Cli.Tests/Doctor/InboundWebhookRoutesDoctorCheckTests.cs",
                         "src/Netclaw.Daemon.Tests/Webhooks/WebhookRouteCatalogTests.cs"
                     ])),
+            ["skill-sources"] = new(
+                nameof(SkillSourcesConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("path", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_missing_external_directory_before_persistence)),
+                    new ValidationConceptTest("uri", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_invalid_skill_feed_url_before_persistence)),
+                    new ValidationConceptTest("auth", nameof(SkillSourcesConfigViewModelTests), nameof(SkillSourcesConfigViewModelTests.Save_rejects_multiline_skill_feed_api_key_before_persistence))),
+                DynamicValidationCoverage.Required(
+                    nameof(SkillSourcesConfigViewModelTests),
+                    nameof(SkillSourcesConfigViewModelTests.Save_blocks_unreachable_skill_feed_until_second_save_anyway)),
+                SecretCoverage.NoExplicitDeleteFlow(
+                    nameof(SkillSourcesConfigViewModelTests),
+                    nameof(SkillSourcesConfigViewModelTests.Save_preserves_existing_feed_api_key_and_unrelated_secrets),
+                    nameof(SkillSourcesConfigViewModelTests),
+                    nameof(SkillSourcesConfigViewModelTests.Save_persists_external_directory_and_skill_feed_for_runtime_binding),
+                    nameof(SkillSourcesConfigViewModelTests),
+                    nameof(SkillSourcesConfigViewModelTests.Save_preserves_existing_feed_api_key_and_unrelated_secrets),
+                    "Skill feed API key entry preserves blank existing values and replaces nonblank values; explicit delete is not in this config pass."),
+                new RuntimeConsumerCoverage(
+                    "Daemon skill scanning and server feed sync consume ExternalSkills.Sources and SkillFeeds.Feeds.",
+                    [
+                        "src/Netclaw.Cli.Tests/Tui/Config/SkillSourcesConfigViewModelTests.cs",
+                        "src/Netclaw.Configuration.Tests/ExternalSkillsConfigTests.cs",
+                        "src/Netclaw.Actors.Tests/Skills/SkillScannerTests.cs"
+                    ])),
             ["search"] = new(
                 nameof(SearchConfigEditorViewModelTests),
                 StructuralValidationCoverage.Required(
@@ -142,6 +166,28 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                     [
                         "src/Netclaw.Configuration.Tests/SecurityPolicyDefaultsTests.cs",
                         "src/Netclaw.Actors.Tests/Tools/DispatchingToolExecutorTests.cs"
+                    ])),
+            ["telemetry-alerting"] = new(
+                nameof(TelemetryAlertingConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("uri", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Save_rejects_invalid_telemetry_endpoint_before_persistence)),
+                    new ValidationConceptTest("webhook-uri", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Save_rejects_invalid_outbound_webhook_url_before_persistence)),
+                    new ValidationConceptTest("auth", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Save_rejects_invalid_outbound_auth_header_before_persistence))),
+                DynamicValidationCoverage.NotApplicable("Telemetry & Alerting validates local URI/header structure; remote delivery health is reported by doctor/runtime, not probed during this parked delivery-policy pass."),
+                SecretCoverage.NoExplicitDeleteFlow(
+                    nameof(TelemetryAlertingConfigViewModelTests),
+                    nameof(TelemetryAlertingConfigViewModelTests.Save_preserves_webhook_headers_delivery_policy_and_unrelated_secrets),
+                    nameof(TelemetryAlertingConfigViewModelTests),
+                    nameof(TelemetryAlertingConfigViewModelTests.Save_updates_outbound_auth_header_when_nonblank_header_is_entered),
+                    nameof(TelemetryAlertingConfigViewModelTests),
+                    nameof(TelemetryAlertingConfigViewModelTests.Save_preserves_webhook_headers_delivery_policy_and_unrelated_secrets),
+                    "Outbound webhook auth headers preserve blank existing values and replace nonblank values; explicit delete is not in this config pass."),
+                new RuntimeConsumerCoverage(
+                    "Daemon OpenTelemetry registration and operational notification delivery consume Telemetry and Notifications.Webhooks.",
+                    [
+                        "src/Netclaw.Cli.Tests/Tui/Config/TelemetryAlertingConfigViewModelTests.cs",
+                        "src/Netclaw.Daemon.Tests/Services/WebhookNotificationServiceTests.cs",
+                        "src/Netclaw.Cli.Tests/Doctor/WebhookFormatDoctorCheckTests.cs"
                     ])),
             ["workspaces"] = new(
                 nameof(WorkspacesConfigViewModelTests),
@@ -187,6 +233,8 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             "inbound-webhooks",
             "search",
             "security-posture",
+            "skill-sources",
+            "telemetry-alerting",
             "workspaces"
         ], visibleEditorIds);
         Assert.Equal(visibleEditorIds, CoverageByEditorId.Keys.OrderBy(static key => key).ToArray());
