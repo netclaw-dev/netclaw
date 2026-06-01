@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -293,6 +295,59 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.True(providers.ContainsKey("my-anthropic"));
         Assert.Equal("anthropic", providers["my-anthropic"].Type);
         Assert.Equal("sk-ant-test", providers["my-anthropic"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public void WriteProvider_OAuth_MergesMultipleProviders()
+    {
+        var registry = ProviderCommand.CreateDefaultRegistry();
+        var protector = new NullSecretsProtector();
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "openai-codex",
+            "openai",
+            AuthMethod.OAuthDevice,
+            endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(
+                new SensitiveString("openai-access-token"),
+                new SensitiveString("openai-refresh-token"),
+                DateTimeOffset.UtcNow.AddHours(1),
+                new SensitiveString("openai-account")),
+            apiKey: null,
+            registry,
+            protector);
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "my-copilot",
+            "github-copilot",
+            AuthMethod.OAuthDevice,
+            endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(
+                new SensitiveString("copilot-access-token"),
+                null,
+                DateTimeOffset.UtcNow.AddHours(1),
+                null),
+            apiKey: null,
+            registry,
+            protector);
+
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var configProviders = config.RootElement.GetProperty("Providers");
+        Assert.True(configProviders.TryGetProperty("openai-codex", out _));
+        Assert.True(configProviders.TryGetProperty("my-copilot", out _));
+
+        using var secrets = ReadConfigFile(_paths.SecretsPath);
+        var secretProviders = secrets.RootElement.GetProperty("Providers");
+        Assert.Equal("openai-access-token",
+            secretProviders.GetProperty("openai-codex").GetProperty("OAuthAccessToken").GetString());
+        Assert.Equal("copilot-access-token",
+            secretProviders.GetProperty("my-copilot").GetProperty("OAuthAccessToken").GetString());
+
+        var loaded = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal("openai-access-token", loaded["openai-codex"].OAuthAccessToken?.Value);
+        Assert.Equal("copilot-access-token", loaded["my-copilot"].OAuthAccessToken?.Value);
     }
 
     [Fact]

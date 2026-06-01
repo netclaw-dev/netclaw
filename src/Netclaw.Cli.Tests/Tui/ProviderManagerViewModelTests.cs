@@ -640,34 +640,95 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
-    public async Task ConfirmAdd_OAuth_TokensPersistOnlyOnSave()
+    public async Task SubmitCredentials_OAuthSuccess_PersistsProviderImmediately()
     {
         using var vm = CreateViewModel();
-        vm.NewProviderName = "my-openai";
-        vm.NewProviderType = "openai";
+        vm.NewProviderName = "my-copilot";
+        vm.NewProviderType = "github-copilot";
         vm.NewAuthMethod = AuthMethod.OAuthDevice;
-        vm.NewEndpoint = "https://api.openai.com";
         vm.OAuth.Result = new OAuthDeviceFlowResult(
             new SensitiveString("oauth-access-token"),
-            new SensitiveString("oauth-refresh-token"),
+            null,
             DateTimeOffset.UtcNow.AddHours(1),
-            new SensitiveString("account-123"));
+            null);
 
         Assert.False(File.Exists(_paths.SecretsPath));
 
-        vm.ConfirmAdd();
-        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
+        Assert.Equal(ProviderManagerState.AddComplete, vm.CurrentState.Value);
+        Assert.True(File.Exists(_paths.NetclawConfigPath));
         Assert.True(File.Exists(_paths.SecretsPath));
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var configProvider = config.RootElement
+            .GetProperty("Providers")
+            .GetProperty("my-copilot");
+        Assert.Equal("github-copilot", configProvider.GetProperty("Type").GetString());
+        Assert.Equal("OAuthDevice", configProvider.GetProperty("AuthMethod").GetString());
+        Assert.Equal("https://api.githubcopilot.com", configProvider.GetProperty("Endpoint").GetString());
 
         var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
         var provider = secrets.RootElement
             .GetProperty("Providers")
-            .GetProperty("my-openai");
+            .GetProperty("my-copilot");
 
         Assert.StartsWith("ENC:", provider.GetProperty("OAuthAccessToken").GetString());
-        Assert.StartsWith("ENC:", provider.GetProperty("OAuthRefreshToken").GetString());
-        Assert.StartsWith("ENC:", provider.GetProperty("OAuthAccountId").GetString());
+        Assert.False(provider.TryGetProperty("OAuthRefreshToken", out _));
+        Assert.False(provider.TryGetProperty("OAuthAccountId", out _));
+    }
+
+    [Fact]
+    public async Task SubmitCredentials_OAuthSuccess_PreservesExistingOAuthProviders()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice",
+                    ["Endpoint"] = "https://api.openai.com"
+                }
+            }
+        });
+
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["OAuthAccessToken"] = "openai-access-token"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.NewProviderName = "my-copilot";
+        vm.NewProviderType = "github-copilot";
+        vm.NewAuthMethod = AuthMethod.OAuthDevice;
+        vm.OAuth.Result = new OAuthDeviceFlowResult(
+            new SensitiveString("copilot-access-token"),
+            null,
+            DateTimeOffset.UtcNow.AddHours(1),
+            null);
+
+        vm.SubmitCredentials();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var configProviders = config.RootElement.GetProperty("Providers");
+        Assert.True(configProviders.TryGetProperty("openai-codex", out _));
+        Assert.True(configProviders.TryGetProperty("my-copilot", out _));
+
+        var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        var secretProviders = secrets.RootElement.GetProperty("Providers");
+        Assert.True(secretProviders.TryGetProperty("openai-codex", out _));
+        Assert.True(secretProviders.TryGetProperty("my-copilot", out _));
     }
 
     [Fact]

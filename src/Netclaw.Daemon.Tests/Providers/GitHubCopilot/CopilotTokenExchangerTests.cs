@@ -200,12 +200,10 @@ public sealed class CopilotTokenExchangerTests
             captured.Headers.GetValues("Authorization").Single());
         Assert.Contains(captured.Headers.Accept, h => h.MediaType == "application/json");
 
-        // User-Agent is deliberately not asserted here — it's stamped by
-        // NetclawHeadersHandler on the named HttpClient, which this unit
-        // test bypasses with a raw FakeHttpMessageHandler. The handler
-        // contract is covered in NetclawHeadersHandlerTests.
-        Assert.False(captured.Headers.Contains("User-Agent"),
-            "exchanger must defer User-Agent to NetclawHeadersHandler");
+        Assert.Equal(NetclawUserAgent.Value,
+            string.Join(" ", captured.Headers.GetValues("User-Agent")));
+        Assert.Equal("copilot-token",
+            captured.Headers.GetValues(NetclawUserAgent.ComponentHeader).Single());
 
         Assert.Equal($"Netclaw/{BuildInfo.Version}",
             captured.Headers.GetValues("Editor-Version").Single());

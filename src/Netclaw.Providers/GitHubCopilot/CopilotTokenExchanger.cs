@@ -32,6 +32,8 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
     private static readonly Uri TokenEndpoint =
         new("https://api.github.com/copilot_internal/v2/token");
 
+    private const string ComponentName = "copilot-token";
+
     // Refresh slightly before the server-reported expiry so chat calls in
     // flight when the cache turns over still see a valid bearer token.
     private static readonly TimeSpan RefreshBuffer = TimeSpan.FromMinutes(2);
@@ -97,10 +99,14 @@ public sealed class CopilotTokenExchanger(HttpClient httpClient, TimeProvider? t
         // integration." Cross-checked against CodeAlta's CopilotDirectAuth
         // and the Neovim Copilot plugin source; both send the same set.
         //
-        // User-Agent is intentionally NOT set here — the named HttpClient
-        // ("CopilotTokenExchange") runs through NetclawHeadersHandler, which
-        // stamps the canonical UA + X-Netclaw-Component. Setting it here
-        // would win over the handler and clobber the shared identity.
+        // Stamp the same identity the DI HttpClient handler uses. CLI one-shot
+        // paths can construct this exchanger with a raw HttpClient, and GitHub
+        // rejects this endpoint outright when User-Agent is absent.
+        if (!request.Headers.Contains("User-Agent"))
+            request.Headers.TryAddWithoutValidation("User-Agent", NetclawUserAgent.Value);
+        if (!request.Headers.Contains(NetclawUserAgent.ComponentHeader))
+            request.Headers.TryAddWithoutValidation(NetclawUserAgent.ComponentHeader, ComponentName);
+
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", oauthToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.TryAddWithoutValidation("Editor-Version", $"Netclaw/{BuildInfo.Version}");

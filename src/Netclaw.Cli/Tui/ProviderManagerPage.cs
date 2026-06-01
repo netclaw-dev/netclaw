@@ -166,7 +166,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     ProviderManagerState.RemoveConfirm =>
                         " [Enter] Confirm  [Esc] Cancel  [Ctrl+Q] Quit",
                     ProviderManagerState.AddComplete =>
-                        " [Enter] Save  [Esc] Cancel  [Ctrl+Q] Quit",
+                        " [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddOAuthDeviceFlow =>
                         " [Esc] Cancel  [Ctrl+Q] Quit",
                     _ =>
@@ -597,7 +597,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             return Layouts.Vertical()
                 .WithChild(new TextNode($"  \u2714 Connection successful! ({result.Models.Count} models found)")
                     .WithForeground(Color.Green))
-                .WithChild(new TextNode("  Press [Enter] to save, [Esc] to cancel.")
+                .WithChild(new TextNode("  Provider saved. Press [Enter] to continue.")
                     .WithForeground(Color.Gray));
         }
 
@@ -612,7 +612,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     {
         var result = ViewModel.ProbeResult.Value;
         return Layouts.Vertical()
-            .WithChild(new TextNode($"  \u2714 Provider '{ViewModel.NewProviderName}' ready to save")
+            .WithChild(new TextNode($"  \u2714 Provider '{ViewModel.NewProviderName}' added")
                 .WithForeground(Color.Green))
             .WithChild(new TextNode($"    Type: {ViewModel.Registry.Get(ViewModel.NewProviderType ?? "unknown").DisplayName}")
                 .WithForeground(Color.White))
@@ -621,7 +621,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .WithChild(new TextNode($"    Models: {result?.Models.Count ?? 0} discovered")
                 .WithForeground(Color.White))
             .WithChild(new TextNode("").Height(1))
-            .WithChild(new TextNode("  Press [Enter] to save, [Esc] to cancel.")
+            .WithChild(new TextNode("  Press [Enter] to return to the provider list.")
                 .WithForeground(Color.Gray));
     }
 

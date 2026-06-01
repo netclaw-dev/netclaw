@@ -56,11 +56,12 @@ Backspace 32
 Type "http://localhost:11434"
 Enter
 
-# ─── Step 3: Probe + ready-to-save ───────────────────────────────────
+# ─── Step 3: Probe + persisted provider confirmation ─────────────────
 # Probe is async; with qwen2:0.5b + all-minilm baked into native
-# ollama, this resolves in seconds. Wait directly on the "ready to
-# save" success line (skips the transient "Validating..." frame).
-Wait+Screen@45s /ready to save/
+# ollama, this resolves in seconds. The provider is persisted before
+# the success screen renders, so wait directly on the persisted-provider
+# confirmation (skips the transient "Validating..." frame).
+Wait+Screen@45s /Provider 'smoke-add-ollama' added/
 Sleep 300ms
 Enter
 

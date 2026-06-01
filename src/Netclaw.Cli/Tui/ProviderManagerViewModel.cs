@@ -115,6 +115,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public AuthMethod NewAuthMethod { get; set; } = AuthMethod.None;
     public string? NewApiKey { get; set; }
     public string? NewEndpoint { get; set; }
+    private bool _newProviderPersisted;
 
     // ── OAuth flow (shared coordinator) ──
     public OAuthFlowCoordinator OAuth { get; private set; } = null!; // initialized in constructor
@@ -447,6 +448,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         NewProviderType = type;
         NewProviderName = DetailProvider.ConfiguredName;
+        NewEndpoint = DetailProvider.Entry?.Endpoint;
         IsFixFlow = true;
 
         var oauthMethod = descriptor.Auth.SupportedAuthMethods
@@ -575,11 +577,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Write the new provider to config files after successful validation.
+    /// Finish a successful add flow and return to the refreshed provider list.
     /// </summary>
     public void ConfirmAdd()
     {
-        WriteProviderConfig();
+        if (!_newProviderPersisted)
+            WriteProviderConfig();
+
         StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
         ClearAddState();
         RefreshAndProbeAll();
@@ -815,7 +819,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddComplete:
-                GoBackToList();
+                ConfirmAdd();
                 break;
             case ProviderManagerState.Details:
             case ProviderManagerState.FixCredentials:
@@ -937,6 +941,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             if (IsFixFlow)
             {
+                if (NewProviderName is not null && OAuth.Result is not null)
+                {
+                    WriteProviderConfig();
+                    _newProviderPersisted = true;
+                }
+
                 // Fix flow: re-probe all providers so list shows fresh health
                 IsFixFlow = false;
                 StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
@@ -944,6 +954,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             }
             else
             {
+                WriteProviderConfig();
+                _newProviderPersisted = true;
+                StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
                 CurrentState.Value = ProviderManagerState.AddComplete;
             }
         }
@@ -1053,6 +1066,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         IsFixFlow = false;
+        _newProviderPersisted = false;
     }
 
     private void NotifyStateChanged()
