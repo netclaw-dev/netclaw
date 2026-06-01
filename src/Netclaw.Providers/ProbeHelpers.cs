@@ -57,6 +57,29 @@ internal static class ProbeHelpers
             : null;
     }
 
+    internal static int? TryReadPositiveInt32(JsonElement element, string propertyName)
+    {
+        // Context-window metadata uses 0 as an unset sentinel in some provider APIs
+        // (notably llama.cpp router-mode /props). Runtime context windows must be
+        // positive, so callers parsing context limits should treat non-positive
+        // values as unknown and let later detection/defaulting fill the value.
+        return TryReadInt32(element, propertyName) is > 0 and var value
+            ? value
+            : null;
+    }
+
+    internal static int? TryReadPositiveInt32OrFallbackWhenMissing(
+        JsonElement element, string propertyName, string fallbackPropertyName)
+    {
+        // n_ctx is the effective runtime context. If a provider reports it as 0,
+        // it is explicitly unknown; do not promote n_ctx_train as if it were the
+        // runtime limit, because that can overstate the configured capacity.
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out _))
+            return TryReadPositiveInt32(element, propertyName);
+
+        return TryReadPositiveInt32(element, fallbackPropertyName);
+    }
+
     /// <summary>
     /// Common probe execution: builds URL, sends request with timeout,
     /// handles errors, and delegates parsing to the caller.

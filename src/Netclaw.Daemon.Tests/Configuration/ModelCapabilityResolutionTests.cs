@@ -86,4 +86,35 @@ public sealed class ModelCapabilityResolutionTests
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
         Assert.Equal(ModelModality.Text, result.OutputModalities);
     }
+
+    [Fact]
+    public void ResolveModelCapabilities_IgnoresDetectedZeroContextWhenConfiguredContextSet()
+    {
+        var models = new ModelSelection
+        {
+            Main = new ModelReference
+            {
+                ContextWindow = 120_000
+            }
+        };
+        var detected = new ResolvedModelCapabilities("model", ModelModality.Text, ModelModality.Text, 0);
+
+        var result = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+
+        Assert.Equal(120_000, result.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void ResolveModelCapabilities_UsesDefaultContextWhenDetectedContextIsZero()
+    {
+        var models = new ModelSelection
+        {
+            Main = new ModelReference()
+        };
+        var detected = new ResolvedModelCapabilities("model", ModelModality.Text, ModelModality.Text, 0);
+
+        var result = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+
+        Assert.Equal(32_768, result.ContextWindowTokens);
+    }
 }

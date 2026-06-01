@@ -20,20 +20,26 @@ internal static class ModelCapabilityResolution
         int defaultContextWindow = 32_768)
     {
         var model = models.Main;
+        // Final safety net: provider parsers should normalize non-positive context
+        // metadata to null, but keep runtime capabilities valid even if an older
+        // or custom resolver reports llama.cpp-style n_ctx=0 as a sentinel.
+        var detectedContextWindow = detected?.ContextWindowTokens is > 0
+            ? detected.ContextWindowTokens
+            : null;
 
         if (model.ContextWindow is int configuredContextWindow
-            && detected?.ContextWindowTokens is int detectedContextWindow
-            && configuredContextWindow > detectedContextWindow)
+            && detectedContextWindow is int detectedWindow
+            && configuredContextWindow > detectedWindow)
         {
             throw new InvalidOperationException(
                 $"Models:Main:ContextWindow ({configuredContextWindow}) exceeds the " +
-                $"provider-reported effective context window ({detectedContextWindow}). " +
+                $"provider-reported effective context window ({detectedWindow}). " +
                 "Reduce the configured ContextWindow or adjust the provider runtime settings.");
         }
 
         var inputModalities = model.InputModalities ?? detected?.InputModalities ?? ModelModality.Text;
         var outputModalities = model.OutputModalities ?? detected?.OutputModalities ?? ModelModality.Text;
-        var contextWindow = model.ContextWindow ?? detected?.ContextWindowTokens ?? defaultContextWindow;
+        var contextWindow = model.ContextWindow ?? detectedContextWindow ?? defaultContextWindow;
 
         return new ModelCapabilities
         {

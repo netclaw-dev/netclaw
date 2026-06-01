@@ -85,11 +85,7 @@ public sealed class OllamaCapabilityResolver : IModelCapabilityResolver
         if (arch is not null)
         {
             // Context window: "{arch}.context_length"
-            if (modelInfo.TryGetProperty($"{arch}.context_length", out var ctxProp) &&
-                ctxProp.ValueKind == JsonValueKind.Number)
-            {
-                contextWindow = ctxProp.GetInt32();
-            }
+            contextWindow = ProbeHelpers.TryReadPositiveInt32(modelInfo, $"{arch}.context_length");
 
             // Vision: "{arch}.vision.block_count" > 0 means image input
             if (modelInfo.TryGetProperty($"{arch}.vision.block_count", out var visionProp) &&
