@@ -208,6 +208,30 @@ Done when:
 
 Purpose: finish the active config work all the way through runtime semantics.
 
+`netclaw config` owns post-install tuning. It should cover ordinary changes an
+operator might make after first run without re-entering bootstrap:
+
+- Providers and Models route to their dedicated editors.
+- Channels, Search, Security & Access, Exposure Mode, Skill Sources,
+  Telemetry & Alerting, Workspaces Directory, Inbound Webhooks, and Browser
+  Automation must not remain root-dashboard placeholders before this phase
+  closes.
+- Identity/personality re-entry remains `netclaw init` / identity-owned work;
+  config may expose the Workspaces Directory because operators can move project
+  discovery roots after first run without regenerating identity files.
+- Per-session project switching is runtime state owned by the
+  `set_working_directory` tool and the Audience Profiles `Change workspace`
+  permission, not a global config editor.
+- General MCP server/permission editing remains `netclaw mcp`; Browser
+  Automation config may add/remove the canonical browser MCP profile, then route
+  grants to `netclaw mcp permissions`.
+- Inbound webhook route-file authoring remains `netclaw webhooks` / route files
+  for this pass; config owns global enablement, execution timeout, route-count
+  visibility, and loud diagnostics when enabled with no routes.
+- Advanced session tuning, logging verbosity, tool hard-deny overrides, and
+  low-level tool execution ceilings are not init-owned, but stay out of this
+  config-command close unless explicitly promoted.
+
 #### Task 1.1: Complete Channels provider-backed validation and canonical persistence
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
@@ -341,7 +365,41 @@ Done when:
 - [ ] Native config smoke covers at least one non-local mode and one return to
   Local.
 
-#### Task 1.5: Complete Skill Sources and Telemetry & Alerting config areas
+#### Task 1.5: Complete Workspaces, Inbound Webhooks, and Browser Automation config areas
+
+**PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/netclaw-mcp/spec.md`, `docs/spec/configuration.md`
+**Surface area:** UI, config, workspaces, webhooks, MCP/browser tools
+**Verification:** L3
+
+Done when:
+
+- [ ] Workspaces Directory is editable from `netclaw config`, validates as a
+  local directory path, persists `Workspaces.Directory`, and preserves existing
+  identity files.
+- [ ] Tests prove `NetclawPaths.WorkspacesDirectory`, project discovery, and
+  prompt/workspace consumers read the saved `Workspaces.Directory` value.
+- [ ] Inbound Webhooks root entry routes to an implemented editor, not a
+  placeholder.
+- [ ] Inbound Webhooks editor controls `Webhooks.Enabled` and
+  `Webhooks.ExecutionTimeoutSeconds`; route-file editing stays in
+  `netclaw webhooks` / `~/.netclaw/config/webhooks/*.json` for this pass.
+- [ ] Enabling inbound webhooks with no valid routes fails loudly through doctor
+  or visible diagnostics; no dummy route is created silently.
+- [ ] Browser Automation root entry routes to an implemented editor, not a
+  placeholder.
+- [ ] Browser Automation detects required local runtime pieces, refuses enablement
+  when prerequisites are missing, and prints manual install guidance instead of
+  shelling out from the TUI.
+- [ ] Browser Automation persists/removes the canonical browser MCP server profile
+  (`browser_playwright` or `browser_chrome_devtools`) using the same shape runtime
+  MCP loading consumes.
+- [ ] Browser Automation grants route to `netclaw mcp permissions`; raw MCP grant
+  editing is not recreated in this editor.
+- [ ] Native smoke covers at least one successful save path and one blocked or
+  guidance-only path across these areas.
+
+#### Task 1.6: Complete Skill Sources and Telemetry & Alerting config areas
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
 **Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/netclaw-mcp/spec.md`
@@ -361,7 +419,7 @@ Done when:
 - [ ] Smoke tapes exercise both areas or document why an existing smoke covers
   the route.
 
-#### Task 1.6: Close the `netclaw config` OpenSpec change
+#### Task 1.7: Close the `netclaw config` OpenSpec change
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
 **Spec:** `openspec/changes/netclaw-config-command/tasks.md`
@@ -643,7 +701,8 @@ Done when:
 NEXT tasks are important but not eligible for autonomous execution unless moved
 to `NOW` by the user.
 
-- Webhook service identity and inbound webhook hardening.
+- Webhook service identity and inbound webhook route hardening beyond the config
+  enablement/timeout editor.
 - Subagent explicit model selection and parent-context alignment.
 - GitHub Copilot provider refinements and VLLM capability strategy.
 - Approval button label refinement and richer interactive approval UX.
@@ -656,7 +715,8 @@ LATER tasks are product-direction items and should stay out of execution loops.
 
 - Ambient monitoring workflows.
 - Delegated coding task orchestration.
-- Browser automation as a first-class feature.
+- Browser automation as a first-class feature beyond config-time MCP profile
+  enablement.
 - Split gateway/agent process architecture.
 - Hosted SaaS / multi-tenant operator console.
 
