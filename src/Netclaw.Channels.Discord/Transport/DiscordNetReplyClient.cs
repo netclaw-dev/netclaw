@@ -95,6 +95,13 @@ internal sealed class DiscordNetReplyClient : IDiscordReplyClient
         return new DiscordPostResult(CreatedThreadId: createdThreadId, MessageId: sentMessageId);
     }
 
+    public async Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default)
+    {
+        var channelSnowflake = ParseSnowflake(channelId.Value, "reply channel ID");
+        var messageChannel = await ResolveMessageChannelAsync(channelSnowflake, channelId.Value);
+        await messageChannel.TriggerTypingAsync(new RequestOptions { CancelToken = cancellationToken });
+    }
+
     public async Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
     {
         var channelId = ParseSnowflake(threadChannelId.Value, "thread channel ID");

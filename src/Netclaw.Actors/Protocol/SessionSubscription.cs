@@ -39,6 +39,11 @@ public enum OutputFilter
     /// </summary>
     TextStreaming = 1 << 5,
 
+    /// <summary>
+    /// <see cref="ProcessingStateOutput"/> — agent processing on/off, for "typing"/"thinking" indicators.
+    /// </summary>
+    Processing = 1 << 6,
+
     // ── Convenience presets ──
 
     /// <summary>Final text replies only — suitable for adapters that post once (Slack).</summary>

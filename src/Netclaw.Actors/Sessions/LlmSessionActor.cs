@@ -571,6 +571,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
             CancelAndDisposeLlmCts();
 
+            // Processing off: this physical call ended. Emitted early so retry paths
+            // below (context-overflow compaction, transient streaming retry) re-bracket
+            // with a fresh "on" when they re-enter FireLlmCall.
+            EmitOutput(new ProcessingStateOutput(false) { SessionId = _sessionId }, OutputFilter.Processing);
+
             // Context overflow: roll back the failed turn, buffer the user message,
             // compact the history, and let the normal buffer drain re-deliver it.
             if (IsContextOverflowError(msg.Cause))
@@ -680,6 +685,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
             CancelAndDisposeLlmCts();
 
+            // Processing off: only the LLM-call watchdog corresponds to an in-flight
+            // model call (the only place that emits "on"); other operations never did.
+            if (msg.OperationName == ProcessingWatchdog.LlmCall)
+                EmitOutput(new ProcessingStateOutput(false) { SessionId = _sessionId }, OutputFilter.Processing);
+
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId}, noProgress={NoProgress})",
                 msg.OperationName, msg.OperationId, msg.NoProgress);
             var errorMessage = ExtractLlmErrorMessage(timeoutCause);
@@ -718,6 +728,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _watchdog.Stop(Timers);
         CancelAndDisposeLlmCts();
+
+        // Processing off: the model call ended. Emitted before the tool-call branch
+        // so the indicator clears during tool execution / approval waits.
+        EmitOutput(new ProcessingStateOutput(false) { SessionId = _sessionId }, OutputFilter.Processing);
 
         var response = msg.Response;
         var lastMessage = response.Messages[^1];
@@ -2688,6 +2702,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             options?.Tools?.Count > 0,
             forceNoTools,
             _activeCallId);
+
+        // Processing on: brackets this physical model call so channels can show a
+        // "typing" indicator. The matching off is emitted at every call termination
+        // (response received, failure, watchdog timeout).
+        EmitOutput(new ProcessingStateOutput(true) { SessionId = _sessionId }, OutputFilter.Processing);
 
         _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId, _activeLlmCts!.Token);
     }

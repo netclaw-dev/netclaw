@@ -12,7 +12,9 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
     public List<DiscordPostMessage> Posts { get; } = [];
     public List<(DiscordReplyChannelId ThreadId, string Name)> ThreadRenames { get; } = [];
     public List<(DiscordReplyChannelId ChannelId, DiscordMessageId MessageId, string Text, bool RemoveComponents)> Updates { get; } = [];
+    public List<DiscordReplyChannelId> TypingTriggers { get; } = [];
     public Exception? ThrowOnPost { get; set; }
+    public Exception? ThrowOnTyping { get; set; }
 
     private int _messageCounter;
 
@@ -36,6 +38,15 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
         }
 
         return Task.FromResult(result);
+    }
+
+    public Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default)
+    {
+        if (ThrowOnTyping is { } ex)
+            throw ex;
+
+        TypingTriggers.Add(channelId);
+        return Task.CompletedTask;
     }
 
     public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)

@@ -84,6 +84,13 @@ public interface IDiscordReplyClient
 {
     Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Triggers Discord's typing indicator on the channel. The indicator
+    /// auto-expires after ~10s, so callers re-trigger it while work is in flight.
+    /// Best-effort: typing is a UX nicety, not a delivery guarantee.
+    /// </summary>
+    Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default);
+
     Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default);
 
     Task UpdateMessageAsync(
@@ -169,6 +176,10 @@ public sealed class UnconfiguredDiscordReplyClient : IDiscordReplyClient
     public Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Discord channel attempted outbound delivery, but no Discord reply client is configured.");
+
+    public Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Discord channel attempted to trigger typing, but no Discord reply client is configured.");
 
     public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(

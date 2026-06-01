@@ -288,6 +288,38 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
             "Expected LLM to receive DataContent (image) via real MagicByteContentScanner");
     }
 
+    [Fact]
+    public async Task Typing_indicator_triggered_while_processing_an_llm_call()
+    {
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var deps = CreateDependencies(pipeline, httpClient);
+
+        var gateway = Sys.ActorOf(DiscordGatewayActor.CreateProps(deps), "discord-gw-typing-test");
+
+        gateway.Tell(new DiscordGatewayMessage(
+            EventId: new DiscordEventId("msg-5000"),
+            ChannelId: new DiscordChannelId("ch-5"),
+            ReplyChannelId: new DiscordReplyChannelId("ch-5"),
+            MessageId: new DiscordMessageId("msg-5000"),
+            ThreadOrMessageId: new DiscordThreadOrMessageId("msg-5000"),
+            RootMessageId: new DiscordMessageId("msg-5000"),
+            SenderId: new DiscordUserId("u-human"),
+            IsBotMessage: false,
+            IsDirectMessage: true,
+            ContainsBotMention: false,
+            Text: "hello there",
+            ReceivedAt: TimeProvider.System.GetUtcNow()));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_replyClient.TypingTriggers.Count > 0,
+                "Expected the typing indicator to be triggered while the LLM call was in flight");
+            Assert.Contains(_replyClient.TypingTriggers, id => id.Value == "ch-5");
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     private DiscordGatewayDependencies CreateDependencies(
         ISessionPipeline pipeline,
         HttpClient? httpClient = null,
@@ -414,6 +446,7 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
     private sealed class RecordingDiscordReplyClient : IDiscordReplyClient
     {
         public List<DiscordPostMessage> Posts { get; } = [];
+        public List<DiscordReplyChannelId> TypingTriggers { get; } = [];
 
         public Task<DiscordPostResult> PostReplyAsync(DiscordPostMessage message, CancellationToken cancellationToken = default)
         {
@@ -431,6 +464,12 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
             }
 
             return Task.FromResult(result);
+        }
+
+        public Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default)
+        {
+            TypingTriggers.Add(channelId);
+            return Task.CompletedTask;
         }
 
         public Task SetThreadNameAsync(DiscordReplyChannelId threadChannelId, string name, CancellationToken cancellationToken = default)

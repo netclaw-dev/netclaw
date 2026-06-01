@@ -62,6 +62,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
+    private static readonly object TypingTimerKey = new();
+    // Discord's typing indicator auto-expires after ~10s; re-trigger inside that
+    // window so it stays visible for the whole model call.
+    private static readonly TimeSpan TypingRefreshInterval = TimeSpan.FromSeconds(8);
     private bool _deliveredThisTurn;
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
@@ -153,7 +157,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private SessionPipelineOptions BuildOptions() => new()
     {
         ChannelType = ChannelType.Discord,
-        Filter = OutputFilter.Text | OutputFilter.Files
+        Filter = OutputFilter.Text | OutputFilter.Files | OutputFilter.Processing
     };
 
     private void Initializing()
@@ -212,6 +216,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
         CommandAsync<StartProactiveThread>(HandleProactiveThreadAsync);
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
+        CommandAsync<TriggerTyping>(async _ => await SafeTriggerTypingAsync());
 
         Command<OutputStreamTerminated>(msg =>
         {
@@ -1103,6 +1108,21 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 _deliveredThisTurn = true;
                 break;
 
+            case ProcessingStateOutput processing:
+                // Render the model-call window as Discord's typing indicator. Not
+                // user content, so do not touch _deliveredThisTurn (it must not
+                // suppress the empty-turn fallback below).
+                if (processing.IsProcessing)
+                {
+                    await SafeTriggerTypingAsync();
+                    Timers.StartPeriodicTimer(TypingTimerKey, TriggerTyping.Instance, TypingRefreshInterval);
+                }
+                else
+                {
+                    Timers.Cancel(TypingTimerKey);
+                }
+                break;
+
             case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
                 _hasObservedApprovalRequest = true;
                 var pendingApproval = new PendingApprovalRequest(request);
@@ -1142,6 +1162,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 break;
 
             case TurnCompleted completed:
+                // Backstop: clear typing in case a stop signal was missed (e.g. the
+                // turn ended without a model call).
+                Timers.Cancel(TypingTimerKey);
+
                 if (completed.Outcome == TurnOutcome.Completed && _pendingCursorSnowflake is { } pendingSnowflake)
                     AdvanceCursor(pendingSnowflake);
                 _pendingCursorSnowflake = null;
@@ -1233,6 +1257,19 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
                 return;
             }
+        }
+    }
+
+    private async Task SafeTriggerTypingAsync()
+    {
+        try
+        {
+            await _dependencies.ReplyClient.TriggerTypingAsync(_replyChannelId);
+        }
+        catch (Exception ex)
+        {
+            // Typing is a best-effort UX nicety; never fail or retry a turn over it.
+            _log.Debug(ex, "Failed to trigger Discord typing indicator for session {0}", _sessionId.Value);
         }
     }
 
@@ -1524,6 +1561,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     }
 
     private sealed record OutputReceived(SessionOutput Output);
+
+    private sealed record TriggerTyping
+    {
+        public static readonly TriggerTyping Instance = new();
+    }
 
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause);
 

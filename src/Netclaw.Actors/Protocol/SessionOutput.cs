@@ -43,6 +43,15 @@ public sealed record TextOutput(string Text) : SessionOutput;
 public sealed record TextDeltaOutput(string Delta) : SessionOutput;
 
 /// <summary>
+/// The agent's processing state for the current model call: <c>true</c> when an
+/// LLM call starts, <c>false</c> when it ends (response received, failed, or timed
+/// out). Brackets each physical model call, so it goes off during tool execution
+/// and tool-approval waits. Channels render this as a "typing"/"thinking" indicator.
+/// Requires <see cref="OutputFilter.Processing"/>.
+/// </summary>
+public sealed record ProcessingStateOutput(bool IsProcessing) : SessionOutput;
+
+/// <summary>
 /// Thinking/reasoning tokens from the model (e.g., Claude extended thinking).
 /// Requires <see cref="OutputFilter.Thinking"/>.
 /// </summary>
