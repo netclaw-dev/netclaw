@@ -287,6 +287,10 @@ Done when:
 
 #### Human Review Checkpoint: Security & Access config editor
 
+- [x] Completed 2026-06-01: human smoke passed in rebuilt
+  `netclaw-config-poc-local` container at commit `547c2c3`; no `401
+  Unauthorized` after enabling Reverse Proxy and entering MCP permissions.
+
 Stop here after Task 1.3 is completed, verified, and committed. Do not continue
 into Task 1.4 until a human has spot-checked the live `netclaw config` Security
 & Access experience in a real terminal.
@@ -310,7 +314,8 @@ MCP permissions in the same `netclaw config` process produced `401 Unauthorized`
 Treat this as a config/runtime credential refresh regression, not an acceptable
 manual workaround. Regression coverage belongs with daemon-client authentication
 tests because the config TUI reuses the same `DaemonApi` instance after exposure
-mode writes a fresh bootstrap `DeviceToken`.
+mode writes a fresh bootstrap `DeviceToken`. Fixed by commit `547c2c37` and
+confirmed by human retest in the rebuilt validation container.
 
 #### Task 1.4: Complete Exposure Mode config leaf
 
