@@ -220,6 +220,52 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void AddSystemNudge_snapshots_media_so_caller_clear_cannot_empty_it()
+    {
+        // Regression: LlmSessionActor hands its mutable
+        // _pendingModelInputMediaReferences accumulator to AddSystemNudge and then
+        // Clear()s it. Without a defensive snapshot the nudge aliased that list, so
+        // the Clear() wiped the tool-loaded image before the next LLM call hydrated
+        // it — the model was told "Image loaded" but never saw the bytes and
+        // hallucinated. The nudge must retain its own copy.
+        var media = new SerializableMediaReference
+        {
+            RelativePath = "image.png",
+            MimeType = new Netclaw.Media.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 16
+        };
+        var pending = new List<SerializableMediaReference> { media };
+
+        var state = SessionState.Empty
+            .AddUserMessage("Real user message")
+            .AddSystemNudge("Loaded media.", pending);
+
+        pending.Clear();
+
+        Assert.Single(state.History[^1].MediaReferences);
+    }
+
+    [Fact]
+    public void AddUserMessage_snapshots_media_so_caller_clear_cannot_empty_it()
+    {
+        var media = new SerializableMediaReference
+        {
+            RelativePath = "image.png",
+            MimeType = new Netclaw.Media.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 16
+        };
+        var pending = new List<SerializableMediaReference> { media };
+
+        var state = SessionState.Empty.AddUserMessage("With image", pending);
+
+        pending.Clear();
+
+        Assert.Single(state.History[^1].MediaReferences);
+    }
+
+    [Fact]
     public void FindLastUserMessage_returns_null_when_no_user_messages()
     {
         var state = WithSystemPrompt("System");

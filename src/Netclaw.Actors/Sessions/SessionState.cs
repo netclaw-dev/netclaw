@@ -188,8 +188,12 @@ public sealed record SessionState
     /// </summary>
     public SessionState AddUserMessage(string content, IReadOnlyList<SerializableMediaReference>? mediaReferences = null)
     {
+        // Snapshot the caller's list: SerializableChatMessage is immutable and must
+        // own its media references, so a caller that reuses/clears its list after
+        // this call cannot retroactively empty the persisted message (see
+        // BuildNudgeMessage for the concrete hazard this guards against).
         var msg = mediaReferences is { Count: > 0 }
-            ? new SerializableChatMessage { Role = ChatRole.User, Content = content, MediaReferences = mediaReferences }
+            ? new SerializableChatMessage { Role = ChatRole.User, Content = content, MediaReferences = [.. mediaReferences] }
             : new SerializableChatMessage { Role = ChatRole.User, Content = content };
 
         return this with { History = History.Add(msg) };
@@ -275,7 +279,14 @@ public sealed record SessionState
             {
                 Role = ChatRole.User,
                 Content = $"{SystemNudgePrefix} {nudge}]",
-                MediaReferences = mediaReferences
+                // Snapshot, never alias. The model-input media nudge is built from
+                // LlmSessionActor._pendingModelInputMediaReferences, a mutable
+                // accumulator the actor Clear()s immediately after handing it off.
+                // SerializableChatMessage is an immutable persistence type that must
+                // own its media list — without this copy the subsequent Clear()
+                // empties the nudge's attachments before the next LLM call hydrates
+                // them, so a tool-loaded image silently never reaches the model.
+                MediaReferences = [.. mediaReferences]
             }
             : new() { Role = ChatRole.User, Content = $"{SystemNudgePrefix} {nudge}]" };
 
