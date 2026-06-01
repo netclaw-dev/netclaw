@@ -27,7 +27,6 @@ public sealed class DaemonApi
 
     private readonly IHttpClientFactory _factory;
     private readonly string _endpoint;
-    private readonly string? _deviceToken;
     private readonly NetclawPaths _paths;
 
     /// <summary>
@@ -40,7 +39,6 @@ public sealed class DaemonApi
         _factory = factory;
         _paths = paths;
         _endpoint = ResolveEndpoint(paths);
-        _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths, DaemonClientFactory.ResolveExposureMode(paths));
     }
 
     internal DaemonApi(IHttpClientFactory factory, IConfiguration configuration)
@@ -363,8 +361,13 @@ public sealed class DaemonApi
     private HttpClient CreateHttpClient()
     {
         var client = _factory.CreateClient();
-        if (!string.IsNullOrWhiteSpace(_deviceToken))
-            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _deviceToken);
+        // Config TUI can switch exposure mode and write the bootstrap token while this singleton is alive.
+        var deviceToken = DaemonClientFactory.ResolveDeviceToken(
+            _endpoint,
+            _paths,
+            DaemonClientFactory.ResolveExposureMode(_paths));
+        if (!string.IsNullOrWhiteSpace(deviceToken))
+            client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", deviceToken);
 
         return client;
     }

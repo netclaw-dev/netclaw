@@ -299,8 +299,18 @@ Human smoke focus:
   `netclaw mcp permissions`.
 - Reset overrides visibly restores the posture baseline and the persisted JSON
   clears hidden MCP and approval overrides.
+- If Reverse Proxy is enabled from this TUI session, immediately entering MCP
+  permissions must not return `401 Unauthorized`; the local daemon client must
+  use the bootstrap `DeviceToken` written by the exposure-mode save.
 - Exposure Mode is visible from Security & Access, but deeper Exposure Mode
   behavior remains Task 1.4 work.
+
+Human smoke finding 2026-06-01: enabling Reverse Proxy and then navigating into
+MCP permissions in the same `netclaw config` process produced `401 Unauthorized`.
+Treat this as a config/runtime credential refresh regression, not an acceptable
+manual workaround. Regression coverage belongs with daemon-client authentication
+tests because the config TUI reuses the same `DaemonApi` instance after exposure
+mode writes a fresh bootstrap `DeviceToken`.
 
 #### Task 1.4: Complete Exposure Mode config leaf
 
