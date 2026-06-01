@@ -9,6 +9,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Tui.Sections;
 using Netclaw.Configuration;
 
@@ -302,6 +303,21 @@ public sealed class ExposureModeStepViewModel : IWizardStepViewModel, ISectionEd
         return DaemonExposureValidator.TryGetInvalidTrustedProxy(TrustedProxies, out var error)
             ? error
             : null;
+    }
+
+    internal string? GetBootstrapPairingValidationError(NetclawPaths paths)
+    {
+        if (!SelectedMode.RequiresRemoteAuthentication())
+            return null;
+
+        var snapshot = DeviceRegistryInspector.Read(paths);
+        if (!snapshot.DevicesFileExists && !snapshot.HasLocalDeviceToken && !snapshot.HasCompletedBootstrap)
+            return null;
+
+        if (snapshot.DeviceCount > 0 && snapshot.LocalTokenMatchesDevice)
+            return null;
+
+        return "Bootstrap pairing state is incomplete or mismatched. Run 'netclaw doctor', review docs/spec/SPEC-006-gateway-exposure-and-remote-access.md, and see issue #875 before saving non-local exposure.";
     }
 
     public SectionContribution BuildContribution(IWizardStepViewModel editor)

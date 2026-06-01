@@ -62,6 +62,13 @@ public sealed class ExposureModeConfigViewModel : ReactiveViewModel
             return;
         }
 
+        if (_step.GetBootstrapPairingValidationError(_context.Paths) is { } pairingError)
+        {
+            _context.StatusMessage.Value = pairingError;
+            NotifyContentChanged();
+            return;
+        }
+
         _orchestrator.WriteConfig();
         IsSaved.Value = true;
         _context.StatusMessage.Value = "Exposure mode saved.";

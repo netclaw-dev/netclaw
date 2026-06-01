@@ -350,19 +350,19 @@ confirmed by human retest in the rebuilt validation container.
 
 Done when:
 
-- [ ] Explicit modes are Local, Reverse Proxy, Tailscale Serve, Tailscale
+- [x] Explicit modes are Local, Reverse Proxy, Tailscale Serve, Tailscale
   Funnel, and Cloudflare Tunnel.
-- [ ] `Daemon.ExposureMode` is the single active selector; no per-mode active
+- [x] `Daemon.ExposureMode` is the single active selector; no per-mode active
   flags are introduced.
-- [ ] Inactive old values are preserved and ignored while inactive.
-- [ ] Each non-local mode has a mode-specific dialog; Local requires no extra
+- [x] Inactive old values are preserved and ignored while inactive.
+- [x] Each non-local mode has a mode-specific dialog; Local requires no extra
   setup.
-- [ ] First non-local enablement auto-pairs the current configuring client when
+- [x] First non-local enablement auto-pairs the current configuring client when
   no bootstrap/pairing state exists.
-- [ ] Orphaned or mismatched bootstrap state blocks with actionable guidance to
+- [x] Orphaned or mismatched bootstrap state blocks with actionable guidance to
   `netclaw doctor`, docs, and the tracked issue.
-- [ ] Tests prove config merge semantics and daemon exposure consumer binding.
-- [ ] Native config smoke covers at least one non-local mode and one return to
+- [x] Tests prove config merge semantics and daemon exposure consumer binding.
+- [x] Native config smoke covers at least one non-local mode and one return to
   Local.
 
 #### Task 1.5: Complete Workspaces, Inbound Webhooks, and Browser Automation config areas

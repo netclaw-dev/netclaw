@@ -3,7 +3,7 @@
 # Exposure Mode is a post-install Security & Access leaf, not an init-wizard
 # step. This tape exercises the configured route:
 #   netclaw config -> Security & Access -> Exposure Mode
-# and verifies the reverse-proxy branch writes the existing Daemon config shape.
+# verifies the reverse-proxy branch, then returns to Local.
 
 Output "/tmp/tape-config-exposure.gif"
 
@@ -43,20 +43,40 @@ Wait+Screen@10s /Reverse proxy: trusted proxies/
 Type "10.0.0.0/24"
 Enter
 
-# Confirm notice and save.
+# Confirm notice and save Reverse Proxy.
 Wait+Screen@10s /Reverse proxy configured/
 Wait+Screen@5s /http:\/\/0\.0\.0\.0:[0-9]+/
 Enter
 Wait+Screen@10s /Reverse Proxy exposure mode saved/
 
-# Returning to Security & Access and reopening Exposure Mode must not preserve
-# the one-shot saved screen.
+# Exit and prove the non-local write semantically before returning to Local.
+Enter
+Wait+Screen@10s /Security & Access/
+Ctrl+Q
+Wait+Screen@10s /TAPE\$/
+
+Type "REVERSE_PROXY=reverse-proxy BIND_HOST=0.0.0.0 PROXY_CIDR=10.0.0.0/24 jq -e '.Daemon.ExposureMode == env.REVERSE_PROXY and .Daemon.Host == env.BIND_HOST and .Daemon.TrustedProxies[0] == env.PROXY_CIDR' $NETCLAW_HOME/config/netclaw.json"
+Enter
+Wait+Screen@5s /true/
+Type "echo CONFIG_EXPOSURE_REVERSE_PROXY_ASSERT=$?"
+Enter
+Wait+Screen@5s /CONFIG_EXPOSURE_REVERSE_PROXY_ASSERT=0/
+
+# Reopen Exposure Mode and return to Local. Reopening must not preserve the
+# one-shot saved screen.
+Type "netclaw config"
+Enter
+Wait+Screen@10s /Settings Areas/
+Down 8
 Enter
 Wait+Screen@10s /Security & Access/
 Down 3
 Enter
 Wait+Screen@10s /How will this Netclaw daemon be accessed/
-Escape
+Up
+Enter
+Wait+Screen@10s /Local exposure mode saved/
+Enter
 Wait+Screen@10s /Security & Access/
 Ctrl+Q
 

@@ -88,20 +88,20 @@
 
 ## 12. Exposure Mode leaf
 
-- [ ] 12.1 Implement explicit modes: Local, Reverse Proxy,
+- [x] 12.1 Implement explicit modes: Local, Reverse Proxy,
   Tailscale Serve, Tailscale Funnel, Cloudflare Tunnel.
-- [ ] 12.2 Keep a single active selector via `Daemon.ExposureMode`.
-- [ ] 12.3 Do not add per-mode active flags.
-- [ ] 12.4 Keep the existing `Daemon` config shape; do not rearrange
+- [x] 12.2 Keep a single active selector via `Daemon.ExposureMode`.
+- [x] 12.3 Do not add per-mode active flags.
+- [x] 12.4 Keep the existing `Daemon` config shape; do not rearrange
   config sections.
-- [ ] 12.5 Preserve inactive old values and ignore them when inactive.
-- [ ] 12.6 Give each non-local mode its own dialog; Local requires no
+- [x] 12.5 Preserve inactive old values and ignore them when inactive.
+- [x] 12.6 Give each non-local mode its own dialog; Local requires no
   extra setup.
-- [ ] 12.7 Do not add new persisted exposure-specific fields that do not
+- [x] 12.7 Do not add new persisted exposure-specific fields that do not
   exist in the current config shape.
-- [ ] 12.8 On first non-local enablement, auto-pair the current
+- [x] 12.8 On first non-local enablement, auto-pair the current
   configuring client when no bootstrap/pairing state exists.
-- [ ] 12.9 If bootstrap state is orphaned or mismatched, block and point
+- [x] 12.9 If bootstrap state is orphaned or mismatched, block and point
   the operator to `netclaw doctor`, formal docs, and issue `#875`.
 
 ## 13. Validation model

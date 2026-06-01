@@ -13,12 +13,15 @@ internal static class DeviceRegistryInspector
 {
     public static DeviceRegistrySnapshot Read(NetclawPaths paths)
     {
+        var devicesFileExists = File.Exists(paths.DevicesPath);
         var devices = ReadDevices(paths);
-        var localTokenMatchesDevice = HasMatchingLocalDeviceToken(paths, devices);
+        var (hasLocalDeviceToken, localTokenMatchesDevice) = ReadLocalDeviceTokenState(paths, devices);
         var hasCompletedBootstrap = new BootstrapStateStore(paths).HasCompletedNonLocalBootstrap();
 
         return new DeviceRegistrySnapshot(
             devices.Count,
+            devicesFileExists,
+            hasLocalDeviceToken,
             localTokenMatchesDevice,
             hasCompletedBootstrap);
     }
@@ -41,31 +44,35 @@ internal static class DeviceRegistryInspector
         }
     }
 
-    private static bool HasMatchingLocalDeviceToken(NetclawPaths paths, IReadOnlyList<PairedDevice> devices)
+    private static (bool HasLocalDeviceToken, bool LocalTokenMatchesDevice) ReadLocalDeviceTokenState(
+        NetclawPaths paths,
+        IReadOnlyList<PairedDevice> devices)
     {
         if (!File.Exists(paths.SecretsPath))
-            return false;
+            return (false, false);
 
         var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
         if (!secrets.TryGetValue("DeviceToken", out var rawValue))
-            return false;
+            return (false, false);
 
         var token = rawValue is JsonElement jsonElement ? jsonElement.GetString() : rawValue?.ToString();
         token = ConfigFileHelper.DecryptIfEncrypted(paths, token);
         if (string.IsNullOrWhiteSpace(token))
-            return false;
+            return (false, false);
 
         foreach (var device in devices)
         {
             if (PairedDevice.VerifyToken(token, device))
-                return true;
+                return (true, true);
         }
 
-        return false;
+        return (true, false);
     }
 }
 
 internal sealed record DeviceRegistrySnapshot(
     int DeviceCount,
+    bool DevicesFileExists,
+    bool HasLocalDeviceToken,
     bool LocalTokenMatchesDevice,
     bool HasCompletedBootstrap);

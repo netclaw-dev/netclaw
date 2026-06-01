@@ -277,18 +277,40 @@ public sealed class ExposureModeStepView : IWizardStepView
 
     private ILayoutNode BuildConfirmation(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
     {
-        if (vm.IsHighRisk)
-            return BuildHighRiskWarning(vm, callbacks);
-
-        return BuildTailscaleServeNotice(vm, callbacks);
+        return vm.SelectedMode switch
+        {
+            ExposureMode.TailscaleFunnel => BuildTailscaleFunnelWarning(callbacks),
+            ExposureMode.CloudflareTunnel => BuildCloudflareTunnelWarning(callbacks),
+            _ => BuildTailscaleServeNotice(vm, callbacks)
+        };
     }
 
-    private ILayoutNode BuildHighRiskWarning(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)
+    private ILayoutNode BuildTailscaleFunnelWarning(StepViewCallbacks callbacks)
     {
-        var modeLabel = vm.SelectedMode == ExposureMode.TailscaleFunnel
-            ? "Tailscale Funnel"
-            : "Cloudflare Tunnel";
+        return BuildHighRiskWarning(
+            "Tailscale Funnel",
+            [
+                "Hub authentication is configured (device pairing or bearer token)",
+                "`tailscaled` is running and Funnel is explicitly enabled for this service",
+                "You trust your security posture selection"
+            ],
+            callbacks);
+    }
 
+    private ILayoutNode BuildCloudflareTunnelWarning(StepViewCallbacks callbacks)
+    {
+        return BuildHighRiskWarning(
+            "Cloudflare Tunnel",
+            [
+                "Hub authentication is configured (device pairing or bearer token)",
+                "`cloudflared` is running and Cloudflare Access protects the tunnel",
+                "You trust your security posture selection"
+            ],
+            callbacks);
+    }
+
+    private ILayoutNode BuildHighRiskWarning(string modeLabel, IReadOnlyList<string> requirements, StepViewCallbacks callbacks)
+    {
         _confirmList = Layouts.SelectionList("I understand the risks — continue")
             .WithMode(SelectionMode.Single)
             .WithHighlightColors(Color.Black, Color.Yellow);
@@ -301,16 +323,16 @@ public sealed class ExposureModeStepView : IWizardStepView
             .Subscribe(_ => callbacks.AdvanceStep())
             .DisposeWith(callbacks.Subscriptions);
 
-        return Layouts.Vertical()
+        var layout = Layouts.Vertical()
             .WithChild(new TextNode($"  ⚠  {modeLabel} exposes your daemon to the public internet.")
                 .WithForeground(Color.Yellow))
             .WithSpacing(1)
-            .WithChild(new TextNode("  Before proceeding, ensure:").WithForeground(Color.White))
-            .WithChild(new TextNode("    • Hub authentication is configured (device pairing or bearer token)").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("    • Your tunnel is running and healthy").WithForeground(Color.BrightBlack))
-            .WithChild(new TextNode("    • You trust your security posture selection").WithForeground(Color.BrightBlack))
-            .WithSpacing(1)
-            .WithChild(_confirmList);
+            .WithChild(new TextNode("  Before proceeding, ensure:").WithForeground(Color.White));
+
+        foreach (var requirement in requirements)
+            layout = layout.WithChild(new TextNode($"    • {requirement}").WithForeground(Color.BrightBlack));
+
+        return layout.WithSpacing(1).WithChild(_confirmList);
     }
 
     private ILayoutNode BuildTailscaleServeNotice(ExposureModeStepViewModel vm, StepViewCallbacks callbacks)

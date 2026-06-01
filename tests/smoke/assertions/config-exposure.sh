@@ -14,12 +14,21 @@ if [[ ! -f "$CONFIG_PATH" ]]; then
 fi
 
 config_json="$(read_config_json)"
+editor_state_path="${NETCLAW_HOME}/config/editor-state.json"
 
-assert_field '.Daemon.ExposureMode' 'reverse-proxy' "$config_json" || :
-assert_field '.Daemon.Host' '0.0.0.0' "$config_json" || :
+assert_field '.Daemon.ExposureMode' 'local' "$config_json" || :
+assert_field '.Daemon.Host' 'null' "$config_json" || :
 assert_field '.Daemon.Port' '5299' "$config_json" || :
 assert_field '.Daemon.DisableSelfUpdate' 'true' "$config_json" || :
-assert_field '.Daemon.TrustedProxies[0]' '10.0.0.0/24' "$config_json" || :
+assert_field '.Daemon.TrustedProxies' 'null' "$config_json" || :
+
+if [[ ! -f "$editor_state_path" ]]; then
+  echo "FAIL: ${editor_state_path} does not exist." >&2
+  assert_fail=1
+else
+  editor_state_json="$(cat "$editor_state_path")"
+  assert_field '.Sections["exposure-mode"]["ReverseProxy.TrustedProxies"][0]' '10.0.0.0/24' "$editor_state_json" || :
+fi
 
 if (( assert_fail )); then
   printf -- '--- netclaw.json contents ---\n%s\n' "$config_json" >&2
