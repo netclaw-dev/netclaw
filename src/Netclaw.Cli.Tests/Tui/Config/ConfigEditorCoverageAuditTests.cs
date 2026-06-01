@@ -35,6 +35,19 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                         "src/Netclaw.Actors.Tests/Tools/DispatchingToolExecutorTests.cs",
                         "src/Netclaw.Actors.Tests/Tools/McpToolAudienceGrantsTests.cs"
                     ])),
+            ["browser-automation"] = new(
+                nameof(BrowserAutomationConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("binary", nameof(BrowserAutomationConfigViewModelTests), nameof(BrowserAutomationConfigViewModelTests.Save_refuses_enablement_when_prerequisites_are_missing))),
+                DynamicValidationCoverage.Required(
+                    nameof(BrowserAutomationConfigViewModelTests),
+                    nameof(BrowserAutomationConfigViewModelTests.Save_refuses_enablement_when_prerequisites_are_missing)),
+                null,
+                new RuntimeConsumerCoverage(
+                    "Daemon MCP loading consumes McpServers.browser_playwright and McpServers.browser_chrome_devtools.",
+                    [
+                        "src/Netclaw.Cli.Tests/Tui/Config/BrowserAutomationConfigViewModelTests.cs"
+                    ])),
             ["channels"] = new(
                 nameof(ChannelsConfigViewModelTests),
                 StructuralValidationCoverage.Required(
@@ -82,6 +95,20 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                         "src/Netclaw.Daemon.Tests/Services/ExposureModeValidationServiceTests.cs",
                         "src/Netclaw.Daemon.Tests/Security/SessionHubAuthorizationTests.cs"
                     ])),
+            ["inbound-webhooks"] = new(
+                nameof(InboundWebhooksConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("local-reference", nameof(InboundWebhooksConfigViewModelTests), nameof(InboundWebhooksConfigViewModelTests.Save_blocks_enabled_state_when_no_valid_routes_exist)),
+                    new ValidationConceptTest("timeout", nameof(InboundWebhooksConfigViewModelTests), nameof(InboundWebhooksConfigViewModelTests.Save_rejects_invalid_timeout_before_persistence))),
+                DynamicValidationCoverage.NotApplicable("Inbound Webhooks validates local route files and timeout bounds; route authoring remains `netclaw webhooks` and no remote probe runs from this editor."),
+                null,
+                new RuntimeConsumerCoverage(
+                    "Daemon WebhooksConfig binding and WebhookRouteCatalog consume Webhooks.Enabled and Webhooks.ExecutionTimeoutSeconds.",
+                    [
+                        "src/Netclaw.Cli.Tests/Tui/Config/InboundWebhooksConfigViewModelTests.cs",
+                        "src/Netclaw.Cli.Tests/Doctor/InboundWebhookRoutesDoctorCheckTests.cs",
+                        "src/Netclaw.Daemon.Tests/Webhooks/WebhookRouteCatalogTests.cs"
+                    ])),
             ["search"] = new(
                 nameof(SearchConfigEditorViewModelTests),
                 StructuralValidationCoverage.Required(
@@ -116,6 +143,21 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                         "src/Netclaw.Configuration.Tests/SecurityPolicyDefaultsTests.cs",
                         "src/Netclaw.Actors.Tests/Tools/DispatchingToolExecutorTests.cs"
                     ])),
+            ["workspaces"] = new(
+                nameof(WorkspacesConfigViewModelTests),
+                StructuralValidationCoverage.Required(
+                    new ValidationConceptTest("path", nameof(WorkspacesConfigViewModelTests), nameof(WorkspacesConfigViewModelTests.Save_rejects_existing_file_before_persistence)),
+                    new ValidationConceptTest("uri", nameof(WorkspacesConfigViewModelTests), nameof(WorkspacesConfigViewModelTests.Save_rejects_url_before_persistence))),
+                DynamicValidationCoverage.NotApplicable("Workspaces Directory validates a local filesystem path and creates the directory; it has no remote/runtime probe."),
+                null,
+                new RuntimeConsumerCoverage(
+                    "NetclawPaths, project prompt assembly, and workspace-scoped filesystem roots consume Workspaces.Directory.",
+                    [
+                        "src/Netclaw.Cli.Tests/Tui/Config/WorkspacesConfigViewModelTests.cs",
+                        "src/Netclaw.Configuration.Tests/NetclawPathsTests.cs",
+                        "src/Netclaw.Configuration.Tests/FileSystemPromptProviderAudienceTests.cs",
+                        "src/Netclaw.Actors.Tests/Tools/PublicAudienceFileAccessPolicyTests.cs"
+                    ])),
         };
 
     private readonly DisposableTempDir _dir = new();
@@ -138,11 +180,14 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
         Assert.Equal(
         [
             "audience-profiles",
+            "browser-automation",
             "channels",
             "enabled-features",
             "exposure-mode",
+            "inbound-webhooks",
             "search",
-            "security-posture"
+            "security-posture",
+            "workspaces"
         ], visibleEditorIds);
         Assert.Equal(visibleEditorIds, CoverageByEditorId.Keys.OrderBy(static key => key).ToArray());
     }

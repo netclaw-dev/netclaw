@@ -374,29 +374,29 @@ Done when:
 
 Done when:
 
-- [ ] Workspaces Directory is editable from `netclaw config`, validates as a
+- [x] Workspaces Directory is editable from `netclaw config`, validates as a
   local directory path, persists `Workspaces.Directory`, and preserves existing
   identity files.
-- [ ] Tests prove `NetclawPaths.WorkspacesDirectory`, project discovery, and
+- [x] Tests prove `NetclawPaths.WorkspacesDirectory`, project discovery, and
   prompt/workspace consumers read the saved `Workspaces.Directory` value.
-- [ ] Inbound Webhooks root entry routes to an implemented editor, not a
+- [x] Inbound Webhooks root entry routes to an implemented editor, not a
   placeholder.
-- [ ] Inbound Webhooks editor controls `Webhooks.Enabled` and
+- [x] Inbound Webhooks editor controls `Webhooks.Enabled` and
   `Webhooks.ExecutionTimeoutSeconds`; route-file editing stays in
   `netclaw webhooks` / `~/.netclaw/config/webhooks/*.json` for this pass.
-- [ ] Enabling inbound webhooks with no valid routes fails loudly through doctor
+- [x] Enabling inbound webhooks with no valid routes fails loudly through doctor
   or visible diagnostics; no dummy route is created silently.
-- [ ] Browser Automation root entry routes to an implemented editor, not a
+- [x] Browser Automation root entry routes to an implemented editor, not a
   placeholder.
-- [ ] Browser Automation detects required local runtime pieces, refuses enablement
+- [x] Browser Automation detects required local runtime pieces, refuses enablement
   when prerequisites are missing, and prints manual install guidance instead of
   shelling out from the TUI.
-- [ ] Browser Automation persists/removes the canonical browser MCP server profile
+- [x] Browser Automation persists/removes the canonical browser MCP server profile
   (`browser_playwright` or `browser_chrome_devtools`) using the same shape runtime
   MCP loading consumes.
-- [ ] Browser Automation grants route to `netclaw mcp permissions`; raw MCP grant
+- [x] Browser Automation grants route to `netclaw mcp permissions`; raw MCP grant
   editing is not recreated in this editor.
-- [ ] Native smoke covers at least one successful save path and one blocked or
+- [x] Native smoke covers at least one successful save path and one blocked or
   guidance-only path across these areas.
 
 #### Task 1.6: Complete Skill Sources and Telemetry & Alerting config areas

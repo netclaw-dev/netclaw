@@ -124,10 +124,10 @@
 
 ## 15. Quality gates
 
-- [ ] 15.1 `dotnet build` clean.
-- [ ] 15.2 `dotnet test` clean.
-- [ ] 15.3 `./scripts/smoke/run-smoke.sh light` clean.
-- [ ] 15.4 `dotnet slopwatch analyze` clean.
-- [ ] 15.5 `./scripts/Add-FileHeaders.ps1 -Verify` clean.
+- [x] 15.1 `dotnet build` clean.
+- [x] 15.2 `dotnet test` clean.
+- [x] 15.3 `./scripts/smoke/run-smoke.sh light` clean.
+- [x] 15.4 `dotnet slopwatch analyze` clean.
+- [x] 15.5 `./scripts/Add-FileHeaders.ps1 -Verify` clean.
 - [x] 15.6 `openspec validate netclaw-config-command --type change`
   passes.

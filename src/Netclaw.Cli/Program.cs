@@ -894,6 +894,7 @@ static async Task RunAsync(string[] args)
         builder.Services.AddSingleton(configPaths);
         builder.Services.AddSingleton(new ConfigDashboardNavigationState());
         builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
+        builder.Services.AddSingleton<IBrowserAutomationPrerequisiteProbe, BrowserAutomationPrerequisiteProbe>();
         builder.Services.AddSingleton<TuiNavigation>();
         builder.Services.AddProviderDescriptors();
         builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
@@ -925,7 +926,10 @@ static async Task RunAsync(string[] args)
             t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
             t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
             t.RegisterRoute<ChannelsConfigPage, ChannelsConfigViewModel>("/channels");
+            t.RegisterRoute<InboundWebhooksConfigPage, InboundWebhooksConfigViewModel>("/inbound-webhooks");
             t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
+            t.RegisterRoute<BrowserAutomationConfigPage, BrowserAutomationConfigViewModel>("/browser-automation");
+            t.RegisterRoute<WorkspacesConfigPage, WorkspacesConfigViewModel>("/workspaces");
             t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
             t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
             t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");

@@ -28,6 +28,7 @@ public sealed class ConfigDashboardViewModelTests
             "Browser Automation",
             "Telemetry & Alerting",
             "Security & Access",
+            "Workspaces Directory",
             "Run Full Doctor",
             "Quit",
         ], labels);
@@ -81,6 +82,21 @@ public sealed class ConfigDashboardViewModelTests
         Assert.Equal("/channels", navigatedRoute);
     }
 
+    [Theory]
+    [InlineData("Inbound Webhooks", "/inbound-webhooks")]
+    [InlineData("Browser Automation", "/browser-automation")]
+    [InlineData("Workspaces Directory", "/workspaces")]
+    public void Task1_config_areas_route_to_dedicated_pages(string label, string expectedRoute)
+    {
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
+        string? navigatedRoute = null;
+        vm.RouteRequested = route => navigatedRoute = route;
+
+        vm.Activate(vm.Items.Single(item => item.Label == label));
+
+        Assert.Equal(expectedRoute, navigatedRoute);
+    }
+
     [Fact]
     public void Run_full_doctor_sets_pending_action_and_shuts_down()
     {
@@ -94,9 +110,7 @@ public sealed class ConfigDashboardViewModelTests
     }
 
     [Theory]
-    [InlineData("Inbound Webhooks")]
     [InlineData("Skill Sources")]
-    [InlineData("Browser Automation")]
     [InlineData("Telemetry & Alerting")]
     public void Placeholder_sections_report_not_implemented_status(string label)
     {
