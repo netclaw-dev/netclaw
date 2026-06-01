@@ -419,6 +419,28 @@ Done when:
 - [ ] Smoke tapes exercise both areas or document why an existing smoke covers
   the route.
 
+#### Human Review Checkpoint: Complete config surface
+
+Stop here after Tasks 1.4, 1.5, and 1.6 are completed, verified, and committed.
+Do not continue into Task 1.7 until a human has spot-checked the live
+`netclaw config` experience in the rebuilt validation container.
+
+Human smoke focus:
+
+- Exposure Mode can switch to a non-local mode and back to Local without stale
+  runtime-active fields or missing local auth.
+- Workspaces Directory, Inbound Webhooks, Browser Automation, Skill Sources,
+  Telemetry, and Outbound Webhooks are implemented pages, not root-dashboard
+  placeholders.
+- Each page rejects structurally invalid values before persistence and preserves
+  unrelated config/secrets.
+- Browser Automation creates/removes the canonical browser MCP profile and routes
+  grants to `netclaw mcp permissions`.
+- Inbound Webhooks global enablement remains separate from route-file authoring;
+  no dummy route is silently created.
+- `./scripts/smoke/run-smoke.sh light` has passed or any local blocker is
+  documented with evidence.
+
 #### Task 1.7: Close the `netclaw config` OpenSpec change
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`
