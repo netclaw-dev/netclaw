@@ -29,7 +29,7 @@ public sealed class SlackConversationActor : ReceiveActor
         Context.SetReceiveTimeout(TimeSpan.FromHours(2));
         Receive<ReceiveTimeout>(_ =>
         {
-            _log.Info("Slack conversation idle for 2 hours, passivating");
+            _log.Info("Conversation idle for 2 hours, passivating");
             Context.Stop(Self);
         });
 
@@ -42,14 +42,14 @@ public sealed class SlackConversationActor : ReceiveActor
 
             if (!aclDecision.IsAllowed)
             {
-                _log.Info("slack_event_dropped event={0} reason={1}", message.EventId, aclDecision.DenyReason ?? "acl_denied");
+                _log.Info("event_dropped event={0} reason={1}", message.EventId, aclDecision.DenyReason ?? "acl_denied");
                 ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped(aclDecision.DenyReason ?? "acl_denied");
                 return;
             }
 
             if (IsBotMessage(message))
             {
-                _log.Info("slack_event_filtered event={0} reason=bot_message", message.EventId);
+                _log.Info("event_filtered event={0} reason=bot_message", message.EventId);
                 ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("bot_message");
                 return;
             }
@@ -74,7 +74,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 // factory invariant (Ignore-kind is only constructed via Ignore(reason)).
                 var ignoreReason = decision.IgnoreReason!.Value;
                 _log.Info(
-                    "slack_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
+                    "event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
                     message.EventId,
                     ignoreReason);
                 ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered(
@@ -84,7 +84,7 @@ public sealed class SlackConversationActor : ReceiveActor
 
             if (decision.Kind is SlackRoutingDecisionKind.ContinueOnly && !threadExists)
             {
-                _log.Info("slack_event_dropped event={0} reason=thread_not_initialized", message.EventId);
+                _log.Info("event_dropped event={0} reason=thread_not_initialized", message.EventId);
                 ChannelTelemetry.For(ChannelType.Slack).RecordEventDropped("thread_not_initialized");
                 return;
             }
@@ -92,7 +92,7 @@ public sealed class SlackConversationActor : ReceiveActor
             if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
             {
                 var replyThreadTs = message.ThreadTs ?? SlackThreadTs.FromEventTs(message.EventTs);
-                _log.Info("slack_event_filtered event={0} reason=restart_drain_active", message.EventId);
+                _log.Info("event_filtered event={0} reason=restart_drain_active", message.EventId);
                 ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("restart_drain_active");
                 _ = PostIngressClosedReplyAsync(message.ChannelId, replyThreadTs, ingressClosedReason);
                 return;
@@ -105,7 +105,7 @@ public sealed class SlackConversationActor : ReceiveActor
             var normalized = NormalizeInboundText(message.Text);
             if (string.IsNullOrWhiteSpace(normalized) && message.Files is not { Count: > 0 })
             {
-                _log.Info("slack_event_filtered event={0} reason=empty_text", message.EventId);
+                _log.Info("event_filtered event={0} reason=empty_text", message.EventId);
                 ChannelTelemetry.For(ChannelType.Slack).RecordEventFiltered("empty_text");
                 return;
             }
@@ -120,7 +120,7 @@ public sealed class SlackConversationActor : ReceiveActor
                 .WithContext("TurnId", turnId)
                 .WithContext("SlackEventId", message.EventId.Value);
 
-            log.Info("slack_turn_routed event={EventId} hasFiles={HasFiles} textChars={TextLength}",
+            log.Info("turn_routed event={EventId} hasFiles={HasFiles} textChars={TextLength}",
                 message.EventId.Value,
                 message.Files is { Count: > 0 },
                 normalized.Length);

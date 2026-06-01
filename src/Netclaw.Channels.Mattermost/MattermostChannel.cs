@@ -109,7 +109,7 @@ public sealed class MattermostChannel : IChannel
     {
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Mattermost channel disabled by configuration.");
+            _logger.LogInformation("Channel disabled by configuration.");
             return;
         }
 
@@ -146,7 +146,7 @@ public sealed class MattermostChannel : IChannel
             await _gatewayClient.ConnectAsync(serverUrl, botToken, cancellationToken);
             CompleteConnectionSetup(serverUrl);
             _connectFailureDetail = null;
-            _logger.LogInformation("Mattermost channel connected.");
+            _logger.LogInformation("Channel connected.");
         }
         catch (Exception ex)
         {
@@ -261,7 +261,7 @@ public sealed class MattermostChannel : IChannel
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Mattermost transport reset before reconnect failed; continuing.");
+                _logger.LogDebug(ex, "Transport reset before reconnect failed; continuing.");
             }
 
             try
@@ -279,7 +279,7 @@ public sealed class MattermostChannel : IChannel
                 await _gatewayClient.ConnectAsync(_options.ServerUrl, _options.BotToken.Value, cancellationToken);
                 CompleteConnectionSetup(_options.ServerUrl);
                 _connectFailureDetail = null;
-                _logger.LogInformation("Mattermost channel reconnected after a transient failure.");
+                _logger.LogInformation("Channel reconnected after a transient failure.");
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -322,7 +322,7 @@ public sealed class MattermostChannel : IChannel
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Mattermost reconnect loop ended with an error during shutdown.");
+                _logger.LogDebug(ex, "Reconnect loop ended with an error during shutdown.");
             }
         }
 
@@ -336,7 +336,7 @@ public sealed class MattermostChannel : IChannel
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Mattermost gateway actor did not stop gracefully; forcing stop");
+                _logger.LogWarning(ex, "Gateway actor did not stop gracefully; forcing stop");
                 _system.Stop(_gateway);
             }
 

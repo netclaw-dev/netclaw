@@ -41,7 +41,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
 
         Receive<ReceiveTimeout>(_ =>
         {
-            _log.Info("Mattermost conversation idle for 2 hours, passivating");
+            _log.Info("Conversation idle for 2 hours, passivating");
             Context.Stop(Self);
         });
 
@@ -74,21 +74,21 @@ internal sealed class MattermostConversationActor : ReceiveActor
         if (!aclDecision.IsAllowed)
         {
             var reason = aclDecision.DenyReason ?? "acl_denied";
-            _log.Info("mattermost_event_dropped event={0} reason={1}", message.EventId.Value, reason);
+            _log.Info("event_dropped event={0} reason={1}", message.EventId.Value, reason);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventDropped(reason);
             return;
         }
 
         if (message.IsBotMessage)
         {
-            _log.Info("mattermost_event_filtered event={0} reason=bot_message", message.EventId.Value);
+            _log.Info("event_filtered event={0} reason=bot_message", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventFiltered("bot_message");
             return;
         }
 
         if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
         {
-            _log.Info("mattermost_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
+            _log.Info("event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventFiltered("restart_drain_active");
             _ = PostIngressClosedReplyAsync(message.ChannelId, message.PostId, closedReason);
             return;
@@ -114,7 +114,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
         {
             var ignoreReason = decision.IgnoreReason!.Value;
             _log.Info(
-                "mattermost_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
+                "event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
                 message.EventId.Value,
                 ignoreReason);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventFiltered(
@@ -124,7 +124,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
 
         if (decision.Kind is MattermostRoutingDecisionKind.ContinueOnly && !threadExists)
         {
-            _log.Info("mattermost_event_dropped event={0} reason=thread_not_initialized", message.EventId.Value);
+            _log.Info("event_dropped event={0} reason=thread_not_initialized", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventDropped("thread_not_initialized");
             return;
         }
@@ -132,14 +132,14 @@ internal sealed class MattermostConversationActor : ReceiveActor
         var normalizedText = NormalizeInboundText(message.Text);
         if (normalizedText.Length > MaxInboundTextLength)
         {
-            _log.Warning("mattermost_inbound_text_truncated original={OriginalLength} clamped={MaxLength}",
+            _log.Warning("inbound_text_truncated original={OriginalLength} clamped={MaxLength}",
                 normalizedText.Length, MaxInboundTextLength);
             normalizedText = normalizedText[..MaxInboundTextLength];
         }
         var hasAttachments = message.Attachments is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(normalizedText) && !hasAttachments)
         {
-            _log.Info("mattermost_event_filtered event={0} reason=empty_text", message.EventId.Value);
+            _log.Info("event_filtered event={0} reason=empty_text", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventFiltered("empty_text");
             return;
         }
@@ -159,7 +159,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
             .WithContext("TurnId", turnId)
             .WithContext("MattermostEventId", message.EventId.Value);
 
-        log.Info("mattermost_turn_routed event={EventId} textChars={TextLength}",
+        log.Info("turn_routed event={EventId} textChars={TextLength}",
             message.EventId.Value,
             normalizedText.Length);
 
@@ -184,7 +184,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
         if (!MattermostAclPolicy.IsAllowedUser(interaction.SenderId, _dependencies.Options))
         {
             _log.Info(
-                "mattermost_interaction_denied sender={0} reason=user_not_allowed",
+                "interaction_denied sender={0} reason=user_not_allowed",
                 interaction.SenderId.Value);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventDropped("interaction_user_not_allowed");
             return;
@@ -229,7 +229,7 @@ internal sealed class MattermostConversationActor : ReceiveActor
             message.RootPostId);
 
         _log.Info(
-            "mattermost_proactive_thread session={Session} channel={Channel} rootPost={RootPost}",
+            "proactive_thread session={Session} channel={Channel} rootPost={RootPost}",
             message.SessionId.Value, message.ChannelId.Value, message.RootPostId.Value);
         Sender.Tell(new MattermostProactiveThreadAck(message.SessionId));
     }

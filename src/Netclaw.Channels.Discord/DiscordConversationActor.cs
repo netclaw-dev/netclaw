@@ -40,7 +40,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
         Receive<ReceiveTimeout>(_ =>
         {
-            _log.Info("Discord conversation idle for 2 hours, passivating");
+            _log.Info("Conversation idle for 2 hours, passivating");
             Context.Stop(Self);
         });
 
@@ -74,7 +74,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         if (!aclDecision.IsAllowed)
         {
             var reason = aclDecision.DenyReason ?? "acl_denied";
-            _log.Info("discord_event_dropped event={0} reason={1}", message.EventId.Value, reason);
+            _log.Info("event_dropped event={0} reason={1}", message.EventId.Value, reason);
             ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped(reason);
             return;
         }
@@ -82,7 +82,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         // --- Bot self-loop filter ---
         if (message.IsBotMessage)
         {
-            _log.Info("discord_event_filtered event={0} reason=bot_message", message.EventId.Value);
+            _log.Info("event_filtered event={0} reason=bot_message", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("bot_message");
             return;
         }
@@ -90,7 +90,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         // --- Ingress gate ---
         if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
         {
-            _log.Info("discord_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
+            _log.Info("event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("restart_drain_active");
             // Safe fire-and-forget: PostIngressClosedReplyAsync wraps everything in try/catch,
             // and no synchronous code precedes the first await, so exceptions cannot escape.
@@ -115,7 +115,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
         {
             var ignoreReason = decision.IgnoreReason!.Value;
             _log.Info(
-                "discord_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
+                "event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
                 message.EventId.Value,
                 ignoreReason);
             ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered(
@@ -125,7 +125,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
 
         if (decision.Kind is DiscordRoutingDecisionKind.ContinueOnly && !threadExists)
         {
-            _log.Info("discord_event_dropped event={0} reason=thread_not_initialized", message.EventId.Value);
+            _log.Info("event_dropped event={0} reason=thread_not_initialized", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped("thread_not_initialized");
             return;
         }
@@ -134,14 +134,14 @@ internal sealed class DiscordConversationActor : ReceiveActor
         var normalizedText = NormalizeInboundText(message.Text);
         if (normalizedText.Length > MaxInboundTextLength)
         {
-            _log.Warning("discord_inbound_text_truncated original={OriginalLength} clamped={MaxLength}",
+            _log.Warning("inbound_text_truncated original={OriginalLength} clamped={MaxLength}",
                 normalizedText.Length, MaxInboundTextLength);
             normalizedText = normalizedText[..MaxInboundTextLength];
         }
         var hasAttachments = message.Attachments is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(normalizedText) && !hasAttachments)
         {
-            _log.Info("discord_event_filtered event={0} reason=empty_text", message.EventId.Value);
+            _log.Info("event_filtered event={0} reason=empty_text", message.EventId.Value);
             ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("empty_text");
             return;
         }
@@ -167,7 +167,7 @@ internal sealed class DiscordConversationActor : ReceiveActor
             .WithContext("TurnId", turnId)
             .WithContext("DiscordEventId", message.EventId.Value);
 
-        log.Info("discord_turn_routed event={EventId} textChars={TextLength}",
+        log.Info("turn_routed event={EventId} textChars={TextLength}",
             message.EventId.Value,
             normalizedText.Length);
 

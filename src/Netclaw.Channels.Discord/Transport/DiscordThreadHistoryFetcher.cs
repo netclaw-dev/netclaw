@@ -401,7 +401,7 @@ public sealed class DiscordThreadHistoryFetcher : IThreadHistoryFetcher
         var channel = client.GetChannel(threadChannelId) as IMessageChannel;
         if (channel is null)
         {
-            logger.LogWarning("Discord channel {ChannelId} not found or is not a message channel", threadChannelId);
+            logger.LogWarning("Channel {ChannelId} not found or is not a message channel", threadChannelId);
             return [];
         }
 

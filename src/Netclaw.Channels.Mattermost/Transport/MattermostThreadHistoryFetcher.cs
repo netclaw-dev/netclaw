@@ -416,7 +416,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
 
         if (threadResponse.Posts.Count == 0)
         {
-            logger.LogDebug("Mattermost thread {RootPostId} returned no posts", rootPostId);
+            logger.LogDebug("Thread {RootPostId} returned no posts", rootPostId);
             return [];
         }
 

@@ -103,7 +103,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         }
         catch (SlackException ex)
         {
-            _logger.LogWarning(ex, "Slack API error fetching thread history for {SessionId}: {Error}", sessionId.Value, ex.ErrorCode);
+            _logger.LogWarning(ex, "API error fetching thread history for {SessionId}: {Error}", sessionId.Value, ex.ErrorCode);
             return [];
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

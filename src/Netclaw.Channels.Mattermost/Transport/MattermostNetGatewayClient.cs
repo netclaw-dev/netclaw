@@ -52,7 +52,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
         var me = await _client.GetMeAsync();
         BotUserId = new MattermostUserId(me.Id);
         BotUsername = me.Username;
-        _logger.LogInformation("Mattermost bot identity resolved: {BotUserId} (@{Username})",
+        _logger.LogInformation("Bot identity resolved: {BotUserId} (@{Username})",
             me.Id, me.Username);
 
         await _client.StartReceivingAsync(cancellationToken);
@@ -69,7 +69,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IDi
         }
         catch (WebSocketException ex) when (ex.WebSocketErrorCode == WebSocketError.InvalidState)
         {
-            _logger.LogDebug(ex, "Mattermost WebSocket was already closed during disconnect.");
+            _logger.LogDebug(ex, "WebSocket was already closed during disconnect.");
         }
     }
 

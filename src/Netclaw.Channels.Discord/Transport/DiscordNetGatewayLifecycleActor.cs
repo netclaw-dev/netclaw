@@ -542,7 +542,7 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
             return;
 
         _fatalCloseHandled = true;
-        _logger.LogError(classified, "Discord gateway closed fatally: {Reason}", classified.Message);
+        _logger.LogError(classified, "Gateway closed fatally: {Reason}", classified.Message);
         BeginStopAfterFatalClose();
     }
 
@@ -864,7 +864,7 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
             return;
 
         _cleanReconnectEmitted = true;
-        _logger.LogWarning("Discord gateway requested clean reconnect: {Reason}", reason);
+        _logger.LogWarning("Gateway requested clean reconnect: {Reason}", reason);
         Dispatch("Discord clean reconnect", () => _eventSink.PublishCleanReconnectRequiredAsync(reason));
     }
 
@@ -883,15 +883,15 @@ internal sealed class DiscordNetGatewayLifecycleActor : ReceiveActor, IWithTimer
 
         if (previousBotUserId == botUserId)
         {
-            _logger.LogDebug("Discord bot identity refreshed from {Source}: {BotUserId}", source, currentUserId);
+            _logger.LogDebug("Bot identity refreshed from {Source}: {BotUserId}", source, currentUserId);
         }
         else if (string.Equals(source, "READY", StringComparison.Ordinal))
         {
-            _logger.LogInformation("Discord bot identity resolved: {BotUserId}", currentUserId);
+            _logger.LogInformation("Bot identity resolved: {BotUserId}", currentUserId);
         }
         else
         {
-            _logger.LogInformation("Discord bot identity resolved from {Source}: {BotUserId}", source, currentUserId);
+            _logger.LogInformation("Bot identity resolved from {Source}: {BotUserId}", source, currentUserId);
         }
 
         return true;

@@ -120,7 +120,7 @@ public sealed class DiscordChannel : IChannel
     {
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Discord channel disabled by configuration.");
+            _logger.LogInformation("Channel disabled by configuration.");
             return;
         }
 
@@ -149,7 +149,7 @@ public sealed class DiscordChannel : IChannel
             EnsureGatewayReadyAfterConnect(gatewaySnapshot);
             CompleteConnectionSetup(gatewaySnapshot.BotUserId);
             _connectFailureDetail = null;
-            _logger.LogInformation("Discord channel connected.");
+            _logger.LogInformation("Channel connected.");
         }
         catch (Exception ex)
         {
@@ -266,7 +266,7 @@ public sealed class DiscordChannel : IChannel
     private Task HandleCleanReconnectRequiredAsync(string reason)
     {
         _connectFailureDetail = reason;
-        _logger.LogWarning("Discord gateway requested clean reconnect: {Reason}", reason);
+        _logger.LogWarning("Gateway requested clean reconnect: {Reason}", reason);
         StartReconnectLoop(initialDelay: TimeSpan.Zero);
         return Task.CompletedTask;
     }
@@ -297,7 +297,7 @@ public sealed class DiscordChannel : IChannel
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Discord transport reset before reconnect failed; continuing.");
+                _logger.LogDebug(ex, "Transport reset before reconnect failed; continuing.");
             }
 
             try
@@ -311,7 +311,7 @@ public sealed class DiscordChannel : IChannel
                 EnsureGatewayReadyAfterConnect(gatewaySnapshot);
                 CompleteConnectionSetup(gatewaySnapshot.BotUserId);
                 _connectFailureDetail = null;
-                _logger.LogInformation("Discord channel reconnected after a transient failure.");
+                _logger.LogInformation("Channel reconnected after a transient failure.");
 
                 if (Interlocked.Exchange(ref _queuedCleanReconnect, 0) == 1)
                 {
@@ -373,7 +373,7 @@ public sealed class DiscordChannel : IChannel
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Discord reconnect loop ended with an error during shutdown.");
+                _logger.LogDebug(ex, "Reconnect loop ended with an error during shutdown.");
             }
         }
 
@@ -392,7 +392,7 @@ public sealed class DiscordChannel : IChannel
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Discord gateway actor did not stop gracefully; forcing stop");
+                _logger.LogWarning(ex, "Gateway actor did not stop gracefully; forcing stop");
                 _system.Stop(_gateway);
             }
 

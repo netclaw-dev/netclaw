@@ -194,7 +194,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 ? "completed"
                 : $"faulted: {msg.Cause.Message}";
 
-            _log.Warning("Slack output stream terminated ({Reason}); reinitializing pipeline", reason);
+            _log.Warning("Output stream terminated ({Reason}); reinitializing pipeline", reason);
             Self.Tell(new ReinitializePipeline(reason));
         });
         CommandAsync<ReinitializePipeline>(async msg => await ReinitializePipelineAsync(msg.Reason));
@@ -202,11 +202,11 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         {
             if (_pendingApprovalRequests.Count > 0)
             {
-                _log.Info("Slack thread idle but {0} approval(s) are pending; deferring passivation", _pendingApprovalRequests.Count);
+                _log.Info("Thread idle but {0} approval(s) are pending; deferring passivation", _pendingApprovalRequests.Count);
                 return;
             }
 
-            _log.Info("Slack thread idle for 1 hour, passivating");
+            _log.Info("Thread idle for 1 hour, passivating");
             RunTask(async () =>
             {
                 await _handle.DrainAsync();
@@ -250,7 +250,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Slack thread input queue is not initialized; rejecting Mode B reminder");
+            _log.Warning("Thread input queue is not initialized; rejecting Mode B reminder");
             ackTarget.Tell(CommandNack.For(_sessionId, "Slack thread pipeline not initialized"));
             return;
         }
@@ -285,7 +285,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Slack thread input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
+            _log.Warning("Thread input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
             ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
         }
     }
@@ -300,7 +300,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         try
         {
-            inboundLog.Info("slack_turn_received textChars={TextLength} fileCount={FileCount}",
+            inboundLog.Info("turn_received textChars={TextLength} fileCount={FileCount}",
                 message.Text?.Length ?? 0,
                 message.Files?.Count ?? 0);
 
@@ -365,7 +365,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             var writer = _handle.InputQueue;
             if (writer is null)
             {
-                _log.Warning("Slack thread input queue is not initialized; dropping inbound message");
+                _log.Warning("Thread input queue is not initialized; dropping inbound message");
                 return;
             }
 
@@ -404,27 +404,27 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
             catch (OperationCanceledException ex)
             {
-                _log.Warning(ex, "Timed out enqueueing Slack message for session {0}", _sessionId.Value);
+                _log.Warning(ex, "Timed out enqueueing message for session {0}", _sessionId.Value);
                 Self.Tell(new ReinitializePipeline("input queue write timeout"));
                 return;
             }
             catch (ChannelClosedException ex)
             {
-                _log.Warning(ex, "Slack thread input queue closed for session {0}", _sessionId.Value);
+                _log.Warning(ex, "Thread input queue closed for session {0}", _sessionId.Value);
                 Self.Tell(new ReinitializePipeline("input queue write failed"));
                 return;
             }
 
-            inboundLog.Info("slack_turn_enqueued contentItems={ContentCount}", input.Contents.Count);
+            inboundLog.Info("turn_enqueued contentItems={ContentCount}", input.Contents.Count);
             ChannelTelemetry.For(ChannelType.Slack).RecordMessageEnqueued();
         }
         catch (OperationCanceledException ex)
         {
-            inboundLog.Warning(ex, "slack_turn_enqueue_timeout");
+            inboundLog.Warning(ex, "turn_enqueue_timeout");
         }
         catch (Exception ex)
         {
-            inboundLog.Error(ex, "slack_turn_enqueue_failed");
+            inboundLog.Error(ex, "turn_enqueue_failed");
         }
     }
 
@@ -465,7 +465,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (files.Count > policy.MaxFilesPerMessage)
         {
             _log.Warning(
-                "slack_attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
+                "attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
                 files.Count,
                 policy.MaxFilesPerMessage,
                 audience);
@@ -729,7 +729,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Slack input queue is not initialized; skipping hydration backfill");
+            _log.Warning("Input queue is not initialized; skipping hydration backfill");
             return;
         }
 
@@ -746,7 +746,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             }
 
             _log.Info(
-                "slack_hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount}",
+                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount}",
                 triggerInput.MessageId,
                 adoptedContext.Count);
             ChannelTelemetry.For(ChannelType.Slack).RecordMessageEnqueued();
@@ -918,7 +918,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
         var mergedInput = MergeAdoptedContext(baseResult.Input, classified.Gap, cursor);
         _log.Info(
-            "slack_deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId}",
+            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId}",
             classified.Gap.Count,
             baseResult.Input.MessageId);
 
@@ -929,7 +929,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     {
         if (_cursorTs is { } c && candidateTs.CompareTo(c) <= 0)
         {
-            _log.Debug("Slack thread cursor did not advance stream={StreamKey} ts={Ts}", _sessionId.Value, candidateTs.Value);
+            _log.Debug("Thread cursor did not advance stream={StreamKey} ts={Ts}", _sessionId.Value, candidateTs.Value);
             return;
         }
 
@@ -1403,7 +1403,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
         catch (SlackMessageDeliveryException ex)
         {
-            _log.Warning("Slack delivery rejected for session {SessionId} error={ErrorCode} kind={FailureKind}",
+            _log.Warning("Delivery rejected for session {SessionId} error={ErrorCode} kind={FailureKind}",
                 _sessionId.Value, ex.ErrorCode ?? "unknown", ex.FailureKind);
             ChannelTelemetry.For(ChannelType.Slack).RecordReplyRejected(ex.ErrorCode);
             return new PostResult(ex.Message, ex.FailureKind);
@@ -1591,7 +1591,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
         catch (SlackMessageDeliveryException ex)
         {
-            _log.Warning("Slack delivery rejected for file upload {FileName} session={SessionId} error={ErrorCode} kind={FailureKind}",
+            _log.Warning("Delivery rejected for file upload {FileName} session={SessionId} error={ErrorCode} kind={FailureKind}",
                 file.FileName, _sessionId.Value, ex.ErrorCode ?? "unknown", ex.FailureKind);
             ChannelTelemetry.For(ChannelType.Slack).RecordReplyRejected(ex.ErrorCode);
             return new PostResult(ex.Message, ex.FailureKind);

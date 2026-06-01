@@ -212,7 +212,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 ? "completed"
                 : $"faulted: {msg.Cause.Message}";
 
-            _log.Warning("Mattermost output stream terminated ({Reason}); reinitializing pipeline", reason);
+            _log.Warning("Output stream terminated ({Reason}); reinitializing pipeline", reason);
             Self.Tell(new ReinitializePipeline(reason));
         });
 
@@ -231,11 +231,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         {
             if (_pendingApprovalRequests.Count > 0)
             {
-                _log.Info("Mattermost session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
+                _log.Info("Session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
                 return;
             }
 
-            _log.Info("Mattermost session idle for 1 hour, passivating");
+            _log.Info("Session idle for 1 hour, passivating");
             Context.Stop(Self);
         });
 
@@ -307,7 +307,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Mattermost input queue is not initialized; dropping inbound message");
+            _log.Warning("Input queue is not initialized; dropping inbound message");
             return;
         }
 
@@ -360,12 +360,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (OperationCanceledException)
         {
-            _log.Warning("Timed out enqueueing Mattermost message for session {0}", _sessionId.Value);
+            _log.Warning("Timed out enqueueing message for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue write timeout"));
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Mattermost input queue closed for session {0}", _sessionId.Value);
+            _log.Warning("Input queue closed for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue closed"));
         }
     }
@@ -497,7 +497,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Mattermost input queue is not initialized; skipping hydration backfill");
+            _log.Warning("Input queue is not initialized; skipping hydration backfill");
             return;
         }
 
@@ -515,7 +515,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             }
 
             _log.Info(
-                "mattermost_hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
+                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
                 triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
             ChannelTelemetry.For(ChannelType.Mattermost).RecordMessageEnqueued();
         }
@@ -597,7 +597,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return baseInput;
 
         _log.Info(
-            "mattermost_deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
+            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
             classified.Gap.Count,
             baseInput.MessageId,
             _sessionId.Value);
@@ -996,7 +996,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Mattermost input queue is not initialized; rejecting Mode B reminder");
+            _log.Warning("Input queue is not initialized; rejecting Mode B reminder");
             ackTarget.Tell(CommandNack.For(_sessionId, "Mattermost session pipeline not initialized"));
             return;
         }
@@ -1031,7 +1031,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Mattermost input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
+            _log.Warning("Input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
             ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
         }
     }
@@ -1329,7 +1329,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (files.Count > policy.MaxFilesPerMessage)
         {
             _log.Warning(
-                "mattermost_attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
+                "attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
                 files.Count,
                 policy.MaxFilesPerMessage,
                 audience);
@@ -1459,7 +1459,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     {
         if (_cursorPostId is not null && string.CompareOrdinal(candidatePostId, _cursorPostId) <= 0)
         {
-            _log.Debug("Mattermost session cursor did not advance session={Session} postId={PostId}",
+            _log.Debug("Session cursor did not advance session={Session} postId={PostId}",
                 _sessionId.Value, candidatePostId);
             return;
         }

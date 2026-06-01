@@ -222,7 +222,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 ? "completed"
                 : $"faulted: {msg.Cause.Message}";
 
-            _log.Warning("Discord output stream terminated ({Reason}); reinitializing pipeline", reason);
+            _log.Warning("Output stream terminated ({Reason}); reinitializing pipeline", reason);
             Self.Tell(new ReinitializePipeline(reason));
         });
 
@@ -241,11 +241,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             if (_pendingApprovalRequests.Count > 0)
             {
-                _log.Info("Discord session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
+                _log.Info("Session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
                 return;
             }
 
-            _log.Info("Discord session idle for 1 hour, passivating");
+            _log.Info("Session idle for 1 hour, passivating");
             RunTask(async () =>
             {
                 await _handle.DrainAsync();
@@ -338,7 +338,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Discord input queue is not initialized; dropping inbound message");
+            _log.Warning("Input queue is not initialized; dropping inbound message");
             return;
         }
 
@@ -389,12 +389,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         catch (OperationCanceledException)
         {
-            _log.Warning("Timed out enqueueing Discord message for session {0}", _sessionId.Value);
+            _log.Warning("Timed out enqueueing message for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue write timeout"));
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Discord input queue closed for session {0}", _sessionId.Value);
+            _log.Warning("Input queue closed for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue closed"));
         }
     }
@@ -524,7 +524,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Discord input queue is not initialized; skipping hydration backfill");
+            _log.Warning("Input queue is not initialized; skipping hydration backfill");
             return;
         }
 
@@ -541,7 +541,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             }
 
             _log.Info(
-                "discord_hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
+                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
                 triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
             ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
         }
@@ -719,7 +719,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return baseInput;
 
         _log.Info(
-            "discord_deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
+            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
             classified.Gap.Count,
             baseInput.MessageId,
             _sessionId.Value);
@@ -1018,7 +1018,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Discord input queue is not initialized; rejecting Mode B reminder");
+            _log.Warning("Input queue is not initialized; rejecting Mode B reminder");
             ackTarget.Tell(CommandNack.For(_sessionId, "Discord session pipeline not initialized"));
             return;
         }
@@ -1053,7 +1053,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Discord input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
+            _log.Warning("Input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
             ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
         }
     }
@@ -1346,7 +1346,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (files.Count > policy.MaxFilesPerMessage)
         {
             _log.Warning(
-                "discord_attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
+                "attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
                 files.Count,
                 policy.MaxFilesPerMessage,
                 audience);
@@ -1464,7 +1464,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     {
         if (_cursorSnowflake is { } c && candidateSnowflake <= c)
         {
-            _log.Debug("Discord session cursor did not advance session={Session} snowflake={Snowflake}",
+            _log.Debug("Session cursor did not advance session={Session} snowflake={Snowflake}",
                 _sessionId.Value, candidateSnowflake);
             return;
         }
