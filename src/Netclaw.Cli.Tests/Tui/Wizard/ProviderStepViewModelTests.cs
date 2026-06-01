@@ -176,6 +176,31 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ContributeConfig_SelectedDiscoveredModel_CarriesModelMetadata()
+    {
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
+        step.SelectedProviderType = "OpenAI";
+        step.SelectedAuthMethod = AuthMethod.OAuthDevice;
+        step.SelectedModelId = "gpt-new-codex";
+        step.DiscoveredModels.Add(new DiscoveredModel
+        {
+            ModelId = new Netclaw.Configuration.ModelId("gpt-new-codex"),
+            ContextWindowTokens = 512000,
+            InputModalities = ModelModality.Text | ModelModality.Image,
+            OutputModalities = ModelModality.Text,
+        });
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Model);
+        Assert.Equal(512000, builder.Model!.ContextWindow);
+        Assert.Equal(ModelDiscoverySource.Live, builder.Model.Provenance);
+        Assert.Equal(ModelModality.Text | ModelModality.Image, builder.Model.InputModalities);
+        Assert.Equal(ModelModality.Text, builder.Model.OutputModalities);
+    }
+
+    [Fact]
     public void ContributeConfig_NoProvider_NoSection()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe);

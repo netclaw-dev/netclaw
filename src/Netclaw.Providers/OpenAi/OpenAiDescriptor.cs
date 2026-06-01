@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using Netclaw.Configuration;
 
 namespace Netclaw.Providers.OpenAi;
@@ -19,6 +21,12 @@ namespace Netclaw.Providers.OpenAi;
 /// </remarks>
 public sealed class OpenAiDescriptor : IProviderDescriptor
 {
+    internal const string CodexBackendEndpoint = "https://chatgpt.com/backend-api/codex";
+
+    // The Codex backend gates model catalog entries by Codex CLI client version.
+    // This must track the official @openai/codex release, not Netclaw's version.
+    internal const string CodexModelCatalogClientVersion = "0.135.0";
+
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;
 
@@ -66,55 +74,210 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
         },
     };
 
-    /// <summary>
-    /// Curated model list — Codex tokens cannot call /v1/models.
-    /// Includes context window sizes and modality metadata so the runtime
-    /// doesn't fall back to the 32K default.
-    /// </summary>
-    // Last updated: 2026-05-31 from https://developers.openai.com/codex/models
-    // and https://developers.openai.com/api/docs/models/all.
-    // Run /update-openai-models skill to refresh this list when new models ship.
-    internal static readonly DiscoveredModel[] CuratedModels =
-    [
-        // Codex-recommended ChatGPT sign-in models.
-        new() { ModelId = new("gpt-5.5"),             ContextWindowTokens = 1_050_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5.4"),             ContextWindowTokens = 1_050_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5.4-mini"),        ContextWindowTokens = 400_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5.3-codex"),       ContextWindowTokens = 400_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-        new() { ModelId = new("gpt-5.3-codex-spark"), ContextWindowTokens = 400_000, InputModalities = ModelModality.Text, OutputModalities = ModelModality.Text },
-
-        // Previous frontier model still listed as a Codex alternative.
-        new() { ModelId = new("gpt-5.2"),             ContextWindowTokens = 400_000, InputModalities = TextImage, OutputModalities = ModelModality.Text },
-    ];
-
-    private const ModelModality TextImage = ModelModality.Text | ModelModality.Image;
-
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
     {
         if (entry.AuthMethod is AuthMethod.OAuthPkce or AuthMethod.OAuthDevice)
-            return ProbeOAuthAsync(entry);
+            return ProbeOAuthAsync(entry, ct);
 
         return ProbeApiKeyAsync(entry, ct);
     }
 
-    private Task<ProviderProbeResult> ProbeOAuthAsync(ProviderEntry entry)
+    private async Task<ProviderProbeResult> ProbeOAuthAsync(ProviderEntry entry, CancellationToken ct)
     {
         var token = entry.OAuthAccessToken?.Value;
         if (string.IsNullOrWhiteSpace(token))
-            return Task.FromResult(new ProviderProbeResult(false,
-                "OAuth token is required for OpenAI. Run 'netclaw provider add' with OAuth.", []));
+            return new ProviderProbeResult(false,
+                "OAuth token is required for OpenAI. Run 'netclaw provider add' with OAuth.", []);
 
         if (entry.OAuthTokenExpiry is { } expiry && expiry < _timeProvider.GetUtcNow())
-            return Task.FromResult(new ProviderProbeResult(false,
-                $"OAuth token expired {expiry:g}. Re-authenticate with 'netclaw provider fix <name>'.", []));
+            return new ProviderProbeResult(false,
+                $"OAuth token expired {expiry:g}. Re-authenticate with 'netclaw provider fix <name>'.", []);
 
-        if (JwtAccountIdExtractor.ResolveAccountId(entry) is null)
-            return Task.FromResult(new ProviderProbeResult(false,
-                "OpenAI OAuth login did not return a ChatGPT account ID. Re-authenticate with 'netclaw provider fix <name>'.", []));
+        var accountId = JwtAccountIdExtractor.ResolveAccountId(entry);
+        if (accountId is null)
+            return new ProviderProbeResult(false,
+                "OpenAI OAuth login did not return a ChatGPT account ID. Re-authenticate with 'netclaw provider fix <name>'.", []);
 
-        // Codex tokens can't probe — return curated models
-        return Task.FromResult(new ProviderProbeResult(true, null, CuratedModels));
+        return await ProbeCodexModelsAsync(token, accountId, ct);
+    }
+
+    private async Task<ProviderProbeResult> ProbeCodexModelsAsync(
+        string accessToken, string accountId, CancellationToken ct)
+    {
+        try
+        {
+            return await ProbeHelpers.ExecuteProbeAsync(
+                _httpClient,
+                "OpenAI Codex",
+                CodexBackendEndpoint,
+                $"/models?client_version={CodexModelCatalogClientVersion}",
+                entryEndpoint: null,
+                request =>
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+                    request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", accountId);
+                    request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+                },
+                ParseCodexModels,
+                ct);
+        }
+        catch (JsonException ex)
+        {
+            return new ProviderProbeResult(false, $"invalid model response: {ex.Message}", []);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return new ProviderProbeResult(false, $"invalid model response: {ex.Message}", []);
+        }
+    }
+
+    internal static ProviderProbeResult ParseCodexModels(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        if (!doc.RootElement.TryGetProperty("models", out var modelsArray)
+            || modelsArray.ValueKind != JsonValueKind.Array)
+        {
+            return new ProviderProbeResult(false,
+                "response did not contain a models array", []);
+        }
+
+        var models = new List<DiscoveredModel>();
+        var missingContextWindow = new List<string>();
+        var missingInputModalities = new List<string>();
+        foreach (var model in modelsArray.EnumerateArray())
+        {
+            if (TryGetModelId(model) is not { } id)
+                continue;
+
+            if (IsHidden(model))
+                continue;
+
+            var contextWindow = ReadContextWindow(model);
+            if (contextWindow is null)
+                missingContextWindow.Add(id);
+
+            var inputModalities = ReadModalities(model, "input_modalities");
+            if (inputModalities is null)
+                missingInputModalities.Add(id);
+
+            var outputModalities = ReadModalities(model, "output_modalities")
+                                    ?? ModelModality.Text;
+
+            models.Add(new DiscoveredModel
+            {
+                ModelId = new(id),
+                ContextWindowTokens = contextWindow,
+                InputModalities = inputModalities ?? ModelModality.Text,
+                OutputModalities = outputModalities,
+            });
+        }
+
+        if (models.Count == 0)
+        {
+            return new ProviderProbeResult(false,
+                "response contained no picker-visible models", []);
+        }
+
+        if (missingContextWindow.Count > 0)
+        {
+            return new ProviderProbeResult(false,
+                "OpenAI Codex /models returned incomplete context-window metadata for: "
+                + string.Join(", ", missingContextWindow), []);
+        }
+
+        if (missingInputModalities.Count > 0)
+        {
+            return new ProviderProbeResult(false,
+                "OpenAI Codex /models returned incomplete input-modality metadata for: "
+                + string.Join(", ", missingInputModalities), []);
+        }
+
+        return new ProviderProbeResult(true, null, models);
+    }
+
+    private static string? TryGetModelId(JsonElement model)
+    {
+        foreach (var propertyName in new[] { "slug", "id", "model" })
+        {
+            if (!model.TryGetProperty(propertyName, out var property)
+                || property.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var value = property.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
+
+    private static bool IsHidden(JsonElement model)
+    {
+        if (!model.TryGetProperty("visibility", out var visibility)
+            || visibility.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        return visibility.GetString() is { } value
+               && (string.Equals(value, "hide", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(value, "none", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int? ReadContextWindow(JsonElement model)
+        => TryReadPositiveInt32(model, "context_window")
+           ?? TryReadPositiveInt32(model, "max_context_window");
+
+    private static int? TryReadPositiveInt32(JsonElement model, string propertyName)
+    {
+        if (!model.TryGetProperty(propertyName, out var property))
+            return null;
+
+        long? value = property.ValueKind switch
+        {
+            JsonValueKind.Number when property.TryGetInt64(out var numericValue) => numericValue,
+            JsonValueKind.String when long.TryParse(
+                property.GetString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var stringValue) => stringValue,
+            _ => null,
+        };
+
+        if (value is null or <= 0)
+            return null;
+
+        return value > int.MaxValue ? int.MaxValue : (int)value;
+    }
+
+    private static ModelModality? ReadModalities(JsonElement model, string propertyName)
+    {
+        if (!model.TryGetProperty(propertyName, out var array)
+            || array.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = ModelModality.None;
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+                continue;
+
+            result |= item.GetString()?.ToLowerInvariant() switch
+            {
+                "text" => ModelModality.Text,
+                "image" => ModelModality.Image,
+                "audio" => ModelModality.Audio,
+                "video" => ModelModality.Video,
+                _ => ModelModality.None,
+            };
+        }
+
+        return result == ModelModality.None ? null : result;
     }
 
     private Task<ProviderProbeResult> ProbeApiKeyAsync(ProviderEntry entry, CancellationToken ct)

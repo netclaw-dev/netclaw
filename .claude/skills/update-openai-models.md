@@ -1,42 +1,39 @@
 ---
-description: Retrieve the latest OpenAI model IDs and update the curated model list in OpenAiDescriptor. Use when OpenAI releases new models or the hardcoded list needs refreshing.
+description: Verify Netclaw's OpenAI Codex live model catalog query when OpenAI or Codex changes model discovery behavior.
 ---
 
-# Update OpenAI Curated Model List
+# Verify OpenAI Codex Model Discovery
 
-OpenAI OAuth tokens (via the Codex CLI client ID) cannot call `/v1/models` —
-the endpoint returns HTTP 403 "Missing scopes: api.model.read". This is an
-OpenAI-specific limitation. As a result, `OpenAiDescriptor` maintains a curated
-model list for OAuth-authenticated users.
+OpenAI OAuth tokens (via the Codex CLI client ID) cannot call the platform
+`/v1/models` endpoint — it returns HTTP 403 "Missing scopes: api.model.read".
+Netclaw therefore uses the ChatGPT Codex backend model catalog for
+OAuth-authenticated providers:
+
+```
+https://chatgpt.com/backend-api/codex/models?client_version=<codex-version>
+```
+
+The query sends the OAuth bearer token and `ChatGPT-Account-Id`. Discovery is
+fail-closed: if the live catalog cannot be queried or omits context-window
+metadata, Netclaw reports the error instead of using a stale built-in OpenAI
+model list.
 
 ## Steps
 
-1. **Fetch the current model catalog** from OpenAI's docs:
-   - Primary: https://developers.openai.com/api/docs/models/all
-   - Codex-specific: https://developers.openai.com/codex/models
+1. **Check the official Codex CLI version** from the `@openai/codex` package.
+   Netclaw's `CodexModelCatalogClientVersion` must track that package version,
+   not Netclaw's own version.
 
-   Use `WebFetch` to retrieve the page and extract model IDs.
+2. **Query the live Codex catalog** with a temporary `NETCLAW_HOME` containing an
+   OpenAI OAuth provider. Do not print OAuth tokens or account IDs.
 
-2. **Filter for chat-relevant models** — exclude:
-   - Image generation models (`gpt-image-*`, `dall-e-*`, `chatgpt-image-*`)
-   - Video models (`sora-*`)
-   - Audio/realtime models (`gpt-audio-*`, `gpt-realtime-*`, `tts-*`, `whisper-*`)
-   - Embedding models (`text-embedding-*`)
-   - Moderation models (`text-moderation-*`, `omni-moderation-*`)
-   - Deep research models (`*-deep-research`)
-   - Deprecated/legacy models (`gpt-3.5-*`, `gpt-4-turbo-preview`, `babbage-*`, `davinci-*`)
+3. **Verify discovery output** includes the expected picker-visible models,
+   context windows, and input modalities. Missing context-window or
+   input-modality metadata is a bug because Netclaw will fail closed rather than
+   guess.
 
-   Keep: frontier chat models (gpt-5.x, gpt-4.1), reasoning models (o3, o4-mini),
-   coding models (gpt-5.x-codex), and their mini/nano variants.
-
-3. **Update the `CuratedModels` array** in:
-   ```
-   src/Netclaw.Providers/OpenAi/OpenAiDescriptor.cs
-   ```
-
-   The array should be ordered with the most capable/recommended models first.
-
-4. **Build and verify**: `dotnet build` to confirm no compilation errors.
+4. **Build and verify** with focused OpenAI provider tests and the normal repo
+   gates.
 
 ## Why This Exists
 
@@ -50,8 +47,8 @@ api.model.read". This is NOT fixable by requesting additional OAuth scopes:
 - The client ID grants API access (chat completions) implicitly, but model listing
   is blocked
 
-All third-party tools (OpenCode, OpenClaw, Codex CLI) use curated/hardcoded model
-lists instead of live discovery for OAuth tokens.
+The Codex backend gates model catalog entries by `client_version`; using an old
+official Codex version can hide newer models even when the token is valid.
 
 ### Responses API requirement
 

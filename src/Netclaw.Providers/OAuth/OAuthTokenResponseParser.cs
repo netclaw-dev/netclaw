@@ -61,7 +61,7 @@ internal static class OAuthTokenResponseParser
 
     private static string? ExtractAccountId(JsonElement root)
     {
-        if (TryGetString(root, "account_id", out var accountId))
+        if (TryGetAccountIdValue(root, "account_id", out var accountId))
             return accountId;
 
         if (TryGetChatGptAccountId(root, out var chatGptAccountId))
@@ -73,12 +73,12 @@ internal static class OAuthTokenResponseParser
 
     private static bool TryGetChatGptAccountId(JsonElement root, out string accountId)
     {
-        if (TryGetString(root, "chatgpt_account_id", out accountId))
+        if (TryGetAccountIdValue(root, "chatgpt_account_id", out accountId))
             return true;
 
         if (root.TryGetProperty("https://api.openai.com/auth", out var auth)
             && auth.ValueKind == JsonValueKind.Object
-            && TryGetString(auth, "chatgpt_account_id", out accountId))
+            && TryGetAccountIdValue(auth, "chatgpt_account_id", out accountId))
         {
             return true;
         }
@@ -102,6 +102,31 @@ internal static class OAuthTokenResponseParser
 
         value = candidate;
         return true;
+    }
+
+    private static bool TryGetAccountIdValue(JsonElement root, string propertyName, out string value)
+    {
+        value = "";
+        if (!root.TryGetProperty(propertyName, out var property))
+            return false;
+
+        if (property.ValueKind == JsonValueKind.String)
+        {
+            var candidate = property.GetString();
+            if (string.IsNullOrWhiteSpace(candidate))
+                return false;
+
+            value = candidate;
+            return true;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var numericValue))
+        {
+            value = numericValue.ToString(CultureInfo.InvariantCulture);
+            return true;
+        }
+
+        return false;
     }
 
     // A token endpoint can return an absurd or non-finite expires_in; DateTimeOffset

@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Providers.OAuth;
@@ -22,23 +21,6 @@ public class OpenAiDeviceFlowServiceTests
         ClientId: "test-client-id",
         Scope: "openid profile email offline_access model.request api.model.read",
         PkceExchangeEndpoint: "https://auth.openai.com/oauth/token");
-
-    private static string MakeJwt(object payload)
-    {
-        var json = JsonSerializer.Serialize(payload);
-        var header = Base64UrlEncode("{}");
-        var body = Base64UrlEncode(json);
-        return $"{header}.{body}.fakesig";
-    }
-
-    private static string Base64UrlEncode(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
 
     [Fact]
     public async Task StartDeviceAuthorization_PostsJsonWithClientId_ReturnsUserCode()
@@ -122,6 +104,40 @@ public class OpenAiDeviceFlowServiceTests
         Assert.NotNull(capturedBody);
         using var doc = JsonDocument.Parse(capturedBody!);
         Assert.False(doc.RootElement.TryGetProperty("scope", out _));
+    }
+
+    [Fact]
+    public async Task StartDeviceAuthorization_IncludesExtraAuthParams()
+    {
+        var config = TestConfig with
+        {
+            ExtraAuthParams = new Dictionary<string, string>
+            {
+                ["id_token_add_organizations"] = "true",
+                ["codex_cli_simplified_flow"] = "true",
+                ["originator"] = "netclaw",
+            }
+        };
+        string? capturedBody = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return JsonResponse(new
+            {
+                device_auth_id = "daid-123",
+                user_code = "ABCD-1234",
+                interval = 5
+            });
+        });
+
+        var service = new OpenAiDeviceFlowService(new HttpClient(handler));
+        await service.StartDeviceAuthorizationAsync(config, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedBody);
+        using var doc = JsonDocument.Parse(capturedBody!);
+        Assert.Equal("true", doc.RootElement.GetProperty("id_token_add_organizations").GetString());
+        Assert.Equal("true", doc.RootElement.GetProperty("codex_cli_simplified_flow").GetString());
+        Assert.Equal("netclaw", doc.RootElement.GetProperty("originator").GetString());
     }
 
     [Fact]
@@ -430,7 +446,7 @@ public class OpenAiDeviceFlowServiceTests
     [Fact]
     public async Task RefreshToken_ExtractsAccountIdFromIdToken()
     {
-        var idToken = MakeJwt(new Dictionary<string, object>
+        var idToken = JwtTestToken.Make(new Dictionary<string, object>
         {
             ["https://api.openai.com/auth"] = new Dictionary<string, object>
             {

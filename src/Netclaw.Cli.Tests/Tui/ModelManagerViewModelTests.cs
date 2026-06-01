@@ -151,7 +151,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         vm.StartAssignment("Main");
         await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        vm.SelectModel("qwen3:30b");
+        vm.SelectModel("model-a");
         Assert.Equal(ModelManagerState.ConfirmAssignment, vm.CurrentState.Value);
 
         vm.ConfirmAssignment();
@@ -161,8 +161,52 @@ public sealed class ModelManagerViewModelTests : IDisposable
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         var main = config.RootElement.GetProperty("Models").GetProperty("Main");
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
-        Assert.Equal("qwen3:30b", main.GetProperty("ModelId").GetString());
+        Assert.Equal("model-a", main.GetProperty("ModelId").GetString());
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
+        Assert.Equal("Text", main.GetProperty("InputModalities").GetString());
+        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
+    }
+
+    [Fact]
+    public async Task ConfirmAssignment_DiscoveredModelWithMetadata_WritesMetadata()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel
+            {
+                ModelId = new Netclaw.Configuration.ModelId("gpt-new-codex"),
+                ContextWindowTokens = 512000,
+                InputModalities = ModelModality.Text | ModelModality.Image,
+                OutputModalities = ModelModality.Text,
+            }
+        ]);
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.StartAssignment("Main");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        vm.SelectModel("gpt-new-codex");
+        vm.ConfirmAssignment();
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var main = config.RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("Live", main.GetProperty("Provenance").GetString());
+        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
+        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
+        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
     }
 
     [Fact]

@@ -164,9 +164,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             _ => SelectedRole
         };
 
-        var provenance = ManualModelEntry
+        var discoveredModel = ManualModelEntry
+            ? null
+            : DiscoveredModels.FirstOrDefault(model =>
+                string.Equals(model.ModelId.Value, SelectedModelId, StringComparison.OrdinalIgnoreCase));
+        var provenance = discoveredModel is null
             ? ModelDiscoverySource.Manual
-            : ModelDiscoverySource.Live;
+            : string.IsNullOrWhiteSpace(ProbeResult.Value?.ErrorMessage)
+                ? ModelDiscoverySource.Live
+                : ModelDiscoverySource.Defaults;
 
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
@@ -177,6 +183,15 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
             ["ModelId"] = SelectedModelId,
             ["Provenance"] = provenance.ToString()
         };
+
+        if (discoveredModel?.ContextWindowTokens is { } contextWindow)
+            modelEntry["ContextWindow"] = contextWindow;
+
+        if (discoveredModel is not null)
+        {
+            modelEntry["InputModalities"] = discoveredModel.InputModalities.ToString();
+            modelEntry["OutputModalities"] = discoveredModel.OutputModalities.ToString();
+        }
 
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);

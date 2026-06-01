@@ -413,6 +413,7 @@ static void ConfigureDaemonServices(
 
         var detected = resolver.ResolveAsync(models.Main.ModelId, CancellationToken.None)
             .GetAwaiter().GetResult();
+        var resolved = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
 
         if (detected is not null)
         {
@@ -423,6 +424,17 @@ static void ConfigureDaemonServices(
                 detected.OutputModalities?.ToString() ?? "unknown",
                 detected.ContextWindowTokens?.ToString() ?? "unknown");
         }
+        else if (models.Main.ContextWindow is not null
+                 || models.Main.InputModalities is not null
+                 || models.Main.OutputModalities is not null)
+        {
+            logger.LogInformation(
+                "Using configured model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
+                models.Main.ModelId,
+                resolved.InputModalities,
+                resolved.OutputModalities,
+                resolved.ContextWindowTokens);
+        }
         else
         {
             logger.LogInformation(
@@ -430,7 +442,7 @@ static void ConfigureDaemonServices(
                 models.Main.ModelId);
         }
 
-        return ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+        return resolved;
     });
 
     // Session config: bind operator-facing settings from config section
@@ -829,11 +841,9 @@ static void ConfigureDaemonServices(
         : persistence.Sqlite.Path!;
 
     // Model capability resolution chain:
-    // Codex static catalog → [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default
-    // Codex resolver is first: authoritative for Codex models, zero network cost.
-    // When the main provider is Ollama, query it next — it knows the true context window
+    // [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default.
+    // When the main provider is Ollama, query it first — it knows the true context window
     // for locally hosted models that may not be indexed by external oracles.
-    services.AddSingleton<OpenAiCodexCapabilityResolver>();
     services.AddHttpClient<OpenRouterOracleResolver>().AddNetclawHeaders("capability-probe");
     services.AddHttpClient<HuggingFaceCapabilityResolver>().AddNetclawHeaders("capability-probe");
     if (ollamaEndpoint is not null)
@@ -867,10 +877,7 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
-        var resolvers = new List<IModelCapabilityResolver>
-        {
-            sp.GetRequiredService<OpenAiCodexCapabilityResolver>()
-        };
+        var resolvers = new List<IModelCapabilityResolver>();
         if (ollamaEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
         if (openAiCompatibleEndpoint is not null)

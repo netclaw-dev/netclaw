@@ -314,10 +314,17 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
                     : null
         };
 
+        var selectedModel = DiscoveredModels.FirstOrDefault(model =>
+            string.Equals(model.ModelId.Value, SelectedModelId, StringComparison.OrdinalIgnoreCase));
+
         builder.Model = new ModelConfigSection
         {
             Provider = providerName,
-            ModelId = SelectedModelId
+            ModelId = SelectedModelId,
+            ContextWindow = selectedModel?.ContextWindowTokens,
+            Provenance = selectedModel is null ? ModelDiscoverySource.Manual : ModelDiscoverySource.Live,
+            InputModalities = selectedModel?.InputModalities,
+            OutputModalities = selectedModel?.OutputModalities,
         };
     }
 

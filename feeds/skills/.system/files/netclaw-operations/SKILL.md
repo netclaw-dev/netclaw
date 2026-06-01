@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.8.6"
+  version: "2.8.8"
 ---
 
 # Netclaw Operations
@@ -702,6 +702,15 @@ account ID is required by the Codex backend. If OpenAI OAuth validation reports
 that the account ID is missing, re-authenticate the provider with `netclaw
 provider fix <name>` or remove and add it again. API-key OpenAI auth does not
 use the Codex backend or this account-ID metadata.
+
+For `openai` OAuth providers, `netclaw model discover <provider>` queries the
+Codex backend model catalog with the OAuth bearer token and
+`ChatGPT-Account-Id`. This path is fail-closed: if the live catalog is
+unavailable, returns no picker-visible models, or omits context-window or
+input-modality metadata, Netclaw reports the provider error instead of using a
+stale built-in model list. The catalog query's `client_version` tracks the
+official `@openai/codex` release version, not Netclaw's own version, because the
+Codex backend uses that value to gate newer model entries.
 
 When adding an OpenAI provider from the CLI, `netclaw provider add <name>
 openai` defaults to the ChatGPT OAuth device flow. Use `--auth api-key

@@ -3,40 +3,20 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text;
-using System.Text.Json;
 using System.ClientModel;
 using System.ClientModel.Primitives;
+using System.Net;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OpenAi;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Providers;
 
 public sealed class OpenAiCodexTests
 {
-    /// <summary>
-    /// Build a fake JWT from a JSON payload. No real signing — just base64url encoding.
-    /// </summary>
-    private static string MakeJwt(object payload)
-    {
-        var json = JsonSerializer.Serialize(payload);
-        var header = Base64UrlEncode("{}");
-        var body = Base64UrlEncode(json);
-        return $"{header}.{body}.fakesig";
-    }
-
-    private static string Base64UrlEncode(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
-
     // ────────────────────────────────────────────────────────────────────
     //  JwtAccountIdExtractor
     // ────────────────────────────────────────────────────────────────────
@@ -46,7 +26,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void Extract_ReturnsOidClaim()
         {
-            var jwt = MakeJwt(new { oid = "org-abc123" });
+            var jwt = JwtTestToken.Make(new { oid = "org-abc123" });
 
             var result = JwtAccountIdExtractor.Extract(jwt);
 
@@ -72,7 +52,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void Extract_FallsBackToOrgsArrayId()
         {
-            var jwt = MakeJwt(new
+            var jwt = JwtTestToken.Make(new
             {
                 orgs = new[]
                 {
@@ -88,7 +68,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void Extract_PrefersOidOverOrgs()
         {
-            var jwt = MakeJwt(new
+            var jwt = JwtTestToken.Make(new
             {
                 oid = "org-primary",
                 orgs = new[]
@@ -105,7 +85,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void Extract_NoOidNoOrgs_ReturnsNull()
         {
-            var jwt = MakeJwt(new { sub = "user-1", email = "a@b.com" });
+            var jwt = JwtTestToken.Make(new { sub = "user-1", email = "a@b.com" });
 
             var result = JwtAccountIdExtractor.Extract(jwt);
 
@@ -115,7 +95,7 @@ public sealed class OpenAiCodexTests
         [Fact]
         public void Extract_ReturnsNestedChatGptAccountClaim()
         {
-            var jwt = MakeJwt(new Dictionary<string, object>
+            var jwt = JwtTestToken.Make(new Dictionary<string, object>
             {
                 ["https://api.openai.com/auth"] = new Dictionary<string, object>
                 {
@@ -177,7 +157,11 @@ public sealed class OpenAiCodexTests
 
     public sealed class OpenAiDescriptorTests
     {
-        private readonly OpenAiDescriptor _descriptor = new(new HttpClient());
+        private readonly OpenAiDescriptor _descriptor = new(new HttpClient(
+            new FakeHttpMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            {
+                Content = new StringContent("{}")
+            })));
 
         [Fact]
         public void TypeKey_IsOpenAi()
@@ -226,7 +210,7 @@ public sealed class OpenAiCodexTests
         }
 
         [Fact]
-        public async Task ProbeAsync_WithOAuthToken_ReturnsCuratedModels()
+        public async Task ProbeAsync_WithOAuthToken_LiveDiscoveryUnavailable_ReturnsFailure()
         {
             var entry = new ProviderEntry
             {
@@ -238,40 +222,118 @@ public sealed class OpenAiCodexTests
 
             var result = await _descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
-            Assert.True(result.Success);
-            Assert.Null(result.ErrorMessage);
-            Assert.NotEmpty(result.Models);
-            Assert.Contains(result.Models, m => m.ModelId.Value == "gpt-5.5");
-            Assert.Contains(result.Models, m => m.ModelId.Value == "gpt-5.3-codex-spark");
-            Assert.Equal(ModelModality.Text,
-                result.Models.Single(m => m.ModelId.Value == "gpt-5.3-codex-spark").InputModalities);
-
-            // All curated models should have context windows and modalities populated
-            Assert.All(result.Models, m =>
-            {
-                Assert.NotNull(m.ContextWindowTokens);
-                Assert.True(m.ContextWindowTokens > 32_768,
-                    $"{m.ModelId} should have context window > 32K, got {m.ContextWindowTokens}");
-                Assert.True(m.InputModalities.HasFlag(ModelModality.Text),
-                    $"{m.ModelId} should accept text input");
-                Assert.Equal(ModelModality.Text, m.OutputModalities);
-            });
+            Assert.False(result.Success);
+            Assert.NotNull(result.ErrorMessage);
+            Assert.Empty(result.Models);
         }
 
         [Fact]
-        public async Task ProbeAsync_WithLegacyJwtOAuthToken_ReturnsCuratedModels()
+        public async Task ProbeAsync_WithOAuthToken_QueriesCodexModelsEndpoint()
+        {
+            HttpRequestMessage? capturedRequest = null;
+            var handler = new FakeHttpMessageHandler(request =>
+            {
+                capturedRequest = request;
+                return FakeHttpMessageHandler.JsonResponse(new
+                {
+                    models = new object[]
+                    {
+                        new
+                        {
+                            slug = "gpt-live-codex",
+                            visibility = "list",
+                            context_window = 272000,
+                            input_modalities = new[] { "text", "image" },
+                        },
+                        new
+                        {
+                            slug = "gpt-hidden",
+                            visibility = "hide",
+                            context_window = 123,
+                        }
+                    }
+                });
+            });
+            var descriptor = new OpenAiDescriptor(new HttpClient(handler));
+            var entry = new ProviderEntry
+            {
+                Type = "openai",
+                AuthMethod = AuthMethod.OAuthDevice,
+                OAuthAccessToken = new SensitiveString("oauth-token"),
+                OAuthAccountId = new SensitiveString("account-1"),
+            };
+
+            var result = await descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
+
+            Assert.True(result.Success);
+            Assert.Null(result.ErrorMessage);
+            var model = Assert.Single(result.Models);
+            Assert.Equal("gpt-live-codex", model.ModelId.Value);
+            Assert.Equal(272000, model.ContextWindowTokens);
+            Assert.Equal(ModelModality.Text | ModelModality.Image, model.InputModalities);
+            Assert.Equal(ModelModality.Text, model.OutputModalities);
+
+            Assert.NotNull(capturedRequest);
+            Assert.Equal(
+                $"{OpenAiDescriptor.CodexBackendEndpoint}/models?client_version={OpenAiDescriptor.CodexModelCatalogClientVersion}",
+                capturedRequest!.RequestUri!.ToString());
+            Assert.Equal("Bearer", capturedRequest.Headers.Authorization!.Scheme);
+            Assert.Equal("oauth-token", capturedRequest.Headers.Authorization.Parameter);
+            Assert.True(capturedRequest.Headers.TryGetValues("ChatGPT-Account-Id", out var accountIds));
+            Assert.Equal("account-1", Assert.Single(accountIds));
+        }
+
+        [Fact]
+        public void ParseCodexModels_IncompleteContextWindow_ReturnsFailure()
+        {
+            var json = """
+                       {
+                         "models": [
+                           { "slug": "future-model", "visibility": "list", "input_modalities": ["text"] }
+                         ]
+                       }
+                       """;
+
+            var result = OpenAiDescriptor.ParseCodexModels(json);
+
+            Assert.False(result.Success);
+            Assert.Contains("incomplete context-window metadata", result.ErrorMessage);
+            Assert.Empty(result.Models);
+        }
+
+        [Fact]
+        public void ParseCodexModels_IncompleteInputModalities_ReturnsFailure()
+        {
+            var json = """
+                       {
+                         "models": [
+                           { "slug": "future-model", "visibility": "list", "context_window": 272000 }
+                         ]
+                       }
+                       """;
+
+            var result = OpenAiDescriptor.ParseCodexModels(json);
+
+            Assert.False(result.Success);
+            Assert.Contains("incomplete input-modality metadata", result.ErrorMessage);
+            Assert.Empty(result.Models);
+        }
+
+        [Fact]
+        public async Task ProbeAsync_WithLegacyJwtOAuthToken_UsesJwtAccountIdAndReturnsProbeFailure()
         {
             var entry = new ProviderEntry
             {
                 Type = "openai",
                 AuthMethod = AuthMethod.OAuthPkce,
-                OAuthAccessToken = new SensitiveString(MakeJwt(new { oid = "legacy-account" })),
+                OAuthAccessToken = new SensitiveString(JwtTestToken.Make(new { oid = "legacy-account" })),
             };
 
             var result = await _descriptor.ProbeAsync(entry, TestContext.Current.CancellationToken);
 
-            Assert.True(result.Success);
-            Assert.NotEmpty(result.Models);
+            Assert.False(result.Success);
+            Assert.NotNull(result.ErrorMessage);
+            Assert.Empty(result.Models);
         }
 
         [Fact]
@@ -335,7 +397,20 @@ public sealed class OpenAiCodexTests
         {
             var now = new DateTimeOffset(2026, 3, 18, 12, 0, 0, TimeSpan.Zero);
             var fakeTime = new FakeTimeProvider(now);
-            var descriptor = new OpenAiDescriptor(new HttpClient(), fakeTime);
+            var descriptor = new OpenAiDescriptor(new HttpClient(new FakeHttpMessageHandler(_ =>
+                FakeHttpMessageHandler.JsonResponse(new
+                {
+                    models = new object[]
+                    {
+                        new
+                        {
+                            slug = "gpt-live-codex",
+                            visibility = "list",
+                            context_window = 272000,
+                            input_modalities = new[] { "text", "image" },
+                        }
+                    }
+                }))), fakeTime);
 
             var entry = new ProviderEntry
             {
@@ -366,47 +441,6 @@ public sealed class OpenAiCodexTests
             Assert.False(result.Success);
             Assert.NotNull(result.ErrorMessage);
             Assert.Empty(result.Models);
-        }
-    }
-
-    // ────────────────────────────────────────────────────────────────────
-    //  OpenAiCodexCapabilityResolver
-    // ────────────────────────────────────────────────────────────────────
-
-    public sealed class CodexCapabilityResolverTests
-    {
-        private readonly OpenAiCodexCapabilityResolver _resolver = new();
-
-        [Fact]
-        public async Task ResolveAsync_KnownCodexModel_ReturnsCapabilities()
-        {
-            var result = await _resolver.ResolveAsync("gpt-5.3-codex", TestContext.Current.CancellationToken);
-
-            Assert.NotNull(result);
-            Assert.Equal(400_000, result.ContextWindowTokens);
-            Assert.NotNull(result.InputModalities);
-            Assert.True(result.InputModalities.Value.HasFlag(ModelModality.Text | ModelModality.Image));
-            Assert.Equal(ModelModality.Text, result.OutputModalities);
-        }
-
-        [Fact]
-        public async Task ResolveAsync_UnknownModel_ReturnsNull()
-        {
-            var result = await _resolver.ResolveAsync("claude-3-opus", TestContext.Current.CancellationToken);
-
-            Assert.Null(result);
-        }
-
-        [Fact]
-        public async Task ResolveAsync_AllCuratedModels_HaveContextWindow()
-        {
-            foreach (var model in OpenAiDescriptor.CuratedModels)
-            {
-                var result = await _resolver.ResolveAsync(model.ModelId.Value, TestContext.Current.CancellationToken);
-                Assert.NotNull(result);
-                Assert.NotNull(result.ContextWindowTokens);
-                Assert.True(result.ContextWindowTokens > 32_768);
-            }
         }
     }
 

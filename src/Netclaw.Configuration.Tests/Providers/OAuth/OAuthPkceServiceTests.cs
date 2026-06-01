@@ -4,8 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
-using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
@@ -16,23 +14,6 @@ namespace Netclaw.Configuration.Tests.Providers.OAuth;
 
 public class OAuthPkceServiceTests
 {
-    private static string MakeJwt(object payload)
-    {
-        var json = JsonSerializer.Serialize(payload);
-        var header = Base64UrlEncode("{}");
-        var body = Base64UrlEncode(json);
-        return $"{header}.{body}.fakesig";
-    }
-
-    private static string Base64UrlEncode(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
-    }
-
     [Fact]
     public void GenerateCodeVerifier_Returns43CharBase64UrlString()
     {
@@ -173,7 +154,7 @@ public class OAuthPkceServiceTests
     [Fact]
     public async Task ExchangeCodeForTokens_ExtractsAccountIdFromIdToken()
     {
-        var idToken = MakeJwt(new Dictionary<string, object>
+        var idToken = JwtTestToken.Make(new Dictionary<string, object>
         {
             ["https://api.openai.com/auth"] = new Dictionary<string, object>
             {

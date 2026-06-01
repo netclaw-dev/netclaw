@@ -3,10 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Providers.OAuth;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Configuration.Tests.Providers.OAuth;
@@ -74,7 +74,7 @@ public sealed class OAuthTokenResponseParserTests
     [Fact]
     public void Parse_ExtractsAccountIdFromNestedOpenAiClaimInIdToken()
     {
-        var idToken = MakeJwt("""{ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-nested" } }""");
+        var idToken = JwtTestToken.MakeFromPayloadJson("""{ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-nested" } }""");
         var result = Parse($$"""{ "access_token": "at", "id_token": "{{idToken}}" }""");
 
         Assert.Equal("acct-nested", result.AccountId!.Value);
@@ -88,16 +88,11 @@ public sealed class OAuthTokenResponseParserTests
         Assert.Equal("acct-top", result.AccountId!.Value);
     }
 
-    private static string MakeJwt(string payloadJson)
+    [Fact]
+    public void Parse_ExtractsNumericAccountIdAsInvariantString()
     {
-        var header = Base64UrlEncode("{}");
-        var body = Base64UrlEncode(payloadJson);
-        return $"{header}.{body}.fakesig";
-    }
+        var result = Parse("""{ "access_token": "at", "account_id": 12345 }""");
 
-    private static string Base64UrlEncode(string value)
-        => Convert.ToBase64String(Encoding.UTF8.GetBytes(value))
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
+        Assert.Equal("12345", result.AccountId!.Value);
+    }
 }

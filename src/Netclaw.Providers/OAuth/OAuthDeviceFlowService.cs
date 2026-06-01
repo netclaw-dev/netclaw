@@ -25,7 +25,8 @@ public sealed record OAuthDeviceFlowConfig(
     string TokenEndpoint,
     string ClientId,
     string? Scope = null,
-    string? PkceExchangeEndpoint = null)
+    string? PkceExchangeEndpoint = null,
+    IReadOnlyDictionary<string, string>? ExtraAuthParams = null)
 {
     /// <summary>
     /// Build a config from an <see cref="OAuthAuth"/> instance.
@@ -42,7 +43,8 @@ public sealed record OAuthDeviceFlowConfig(
             oauth.ClientId,
             Scope: oauth.Scope,
             PkceExchangeEndpoint: oauth.UseProprietaryDeviceFlow
-                ? tokenEndpoint : null);
+                ? tokenEndpoint : null,
+            ExtraAuthParams: oauth.ExtraAuthParams);
     }
 }
 
@@ -266,6 +268,20 @@ public sealed class OAuthDeviceFlowService : IDeviceFlowService
 
         if (config.Scope is not null)
             parameters.Add(new("scope", config.Scope));
+
+        if (config.ExtraAuthParams is not null)
+        {
+            foreach (var (key, value) in config.ExtraAuthParams)
+            {
+                if (string.IsNullOrWhiteSpace(key)
+                    || key is "client_id" or "scope")
+                {
+                    continue;
+                }
+
+                parameters.Add(new(key, value));
+            }
+        }
 
         return parameters;
     }

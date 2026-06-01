@@ -165,7 +165,7 @@ public sealed class ProviderOAuthEndpointTests
         {
             access_token = "access-token",
             refresh_token = "refresh-token",
-            id_token = MakeJwt(new Dictionary<string, object>
+            id_token = JwtTestToken.Make(new Dictionary<string, object>
             {
                 ["https://api.openai.com/auth"] = new Dictionary<string, object>
                 {
@@ -174,23 +174,6 @@ public sealed class ProviderOAuthEndpointTests
             }),
             expires_in = 3600
         });
-    }
-
-    private static string MakeJwt(object payload)
-    {
-        var json = JsonSerializer.Serialize(payload);
-        var header = Base64UrlEncode("{}");
-        var body = Base64UrlEncode(json);
-        return $"{header}.{body}.fakesig";
-    }
-
-    private static string Base64UrlEncode(string value)
-    {
-        var bytes = Encoding.UTF8.GetBytes(value);
-        return Convert.ToBase64String(bytes)
-            .TrimEnd('=')
-            .Replace('+', '-')
-            .Replace('/', '_');
     }
 
     private static HttpResponseMessage JsonResponse(object body, HttpStatusCode status = HttpStatusCode.OK)

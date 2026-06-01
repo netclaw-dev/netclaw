@@ -839,7 +839,7 @@
         "ContextWindow": { "type": "integer", "description": "Effective runtime context window in tokens. When set, clamps the detected provider value." },
         "Provenance": {
           "type": ["string", "null"],
-          "description": "Optional model provenance marker (e.g. AutoDetected, Manual)."
+          "description": "Optional model provenance marker (Live, Defaults, or Manual)."
         },
         "InputModalities": {
           "type": "string",

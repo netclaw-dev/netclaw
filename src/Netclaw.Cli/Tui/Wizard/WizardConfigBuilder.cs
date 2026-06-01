@@ -100,6 +100,18 @@ public sealed class WizardConfigBuilder
             if (!string.IsNullOrWhiteSpace(Model.ModelId))
                 modelEntry["ModelId"] = Model.ModelId;
 
+            if (Model.ContextWindow is { } contextWindow)
+                modelEntry["ContextWindow"] = contextWindow;
+
+            if (Model.Provenance is { } provenance)
+                modelEntry["Provenance"] = provenance.ToString();
+
+            if (Model.InputModalities is { } inputModalities)
+                modelEntry["InputModalities"] = inputModalities.ToString();
+
+            if (Model.OutputModalities is { } outputModalities)
+                modelEntry["OutputModalities"] = outputModalities.ToString();
+
             config["Models"] = new Dictionary<string, object>
             {
                 ["Main"] = modelEntry
@@ -452,6 +464,10 @@ public sealed class ModelConfigSection
 {
     public required string Provider { get; init; }
     public string? ModelId { get; init; }
+    public int? ContextWindow { get; init; }
+    public ModelDiscoverySource? Provenance { get; init; }
+    public ModelModality? InputModalities { get; init; }
+    public ModelModality? OutputModalities { get; init; }
 }
 
 public sealed class SlackConfigSection

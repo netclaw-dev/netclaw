@@ -47,6 +47,20 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
         if (config.Scope is not null)
             payload["scope"] = config.Scope;
 
+        if (config.ExtraAuthParams is not null)
+        {
+            foreach (var (key, value) in config.ExtraAuthParams)
+            {
+                if (string.IsNullOrWhiteSpace(key)
+                    || key is "client_id" or "scope")
+                {
+                    continue;
+                }
+
+                payload[key] = value;
+            }
+        }
+
         HttpResponseMessage response;
         try
         {
