@@ -429,7 +429,7 @@ static void ConfigureDaemonServices(
 
         var detected = resolver.ResolveAsync(models.Main.ModelId, CancellationToken.None)
             .GetAwaiter().GetResult();
-        var resolved = ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+        var resolved = ModelCapabilityResolution.ResolveModelCapabilities(models, detected, logger: logger);
 
         if (detected is not null)
         {
