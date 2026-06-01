@@ -15,6 +15,7 @@ on:
       - main
     paths:
       - 'docker/Dockerfile'
+      - 'docker/entrypoint.sh'
       - 'scripts/docker/build-image.sh'
       - 'src/**'
       - 'global.json'
@@ -28,6 +29,7 @@ on:
       - main
     paths:
       - 'docker/Dockerfile'
+      - 'docker/entrypoint.sh'
       - 'scripts/docker/build-image.sh'
       - 'src/**'
       - 'global.json'
@@ -120,6 +122,88 @@ jobs:
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
           exit 1
 
+      - name: "Verify bind-mounted state ownership is repaired"
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker rm -f netclaw-validate-bind-mount >/dev/null 2>&1 || true
+
+          tmpdir="$(mktemp -d)"
+          state_dir="$tmpdir/data"
+          tools_dir="$tmpdir/tools"
+          mkdir -p "$state_dir" "$tools_dir"
+          chmod 755 "$state_dir" "$tools_dir"
+
+          cleanup() {
+            docker rm -f netclaw-validate-bind-mount >/dev/null 2>&1 || true
+            if ! rm -rf "$tmpdir" 2>/dev/null; then
+              docker run --rm \
+                -v "$tmpdir:/target" \
+                ubuntu:24.04 sh -c 'rm -rf /target/..?* /target/.[!.]* /target/*' \
+                >/dev/null 2>&1 || true
+              rmdir "$tmpdir" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          owner_before="$(stat -c '%u:%g' "$state_dir")"
+          if [[ "$owner_before" == "1654:1654" ]]; then
+            echo "ERROR: bind-mount fixture unexpectedly starts with runtime ownership" >&2
+            exit 1
+          fi
+
+          docker run -d --name netclaw-validate-bind-mount \
+            -v "$state_dir:/home/netclaw/.netclaw" \
+            -v "$tools_dir:/tools" \
+            -e NETCLAW_Daemon__Port=5199 \
+            -e NETCLAW_Providers__validate__Type=ollama \
+            -e NETCLAW_Providers__validate__Endpoint=http://127.0.0.1:11434 \
+            -e NETCLAW_Models__Main__Provider=validate \
+            -e NETCLAW_Models__Main__ModelId=qwen2:0.5b \
+            "netclawd-pr:${{ steps.tag.outputs.tag }}" >/dev/null
+
+          for i in $(seq 1 60); do
+            if docker exec netclaw-validate-bind-mount curl -fsS http://127.0.0.1:5199/api/health/ready >/dev/null 2>&1; then
+              echo "✓ Bind-mounted daemon reported healthy after ${i}s"
+              break
+            fi
+
+            running="$(docker inspect -f '{{.State.Running}}' netclaw-validate-bind-mount 2>/dev/null || echo "false")"
+            if [[ "$running" != "true" ]]; then
+              echo "ERROR: bind-mounted daemon container exited during health probe" >&2
+              docker logs netclaw-validate-bind-mount >&2 2>&1 || true
+              exit 1
+            fi
+
+            if [[ "$i" == "60" ]]; then
+              echo "ERROR: bind-mounted daemon did not report healthy within 60s" >&2
+              docker logs netclaw-validate-bind-mount >&2 2>&1 || true
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          docker exec netclaw-validate-bind-mount test -d /home/netclaw/.netclaw/identity
+
+          state_owner="$(docker exec netclaw-validate-bind-mount stat -c '%u:%g' /home/netclaw/.netclaw)"
+          if [[ "$state_owner" != "1654:1654" ]]; then
+            echo "ERROR: /home/netclaw/.netclaw owner is $state_owner, expected 1654:1654" >&2
+            exit 1
+          fi
+
+          tools_owner="$(docker exec netclaw-validate-bind-mount stat -c '%u:%g' /tools)"
+          if [[ "$tools_owner" != "1654:1654" ]]; then
+            echo "ERROR: /tools owner is $tools_owner, expected 1654:1654" >&2
+            exit 1
+          fi
+
+          daemon_uid="$(docker exec netclaw-validate-bind-mount sh -c 'pid=$(pgrep -o -x netclawd); stat -c %u /proc/$pid')"
+          if [[ "$daemon_uid" != "1654" ]]; then
+            echo "ERROR: netclawd is running as uid $daemon_uid, expected 1654" >&2
+            exit 1
+          fi
+
       - name: "Lint: ARG TARGETARCH must have no default (#1091)"
         shell: bash
         run: |
@@ -164,3 +248,4 @@ jobs:
         shell: bash
         run: |
           docker rm -f netclaw-validate-ok 2>/dev/null || true
+          docker rm -f netclaw-validate-bind-mount 2>/dev/null || true

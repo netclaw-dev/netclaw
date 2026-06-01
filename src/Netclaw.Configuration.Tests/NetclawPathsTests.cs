@@ -134,6 +134,30 @@ public sealed class NetclawPathsTests : IDisposable
 
         Assert.Equal(expected, paths.BasePath);
     }
+
+    [Fact]
+    public void EnsureDirectoriesExist_reports_actionable_initialization_failures()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-path-file-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllText(basePath, "not a directory");
+
+        try
+        {
+            var paths = new NetclawPaths(basePath);
+
+            var exception = Assert.Throws<NetclawDirectoryInitializationException>(paths.EnsureDirectoriesExist);
+
+            Assert.Equal(basePath, exception.BasePath);
+            Assert.Contains(exception.Failures, failure => failure.DirectoryPath == paths.IdentityDirectory);
+            Assert.Contains("Failed to initialize Netclaw directories", exception.Message);
+            Assert.Contains("Docker bind mount", exception.Message);
+            Assert.Contains("sudo chown -R 1654:1654", exception.Message);
+        }
+        finally
+        {
+            File.Delete(basePath);
+        }
+    }
 }
 
 /// <summary>

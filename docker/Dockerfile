@@ -53,6 +53,7 @@ ARG NETCLAW_VERSION=unknown
 #   Data/JSON:   jq, sqlite3
 #   VCS/GitHub:  git, gh
 #   Python:      python3, python3-pip, python3-venv
+#   Privileges:  gosu (entrypoint ownership repair, then drop to netclaw)
 #   Crypto:      libsodium23 (required by NSec for Ed25519 signature verification)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -60,6 +61,7 @@ RUN apt-get update \
       curl \
       wget \
       procps \
+      gosu \
       git \
       jq \
       sqlite3 \
@@ -83,14 +85,18 @@ RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/
  && ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
  && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
 
-# Non-root runtime user — limits blast radius of tool execution and
-# satisfies CIS Docker Benchmark / K8s PodSecurityStandards.
-# Pre-create the data directory so VOLUME inherits correct ownership.
+# Non-root runtime user — limits blast radius of daemon-owned tool execution.
+# The entrypoint starts as root only to repair bind-mount ownership, then
+# re-execs itself as this user before launching netclawd.
+# Pre-create the data and tools directories so image-owned paths inherit
+# correct ownership when operators use Docker named volumes.
 RUN groupadd --gid 1654 netclaw \
  && useradd --uid 1654 --gid netclaw --create-home netclaw \
- && mkdir -p /home/netclaw/.netclaw \
- && chown netclaw:netclaw /home/netclaw/.netclaw
+ && mkdir -p /home/netclaw/.netclaw /tools \
+ && chown -R netclaw:netclaw /home/netclaw/.netclaw /tools
 
+ENV HOME=/home/netclaw
+ENV NETCLAW_HOME=/home/netclaw/.netclaw
 ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
 # Block in-place binary self-update — the image tag IS the version.
 # Update availability checks still run so operators see when a new version exists.
@@ -107,7 +113,9 @@ EXPOSE 5199
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD curl -sf http://127.0.0.1:5199/api/health/ready || exit 1
 
-USER netclaw
+# Keep the image entrypoint root so it can repair host bind-mount ownership.
+# docker/entrypoint.sh drops privileges before starting the daemon supervisor.
+USER root
 
 LABEL org.opencontainers.image.source="https://github.com/netclaw-dev/netclaw" \
       org.opencontainers.image.title="netclawd" \

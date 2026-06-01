@@ -51,7 +51,17 @@ using Netclaw.Security;
 using static Microsoft.Extensions.Logging.LogLevel;
 
 var bootstrapPaths = new NetclawPaths();
-bootstrapPaths.EnsureDirectoriesExist();
+try
+{
+    bootstrapPaths.EnsureDirectoriesExist();
+}
+catch (NetclawDirectoryInitializationException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+
 using var crashMonitor = DaemonCrashMonitor.Register(
     bootstrapPaths,
     benignUnobservedFilters: [KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace]);
@@ -89,6 +99,12 @@ try
             await RunDaemonAsync(args, restartSignal, crashMonitor);
         } while (restartSignal.RestartRequested);
     }
+}
+catch (NetclawDirectoryInitializationException ex)
+{
+    crashMonitor.RecordTopLevelException(ex);
+    Console.Error.WriteLine(ex.Message);
+    Environment.ExitCode = 1;
 }
 catch (Exception ex)
 {
