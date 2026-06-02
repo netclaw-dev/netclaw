@@ -136,16 +136,17 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             process.StandardInput.Close();
 
-            var outputBuilder = new StringBuilder();
-            var errorBuilder = new StringBuilder();
-
             // Start draining both pipes up front: a chatty child can deadlock if
             // one pipe buffer fills while we wait on the other. The reads take
             // CancellationToken.None deliberately — a redirected child holds the
             // pipe write-ends open, so a blocked pipe read cannot be interrupted
             // by a token; killing the process is what closes the pipes.
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-            var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+            //
+            // BoundedDrainAsync reads into a head+tail window bounded by
+            // MaxOutputChars but continues draining after the cap is reached so
+            // the pipe never fills up and deadlocks a still-running child.
+            var stdoutTask = BoundedDrainAsync(process.StandardOutput, _config.MaxOutputChars);
+            var stderrTask = BoundedDrainAsync(process.StandardError, _config.MaxOutputChars);
 
             try
             {
@@ -172,7 +173,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 {
                     // If the OS refuses the kill, the child may keep stdout/stderr
                     // open forever. Close our read ends so cancellation still
-                    // returns promptly instead of hanging in ReadToEndAsync.
+                    // returns promptly instead of hanging in BoundedDrainAsync.
                     killClosedPipes = false;
                     Debug.WriteLine($"shell_execute: process kill skipped — {ex.Message}");
                     process.StandardOutput.Dispose();
@@ -193,25 +194,114 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     : "Error: Command cancelled.";
             }
 
-            outputBuilder.Append(await stdoutTask);
-            errorBuilder.Append(await stderrTask);
+            var (stdoutText, stdoutTruncated) = await stdoutTask;
+            var (stderrText, stderrTruncated) = await stderrTask;
+
+            // Redact secrets on the already-bounded strings, then assemble.
+            var stdout = SecretOutputRedactor.Redact(stdoutText);
+            var stderr = SecretOutputRedactor.Redact(stderrText);
 
             var result = new StringBuilder();
-            if (outputBuilder.Length > 0)
-                result.Append(outputBuilder);
-            if (errorBuilder.Length > 0)
+            if (stdout.Length > 0)
+            {
+                result.Append(stdout);
+                if (stdoutTruncated)
+                    result.Append($"\n[stdout truncated — output exceeded {_config.MaxOutputChars} chars; head and tail shown]");
+            }
+            if (stderr.Length > 0)
             {
                 if (result.Length > 0)
                     result.AppendLine();
-                result.Append(errorBuilder);
+                result.Append(stderr);
+                if (stderrTruncated)
+                    result.Append($"\n[stderr truncated — output exceeded {_config.MaxOutputChars} chars; head and tail shown]");
             }
 
-            var sanitized = SecretOutputRedactor.Redact(result.ToString());
-            var output = TruncateOutput(sanitized, _config.MaxOutputChars);
-            return $"Exit code: {process.ExitCode}{Environment.NewLine}{output}";
+            return $"Exit code: {process.ExitCode}{Environment.NewLine}{result}";
         }
     }
 
+    /// <summary>
+    /// Drains <paramref name="reader"/> into a head+tail window bounded by
+    /// <paramref name="maxChars"/>. Bytes beyond the cap are discarded but the
+    /// pipe continues to be read so a still-running child never deadlocks on a
+    /// full pipe buffer. Returns the captured text and whether it was truncated.
+    /// </summary>
+    internal static async Task<(string Text, bool Truncated)> BoundedDrainAsync(
+        TextReader reader, int maxChars)
+    {
+        if (maxChars <= 0)
+        {
+            // Cap disabled: fall back to unbounded read (matches previous behaviour
+            // when MaxOutputChars is set to 0 to opt out of truncation).
+            var all = await reader.ReadToEndAsync(CancellationToken.None);
+            return (all, false);
+        }
+
+        // Split the budget: first half for the head, second half for the tail.
+        // Odd maxChars gives the extra char to the head.
+        var headCap = (maxChars + 1) / 2;
+        var tailCap = maxChars / 2;
+
+        var head = new StringBuilder(Math.Min(headCap, 4096));
+        // Ring buffer for the tail window: we keep overwriting once the tail is full.
+        var tailBuf = tailCap > 0 ? new char[tailCap] : [];
+        var tailPos = 0;    // next write position in the ring
+        var tailLen = 0;    // chars actually written (< tailCap until ring is full)
+        var totalChars = 0; // total chars seen across all reads
+        var buf = new char[4096];
+
+        int read;
+        while ((read = await reader.ReadAsync(buf, 0, buf.Length)) > 0)
+        {
+            totalChars += read;
+            var span = buf.AsSpan(0, read);
+
+            if (head.Length < headCap)
+            {
+                var headChunk = Math.Min(headCap - head.Length, span.Length);
+                head.Append(span[..headChunk]);
+                span = span[headChunk..];
+            }
+
+            // Feed overflow chars into the tail ring buffer, discarding nothing
+            // except the overwritten oldest entry — the pipe keeps draining.
+            if (tailCap > 0)
+            {
+                foreach (var ch in span)
+                {
+                    tailBuf[tailPos] = ch;
+                    tailPos = (tailPos + 1) % tailCap;
+                    if (tailLen < tailCap) tailLen++;
+                }
+            }
+        }
+
+        // Truncation only when total chars exceeded the full budget (head+tail),
+        // meaning some middle chars were discarded.
+        var truncated = totalChars > maxChars;
+
+        // Reconstruct the tail in order from the ring buffer.
+        var tail = new StringBuilder(tailLen);
+        if (tailLen > 0)
+        {
+            var start = tailLen < tailCap ? 0 : tailPos; // oldest char position
+            for (var i = 0; i < tailLen; i++)
+                tail.Append(tailBuf[(start + i) % tailCap]);
+        }
+
+        if (!truncated)
+        {
+            // Nothing was discarded: head + tail together is the full output.
+            head.Append(tail);
+            return (head.ToString(), false);
+        }
+
+        return (head + "\n...\n" + tail, true);
+    }
+
+    // Retained for compatibility with tests that call it directly; the main
+    // execution path no longer uses this — BoundedDrainAsync caps at read time.
     internal static string TruncateOutput(string output, int maxChars)
     {
         if (output.Length <= maxChars)

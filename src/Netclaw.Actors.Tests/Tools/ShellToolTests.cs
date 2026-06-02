@@ -111,7 +111,7 @@ public class ShellToolTests
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
-        Assert.Contains("[output truncated]", result);
+        Assert.Contains("[stdout truncated", result);
     }
 
     [Fact]
@@ -298,6 +298,76 @@ public class ShellToolTests
 
         Assert.StartsWith(new string('x', 50), result);
         Assert.EndsWith("[output truncated]", result);
+    }
+
+    // ── BoundedDrainAsync ──
+
+    [Fact]
+    public async Task BoundedDrain_short_output_returned_verbatim()
+    {
+        var input = "hello world";
+        var reader = new StringReader(input);
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
+        Assert.Equal(input, text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_empty_input_returns_empty()
+    {
+        var reader = new StringReader("");
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
+        Assert.Equal("", text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_output_exactly_at_cap_not_truncated()
+    {
+        var input = new string('a', 100);
+        var reader = new StringReader(input);
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
+        Assert.Equal(input, text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_long_output_truncated_with_head_and_tail()
+    {
+        // 100-char head marker + separator + 100-char tail marker, with filler in the middle
+        var head = new string('H', 100);
+        var middle = new string('M', 5000);
+        var tail = new string('T', 100);
+        var input = head + middle + tail;
+
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 200);
+
+        Assert.True(truncated);
+        Assert.StartsWith(new string('H', 100), text);  // head preserved
+        Assert.EndsWith(new string('T', 100), text);    // tail preserved
+        Assert.Contains("...", text);                    // separator present
+        Assert.DoesNotContain("M", text);                // middle discarded
+    }
+
+    [Fact]
+    public async Task BoundedDrain_head_and_tail_split_evenly()
+    {
+        // maxChars=10 → headCap=5, tailCap=5
+        var input = "AAAAAXXXXXXBBBBB"; // 16 chars: 5 head, 6 overflow discard, 5 tail
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 10);
+
+        Assert.True(truncated);
+        Assert.StartsWith("AAAAA", text);
+        Assert.EndsWith("BBBBB", text);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_disabled_cap_returns_full_output()
+    {
+        var input = new string('x', 10_000);
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 0);
+        Assert.Equal(input, text);
+        Assert.False(truncated);
     }
 
     [Fact]
