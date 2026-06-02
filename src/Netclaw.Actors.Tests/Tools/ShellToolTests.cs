@@ -276,6 +276,72 @@ public class ShellToolTests
         }
     }
 
+    // ── Working directory must exist (#1286): fail loudly with the mkdir remedy ──
+    // instead of letting Process.Start surface an opaque, platform-specific error.
+
+    [Fact]
+    public async Task Missing_explicit_working_directory_returns_helpful_error()
+    {
+        var missingDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var args = ToolInput.Create("Command", "echo hi", "WorkingDirectory", missingDir);
+
+        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("does not exist", result);
+        Assert.Contains(missingDir, result);
+        Assert.Contains("mkdir", result);
+        // The process must never start with a missing cwd...
+        Assert.DoesNotContain("Exit code", result);
+        // ...and the tool must not silently create the directory either.
+        Assert.False(Directory.Exists(missingDir));
+    }
+
+    [Fact]
+    public async Task Working_directory_that_is_a_file_returns_not_a_directory_error()
+    {
+        var filePath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        File.WriteAllText(filePath, "not a dir");
+        try
+        {
+            var args = ToolInput.Create("Command", "echo hi", "WorkingDirectory", filePath);
+
+            var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+
+            Assert.Contains("is a file, not a directory", result);
+            Assert.Contains(filePath, result);
+            Assert.DoesNotContain("Exit code", result);
+        }
+        finally
+        {
+            if (File.Exists(filePath)) File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task Missing_project_directory_returns_helpful_error()
+    {
+        // No explicit arg, so the resolution chain falls back to ProjectDirectory —
+        // proving the existence guard covers the fallback paths, not just explicit args.
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var missingProjectDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = missingProjectDir };
+            var args = ToolInput.Create("Command", "echo hi");
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("does not exist", result);
+            Assert.Contains(missingProjectDir, result);
+            Assert.DoesNotContain("Exit code", result);
+        }
+        finally
+        {
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Null_arguments_returns_error()
     {

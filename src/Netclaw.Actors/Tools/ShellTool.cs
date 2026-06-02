@@ -106,6 +106,22 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     return $"Error preparing session working directory: {ex.Message}";
                 }
             }
+            else if (!Directory.Exists(resolvedCwd))
+            {
+                // ProcessStartInfo.WorkingDirectory must point at an existing directory or
+                // Process.Start throws an opaque, platform-specific error. Only the session
+                // scratch dir is auto-created (above); every other resolved cwd — explicit
+                // arg, project dir, inherited cwd — must already exist. Fail loudly with the
+                // remedy so the agent creates it instead of retry-looping on a cryptic error.
+                // Any approval for this cwd is existence-agnostic, so it still matches once
+                // the agent runs the mkdir.
+                if (File.Exists(resolvedCwd))
+                    return $"Error: Working directory '{resolvedCwd}' is a file, not a directory.";
+
+                var mkdirHint = isWindows ? $"mkdir \"{resolvedCwd}\"" : $"mkdir -p \"{resolvedCwd}\"";
+                return $"Error: Working directory '{resolvedCwd}' does not exist. "
+                     + $"Create it first, e.g.: {mkdirHint}";
+            }
 
             psi.WorkingDirectory = resolvedCwd;
         }
