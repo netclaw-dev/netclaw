@@ -100,32 +100,4 @@ public static class DaemonControlPlaneEndpointResolver
 
     public static bool RequiresBearerToken(ExposureMode exposureMode)
         => exposureMode.RequiresRemoteAuthentication();
-
-    /// <summary>
-    /// Best-effort device-token read for thin clients calling the daemon's control plane.
-    /// Returns <c>null</c> for loopback endpoints (the daemon's loopback auth handler
-    /// authenticates them without a bearer token) and for any failure to read
-    /// <c>secrets.json</c> — callers fall back to anonymous and the daemon will
-    /// reject the request with 401 if a token was actually required.
-    /// </summary>
-    public static string? ResolveBearerToken(string endpoint, NetclawPaths paths)
-    {
-        if (Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) && uri.IsLoopback)
-            return null;
-
-        if (!File.Exists(paths.SecretsPath))
-            return null;
-
-        try
-        {
-            using var stream = File.OpenRead(paths.SecretsPath);
-            using var doc = JsonDocument.Parse(stream);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
-            if (!doc.RootElement.TryGetProperty("DeviceToken", out var prop)) return null;
-            var token = prop.GetString();
-            return string.IsNullOrWhiteSpace(token) ? null : token;
-        }
-        catch (JsonException) { return null; } // slopwatch-ignore: SW003 best-effort token read; falls back to anonymous.
-        catch (IOException) { return null; } // slopwatch-ignore: SW003 best-effort token read; falls back to anonymous.
-    }
 }
