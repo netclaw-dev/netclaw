@@ -249,6 +249,30 @@ public sealed class RetryingChatClientTests
         Assert.Equal(1, attempts); // cancellation is not retried
     }
 
+    [Fact]
+    public async Task StreamingRetries_ProviderException5xx_ThenSucceeds()
+    {
+        // Curated provider errors carry the status on a ProviderException, not a raw
+        // HttpRequestException — the transport must still recognize them as transient.
+        var attempts = 0;
+        var fake = new FakeChatClient(streamHandler: (_, _, ct) =>
+        {
+            attempts++;
+            return ThrowProviderExceptionThenYield(attempts, failUntil: 3, ct);
+        });
+        var client = new RetryingChatClient(fake, _policy, NullLogger.Instance);
+
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
+        {
+            updates.Add(u);
+        }
+
+        Assert.Single(updates);
+        Assert.Equal(3, attempts); // 2 ProviderException(502) failures + 1 success
+    }
+
     // Throws a retryable 429 before yielding any chunk while attemptNumber < failUntil,
     // otherwise yields one chunk. The runtime-dependent condition keeps the yield
     // reachable (no CS0162) so no warning suppression is needed.
@@ -260,6 +284,19 @@ public sealed class RetryingChatClientTests
         cancellationToken.ThrowIfCancellationRequested();
         if (attemptNumber < failUntil)
             throw new HttpRequestException("rate limited", null, HttpStatusCode.TooManyRequests);
+
+        yield return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("ok")] };
+    }
+
+    // Same shape as ThrowBeforeChunkThenYield but throws a curated ProviderException(502).
+    private static async IAsyncEnumerable<ChatResponseUpdate> ThrowProviderExceptionThenYield(
+        int attemptNumber, int failUntil,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (attemptNumber < failUntil)
+            throw new ProviderException("server error (502)", "HTTP 502", statusCode: 502);
 
         yield return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("ok")] };
     }

@@ -24,7 +24,8 @@ public static class DaemonProviderServiceExtensions
     public static IServiceCollection AddDaemonLlmProviders(
         this IServiceCollection services,
         Dictionary<string, ProviderEntry> providers,
-        ModelSelection models)
+        ModelSelection models,
+        RetryPolicy? retryPolicy = null)
     {
         // Register plugins and OAuth from Netclaw.Providers
         services.AddLlmProviders();
@@ -33,8 +34,10 @@ public static class DaemonProviderServiceExtensions
         services.AddSingleton(sp =>
             new ProviderPluginFactory(providers, sp.GetServices<ILlmProviderPlugin>()));
 
-        // Retry policy (TODO: make configurable via netclaw.json Resilience section)
-        services.AddSingleton(new RetryPolicy());
+        // Transport retry budget/backoff. The RetryingChatClient layer is the single
+        // owner of LLM transient-failure retry; this is its configured policy
+        // (Session:Tuning:StreamingRetryPolicy), defaulting to the standard policy.
+        services.AddSingleton(retryPolicy ?? new RetryPolicy());
 
         // Composes the cross-cutting middleware (Logging → Retry) around each provider
         // pipeline via ChatClientBuilder.

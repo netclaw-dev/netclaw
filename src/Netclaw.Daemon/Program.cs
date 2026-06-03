@@ -362,7 +362,13 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     var models = configuration.GetSection("Models")
         .Get<ModelSelection>() ?? new ModelSelection();
 
-    services.AddDaemonLlmProviders(providers, models);
+    // The transport RetryingChatClient is the single owner of LLM transient-failure
+    // retry, so it uses the configured streaming-retry budget.
+    var streamingRetryPolicy = SessionConfig
+        .BindFromConfiguration(configuration.GetSection("Session"))
+        .Tuning.StreamingRetryPolicy;
+
+    services.AddDaemonLlmProviders(providers, models, streamingRetryPolicy);
 
     return paths;
 }
