@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 
@@ -10,7 +11,8 @@ namespace Netclaw.Daemon.Providers;
 
 public sealed class ModelCatalogService(
     ConfiguredModelProviderState providerState,
-    IProviderProbe probe)
+    IProviderProbe probe,
+    ILogger<ModelCatalogService> logger)
 {
     public async Task<ModelCatalogResult> ReadCatalogAsync(CancellationToken ct)
     {
@@ -38,8 +40,12 @@ public sealed class ModelCatalogService(
         }
         catch (Exception ex)
         {
+            // The probe makes an authenticated network call to the provider, so its
+            // exception text can carry endpoint, header, or auth detail. Keep that in
+            // the server log and return only the (user-configured) provider name.
+            logger.LogError(ex, "Model discovery probe failed for provider {Provider}.", providerName);
             return ModelCatalogResult.Failure(502,
-                $"Model discovery failed for provider '{providerName}': {ex.Message}");
+                $"Model discovery failed for provider '{providerName}'. See daemon logs for details.");
         }
 
         if (!result.Success)
