@@ -16,7 +16,7 @@
 #
 # Environment variables:
 #   INSTALL_DIR     — Install directory (default: ~/.netclaw/bin)
-#   NETCLAW_VERSION — Specific version to install (overrides --channel; e.g. 0.19.0-beta1)
+#   NETCLAW_VERSION — Specific version to install (overrides --channel; e.g. 0.19.0-beta.1)
 
 set -euo pipefail
 

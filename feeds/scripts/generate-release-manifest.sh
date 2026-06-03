@@ -118,8 +118,13 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
-POINTERS=$(python3 - "$VERSION" "$MANIFEST_PATH" <<'PY'
-import json, sys
+POINTERS=$(SCRIPT_DIR="$SCRIPT_DIR" python3 - "$VERSION" "$MANIFEST_PATH" <<'PY'
+import json, os, sys
+
+# Import the shared precedence key (also used by the conformance check) so the generator
+# and the C# comparator are guaranteed to use the same SemVer ordering.
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from semver_key import semver_key
 
 version = sys.argv[1]
 manifest_path = sys.argv[2]
@@ -132,27 +137,9 @@ try:
 except Exception:
     pass  # no existing manifest (first release) — just this version
 
-
-def key(v):
-    # Semver precedence: compare (major, minor, patch), then a stable release
-    # outranks any prerelease of the same core, then prerelease identifiers
-    # (numeric < alphanumeric, shorter prefix lower).
-    core, _, pre = v.partition("-")
-    pre = pre.split("+")[0]  # drop build metadata
-    parts = (core.split(".") + ["0", "0", "0"])[:3]
-    try:
-        nums = tuple(int(x) for x in parts)
-    except ValueError:
-        nums = (0, 0, 0)
-    if not pre:
-        return (nums, 1, ())
-    ids = [(0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split(".")]
-    return (nums, 0, tuple(ids))
-
-
 stable = [v for v in versions if "-" not in v]
-print(max(stable, key=key) if stable else "")
-print(max(versions, key=key))
+print(max(stable, key=semver_key) if stable else "")
+print(max(versions, key=semver_key))
 PY
 )
 LATEST=$(printf '%s\n' "$POINTERS" | sed -n '1p')

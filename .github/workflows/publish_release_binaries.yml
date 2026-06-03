@@ -37,6 +37,22 @@ jobs:
           TAG_SUFFIX="${TAG_VERSION#*-}"
         fi
 
+        # Enforce the dotted prerelease convention: each '.'-separated identifier in the
+        # suffix must be all-letters or all-digits (e.g. 'beta.1'), never mixed ('beta1').
+        # A mixed identifier is one opaque alphanumeric token that SemVer orders
+        # lexically, so 'beta10' would rank BELOW 'beta2' — in this repo's comparator and
+        # in the release manifest. The dotted form makes the number a numeric identifier.
+        if [ -n "$TAG_SUFFIX" ]; then
+          IFS='.' read -ra _suffix_ids <<< "$TAG_SUFFIX"
+          for _id in "${_suffix_ids[@]}"; do
+            if ! [[ "$_id" =~ ^[A-Za-z]+$ || "$_id" =~ ^[0-9]+$ ]]; then
+              echo "Invalid prerelease identifier '$_id' in tag '$TAG_VERSION': mixes letters and digits." >&2
+              echo "  Use the dotted form so the number orders numerically, e.g. '${TAG_PREFIX}-beta.1' (not '${TAG_PREFIX}-beta1')." >&2
+              exit 1
+            fi
+          done
+        fi
+
         PROPS_PREFIX=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('Directory.Build.props').getroot(); node=root.find('.//VersionPrefix'); print((node.text or '').strip() if node is not None else '')")
         PROPS_SUFFIX=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('Directory.Build.props').getroot(); node=root.find('.//VersionSuffix'); print((node.text or '').strip() if node is not None else '')")
 

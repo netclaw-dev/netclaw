@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Text;
 using Akka.Actor;
 using Akka.Event;
+using Netclaw.Actors.Tools;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Jobs;
@@ -136,11 +137,18 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             var outputBuilder = new StringBuilder();
             try
             {
-                var stdoutTask = process.StandardOutput.ReadToEndAsync();
-                var stderrTask = process.StandardError.ReadToEndAsync();
+                // Bounded capture (not ReadToEndAsync): a chatty long-running job —
+                // exactly what background jobs exist for — must not buffer its full
+                // output in memory. Drain each stream to the capture ceiling (head+tail
+                // for floods larger than it); the source keeps draining past the cap so
+                // the child never deadlocks on a full pipe. Closes #1300.
+                var stdoutTask = BoundedOutputReader.DrainToWindowAsync(
+                    process.StandardOutput, BackgroundJobManagerActor.MaxCapturedOutputChars, CancellationToken.None);
+                var stderrTask = BoundedOutputReader.DrainToWindowAsync(
+                    process.StandardError, BackgroundJobManagerActor.MaxCapturedOutputChars, CancellationToken.None);
 
-                var stdout = await stdoutTask;
-                var stderr = await stderrTask;
+                var (stdout, stdoutTruncated) = await stdoutTask;
+                var (stderr, stderrTruncated) = await stderrTask;
                 await process.WaitForExitAsync();
 
                 outputBuilder.Append(stdout);
@@ -150,6 +158,12 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
                     outputBuilder.Append("STDERR:\n");
                     outputBuilder.Append(stderr);
                 }
+
+                // Mark a flood that exceeded the capture ceiling so the log isn't a
+                // silent head+tail splice presented as complete.
+                if (stdoutTruncated || stderrTruncated)
+                    outputBuilder.Append(
+                        $"\n[output exceeded the {BackgroundJobManagerActor.MaxCapturedOutputChars}-char capture ceiling — head and tail shown]");
 
                 var fullOutput = SecretOutputRedactor.Redact(outputBuilder.ToString());
 

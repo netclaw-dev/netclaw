@@ -90,7 +90,7 @@ static async Task RunAsync(string[] args)
     {
         var backgroundUpdateConfig = BuildCliConfig();
         var backgroundDaemonConfig = DaemonConfig.BindFromConfiguration(backgroundUpdateConfig.GetSection("Daemon"));
-        _ = UpdateCommand.BackgroundUpdateCheckAsync(backgroundDaemonConfig.DisableSelfUpdate);
+        _ = UpdateCommand.BackgroundUpdateCheckAsync(backgroundDaemonConfig.DisableSelfUpdate, backgroundDaemonConfig.UpdateChannel);
     }
 
     // ── Lightweight modes (no Akka, no persistence) ──
@@ -864,7 +864,7 @@ static async Task RunAsync(string[] args)
         using var host = builder.Build();
         var paths = host.Services.GetRequiredService<NetclawPaths>();
         var daemonConfig = host.Services.GetRequiredService<DaemonConfig>();
-        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths, daemonConfig.DisableSelfUpdate);
+        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths, daemonConfig.DisableSelfUpdate, daemonConfig.UpdateChannel);
         return;
     }
 
@@ -1338,7 +1338,9 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
     // Start CLI update check concurrently with daemon status fetch (3s timeout, non-blocking).
     using var updateCts = new CancellationTokenSource();
     var updateClient = httpClientFactory.CreateClient();
-    var updateTask = StatusUpdateChecker.CheckAsync(updateClient, BuildInfo.Version, updateCts.Token);
+    var updateChannel = services.GetRequiredService<DaemonConfig>().UpdateChannel;
+    var updateTask = StatusUpdateChecker.CheckAsync(
+        updateClient, BuildInfo.FullVersion, updateCts.Token, channel: updateChannel);
 
     try
     {

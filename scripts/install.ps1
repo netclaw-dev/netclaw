@@ -9,7 +9,7 @@
 #   .\install.ps1 -DryRun
 #
 # -Channel beta installs the newest prerelease (or latest stable if no prerelease
-# exists). -Version pins an exact version and overrides -Channel (e.g. 0.19.0-beta1).
+# exists). -Version pins an exact version and overrides -Channel (e.g. 0.19.0-beta.1).
 
 param(
     [ValidateSet("all", "cli", "daemon")]

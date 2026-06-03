@@ -15,8 +15,8 @@ namespace Netclaw.Benchmarks;
 /// turning a child's stdout stream into a bounded, redaction-ready string.
 ///
 /// The comparison is the regression fix for #1293:
-///   <see cref="ShellTool.BoundedDrainAsync"/> (head+tail ring buffer, capped at
-///   read time) versus the old path — <see cref="System.IO.TextReader.ReadToEndAsync()"/>
+///   <see cref="BoundedOutputReader.DrainToWindowAsync"/> (head+tail ring buffer,
+///   capped at read time) versus the old path — <see cref="System.IO.TextReader.ReadToEndAsync()"/>
 ///   followed by <see cref="ShellTool.TruncateOutput"/>, which materialised the
 ///   entire output before applying the cap. The story we want the numbers to tell
 ///   is allocation shape: the old path is O(total output) and lands on the LOH for
@@ -53,7 +53,7 @@ public class ShellDrainBenchmarks
     public async Task<int> BoundedDrain()
     {
         var reader = new SyntheticCharReader(TotalChars);
-        var (text, _) = await ShellTool.BoundedDrainAsync(reader, Cap);
+        var (text, _) = await BoundedOutputReader.DrainToWindowAsync(reader, Cap, CancellationToken.None);
         return text.Length;
     }
 }

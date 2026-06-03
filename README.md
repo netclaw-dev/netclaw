@@ -134,7 +134,7 @@ docker run -d --name netclawd \
 ```
 
 Use `ghcr.io/netclaw-dev/netclaw:beta` to track the newest prerelease, or a pinned
-tag like `:0.19.0-beta1`. `:latest` only ever points at the latest stable release.
+tag like `:0.19.0-beta.1`. `:latest` only ever points at the latest stable release.
 
 See the [Docker deployment guide](https://netclaw.dev/deployment/docker/) for
 volume setup, environment variables, and Docker Compose examples.
@@ -164,8 +164,8 @@ docker pull ghcr.io/netclaw-dev/netclaw:beta
 ```
 
 To pin an exact build instead of following the channel, name the version directly:
-`NETCLAW_VERSION=0.19.0-beta1` (Linux/macOS), `-Version 0.19.0-beta1` (Windows), or
-the `:0.19.0-beta1` image tag (Docker).
+`NETCLAW_VERSION=0.19.0-beta.1` (Linux/macOS), `-Version 0.19.0-beta.1` (Windows), or
+the `:0.19.0-beta.1` image tag (Docker).
 
 For the full installation reference (including building from source), see the
 [installation docs](https://netclaw.dev/getting-started/installation/).

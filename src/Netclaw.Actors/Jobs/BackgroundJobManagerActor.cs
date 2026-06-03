@@ -22,6 +22,13 @@ public sealed class BackgroundJobManagerActor : ReceiveActor
 {
     internal const int MaxConcurrentJobs = 5;
     internal const int MaxOutputTailChars = 2000;
+
+    // Capture ceiling for a job's output log: the execution actor drains each
+    // stream to this bound (head+tail) so a chatty long-running job can't buffer
+    // its full output in memory and OOM the daemon. The log holds a head+tail view
+    // for floods larger than the ceiling; the message still carries the last
+    // MaxOutputTailChars.
+    internal const int MaxCapturedOutputChars = 256_000;
     internal const string JobDeliveryKeyPrefix = "bg-job:";
     internal const string SystemSenderId = "background-job-system";
     internal const string SourceKind = "background-job";

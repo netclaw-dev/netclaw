@@ -68,6 +68,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 : await tool.ExecuteAsync(toolCall.Arguments, ct);
 
             result = SecretOutputRedactor.Redact(result);
+            // Single, uniform bounding+spill point for every tool (main session and
+            // sub-agents both funnel through here): cap the inline result to the
+            // tool's budget and, when it overflows, spill the full redacted result
+            // to a session file and steer the model to read a slice. Tools only
+            // bound their own capture for memory safety; they do not window or spill.
+            result = await ToolOutputSpill.BoundAndSpillAsync(
+                result, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
 
             sw.Stop();
             _logger.LogInformation(
@@ -90,6 +97,15 @@ public sealed class DispatchingToolExecutor : IToolExecutor
     {
         _ = await AuthorizeCoreAsync(toolCall, context, ct);
     }
+
+    // The tool's own override (verbose tools like shell opt down) wins; otherwise
+    // the session content budget; otherwise the built-in content default.
+    private static int ResolveInlineBudget(INetclawTool tool, ToolExecutionContext? context)
+        => tool.InlineOutputBudgetChars is > 0 and var toolBudget
+            ? toolBudget
+            : context?.MaxInlineToolResultChars is > 0 and var contentBudget
+                ? contentBudget
+                : ToolOutputSpill.DefaultContentBudget;
 
     public async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
         FunctionCallContent toolCall,
@@ -117,6 +133,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 case ToolCompletedUpdate completed:
                     sw.Stop();
                     var redacted = SecretOutputRedactor.Redact(completed.Result);
+                    redacted = await ToolOutputSpill.BoundAndSpillAsync(
+                        redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
                     _logger.LogInformation(
                         "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
                         toolCall.Name, sw.ElapsedMilliseconds, redacted.Length);

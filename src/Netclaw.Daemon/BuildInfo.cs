@@ -22,6 +22,13 @@ internal static class BuildInfo
         Netclaw.Configuration.BuildInfo.GetVersion(Assembly);
 
     /// <summary>
+    /// Full semver including any prerelease suffix (e.g. "0.19.0-beta.1"), read from
+    /// the daemon assembly's informational version. What the update check compares.
+    /// </summary>
+    public static string FullVersion { get; } =
+        Netclaw.Configuration.BuildInfo.GetFullVersion(Assembly);
+
+    /// <summary>
     /// Short git commit hash (first 7 chars of the SHA embedded by SourceLink),
     /// or "unknown" if the assembly was built outside a git repository.
     /// </summary>

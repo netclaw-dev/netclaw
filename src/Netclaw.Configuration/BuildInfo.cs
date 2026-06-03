@@ -35,6 +35,16 @@ public static class BuildInfo
     public static string Version => TargetAssembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
     /// <summary>
+    /// Full semver version including any prerelease suffix (e.g. "0.19.0-beta.1").
+    /// Read from <see cref="AssemblyInformationalVersionAttribute"/> (which retains the
+    /// suffix), with the SourceLink "+{sha}" build metadata stripped. Unlike
+    /// <see cref="Version"/> — which reads the numeric <c>AssemblyVersion</c> and so
+    /// loses the prerelease suffix — this is what the update check must compare, or a
+    /// beta build (e.g. "0.19.0-beta.1") would report "0.19.0" and strand on its beta.
+    /// </summary>
+    public static string FullVersion => GetFullVersion(TargetAssembly);
+
+    /// <summary>
     /// Short git commit hash (first 7 chars of the SHA embedded by SourceLink),
     /// or "unknown" if the assembly was built outside a git repository.
     /// </summary>
@@ -53,6 +63,25 @@ public static class BuildInfo
     /// </summary>
     public static string GetVersion(Assembly assembly) =>
         assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+
+    /// <summary>
+    /// Reads the full semver (incl. prerelease suffix) from a specific assembly's
+    /// <see cref="AssemblyInformationalVersionAttribute"/>, stripping SourceLink's
+    /// "+{sha}" build metadata. Falls back to the numeric <see cref="GetVersion"/>
+    /// only when the informational attribute is absent.
+    /// </summary>
+    public static string GetFullVersion(Assembly assembly)
+    {
+        var informational = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+
+        if (string.IsNullOrEmpty(informational))
+            return GetVersion(assembly);
+
+        var plusIndex = informational.IndexOf('+', StringComparison.Ordinal);
+        return plusIndex >= 0 ? informational[..plusIndex] : informational;
+    }
 
     public static string ResolveCommitHash(Assembly assembly)
     {

@@ -132,7 +132,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0", TestContext.Current.CancellationToken);
+            httpClient, "0.1.0", TestContext.Current.CancellationToken, UpdateChannel.Stable);
 
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -148,7 +148,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0", TestContext.Current.CancellationToken);
+            httpClient, "0.1.0", TestContext.Current.CancellationToken, UpdateChannel.Stable);
 
         Assert.False(result.IsUpdateAvailable);
     }
@@ -161,7 +161,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.2.0", TestContext.Current.CancellationToken);
+            httpClient, "0.2.0", TestContext.Current.CancellationToken, UpdateChannel.Stable);
 
         Assert.False(result.IsUpdateAvailable);
     }
@@ -174,7 +174,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0", TestContext.Current.CancellationToken);
+            httpClient, "0.1.0", TestContext.Current.CancellationToken, UpdateChannel.Stable);
 
         Assert.False(result.IsUpdateAvailable);
         Assert.Equal("0.1.0", result.CurrentVersion);
@@ -188,7 +188,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0", TestContext.Current.CancellationToken);
+            httpClient, "0.1.0", TestContext.Current.CancellationToken, UpdateChannel.Stable);
 
         Assert.True(result.IsUpdateAvailable);
         Assert.Equal("0.2.0", result.LatestVersion);
@@ -204,7 +204,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
 
         using var httpClient = new HttpClient(handler);
         var result = await UpdateCheckService.CheckForUpdateAsync(
-            httpClient, "0.1.0", TestContext.Current.CancellationToken);
+            httpClient, "0.1.0", TestContext.Current.CancellationToken, UpdateChannel.Stable);
 
         // Signature failure treated as network failure → no update
         Assert.False(result.IsUpdateAvailable);
@@ -309,7 +309,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
             ]
         };
 
-        var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0");
+        var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0", UpdateChannel.Stable);
 
         Assert.True(result.IsUpdateAvailable);
         // The matching count depends on the current RID at test runtime; the
@@ -344,7 +344,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
             ]
         };
 
-        var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0");
+        var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0", UpdateChannel.Stable);
 
         // Update exists in manifest but no assets match current RID
         Assert.False(result.IsUpdateAvailable);
@@ -378,7 +378,7 @@ public sealed class BinaryUpdateCheckServiceTests : IDisposable
             ]
         };
 
-        var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0");
+        var result = UpdateCheckService.EvaluateManifest(manifest, "0.1.0", UpdateChannel.Stable);
 
         Assert.Equal("https://github.com/netclaw-dev/netclaw/releases/tag/0.2.0",
             result.ReleaseNotesUrl);

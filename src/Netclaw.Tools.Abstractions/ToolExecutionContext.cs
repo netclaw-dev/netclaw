@@ -166,6 +166,17 @@ public sealed class ToolExecutionContext
     public string? SessionDirectory { get; }
 
     /// <summary>
+    /// The session <i>content</i> inline budget
+    /// (<c>SessionTuning.MaxInlineToolResultChars</c>), surfaced here so
+    /// <c>DispatchingToolExecutor</c> can bound a tool result and spill the
+    /// overflow to <c>{SessionDirectory}/tool-calls/{callId}.log</c>. The dispatcher
+    /// uses a tool's own <c>InlineOutputBudgetChars</c> override when set (verbose
+    /// tools), else this content budget. Zero when unset (the dispatcher falls back
+    /// to its built-in content default).
+    /// </summary>
+    public int MaxInlineToolResultChars { get; init; }
+
+    /// <summary>
     /// Resolved absolute working directory for the in-flight tool call. Set
     /// by the session pipeline from the candidate tool arguments,
     /// <c>WorkingContext.ProjectDirectory</c>, or <see cref="SessionDirectory"/>
