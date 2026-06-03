@@ -65,7 +65,7 @@ public sealed record ModelSelectionReference
 /// </summary>
 public sealed record GetModelSelectionResponse
 {
-    public required ModelSelectionReference Main { get; init; }
+    public ModelSelectionReference? Main { get; init; }
 
     public ModelSelectionReference? Fallback { get; init; }
 

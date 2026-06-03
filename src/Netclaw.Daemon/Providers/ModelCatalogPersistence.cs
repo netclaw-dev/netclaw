@@ -34,7 +34,7 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
 
         return new GetModelSelectionResponse
         {
-            Main = ReadReferenceOrDefault(models, "Main"),
+            Main = ReadReference(models, "Main"),
             Fallback = ReadReference(models, "Fallback"),
             Compaction = ReadReference(models, "Compaction"),
         };
@@ -69,13 +69,6 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
 
         return ModelCatalogWriteResult.Ok(paths.NetclawConfigPath);
     }
-
-    private static ModelSelectionReference ReadReferenceOrDefault(JsonObject? models, string role)
-        => ReadReference(models, role) ?? new ModelSelectionReference
-        {
-            Provider = "local-ollama",
-            ModelId = "qwen3:30b",
-        };
 
     private static ModelSelectionReference? ReadReference(JsonObject? models, string role)
     {
