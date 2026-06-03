@@ -65,15 +65,7 @@ internal static class DaemonClientFactory
         => LoadDaemonConfig(paths).ExposureMode;
 
     internal static DaemonConfig LoadDaemonConfig(NetclawPaths paths)
-    {
-        var config = new ConfigurationBuilder()
-            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
-            .AddJsonFile(paths.SecretsPath, optional: true, reloadOnChange: false)
-            .AddEnvironmentVariables("NETCLAW_")
-            .Build();
-
-        return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
-    }
+        => DaemonControlPlaneEndpointResolver.LoadDaemonConfig(paths);
 
     /// <summary>
     /// Returns <c>true</c> if the endpoint resolves to a loopback address

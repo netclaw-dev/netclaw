@@ -28,6 +28,8 @@ public static class DaemonProviderServiceExtensions
         // Register plugins and OAuth from Netclaw.Providers
         services.AddLlmProviders();
 
+        services.AddSingleton(new ConfiguredModelProviderState(providers, models));
+
         // Register the plugin factory and chat client provider
         services.AddSingleton(sp =>
             new ProviderPluginFactory(providers, sp.GetServices<ILlmProviderPlugin>()));

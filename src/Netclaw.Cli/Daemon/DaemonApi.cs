@@ -53,20 +53,7 @@ public sealed class DaemonApi
     /// Usable without DI for callers that don't have the CLI service provider.
     /// </summary>
     public static string ResolveEndpoint(NetclawPaths? paths = null)
-    {
-        paths ??= new NetclawPaths();
-
-        return (Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT")
-            ?? ClientConfigFile.ReadEndpoint(paths)
-            ?? ResolveDaemonConfigEndpoint(paths)
-            ?? DefaultEndpoint).TrimEnd('/');
-    }
-
-    private static string? ResolveDaemonConfigEndpoint(NetclawPaths paths)
-    {
-        var daemonConfig = DaemonClientFactory.LoadDaemonConfig(paths);
-        return DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(daemonConfig);
-    }
+        => DaemonControlPlaneEndpointResolver.ResolveEndpoint(paths);
 
     /// <summary>
     /// The resolved daemon base endpoint (e.g. <c>http://127.0.0.1:5199</c>).
