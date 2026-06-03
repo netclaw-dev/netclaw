@@ -14,12 +14,18 @@ public static class DiscordConfigEndpointRouteBuilderExtensions
         app.MapGet("/api/config/discord", (DiscordConfigPersistence persistence) =>
         {
             return Results.Ok(persistence.Read());
-        }).RequireAuthorization();
+        }).RequireAuthorization()
+        .WithName("GetDiscordConfig")
+        .WithSummary("Get the current Discord connector configuration (bot token excluded).")
+        .WithTags("Discord");
 
         app.MapPut("/api/config/discord", (PutDiscordConfigRequest request, DiscordConfigPersistence persistence) =>
         {
             var response = persistence.Write(request);
             return Results.Ok(response);
-        }).RequireAuthorization();
+        }).RequireAuthorization()
+        .WithName("UpdateDiscordConfig")
+        .WithSummary("Update the Discord connector configuration; takes effect after a daemon restart.")
+        .WithTags("Discord");
     }
 }
