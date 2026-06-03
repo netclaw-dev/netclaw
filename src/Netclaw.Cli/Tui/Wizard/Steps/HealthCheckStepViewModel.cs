@@ -152,12 +152,35 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
 
         // We never stop the daemon: writing the config below is the single restart
         // trigger. A running daemon's ConfigWatcherService performs a coordinated
-        // in-process restart to apply it (#1279). Capture its pre-write state first so
-        // we can confirm the reload actually happened — the PID-file generation
-        // advances on each restart, distinguishing the reloaded daemon from the
-        // still-draining old one (both answer the anonymous /health/ready).
+        // in-process restart to apply it (#1279). Capture its restart generation first so
+        // we can confirm the reload actually happened — the daemon advances a monotonic
+        // generation on each restart and reports it on /api/health/ready, distinguishing
+        // the reloaded daemon from the still-draining old one (#1302).
+        // A null baseline relaxes the gate to "any live instance counts" (see
+        // IsRestartedGeneration). That happens in two ways, both intentional and bounded:
+        //   * the daemon was not running before (nothing to confuse with — correct);
+        //   * the daemon is running but reports no generation. That only occurs against a
+        //     pre-#1302 daemon during the single upgrade where a new CLI re-runs init
+        //     against an old daemon that hasn't restarted yet. The config is still written
+        //     to disk and applied; the only cost is the wizard declaring "ready" a beat
+        //     early against the reloading daemon — cosmetic, and gone once the daemon is on
+        //     a build that emits the generation header.
         var wasRunning = _daemonManager?.GetStatus().IsRunning ?? false;
-        var generationBefore = _daemonManager?.TryGetRecordedStartTime();
+        int? generationBefore = null;
+        if (wasRunning && _daemonApi is not null)
+        {
+            try
+            {
+                generationBefore = (await _daemonApi.ProbeReadinessAsync(ct)).Generation;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                // Running per GetStatus but not answering the probe right now. Fall back to
+                // "any live instance counts" (null) — at worst the readiness-race guard is
+                // relaxed for this run; it never produces a false "not ready".
+                generationBefore = null;
+            }
+        }
 
         // Write config
         runner.Add(new HealthCheckItem("Writing configuration", null));
@@ -225,7 +248,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     private static string ProgressLabel(bool wasRunning) =>
         wasRunning ? "Applying configuration" : "Starting daemon";
 
-    private async Task<bool> StartIfNeededAndPollAsync(bool wasRunning, DateTimeOffset? generationBefore, CancellationToken ct)
+    private async Task<bool> StartIfNeededAndPollAsync(bool wasRunning, int? generationBefore, CancellationToken ct)
     {
         if (_daemonManager is null) return false;
 
@@ -264,17 +287,17 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         {
             ct.ThrowIfCancellationRequested();
 
-            bool ready;
+            DaemonApi.DaemonReadiness probe;
             try
             {
-                ready = await api.IsHealthyAsync(ct);
+                probe = await api.ProbeReadinessAsync(ct);
             }
             catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException && !ct.IsCancellationRequested)
             {
-                ready = false; // daemon mid-restart / per-request timeout — keep waiting
+                probe = default; // daemon mid-restart / per-request timeout — keep waiting
             }
 
-            if (ready && IsRestartedGeneration(generationBefore))
+            if (probe.Healthy && IsRestartedGeneration(generationBefore, probe.Generation))
                 return true;
 
             // Fail fast on a startup abort instead of polling the full timeout: a bad
@@ -313,21 +336,16 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     }
 
     /// <summary>
-    /// Whether the daemon now reports a newer restart generation than
-    /// <paramref name="before"/> (the PID-file start time advances on each in-process
-    /// restart). A missing pre-restart value (daemon was down) means any live instance
-    /// qualifies; a missing current value means the restarted daemon hasn't written its
-    /// PID file yet, so it does not yet qualify. Without a daemon manager there is no
-    /// generation source to confirm a restart, so we fail safe (treat as not-yet-restarted)
-    /// rather than risk reporting the still-draining old daemon as ready.
+    /// Whether the daemon's reported <paramref name="current"/> restart generation proves
+    /// it restarted onto the freshly-written config. A missing <paramref name="before"/>
+    /// (the daemon was down before the write) means any live instance qualifies; a missing
+    /// <paramref name="current"/> (the daemon answered healthy but reported no generation —
+    /// a pre-#1302 daemon, or a torn probe) cannot confirm a restart, so it does not yet
+    /// qualify — failing safe rather than risk reporting the still-draining pre-restart
+    /// daemon as ready (#1302).
     /// </summary>
-    internal bool IsRestartedGeneration(DateTimeOffset? before)
-    {
-        if (_daemonManager is null) return false;
-        var current = _daemonManager.TryGetRecordedStartTime();
-        if (current is null) return false;
-        return before is null || current > before;
-    }
+    internal static bool IsRestartedGeneration(int? before, int? current) =>
+        before is null || (current is { } now && now > before);
 
     private void NotifyChanged()
     {

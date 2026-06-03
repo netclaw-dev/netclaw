@@ -250,15 +250,6 @@ public sealed partial class DaemonManager
     }
 
     /// <summary>
-    /// Reads the daemon's recorded start time from the PID file, or <c>null</c> if
-    /// absent. The daemon rewrites this on every (in-process) restart, so a change
-    /// signals a fresh restart generation — letting callers tell a restarted daemon
-    /// apart from a still-draining one without an authenticated status call.
-    /// </summary>
-    internal DateTimeOffset? TryGetRecordedStartTime()
-        => TryReadPidFile(out _, out var startedAt) ? startedAt : null;
-
-    /// <summary>
     /// Installs daemon as a systemd user service (Linux only).
     /// </summary>
     public async Task<DaemonResult> InstallAsync()

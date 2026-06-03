@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Akka.Actor;
 using Akka.Hosting;
@@ -96,6 +97,10 @@ try
         do
         {
             restartSignal.Reset();
+            // Each pass through the loop is a new daemon generation; the counter is
+            // surfaced on /api/health/ready so the init wizard can confirm a config
+            // reload actually restarted the daemon (#1302).
+            restartSignal.AdvanceGeneration();
             await RunDaemonAsync(args, restartSignal, crashMonitor);
         } while (restartSignal.RestartRequested);
     }
@@ -238,7 +243,16 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
-    app.MapGet("/api/health/ready", () => TypedResults.Ok("healthy"))
+    app.MapGet("/api/health/ready", (DaemonRestartSignal restartSignal, HttpResponse response) =>
+        {
+            // Surface the monotonic restart generation on the anonymous readiness probe
+            // (#1302). The init wizard reads it to confirm the daemon it is polling is the
+            // post-config-reload generation, not the still-draining pre-restart one — on
+            // the anonymous endpoint precisely so first-init needs no auth token.
+            response.Headers["X-Netclaw-Generation"] =
+                restartSignal.Generation.ToString(CultureInfo.InvariantCulture);
+            return TypedResults.Ok("healthy");
+        })
         .WithName("HealthReady")
         .WithSummary("Liveness probe reporting the daemon is accepting requests.")
         .WithTags("Health");

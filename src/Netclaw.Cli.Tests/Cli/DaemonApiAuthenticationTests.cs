@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
@@ -136,6 +137,77 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         var endpoint = DaemonApi.ResolveEndpoint(_paths);
 
         Assert.Equal("http://override-host:6000", endpoint);
+    }
+
+    [Fact]
+    public async Task ProbeReadinessAsync_ReportsHealthyAndParsesGenerationHeader()
+    {
+        HttpRequestMessage? captured = null;
+        var api = CreateDaemonApi("http://127.0.0.1:5199", request =>
+        {
+            captured = request;
+            var response = new HttpResponseMessage(HttpStatusCode.OK);
+            response.Headers.Add("X-Netclaw-Generation", "7");
+            return response;
+        });
+
+        var readiness = await api.ProbeReadinessAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(readiness.Healthy);
+        Assert.Equal(7, readiness.Generation);
+        Assert.Equal("/api/health/ready", captured!.RequestUri!.AbsolutePath);
+    }
+
+    [Fact]
+    public async Task ProbeReadinessAsync_NoGenerationHeader_ReportsHealthyWithNullGeneration()
+    {
+        // A pre-#1302 daemon answers 200 without the header — still healthy, generation unknown.
+        var api = CreateDaemonApi("http://127.0.0.1:5199",
+            _ => new HttpResponseMessage(HttpStatusCode.OK));
+
+        var readiness = await api.ProbeReadinessAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(readiness.Healthy);
+        Assert.Null(readiness.Generation);
+    }
+
+    [Fact]
+    public async Task ProbeReadinessAsync_NonSuccess_ReportsNotHealthy()
+    {
+        var api = CreateDaemonApi("http://127.0.0.1:5199",
+            _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+
+        var readiness = await api.ProbeReadinessAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(readiness.Healthy);
+        Assert.Null(readiness.Generation);
+    }
+
+    [Fact]
+    public async Task ProbeReadinessAsync_ReResolvesEndpoint_AfterDaemonPortChange()
+    {
+        // NOTE: this test deliberately does NOT use CreateDaemonApi — that helper writes a
+        // client-endpoint file (ClientConfigFile.WriteEndpoint), which wins over the Daemon
+        // config section in ResolveEndpoint and would FREEZE the endpoint, defeating the
+        // re-resolution this test guards. Resolution must fall through to the Daemon section
+        // both at construction and at probe time, so no client endpoint / env override is set.
+        // Daemon bound :5199 when the client was constructed...
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"Daemon\":{\"Host\":\"127.0.0.1\",\"Port\":5199}}");
+        HttpRequestMessage? captured = null;
+        var api = new DaemonApi(
+            new FakeHttpClientFactory(request => { captured = request; return new HttpResponseMessage(HttpStatusCode.OK); }),
+            new ConfigurationBuilder().Build(),
+            _paths);
+
+        // ...then a Daemon-section change rebinds it to :5300 (as the wizard would write).
+        // A frozen endpoint would keep probing :5199; the probe must re-resolve to :5300 (#1304).
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"Daemon\":{\"Host\":\"127.0.0.1\",\"Port\":5300}}");
+
+        await api.ProbeReadinessAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(5300, captured!.RequestUri!.Port);
     }
 
     private DaemonApi CreateDaemonApi(string endpoint, Func<HttpRequestMessage, HttpResponseMessage> handler)

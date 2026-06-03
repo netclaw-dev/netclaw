@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -27,6 +28,7 @@ public sealed class DaemonApi
     private readonly IHttpClientFactory _factory;
     private readonly string _endpoint;
     private readonly string? _deviceToken;
+    private readonly NetclawPaths _paths;
 
     /// <summary>
     /// Default daemon endpoint when no override is configured.
@@ -36,6 +38,7 @@ public sealed class DaemonApi
     public DaemonApi(IHttpClientFactory factory, IConfiguration configuration, NetclawPaths paths)
     {
         _factory = factory;
+        _paths = paths;
         _endpoint = ResolveEndpoint(paths);
         _deviceToken = DaemonClientFactory.ResolveDeviceToken(_endpoint, paths, DaemonClientFactory.ResolveExposureMode(paths));
     }
@@ -295,12 +298,40 @@ public sealed class DaemonApi
 
     // ── Health (for init wizard polling) ──────────────────────────────
 
-    public async Task<bool> IsHealthyAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Outcome of probing <c>/api/health/ready</c>: whether the daemon answered healthy,
+    /// and the monotonic restart <see cref="Generation"/> it reported (null when the
+    /// daemon predates the header or the probe failed).
+    /// </summary>
+    public readonly record struct DaemonReadiness(bool Healthy, int? Generation);
+
+    /// <summary>
+    /// Probes the daemon's anonymous readiness endpoint, returning both health and the
+    /// reported restart generation (<c>X-Netclaw-Generation</c>).
+    /// </summary>
+    /// <remarks>
+    /// The endpoint is re-resolved on every probe rather than reusing the value captured
+    /// at construction (#1304): the init wizard writes config and waits for an in-process
+    /// restart, and if that change altered <c>Daemon.Port</c> the daemon comes back on the
+    /// new port while a frozen endpoint would keep polling the dead one. Re-resolution
+    /// reads the just-written <c>Daemon</c> section (and still honors an explicit
+    /// <c>NETCLAW_DAEMON_ENDPOINT</c> / paired client endpoint when one is set).
+    /// </remarks>
+    public async Task<DaemonReadiness> ProbeReadinessAsync(CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = CreateHttpClient();
-        var response = await client.GetAsync($"{_endpoint}/api/health/ready", cts.Token);
-        return response.IsSuccessStatusCode;
+        var endpoint = ResolveEndpoint(_paths);
+        using var response = await client.GetAsync($"{endpoint}/api/health/ready", cts.Token);
+        if (!response.IsSuccessStatusCode)
+            return new DaemonReadiness(false, null);
+
+        int? generation = null;
+        if (response.Headers.TryGetValues("X-Netclaw-Generation", out var values)
+            && int.TryParse(values.FirstOrDefault(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+            generation = parsed;
+
+        return new DaemonReadiness(true, generation);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────
