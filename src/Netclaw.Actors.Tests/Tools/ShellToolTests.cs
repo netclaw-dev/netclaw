@@ -103,11 +103,12 @@ public class ShellToolTests
     public async Task Output_truncation_applies()
     {
         var tool = new ShellTool(new ToolConfig { MaxOutputChars = 50 });
-        // Generate output longer than 50 chars — use cross-platform command
-        var command = OperatingSystem.IsWindows()
-            ? "python -c \"print('x' * 200)\""
-            : "printf 'x%.0s' {1..200}";
-        var args = ToolInput.Create("Command", command);
+        // Write >50 chars to stdout with a command that needs no interpreter.
+        // `echo` is a builtin on both bash and cmd.exe; a long literal is
+        // deterministic. (python on the Windows runner resolves to the Store
+        // stub, which writes to stderr — so the truncation would land on stderr
+        // and the marker would read "[stderr truncated", not "[stdout truncated".)
+        var args = ToolInput.Create("Command", $"echo {new string('x', 200)}");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
