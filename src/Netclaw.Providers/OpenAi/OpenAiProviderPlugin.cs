@@ -37,15 +37,15 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
             };
             options.AddPolicy(new OpenAiCodexRequestPolicy(accountId), PipelinePosition.PerCall);
 
-            // The Codex backend rejects non-streaming Responses calls with
-            // 400 {"detail":"Stream must be set to true"}. Netclaw's session loop
-            // streams, but auxiliary calls (title generation, memory extraction,
-            // compaction) use the non-streaming GetResponseAsync path. Wrap the
-            // client so those calls are served by streaming under the hood.
-            return new StreamingOnlyChatClient(
-                new OpenAI.Responses.ResponsesClient(
-                        new ApiKeyCredential(token.Value), options)
-                    .AsIChatClient(model.ModelId));
+            // No non-streaming wrapper is needed here: Netclaw issues streaming-only
+            // LLM calls everywhere (the session loop and every auxiliary caller —
+            // title generation, memory extraction, compaction — go through the
+            // streaming transport), so the Codex backend's
+            // 400 {"detail":"Stream must be set to true"} on non-streaming Responses
+            // calls is structurally unreachable.
+            return new OpenAI.Responses.ResponsesClient(
+                    new ApiKeyCredential(token.Value), options)
+                .AsIChatClient(model.ModelId);
         }
 
         // API key path → standard endpoint
@@ -53,22 +53,4 @@ public sealed class OpenAiProviderPlugin : ProviderPluginBase<OpenAiDescriptor>
         return new OpenAI.Responses.ResponsesClient(apiKey)
             .AsIChatClient(model.ModelId);
     }
-}
-
-/// <summary>
-/// Serves non-streaming <see cref="IChatClient.GetResponseAsync"/> calls by consuming the
-/// underlying streaming endpoint and aggregating the updates. Required for the OpenAI Codex
-/// backend, which rejects non-streaming Responses requests with
-/// <c>400 {"detail":"Stream must be set to true"}</c>. Streaming calls pass straight through.
-/// </summary>
-internal sealed class StreamingOnlyChatClient : DelegatingChatClient
-{
-    public StreamingOnlyChatClient(IChatClient innerClient) : base(innerClient) { }
-
-    public override Task<ChatResponse> GetResponseAsync(
-        IEnumerable<ChatMessage> messages,
-        ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
-        => base.GetStreamingResponseAsync(messages, options, cancellationToken)
-            .ToChatResponseAsync(cancellationToken);
 }
