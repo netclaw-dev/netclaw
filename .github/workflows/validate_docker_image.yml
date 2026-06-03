@@ -16,8 +16,7 @@ on:
     paths:
       - 'docker/Dockerfile'
       - 'docker/entrypoint.sh'
-      - 'scripts/docker/build-image.sh'
-      - 'scripts/docker/test-daemon-lifecycle.sh'
+      - 'scripts/docker/**'
       - 'src/**'
       - 'global.json'
       - 'Directory.Build.props'
@@ -31,8 +30,7 @@ on:
     paths:
       - 'docker/Dockerfile'
       - 'docker/entrypoint.sh'
-      - 'scripts/docker/build-image.sh'
-      - 'scripts/docker/test-daemon-lifecycle.sh'
+      - 'scripts/docker/**'
       - 'src/**'
       - 'global.json'
       - 'Directory.Build.props'
@@ -83,51 +81,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source scripts/docker/lib/smoke-lib.sh   # shared minimal-config env + health poll (#1303)
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
 
-          # Ollama provider type needs no API key, so this job can run
-          # without secrets. The endpoint is fake (:11434 on loopback) —
-          # the daemon doesn't actually call it during startup or health
-          # checks, so unreachable is fine.
-          # Bind loopback (Local mode default) — the health probe runs
-          # inside the container via docker exec, so no port mapping needed.
-          docker run -d --name netclaw-validate-ok \
-            -e NETCLAW_Daemon__Port=5199 \
-            -e NETCLAW_Providers__validate__Type=ollama \
-            -e NETCLAW_Providers__validate__Endpoint=http://127.0.0.1:11434 \
-            -e NETCLAW_Models__Main__Provider=validate \
-            -e NETCLAW_Models__Main__ModelId=qwen2:0.5b \
+          # Minimal config from the shared lib (no secrets; fake Ollama endpoint is never
+          # called during startup/health). Default bind port 5199; probe runs in-container.
+          docker run -d --name netclaw-validate-ok $(netclaw_smoke_env_args) \
             "netclawd-pr:${{ steps.tag.outputs.tag }}" >/dev/null
 
-          # Poll /api/health/ready for up to 60s from inside the container.
-          for i in $(seq 1 60); do
-            if docker exec netclaw-validate-ok curl -fsS http://127.0.0.1:5199/api/health/ready >/dev/null 2>&1; then
-              echo "✓ Daemon reported healthy after ${i}s"
-              docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
-              exit 0
-            fi
-
-            # Bail early if the container crashed mid-probe.
-            running=$(docker inspect -f '{{.State.Running}}' netclaw-validate-ok 2>/dev/null || echo "false")
-            if [[ "$running" != "true" ]]; then
-              echo "ERROR: daemon container exited during health probe" >&2
-              docker logs netclaw-validate-ok >&2 2>&1 || true
-              docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
-              exit 1
-            fi
-
-            sleep 1
-          done
-
-          echo "ERROR: daemon did not report healthy within 60s" >&2
-          docker logs netclaw-validate-ok >&2 2>&1 || true
+          if netclaw_wait_healthy netclaw-validate-ok 5199 60; then
+            echo "✓ Daemon reported healthy"
+          else
+            echo "ERROR: daemon did not reach a healthy state within 60s" >&2
+            docker logs netclaw-validate-ok >&2 2>&1 || true
+            docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
+            exit 1
+          fi
           docker rm -f netclaw-validate-ok >/dev/null 2>&1 || true
-          exit 1
 
       - name: "Verify bind-mounted state ownership is repaired"
         shell: bash
         run: |
           set -euo pipefail
+          source scripts/docker/lib/smoke-lib.sh   # shared minimal-config env + health poll (#1303)
           docker rm -f netclaw-validate-bind-mount >/dev/null 2>&1 || true
 
           tmpdir="$(mktemp -d)"
@@ -157,34 +133,16 @@ jobs:
           docker run -d --name netclaw-validate-bind-mount \
             -v "$state_dir:/home/netclaw/.netclaw" \
             -v "$tools_dir:/tools" \
-            -e NETCLAW_Daemon__Port=5199 \
-            -e NETCLAW_Providers__validate__Type=ollama \
-            -e NETCLAW_Providers__validate__Endpoint=http://127.0.0.1:11434 \
-            -e NETCLAW_Models__Main__Provider=validate \
-            -e NETCLAW_Models__Main__ModelId=qwen2:0.5b \
+            $(netclaw_smoke_env_args) \
             "netclawd-pr:${{ steps.tag.outputs.tag }}" >/dev/null
 
-          for i in $(seq 1 60); do
-            if docker exec netclaw-validate-bind-mount curl -fsS http://127.0.0.1:5199/api/health/ready >/dev/null 2>&1; then
-              echo "✓ Bind-mounted daemon reported healthy after ${i}s"
-              break
-            fi
-
-            running="$(docker inspect -f '{{.State.Running}}' netclaw-validate-bind-mount 2>/dev/null || echo "false")"
-            if [[ "$running" != "true" ]]; then
-              echo "ERROR: bind-mounted daemon container exited during health probe" >&2
-              docker logs netclaw-validate-bind-mount >&2 2>&1 || true
-              exit 1
-            fi
-
-            if [[ "$i" == "60" ]]; then
-              echo "ERROR: bind-mounted daemon did not report healthy within 60s" >&2
-              docker logs netclaw-validate-bind-mount >&2 2>&1 || true
-              exit 1
-            fi
-
-            sleep 1
-          done
+          if netclaw_wait_healthy netclaw-validate-bind-mount 5199 60; then
+            echo "✓ Bind-mounted daemon reported healthy"
+          else
+            echo "ERROR: bind-mounted daemon did not reach a healthy state within 60s" >&2
+            docker logs netclaw-validate-bind-mount >&2 2>&1 || true
+            exit 1
+          fi
 
           docker exec netclaw-validate-bind-mount test -d /home/netclaw/.netclaw/identity
 

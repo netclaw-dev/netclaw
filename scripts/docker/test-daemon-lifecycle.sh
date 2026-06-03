@@ -22,10 +22,24 @@
 #     crash-loops) rather than silently keep serving stale config; fixing the
 #     config on disk must let the supervisor's next restart recover.
 #
+#   Phase D — PID 1 reaps orphaned subprocesses (#1287):
+#     An orphaned process (its parent exits, so it reparents to PID 1) must be reaped
+#     once it dies rather than lingering as a <defunct> zombie — proving tini runs as
+#     PID 1 and reaps, which entrypoint.sh alone (it only `wait`s its direct child)
+#     would not do.
+#
+# Process tree (#1287): tini (PID 1) -> entrypoint.sh supervisor -> netclawd. netclawd
+# is therefore a child of the supervisor, NOT a direct child of PID 1 — see
+# daemon_supervision() for how the supervised-child invariant is checked.
+#
 # Usage:
 #   scripts/docker/test-daemon-lifecycle.sh <image-ref>
 #   scripts/docker/test-daemon-lifecycle.sh netclawd-pr:pr-1279
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/docker/lib/smoke-lib.sh
+. "$SCRIPT_DIR/lib/smoke-lib.sh"
 
 IMAGE="${1:?usage: test-daemon-lifecycle.sh <image-ref>}"
 CONTAINER="netclaw-lifecycle-1279"
@@ -48,27 +62,42 @@ fail() {
 daemon_count() { docker exec "$CONTAINER" sh -c 'pgrep -x netclawd | wc -l' | tr -d '[:space:]'; }
 # PID of the (first) netclawd, empty if none.
 daemon_pid()   { docker exec "$CONTAINER" sh -c 'pgrep -x netclawd | head -n1' | tr -d '[:space:]'; }
-# Parent PID of the (first) netclawd — must be 1 (entrypoint.sh), proving it is
-# the supervisor's child and not an orphaned/exec-session process. Emits empty when
-# no daemon is running (rather than letting `ps -p ""` error and trip `set -e` at the
-# capture site, which would abort before the descriptive `fail` + log dump).
-daemon_ppid()  { docker exec "$CONTAINER" sh -c 'pid=$(pgrep -x netclawd | head -n1); [ -n "$pid" ] && ps -o ppid= -p "$pid" || true' | tr -d '[:space:]'; }
+# Supervision chain of the (first) netclawd. Proves it is the supervised child of the
+# entrypoint.sh process, which is itself a child of PID 1 (tini, #1287) — NOT a detached
+# daemon from a `docker exec` session (which reparents straight to PID 1). With tini
+# inserted as PID 1, netclawd's direct parent is the entrypoint.sh supervisor (PID > 1),
+# so a bare "PPID == 1" check no longer expresses the invariant. Echoes "ok" on success,
+# "no-daemon" when none is running, or a diagnostic otherwise; always exits 0 so it never
+# trips the caller's `set -e` before the descriptive `fail` + log dump.
+daemon_supervision() {
+    docker exec "$CONTAINER" sh -c '
+        dpid=$(pgrep -x netclawd | head -n1)
+        [ -n "$dpid" ] || { echo "no-daemon"; exit 0; }
+        sup=$(ps -o ppid= -p "$dpid" 2>/dev/null | tr -d "[:space:]")
+        supargs=$(ps -o args= -p "$sup" 2>/dev/null)
+        supppid=$(ps -o ppid= -p "$sup" 2>/dev/null | tr -d "[:space:]")
+        case "$supargs" in
+            *entrypoint.sh*) ;;
+            *) echo "parent-not-supervisor(pid=$sup args=[$supargs])"; exit 0 ;;
+        esac
+        [ "$supppid" = "1" ] || { echo "supervisor-not-pid1-child(ppid=$supppid)"; exit 0; }
+        echo "ok"
+    '
+}
 # PID-file generation (line 2 = ISO start time); the daemon rewrites it on each restart.
 daemon_generation() { docker exec "$CONTAINER" sh -c "sed -n 2p $PIDFILE 2>/dev/null" | tr -d '[:space:]'; }
 # Number of times the supervisor has observed the daemon exit (proves a real exit
 # vs an in-process restart, which keeps the process alive).
 entrypoint_exit_count() { docker logs "$CONTAINER" 2>&1 | grep -c '\[entrypoint\] netclawd exited' || true; }
 
+# Wrap the shared poll so a container-exit (rc 2) becomes a descriptive failure.
 wait_healthy() {  # $1 = port, $2 = timeout-seconds
-    for _ in $(seq 1 "$2"); do
-        if docker exec "$CONTAINER" curl -fsS "http://127.0.0.1:$1/api/health/ready" >/dev/null 2>&1; then
-            return 0
-        fi
-        [[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo false)" == "true" ]] \
-            || fail "container exited while waiting for health on :$1"
-        sleep 1
-    done
-    return 1
+    local rc=0
+    netclaw_wait_healthy "$CONTAINER" "$1" "$2" || rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+        fail "container exited while waiting for health on :$1"
+    fi
+    return "$rc"
 }
 port_serving() { docker exec "$CONTAINER" curl -fsS "http://127.0.0.1:$1/api/health/ready" >/dev/null 2>&1; }
 
@@ -77,24 +106,17 @@ write_config() { docker exec -i "$CONTAINER" sh -c "cat > $CONFIG"; }
 
 echo "==> Starting supervised daemon from image: $IMAGE"
 cleanup
-# Ollama needs no API key, so this runs without secrets; the endpoint is never called
-# during startup/health, so an unreachable one is fine. Local (loopback) mode is the
-# default. NOTE: we deliberately do NOT set NETCLAW_Daemon__Port — env overrides the
-# config file (Program.cs: env is highest priority), and Phase A needs the file's
-# Daemon.Port to be authoritative. The default port is already 5199.
-docker run -d --name "$CONTAINER" \
-    -e NETCLAW_Providers__validate__Type=ollama \
-    -e NETCLAW_Providers__validate__Endpoint=http://127.0.0.1:11434 \
-    -e NETCLAW_Models__Main__Provider=validate \
-    -e NETCLAW_Models__Main__ModelId=qwen2:0.5b \
-    "$IMAGE" >/dev/null
+# Minimal provider/model config from the shared lib (deliberately no Daemon.Port — see
+# netclaw_smoke_env_args; Phase A needs the file's port to win over env).
+# shellcheck disable=SC2046  # intentional word-splitting of the -e args
+docker run -d --name "$CONTAINER" $(netclaw_smoke_env_args) "$IMAGE" >/dev/null
 
 wait_healthy "$DEFAULT_PORT" 60 || fail "supervised daemon never became healthy on :$DEFAULT_PORT"
 
-count="$(daemon_count)"; pid="$(daemon_pid)"; ppid="$(daemon_ppid)"
-echo "    initial: count=$count pid=$pid ppid=$ppid (port :$DEFAULT_PORT)"
-[[ "$count" == "1" ]]  || fail "expected exactly 1 netclawd at startup, found $count"
-[[ "$ppid" == "1" ]]   || fail "netclawd PPID is '$ppid', expected 1 (entrypoint supervisor)"
+count="$(daemon_count)"; pid="$(daemon_pid)"; sup="$(daemon_supervision)"
+echo "    initial: count=$count pid=$pid supervision=$sup (port :$DEFAULT_PORT)"
+[[ "$count" == "1" ]] || fail "expected exactly 1 netclawd at startup, found $count"
+[[ "$sup" == "ok" ]]  || fail "netclawd is not properly supervised at startup: $sup"
 
 # ── Phase A: a config write reloads in-process AND the change takes effect ──
 echo "==> Phase A: config write re-binds the daemon in-process (:$DEFAULT_PORT -> :$NEW_PORT)"
@@ -122,11 +144,11 @@ wait_healthy "$NEW_PORT" 60   || fail "daemon not healthy on the new port :$NEW_
 ! port_serving "$DEFAULT_PORT" || fail "old port :$DEFAULT_PORT still serving — the bind change did not apply"
 
 # ...and it was an in-process restart, not a respawn / duplicate.
-count_a="$(daemon_count)"; pid_a="$(daemon_pid)"; ppid_a="$(daemon_ppid)"
-echo "    after reload: count=$count_a pid=$pid_a ppid=$ppid_a (port :$NEW_PORT)"
+count_a="$(daemon_count)"; pid_a="$(daemon_pid)"; sup_a="$(daemon_supervision)"
+echo "    after reload: count=$count_a pid=$pid_a supervision=$sup_a (port :$NEW_PORT)"
 [[ "$count_a" == "1" ]]  || fail "config reload produced $count_a daemons (expected 1 — duplicate!)"
 [[ "$pid_a" == "$pid" ]] || fail "PID changed ($pid -> $pid_a): the process exited instead of restarting in-process"
-[[ "$ppid_a" == "1" ]]   || fail "netclawd PPID is '$ppid_a' after reload, expected 1"
+[[ "$sup_a" == "ok" ]]   || fail "netclawd not properly supervised after reload: $sup_a"
 [[ "$(entrypoint_exit_count)" == "0" ]] \
     || fail "entrypoint observed a daemon exit during an in-process reload (supervisor would respawn)"
 
@@ -142,10 +164,10 @@ echo "$out" | grep -qi "container supervisor" \
 # Give any erroneously-spawned daemon time to race for the lock.
 sleep 3
 
-count_b="$(daemon_count)"; ppid_b="$(daemon_ppid)"
-echo "    after daemon start: count=$count_b ppid=$ppid_b"
+count_b="$(daemon_count)"; sup_b="$(daemon_supervision)"
+echo "    after daemon start: count=$count_b supervision=$sup_b"
 [[ "$count_b" == "1" ]] || fail "'netclaw daemon start' produced $count_b daemons (split-brain!)"
-[[ "$ppid_b" == "1" ]]  || fail "netclawd PPID is '$ppid_b', expected 1 (daemon was orphaned)"
+[[ "$sup_b" == "ok" ]]  || fail "netclawd not properly supervised after 'daemon start': $sup_b"
 if docker logs "$CONTAINER" 2>&1 | grep -q "Another netclawd instance is already running (lock file held)"; then
     fail "lock-file contention detected in container logs (split-brain)"
 fi
@@ -173,9 +195,42 @@ write_config <<JSON
 { "Daemon": { "Host": "127.0.0.1", "Port": $NEW_PORT, "ExposureMode": "local" } }
 JSON
 wait_healthy "$NEW_PORT" 90 || fail "daemon did not recover on :$NEW_PORT after the bad config was fixed"
-count_c="$(daemon_count)"; ppid_c="$(daemon_ppid)"
+count_c="$(daemon_count)"; sup_c="$(daemon_supervision)"
 [[ "$count_c" == "1" ]] || fail "after recovery found $count_c daemons (expected 1)"
-[[ "$ppid_c" == "1" ]]  || fail "after recovery netclawd PPID is '$ppid_c', expected 1"
-echo "    recovered: count=$count_c ppid=$ppid_c (port :$NEW_PORT)"
+[[ "$sup_c" == "ok" ]]  || fail "after recovery netclawd not properly supervised: $sup_c"
+echo "    recovered: count=$count_c supervision=$sup_c (port :$NEW_PORT)"
 
-echo "✓ #1279: single supervised daemon; reload re-binds in-process; daemon start defers; bad config fails loud + recovers"
+# ── Phase D: PID 1 reaps orphaned subprocesses (tini) ───────────────────────
+echo "==> Phase D: orphaned subprocesses are reaped by PID 1 (tini)"
+# Spawn a process whose parent shell exits immediately, so it reparents to PID 1 —
+# exactly how netclawd's tool subprocesses orphan. entrypoint.sh alone only `wait`s its
+# direct child, so without a reaping init (#1287) these would pile up as <defunct>.
+# Capture the PID directly via `echo $!` (not `pgrep -x sleep`, which could latch onto a
+# coincidental sleep such as the supervisor's backoff). The reparent comes from the
+# parent `sh` exiting; `disown` is intentionally NOT used — it isn't a /bin/sh (dash)
+# builtin on the Ubuntu base.
+orphan="$(docker exec "$CONTAINER" sh -c 'sleep 300 >/dev/null 2>&1 & echo $!' | tr -d '[:space:]')"
+[[ -n "$orphan" ]] || fail "could not create an orphan test process"
+
+# Reparenting is async (it happens when the parent sh exits), so poll for PPID 1.
+oppid=""
+for _ in $(seq 1 10); do
+    oppid="$(docker exec "$CONTAINER" sh -c "ps -o ppid= -p $orphan 2>/dev/null" | tr -d '[:space:]')"
+    [[ "$oppid" == "1" ]] && break
+    sleep 1
+done
+[[ "$oppid" == "1" ]] || fail "orphan (pid $orphan) PPID is '$oppid', expected 1 (did not reparent to PID 1)"
+
+docker exec "$CONTAINER" kill "$orphan" >/dev/null 2>&1 || true
+reaped=false
+for _ in $(seq 1 10); do
+    # Reaped == the PID is gone entirely; a non-reaping PID 1 leaves it <defunct> (state Z),
+    # which `ps -p` would still report.
+    docker exec "$CONTAINER" sh -c "ps -o stat= -p $orphan" >/dev/null 2>&1 || { reaped=true; break; }
+    sleep 1
+done
+[[ "$reaped" == "true" ]] \
+    || fail "orphan (pid $orphan) was not reaped — PID 1 left it as a zombie (tini not reaping?)"
+echo "    orphan pid $orphan reaped by PID 1"
+
+echo "✓ #1279/#1287: single supervised daemon; reload re-binds in-process; daemon start defers; bad config fails loud + recovers; orphans reaped"
