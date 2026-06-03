@@ -3,10 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 
 namespace Netclaw.Daemon.Providers;
 
@@ -23,13 +23,11 @@ namespace Netclaw.Daemon.Providers;
 /// </summary>
 public sealed class ModelCatalogPersistence(NetclawPaths paths)
 {
-    private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
-
     private static readonly string[] ValidRoles = ["Main", "Fallback", "Compaction"];
 
     public GetModelSelectionResponse ReadSelection()
     {
-        var root = LoadJsonObject(paths.NetclawConfigPath);
+        var root = AtomicJsonFile.Load(paths.NetclawConfigPath);
         var models = root["Models"] as JsonObject;
 
         return new GetModelSelectionResponse
@@ -54,7 +52,7 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
                 []);
         }
 
-        var root = LoadJsonObject(paths.NetclawConfigPath);
+        var root = AtomicJsonFile.Load(paths.NetclawConfigPath);
         var models = root["Models"] as JsonObject ?? new JsonObject();
 
         models[request.Role] = BuildReferenceNode(request.Reference);
@@ -65,7 +63,7 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
         if (validationErrors.Length > 0)
             return ModelCatalogWriteResult.ValidationError("Config does not satisfy the JSON schema.", validationErrors);
 
-        WriteConfigAtomic(paths.NetclawConfigPath, root);
+        AtomicJsonFile.Write(paths.NetclawConfigPath, root);
 
         return ModelCatalogWriteResult.Ok(paths.NetclawConfigPath);
     }
@@ -139,33 +137,6 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
             .ToArray();
     }
 
-    private static JsonObject LoadJsonObject(string path)
-    {
-        if (!File.Exists(path))
-            return new JsonObject();
-
-        var text = File.ReadAllText(path);
-        if (string.IsNullOrWhiteSpace(text))
-            return new JsonObject();
-
-        var node = JsonNode.Parse(text);
-        return node as JsonObject ?? new JsonObject();
-    }
-
-    private static void WriteConfigAtomic(string path, JsonObject root)
-    {
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var json = root.ToJsonString(WriteOptions);
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, json);
-        if (File.Exists(path))
-            File.Replace(temp, path, destinationBackupFileName: null);
-        else
-            File.Move(temp, path);
-    }
 }
 
 public sealed record ModelCatalogWriteResult(

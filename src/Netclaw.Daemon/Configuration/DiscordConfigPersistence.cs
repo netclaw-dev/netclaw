@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -21,12 +20,10 @@ namespace Netclaw.Daemon.Configuration;
 /// </summary>
 public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtector? protector = null)
 {
-    private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
-
     public GetDiscordConfigResponse Read()
     {
-        var configRoot = LoadJsonObject(paths.NetclawConfigPath);
-        var secretsRoot = LoadJsonObject(paths.SecretsPath);
+        var configRoot = AtomicJsonFile.Load(paths.NetclawConfigPath);
+        var secretsRoot = AtomicJsonFile.Load(paths.SecretsPath);
 
         var discord = configRoot["Discord"] as JsonObject;
         var secretsDiscord = secretsRoot["Discord"] as JsonObject;
@@ -50,7 +47,7 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
     public PutDiscordConfigResponse Write(PutDiscordConfigRequest request)
     {
         // ---- netclaw.json ----
-        var configRoot = LoadJsonObject(paths.NetclawConfigPath);
+        var configRoot = AtomicJsonFile.Load(paths.NetclawConfigPath);
         var discord = configRoot["Discord"] as JsonObject ?? new JsonObject();
 
         discord["Enabled"] = request.Enabled;
@@ -70,7 +67,7 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
         // ---- secrets.json (only touched when the token field changed) ----
         if (request.BotToken is not null)
         {
-            var secretsRoot = LoadJsonObject(paths.SecretsPath);
+            var secretsRoot = AtomicJsonFile.Load(paths.SecretsPath);
             var secretsDiscord = secretsRoot["Discord"] as JsonObject ?? new JsonObject();
 
             if (string.IsNullOrEmpty(request.BotToken))
@@ -83,14 +80,14 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
             else
                 secretsRoot["Discord"] = secretsDiscord;
 
-            var json = secretsRoot.ToJsonString(WriteOptions);
+            var json = AtomicJsonFile.Serialize(secretsRoot);
             SecretsFileWriter.Write(paths.SecretsPath, json, protector);
         }
 
         // write discord config _after_ secrets, since the daemon watcher
         // does not watch for changes in the secrets config
         configRoot["Discord"] = discord;
-        WriteConfigAtomic(paths.NetclawConfigPath, configRoot);
+        AtomicJsonFile.Write(paths.NetclawConfigPath, configRoot);
 
         return new PutDiscordConfigResponse
         {
@@ -98,34 +95,6 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
             SecretsPath = paths.SecretsPath,
             RestartRequired = true,
         };
-    }
-
-    private static JsonObject LoadJsonObject(string path)
-    {
-        if (!File.Exists(path))
-            return new JsonObject();
-
-        var text = File.ReadAllText(path);
-        if (string.IsNullOrWhiteSpace(text))
-            return new JsonObject();
-
-        var node = JsonNode.Parse(text);
-        return node as JsonObject ?? new JsonObject();
-    }
-
-    private static void WriteConfigAtomic(string path, JsonObject root)
-    {
-        var dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var json = root.ToJsonString(WriteOptions);
-        var temp = path + ".tmp";
-        File.WriteAllText(temp, json);
-        if (File.Exists(path))
-            File.Replace(temp, path, destinationBackupFileName: null);
-        else
-            File.Move(temp, path);
     }
 
     private static string[] ReadStringArray(JsonObject? container, string key)
