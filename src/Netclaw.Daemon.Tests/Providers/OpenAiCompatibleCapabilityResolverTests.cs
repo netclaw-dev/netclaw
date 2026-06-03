@@ -34,6 +34,45 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
         Assert.Equal(expectedContextWindow, model.ContextWindowTokens);
     }
 
+    [Theory]
+    [InlineData("{\"id\":\"router-model\",\"meta\":{\"n_ctx\":0}}")]
+    [InlineData("{\"id\":\"router-model\",\"max_model_len\":0}")]
+    public void ParseModels_TreatsZeroContextMetadataAsUnknown(string modelJson)
+    {
+        var json = $$"""
+        {
+          "object": "list",
+          "data": [ {{modelJson}} ]
+        }
+        """;
+
+        var result = OpenAiCompatibleDescriptor.ParseModels(json);
+
+        var model = Assert.Single(result.Models);
+        Assert.Null(model.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void ParseModels_ZeroNCtxDoesNotFallBackToTrainContext()
+    {
+        const string json = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "router-model",
+              "meta": { "n_ctx": 0, "n_ctx_train": 262144 }
+            }
+          ]
+        }
+        """;
+
+        var result = OpenAiCompatibleDescriptor.ParseModels(json);
+
+        var model = Assert.Single(result.Models);
+        Assert.Null(model.ContextWindowTokens);
+    }
+
     [Fact]
     public void ResolveFromProbe_VllmShape_DispatchesToVllmStrategy()
     {
@@ -90,6 +129,43 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
         Assert.Equal(131_072, result.ContextWindowTokens);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
         Assert.Equal(ModelModality.Text, result.OutputModalities);
+    }
+
+    [Fact]
+    public void ResolveFromProbe_LlamaCppRouterPropsZero_ReturnsUnknownContext()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "router-model",
+              "object": "model",
+              "owned_by": "llamacpp"
+            }
+          ]
+        }
+        """;
+        const string propsJson = """
+        {
+          "role": "router",
+          "default_generation_settings": {
+            "params": {},
+            "n_ctx": 0
+          },
+          "modalities": {
+            "vision": false
+          }
+        }
+        """;
+
+        var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(
+            "router-model", modelsJson, propsJson);
+
+        Assert.NotNull(result);
+        Assert.Null(result.ContextWindowTokens);
+        Assert.Null(result.InputModalities);
+        Assert.Null(result.OutputModalities);
     }
 
     [Fact]

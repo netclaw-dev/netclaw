@@ -55,6 +55,26 @@ public sealed class CompositeCapabilityResolverTests
     }
 
     [Fact]
+    public async Task NonPositiveContext_DoesNotBlockLaterResolver()
+    {
+        var first = new FakeResolver(
+            new ResolvedModelCapabilities("test-model", ModelModality.Text, null, 0));
+        var second = new FakeResolver(
+            new ResolvedModelCapabilities("test-model", null, ModelModality.Text, 256_000));
+
+        var composite = new CompositeCapabilityResolver(
+            [first, second],
+            NullLogger<CompositeCapabilityResolver>.Instance);
+
+        var result = await composite.ResolveAsync("test-model", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result);
+        Assert.Equal(ModelModality.Text, result.InputModalities);
+        Assert.Equal(ModelModality.Text, result.OutputModalities);
+        Assert.Equal(256_000, result.ContextWindowTokens);
+    }
+
+    [Fact]
     public async Task AllResolvers_ReturnNull_CompositeReturnsNull()
     {
         // Defaulting now lives at the consumption boundary

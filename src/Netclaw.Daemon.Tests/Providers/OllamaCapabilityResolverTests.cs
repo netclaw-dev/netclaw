@@ -106,6 +106,24 @@ public sealed class OllamaCapabilityResolverTests
     }
 
     [Fact]
+    public void ParseShowResponse_ZeroContextLength_ReturnsNull()
+    {
+        const string json = """
+        {
+          "model_info": {
+            "general.architecture": "qwen35",
+            "qwen35.context_length": 0
+          }
+        }
+        """;
+
+        var result = OllamaCapabilityResolver.ParseShowResponse(json, "qwen3.5:9b");
+
+        Assert.NotNull(result);
+        Assert.Null(result.ContextWindowTokens);
+    }
+
+    [Fact]
     public void ParseShowResponse_MissingArchitecture()
     {
         const string json = """

@@ -77,6 +77,21 @@ public sealed class VllmBackendStrategyTests
     }
 
     [Fact]
+    public void Parse_ZeroMaxModelLen_ReturnsUnknownContext()
+    {
+        const string json = """
+        { "object": "list", "data": [ { "id": "model-x", "owned_by": "vllm", "max_model_len": 0 } ] }
+        """;
+        using var doc = JsonDocument.Parse(json);
+        var probe = new BackendProbe("model-x", doc.RootElement, PropsRoot: null);
+
+        var result = new VllmBackendStrategy().Parse(probe);
+
+        Assert.NotNull(result);
+        Assert.Null(result.ContextWindowTokens);
+    }
+
+    [Fact]
     public void Parse_NoMatchingModelId_ReturnsNull()
     {
         // Strategy can't say anything useful when the served model is

@@ -151,6 +151,29 @@ public sealed class OpenRouterOracleResolverTests
     }
 
     [Fact]
+    public void ParseCatalog_ZeroContextLength_ReturnsNull()
+    {
+        const string json = """
+        {
+          "data": [
+            {
+              "id": "some/model",
+              "context_length": 0,
+              "architecture": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+              }
+            }
+          ]
+        }
+        """;
+
+        var catalog = OpenRouterOracleResolver.ParseCatalog(json);
+
+        Assert.Null(catalog["some/model"].ContextWindowTokens);
+    }
+
+    [Fact]
     public void ParseCatalog_EmptyData()
     {
         const string json = """{"data": []}""";

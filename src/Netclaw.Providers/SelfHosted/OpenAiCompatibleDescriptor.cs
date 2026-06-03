@@ -52,13 +52,13 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
 
     private static int? TryReadContextWindow(JsonElement model)
     {
-        var contextWindow = ProbeHelpers.TryReadInt32(model, "max_model_len"); // vLLM
+        var contextWindow = ProbeHelpers.TryReadPositiveInt32(model, "max_model_len"); // vLLM
         if (contextWindow is not null)
             return contextWindow;
 
         return model.TryGetProperty("meta", out var meta)
-            ? ProbeHelpers.TryReadInt32(meta, "n_ctx") ??
-              ProbeHelpers.TryReadInt32(meta, "n_ctx_train")
+            ? ProbeHelpers.TryReadPositiveInt32OrFallbackWhenMissing(
+                meta, "n_ctx", "n_ctx_train")
             : null;
     }
 }
