@@ -1,3 +1,48 @@
+#### 0.23.0-beta.1 2026-06-03 ####
+
+Netclaw v0.23.0-beta.1 — our first public beta, debuting the opt-in beta release channel itself
+
+This is a prerelease. Stable installs are unaffected — the default install, Docker `:latest`, and the GitHub "Latest" release all still point at 0.22.1, and only opt-in beta testers are ever offered this build.
+
+**Try the beta**
+
+* Linux / macOS: `curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta`
+* Windows: download `install.ps1`, then `./install.ps1 -Channel beta`
+* Docker: `docker pull ghcr.io/netclaw-dev/netclaw:beta`
+* To get update notices on the beta line, set `Daemon.UpdateChannel` to `beta` in your config.
+
+**Features**
+
+* **Opt-in beta release channel** — Netclaw can now publish and install prereleases without ever touching a default install. The release manifest gained an additive `latestPrerelease` pointer (newest of all releases) alongside `latest` (newest stable); `--channel beta` / `-Channel beta` and the rolling `:beta` Docker tag resolve to it, while stable clients structurally only ever read `latest`. ([#1314](https://github.com/netclaw-dev/netclaw/pull/1314))
+
+* **Channel-aware, SemVer-correct update check** — the binary update check now honors `Daemon.UpdateChannel` (`stable` default, or `beta`) and compares versions by SemVer 2.0.0 precedence. Beta testers are notified of the next prerelease and automatically roll onto a stable release once it supersedes their beta; stable users are never offered a prerelease. ([#1315](https://github.com/netclaw-dev/netclaw/pull/1315))
+
+* **Bounded tool output with file spill** — large tool outputs are now bounded and spilled to a file instead of flooding the session, keeping context lean while preserving the full output on disk. ([#1305](https://github.com/netclaw-dev/netclaw/pull/1305))
+
+**Bug Fixes**
+
+* **Provider modality probing fixed** — Netclaw no longer persists guessed modalities, and the model-probe timeout and visibility issues are resolved. ([#1311](https://github.com/netclaw-dev/netclaw/pull/1311))
+
+* **OpenAI Codex calls no longer hang** — non-streaming Codex calls are now served via streaming under the hood, so they complete reliably. ([#1289](https://github.com/netclaw-dev/netclaw/pull/1289))
+
+* **Docker reaps orphaned subprocesses** — the container now uses `tini` so orphaned subprocesses are reaped instead of accumulating as zombies; smoke setup was deduplicated. ([#1306](https://github.com/netclaw-dev/netclaw/pull/1306))
+
+* **Init wizard readiness race fixed** — init readiness is now gated on a daemon restart generation and a re-resolved endpoint, closing a race in the setup wizard. ([#1307](https://github.com/netclaw-dev/netclaw/pull/1307))
+
+* **Docker owns the daemon lifecycle** — the container is now the sole owner of the daemon lifecycle, fixing conflicting restart behavior. ([#1282](https://github.com/netclaw-dev/netclaw/pull/1282))
+
+* **Shell pipe reads are bounded** — pipe reads are now bounded to `MaxOutputChars` before truncating, preventing runaway memory on huge command output. ([#1298](https://github.com/netclaw-dev/netclaw/pull/1298))
+
+* **Shell verifies the working directory** — Netclaw confirms the working directory exists before launching a process, surfacing a clear error instead of a cryptic failure. ([#1299](https://github.com/netclaw-dev/netclaw/pull/1299))
+
+* **Lighter daemon memory footprint** — `netclawd` now uses Workstation GC, reducing baseline memory use. ([#1295](https://github.com/netclaw-dev/netclaw/pull/1295))
+
+* **Zero context-window models ignored** — models that report a zero context window are now ignored instead of breaking model selection. ([#1285](https://github.com/netclaw-dev/netclaw/pull/1285))
+
+* **Docker bind-mount ownership repaired** — bind-mount ownership is corrected on startup so mounted data is writable. ([#1281](https://github.com/netclaw-dev/netclaw/pull/1281))
+
+* **Windows installer uses User-scope PATH** — the Windows install instruction now updates the User-scope PATH so `netclaw` is found in new shells. ([#1274](https://github.com/netclaw-dev/netclaw/pull/1274))
+
 #### 0.22.1 2026-06-01 ####
 
 Netclaw v0.22.1 — Quick bug-fix release on the heels of 0.22.0
