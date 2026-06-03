@@ -17,14 +17,8 @@ public sealed record ChatRoutingContext
     public required ModelRole Role { get; init; }
 
     /// <summary>
-    /// Owning session id. Unused today; a future per-session router policy reads this
-    /// to route a session's chats to a specific model/provider.
+    /// Owning session id. Unused today; the explicit seam for a future per-session
+    /// router policy that routes a session's chats to a specific model/provider.
     /// </summary>
     public string? SessionId { get; init; }
-
-    /// <summary>
-    /// Index of the current failover attempt within a single call. Unused today; a
-    /// future policy can use it to re-rank candidates across attempts.
-    /// </summary>
-    public int AttemptIndex { get; init; }
 }

@@ -162,6 +162,55 @@ public sealed class RoutingChatClientTests
         Assert.Equal(0, fallbackCalls);
     }
 
+    [Fact]
+    public async Task Streaming_EmitsUnreachable_WhenAllCandidatesFailBeforeFirstChunk()
+    {
+        var sink = new CapturingSink();
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(true, ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(true, ct));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => CollectText(Client(sink, primary, fallback)));
+
+        Assert.Contains(sink.Alerts, a => a.Category == AlertType.ProviderFailover);
+        Assert.Contains(sink.Alerts, a => a.Category == AlertType.ProviderUnreachable);
+    }
+
+    [Fact]
+    public async Task Streaming_SingleCandidateFailure_EmitsUnreachable_NotFailover()
+    {
+        var sink = new CapturingSink();
+        var only = new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(true, ct));
+
+        await Assert.ThrowsAsync<HttpRequestException>(() => CollectText(Client(sink, only)));
+
+        Assert.Contains(sink.Alerts, a => a.Category == AlertType.ProviderUnreachable);
+        Assert.DoesNotContain(sink.Alerts, a => a.Category == AlertType.ProviderFailover);
+    }
+
+    [Fact]
+    public async Task Streaming_DoesNotFailover_OnCancellation()
+    {
+        var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var sink = new CapturingSink();
+        var fallbackCalls = 0;
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) => ThrowBeforeFirstChunkAsync(true, ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) =>
+        {
+            fallbackCalls++;
+            return SingleTextUpdateAsync("fallback", ct);
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (var _ in Client(sink, primary, fallback).GetStreamingResponseAsync(
+                [new ChatMessage(ChatRole.User, "hi")], cancellationToken: cts.Token)) { }
+        });
+
+        Assert.Equal(0, fallbackCalls);
+        Assert.Empty(sink.Alerts);
+    }
+
     private static async Task<List<string>> CollectText(IChatClient client)
     {
         var texts = new List<string>();
