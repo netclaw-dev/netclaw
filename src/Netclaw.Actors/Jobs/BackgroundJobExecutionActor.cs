@@ -84,7 +84,31 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
         }
 
         if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
+        {
+            // ProcessStartInfo.WorkingDirectory must point at an existing directory or
+            // Process.Start throws an opaque, platform-specific error that surfaces as a
+            // cryptic "Failed to start: ...". Report the missing directory with the mkdir
+            // remedy so the agent creates it instead of retry-looping on the opaque error.
+            if (!Directory.Exists(_definition.WorkingDirectory))
+            {
+                if (File.Exists(_definition.WorkingDirectory))
+                {
+                    ReportCompletion(BackgroundJobStatus.Failed, -1,
+                        $"Working directory '{_definition.WorkingDirectory}' is a file, not a directory.");
+                    return;
+                }
+
+                var mkdirHint = isWindows
+                    ? $"mkdir \"{_definition.WorkingDirectory}\""
+                    : $"mkdir -p \"{_definition.WorkingDirectory}\"";
+                ReportCompletion(BackgroundJobStatus.Failed, -1,
+                    $"Working directory '{_definition.WorkingDirectory}' does not exist. "
+                    + $"Create it first, e.g.: {mkdirHint}");
+                return;
+            }
+
             psi.WorkingDirectory = _definition.WorkingDirectory;
+        }
 
         _process = Process.Start(psi);
         if (_process is null)
