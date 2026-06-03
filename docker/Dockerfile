@@ -55,7 +55,8 @@ ARG NETCLAW_VERSION=unknown
 #   VCS/GitHub:  git, gh
 #   Python:      python3, python3-pip, python3-venv
 #   Privileges:  gosu (entrypoint ownership repair, then drop to netclaw)
-#   Init/PID 1:  tini (reaps orphaned subprocess zombies, forwards signals)
+#   Init/PID 1:  tini (reaps orphaned subprocess zombies, forwards signals) — https://github.com/krallin/tini
+#                Unpinned like the rest of this apt set; ubuntu:24.04 pins it at 0.19.0 for the LTS life.
 #   Crypto:      libsodium23 (required by NSec for Ed25519 signature verification)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
