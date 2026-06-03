@@ -37,6 +37,7 @@
         <PackageReference Include="Akka.Hosting"/>
         <PackageReference Include="Akka.Persistence.Hosting"/>
         <PackageReference Include="Akka.Persistence.Sql.Hosting"/>
+        <PackageReference Include="Microsoft.Extensions.AI"/>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi"/>
         <PackageReference Include="Microsoft.Data.Sqlite"/>
         <PackageReference Include="ModelContextProtocol.Core"/>

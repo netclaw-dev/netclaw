@@ -182,9 +182,9 @@ internal static class SessionCompactionPipeline
                     ObservationPromptBuilder.BuildObservationUserPrompt(remainingDiscarded))
             };
 
-            var response = await client.GetResponseAsync(
-                observerMessages, cancellationToken: cts.Token);
-            var text = response.Messages[^1].Text;
+            var result = await StreamingResponseReader.ReadAsync(
+                client, observerMessages, options: null, cts.Token);
+            var text = result.Response.Text;
 
             if (string.IsNullOrWhiteSpace(text))
             {

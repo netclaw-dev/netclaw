@@ -11,14 +11,15 @@ using Netclaw.Providers;
 namespace Netclaw.Daemon.Configuration;
 
 /// <summary>
-/// Daemon-level provider wiring: plugin factory, retry, resilient decorator.
-/// Chains on top of <see cref="LlmProviderServiceExtensions.AddLlmProviders"/>.
+/// Daemon-level provider wiring: plugin factory, retry, composed pipelines, and a
+/// router-backed chat client provider. Chains on top of
+/// <see cref="LlmProviderServiceExtensions.AddLlmProviders"/>.
 /// </summary>
 public static class DaemonProviderServiceExtensions
 {
     /// <summary>
-    /// Registers provider plugins (via Netclaw.Providers) plus daemon-specific
-    /// factory, retry, and resilient chat client provider.
+    /// Registers provider plugins (via Netclaw.Providers) plus the daemon-specific
+    /// plugin factory, retry policy, pipeline composition, and routing.
     /// </summary>
     public static IServiceCollection AddDaemonLlmProviders(
         this IServiceCollection services,
@@ -28,26 +29,32 @@ public static class DaemonProviderServiceExtensions
         // Register plugins and OAuth from Netclaw.Providers
         services.AddLlmProviders();
 
-        // Register the plugin factory and chat client provider
+        // Raw provider client factory (raw client + vendor options per model)
         services.AddSingleton(sp =>
             new ProviderPluginFactory(providers, sp.GetServices<ILlmProviderPlugin>()));
 
         // Retry policy (TODO: make configurable via netclaw.json Resilience section)
         services.AddSingleton(new RetryPolicy());
 
-        // Raw provider → Resilient decorator (Logging → Retry → Failover → Alerting)
-        services.AddSingleton<IChatClientProvider>(sp =>
-        {
-            var raw = new NetclawChatClientProvider(
-                sp.GetRequiredService<ProviderPluginFactory>(), models);
-            return new ResilientChatClientProviderDecorator(
-                raw,
-                sp.GetRequiredService<RetryPolicy>(),
-                models,
-                sp.GetRequiredService<ILoggerFactory>(),
-                sp.GetRequiredService<IOperationalNotificationSink>(),
-                sp.GetService<TimeProvider>());
-        });
+        // Composes the cross-cutting middleware (Logging → Retry) around each provider
+        // pipeline via ChatClientBuilder.
+        services.AddSingleton(sp => new PipelineChatClientFactory(
+            sp.GetRequiredService<ProviderPluginFactory>(),
+            sp.GetRequiredService<RetryPolicy>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetService<TimeProvider>()));
+
+        // Routing policy. Today: role-based selection with primary→fallback failover.
+        // Per-session / per-provider routing slots in here later as a different policy.
+        services.AddSingleton<IChatClientRouter>(sp => new RoleBasedFailoverRouter(
+            sp.GetRequiredService<PipelineChatClientFactory>(), models));
+
+        // Router-backed provider the actor layer consumes via GetClient(role).
+        services.AddSingleton<IChatClientProvider>(sp => new RoutingChatClientProvider(
+            sp.GetRequiredService<IChatClientRouter>(),
+            sp.GetRequiredService<IOperationalNotificationSink>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetService<TimeProvider>()));
 
         return services;
     }

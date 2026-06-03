@@ -1641,9 +1641,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 new(Microsoft.Extensions.AI.ChatRole.User,
                     CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
             };
-            var extractionResponse = await client.GetResponseAsync(extractionMessages,
-                cancellationToken: cts.Token);
-            var extractedText = extractionResponse.Messages[^1].Text ?? string.Empty;
+            var extractionResult = await StreamingResponseReader.ReadAsync(
+                client, extractionMessages, options: null, cts.Token);
+            var extractedText = extractionResult.Response.Text ?? string.Empty;
             self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
         }
         catch (Exception ex)

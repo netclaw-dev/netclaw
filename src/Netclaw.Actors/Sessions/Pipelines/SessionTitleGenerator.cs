@@ -49,8 +49,8 @@ internal static class SessionTitleGenerator
                 new(Microsoft.Extensions.AI.ChatRole.User,
                     CompactionPromptBuilder.BuildTitleGenerationPrompt(history))
             };
-            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
-            var title = response.Messages[^1].Text ?? string.Empty;
+            var result = await StreamingResponseReader.ReadAsync(client, messages, options: null, cts.Token);
+            var title = result.Response.Text ?? string.Empty;
 
             if (string.IsNullOrWhiteSpace(title))
             {
