@@ -48,14 +48,14 @@ public sealed class ModelCatalogService(
                 $"Model discovery failed for provider '{providerName}': {result.ErrorMessage ?? "Provider probe failed."}");
         }
 
-        return ModelCatalogResult.Ok(new ModelCatalogWire.GetCatalogResponse
+        return ModelCatalogResult.Ok(new GetModelCatalogResponse
         {
             Models = result.Models.Select(model => ToWire(providerName, model)).ToArray(),
             Warning = string.IsNullOrWhiteSpace(result.ErrorMessage) ? null : result.ErrorMessage,
         });
     }
 
-    private static ModelCatalogWire.ModelEntry ToWire(string providerName, DiscoveredModel model)
+    private static ModelCatalogEntry ToWire(string providerName, DiscoveredModel model)
         => new()
         {
             Provider = providerName,
@@ -80,11 +80,11 @@ public sealed class ModelCatalogService(
 
 public sealed record ModelCatalogResult(
     bool Success,
-    ModelCatalogWire.GetCatalogResponse? Catalog,
+    GetModelCatalogResponse? Catalog,
     int StatusCode,
     string? ErrorMessage)
 {
-    public static ModelCatalogResult Ok(ModelCatalogWire.GetCatalogResponse catalog)
+    public static ModelCatalogResult Ok(GetModelCatalogResponse catalog)
         => new(true, catalog, 200, null);
 
     public static ModelCatalogResult Failure(int statusCode, string message)

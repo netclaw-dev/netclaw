@@ -66,7 +66,7 @@ public sealed class ModelCatalogEndpointTests
         var client = host.GetTestClient();
         client.DefaultRequestHeaders.Add(TestAuthHandler.HeaderName, TestAuthHandler.HeaderValue);
 
-        var catalog = await client.GetFromJsonAsync<ModelCatalogWire.GetCatalogResponse>(
+        var catalog = await client.GetFromJsonAsync<GetModelCatalogResponse>(
             "/api/models",
             TestContext.Current.CancellationToken);
 

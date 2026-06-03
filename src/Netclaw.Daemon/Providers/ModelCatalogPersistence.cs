@@ -27,12 +27,12 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
 
     private static readonly string[] ValidRoles = ["Main", "Fallback", "Compaction"];
 
-    public ModelCatalogWire.GetSelectionResponse ReadSelection()
+    public GetModelSelectionResponse ReadSelection()
     {
         var root = LoadJsonObject(paths.NetclawConfigPath);
         var models = root["Models"] as JsonObject;
 
-        return new ModelCatalogWire.GetSelectionResponse
+        return new GetModelSelectionResponse
         {
             Main = ReadReferenceOrDefault(models, "Main"),
             Fallback = ReadReference(models, "Fallback"),
@@ -45,7 +45,7 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
     /// Returns a validation-error result when the resulting document would
     /// fail schema validation — the file is NOT written in that case.
     /// </summary>
-    public ModelCatalogWriteResult Write(ModelCatalogWire.PutSelectionRequest request)
+    public ModelCatalogWriteResult Write(PutModelSelectionRequest request)
     {
         if (!ValidRoles.Contains(request.Role, StringComparer.Ordinal))
         {
@@ -70,19 +70,19 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
         return ModelCatalogWriteResult.Ok(paths.NetclawConfigPath);
     }
 
-    private static ModelCatalogWire.ModelReferenceWire ReadReferenceOrDefault(JsonObject? models, string role)
-        => ReadReference(models, role) ?? new ModelCatalogWire.ModelReferenceWire
+    private static ModelSelectionReference ReadReferenceOrDefault(JsonObject? models, string role)
+        => ReadReference(models, role) ?? new ModelSelectionReference
         {
             Provider = "local-ollama",
             ModelId = "qwen3:30b",
         };
 
-    private static ModelCatalogWire.ModelReferenceWire? ReadReference(JsonObject? models, string role)
+    private static ModelSelectionReference? ReadReference(JsonObject? models, string role)
     {
         if (models?[role] is not JsonObject refNode)
             return null;
 
-        return new ModelCatalogWire.ModelReferenceWire
+        return new ModelSelectionReference
         {
             Provider = refNode["Provider"]?.GetValue<string>() ?? string.Empty,
             ModelId = refNode["ModelId"]?.GetValue<string>() ?? string.Empty,
@@ -93,7 +93,7 @@ public sealed class ModelCatalogPersistence(NetclawPaths paths)
         };
     }
 
-    private static JsonObject BuildReferenceNode(ModelCatalogWire.ModelReferenceWire wire)
+    private static JsonObject BuildReferenceNode(ModelSelectionReference wire)
     {
         var node = new JsonObject
         {

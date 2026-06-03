@@ -12,7 +12,7 @@ public static class ModelCatalogEndpointRouteBuilderExtensions
 {
     public static void MapModelCatalogEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/models", async Task<Results<Ok<ModelCatalogWire.GetCatalogResponse>, ProblemHttpResult>> (
+        app.MapGet("/api/models", async Task<Results<Ok<GetModelCatalogResponse>, ProblemHttpResult>> (
             ModelCatalogService catalog,
             CancellationToken ct) =>
         {
@@ -20,20 +20,27 @@ public static class ModelCatalogEndpointRouteBuilderExtensions
             return result.Success
                 ? TypedResults.Ok(result.Catalog!)
                 : TypedResults.Problem(result.ErrorMessage, statusCode: result.StatusCode);
-        }).RequireAuthorization();
+        }).RequireAuthorization()
+        .WithName("GetModelCatalog")
+        .WithSummary("List the models discovered from the configured main provider.")
+        .WithTags("Models");
 
-        app.MapGet("/api/model/selection", (ModelCatalogPersistence persistence) =>
+        app.MapGet("/api/model/selection", Ok<GetModelSelectionResponse> (
+            ModelCatalogPersistence persistence) =>
         {
             return TypedResults.Ok(persistence.ReadSelection());
-        }).RequireAuthorization();
+        }).RequireAuthorization()
+        .WithName("GetModelSelection")
+        .WithSummary("Get the model selected for each role (Main, Fallback, Compaction).")
+        .WithTags("Models");
 
-        app.MapPut("/api/model/selection", Results<Ok<ModelCatalogWire.PutSelectionResponse>, BadRequest<ModelCatalogWire.PutSelectionErrorResponse>> (
-            ModelCatalogWire.PutSelectionRequest request,
+        app.MapPut("/api/model/selection", Results<Ok<PutModelSelectionResponse>, BadRequest<PutModelSelectionErrorResponse>> (
+            PutModelSelectionRequest request,
             ModelCatalogPersistence persistence) =>
         {
             if (string.IsNullOrWhiteSpace(request.Role))
             {
-                return TypedResults.BadRequest(new ModelCatalogWire.PutSelectionErrorResponse
+                return TypedResults.BadRequest(new PutModelSelectionErrorResponse
                 {
                     Message = "Role is required.",
                 });
@@ -41,7 +48,7 @@ public static class ModelCatalogEndpointRouteBuilderExtensions
 
             if (string.IsNullOrWhiteSpace(request.Reference?.Provider))
             {
-                return TypedResults.BadRequest(new ModelCatalogWire.PutSelectionErrorResponse
+                return TypedResults.BadRequest(new PutModelSelectionErrorResponse
                 {
                     Message = "Reference.Provider is required.",
                 });
@@ -49,7 +56,7 @@ public static class ModelCatalogEndpointRouteBuilderExtensions
 
             if (string.IsNullOrWhiteSpace(request.Reference?.ModelId))
             {
-                return TypedResults.BadRequest(new ModelCatalogWire.PutSelectionErrorResponse
+                return TypedResults.BadRequest(new PutModelSelectionErrorResponse
                 {
                     Message = "Reference.ModelId is required.",
                 });
@@ -59,18 +66,21 @@ public static class ModelCatalogEndpointRouteBuilderExtensions
 
             if (!result.Success)
             {
-                return TypedResults.BadRequest(new ModelCatalogWire.PutSelectionErrorResponse
+                return TypedResults.BadRequest(new PutModelSelectionErrorResponse
                 {
                     Message = result.ErrorMessage ?? "Validation failed.",
                     ValidationErrors = result.ValidationErrors,
                 });
             }
 
-            return TypedResults.Ok(new ModelCatalogWire.PutSelectionResponse
+            return TypedResults.Ok(new PutModelSelectionResponse
             {
                 ConfigPath = result.ConfigPath!,
                 RestartRequired = true,
             });
-        }).RequireAuthorization();
+        }).RequireAuthorization()
+        .WithName("UpdateModelSelection")
+        .WithSummary("Set the model for one role; takes effect after a daemon restart.")
+        .WithTags("Models");
     }
 }

@@ -27,10 +27,10 @@ public sealed class ModelCatalogPersistenceTests : IDisposable
     {
         var persistence = new ModelCatalogPersistence(_paths);
 
-        var result = persistence.Write(new ModelCatalogWire.PutSelectionRequest
+        var result = persistence.Write(new PutModelSelectionRequest
         {
             Role = "Main",
-            Reference = new ModelCatalogWire.ModelReferenceWire
+            Reference = new ModelSelectionReference
             {
                 Provider = "local-ollama",
                 ModelId = "qwen3:30b",
@@ -50,10 +50,10 @@ public sealed class ModelCatalogPersistenceTests : IDisposable
     {
         var persistence = new ModelCatalogPersistence(_paths);
 
-        var result = persistence.Write(new ModelCatalogWire.PutSelectionRequest
+        var result = persistence.Write(new PutModelSelectionRequest
         {
             Role = "Main",
-            Reference = new ModelCatalogWire.ModelReferenceWire
+            Reference = new ModelSelectionReference
             {
                 Provider = "local-ollama",
                 ModelId = "qwen3:30b",
