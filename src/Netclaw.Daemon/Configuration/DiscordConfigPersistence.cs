@@ -23,7 +23,7 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
 {
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
-    public DiscordConfigWire.GetResponse Read()
+    public GetDiscordConfigResponse Read()
     {
         var configRoot = LoadJsonObject(paths.NetclawConfigPath);
         var secretsRoot = LoadJsonObject(paths.SecretsPath);
@@ -33,7 +33,7 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
 
         var tokenValue = secretsDiscord?["BotToken"]?.GetValue<string>();
 
-        return new DiscordConfigWire.GetResponse
+        return new GetDiscordConfigResponse
         {
             Enabled = discord?["Enabled"]?.GetValue<bool>() ?? false,
             BotTokenIsSet = !string.IsNullOrWhiteSpace(tokenValue),
@@ -47,7 +47,7 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
         };
     }
 
-    public DiscordConfigWire.PutResponse Write(DiscordConfigWire.PutRequest request)
+    public PutDiscordConfigResponse Write(PutDiscordConfigRequest request)
     {
         // ---- netclaw.json ----
         var configRoot = LoadJsonObject(paths.NetclawConfigPath);
@@ -92,7 +92,7 @@ public sealed class DiscordConfigPersistence(NetclawPaths paths, ISecretsProtect
         configRoot["Discord"] = discord;
         WriteConfigAtomic(paths.NetclawConfigPath, configRoot);
 
-        return new DiscordConfigWire.PutResponse
+        return new PutDiscordConfigResponse
         {
             ConfigPath = paths.NetclawConfigPath,
             SecretsPath = paths.SecretsPath,

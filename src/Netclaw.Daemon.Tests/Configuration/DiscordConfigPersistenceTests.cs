@@ -42,7 +42,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
     {
         var persistence = new DiscordConfigPersistence(_paths);
 
-        persistence.Write(new DiscordConfigWire.PutRequest
+        persistence.Write(new PutDiscordConfigRequest
         {
             Enabled = true,
             DefaultChannelId = "123",
@@ -76,7 +76,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
             """{ "Discord": { "BotToken": "existing-token" }, "DeviceToken": "keep-me" }""");
 
         var persistence = new DiscordConfigPersistence(_paths);
-        persistence.Write(new DiscordConfigWire.PutRequest { Enabled = true, BotToken = null });
+        persistence.Write(new PutDiscordConfigRequest { Enabled = true, BotToken = null });
 
         var secrets = JsonNode.Parse(File.ReadAllText(_paths.SecretsPath))!.AsObject();
         Assert.Equal("existing-token", secrets["Discord"]!["BotToken"]!.GetValue<string>());
@@ -92,7 +92,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
             """{ "Discord": { "BotToken": "existing" }, "DeviceToken": "keep" }""");
 
         var persistence = new DiscordConfigPersistence(_paths);
-        persistence.Write(new DiscordConfigWire.PutRequest { Enabled = false, BotToken = string.Empty });
+        persistence.Write(new PutDiscordConfigRequest { Enabled = false, BotToken = string.Empty });
 
         var secrets = JsonNode.Parse(File.ReadAllText(_paths.SecretsPath))!.AsObject();
         Assert.False(secrets.ContainsKey("Discord"));
@@ -104,7 +104,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
     public void Token_value_replaces_secret()
     {
         var persistence = new DiscordConfigPersistence(_paths);
-        persistence.Write(new DiscordConfigWire.PutRequest { Enabled = true, BotToken = "fresh-token" });
+        persistence.Write(new PutDiscordConfigRequest { Enabled = true, BotToken = "fresh-token" });
 
         var secrets = JsonNode.Parse(File.ReadAllText(_paths.SecretsPath))!.AsObject();
         Assert.Equal("fresh-token", secrets["Discord"]!["BotToken"]!.GetValue<string>());
@@ -120,7 +120,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
         var persistence = new DiscordConfigPersistence(_paths, new ThrowingSecretsProtector());
 
         Assert.Throws<InvalidOperationException>(() =>
-            persistence.Write(new DiscordConfigWire.PutRequest { Enabled = true, BotToken = "fresh-token" }));
+            persistence.Write(new PutDiscordConfigRequest { Enabled = true, BotToken = "fresh-token" }));
 
         var config = JsonNode.Parse(File.ReadAllText(_paths.NetclawConfigPath))!.AsObject();
         Assert.False(config["Discord"]!["Enabled"]!.GetValue<bool>());
@@ -134,7 +134,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
             """{ "Slack": { "Enabled": true }, "Discord": { "Enabled": false } }""");
 
         var persistence = new DiscordConfigPersistence(_paths);
-        persistence.Write(new DiscordConfigWire.PutRequest { Enabled = true });
+        persistence.Write(new PutDiscordConfigRequest { Enabled = true });
 
         var root = JsonNode.Parse(File.ReadAllText(_paths.NetclawConfigPath))!.AsObject();
         Assert.True(root["Slack"]!["Enabled"]!.GetValue<bool>());
@@ -145,7 +145,7 @@ public sealed class DiscordConfigPersistenceTests : IDisposable
     public void PutResponse_always_signals_restart_required()
     {
         var persistence = new DiscordConfigPersistence(_paths);
-        var response = persistence.Write(new DiscordConfigWire.PutRequest { Enabled = false });
+        var response = persistence.Write(new PutDiscordConfigRequest { Enabled = false });
         Assert.True(response.RestartRequired);
         Assert.Equal(_paths.NetclawConfigPath, response.ConfigPath);
         Assert.Equal(_paths.SecretsPath, response.SecretsPath);
