@@ -58,6 +58,22 @@ public sealed class LlamaCppBackendStrategyTests
         Assert.Equal(ModelModality.Text, result.OutputModalities);
     }
 
+    [Theory]
+    [InlineData("{\"default_generation_settings\":{\"n_ctx\":0},\"modalities\":{\"vision\":true}}")]
+    [InlineData("{\"default_generation_settings\":{\"params\":{\"n_ctx\":0}},\"modalities\":{\"vision\":true}}")]
+    public void Parse_IgnoresZeroPropsNCtx_UsesMetaContext(string propsJson)
+    {
+        using var models = JsonDocument.Parse(ModelsJsonWithMetaCtx);
+        using var props = JsonDocument.Parse(propsJson);
+        var probe = new BackendProbe("Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", models.RootElement, props.RootElement);
+
+        var result = new LlamaCppBackendStrategy().Parse(probe);
+
+        Assert.NotNull(result);
+        Assert.Equal(131_072, result.ContextWindowTokens);
+        Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
+    }
+
     [Fact]
     public void Parse_UsesMetaNCtx_WhenPropsAbsent()
     {
@@ -68,7 +84,104 @@ public sealed class LlamaCppBackendStrategyTests
 
         Assert.NotNull(result);
         Assert.Equal(131_072, result.ContextWindowTokens);
-        Assert.Equal(ModelModality.Text, result.InputModalities);
+        Assert.Null(result.InputModalities);
+        Assert.Null(result.OutputModalities);
+    }
+
+    [Fact]
+    public void Parse_ZeroMetaNCtx_ReturnsUnknownContextEvenWhenMetaTrainPresent()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf",
+              "meta": { "n_ctx": 0, "n_ctx_train": 262144 }
+            }
+          ]
+        }
+        """;
+        using var models = JsonDocument.Parse(modelsJson);
+        var probe = new BackendProbe("Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", models.RootElement, PropsRoot: null);
+
+        var result = new LlamaCppBackendStrategy().Parse(probe);
+
+        Assert.NotNull(result);
+        Assert.Null(result.ContextWindowTokens);
+        Assert.Null(result.InputModalities);
+        Assert.Null(result.OutputModalities);
+    }
+
+    [Fact]
+    public void Parse_UsesMetaTrainContext_WhenMetaNCtxAbsent()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf",
+              "meta": { "n_ctx_train": 262144 }
+            }
+          ]
+        }
+        """;
+        using var models = JsonDocument.Parse(modelsJson);
+        var probe = new BackendProbe("Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", models.RootElement, PropsRoot: null);
+
+        var result = new LlamaCppBackendStrategy().Parse(probe);
+
+        Assert.NotNull(result);
+        Assert.Equal(262_144, result.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void Parse_AllContextMetadataZero_ReturnsNullContext()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf",
+              "meta": { "n_ctx": 0, "n_ctx_train": 0 }
+            }
+          ]
+        }
+        """;
+        using var models = JsonDocument.Parse(modelsJson);
+        using var props = JsonDocument.Parse("""{"default_generation_settings":{"n_ctx":0}}""");
+        var probe = new BackendProbe("Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", models.RootElement, props.RootElement);
+
+        var result = new LlamaCppBackendStrategy().Parse(probe);
+
+        Assert.NotNull(result);
+        Assert.Null(result.ContextWindowTokens);
+        Assert.Null(result.InputModalities);
+        Assert.Null(result.OutputModalities);
+    }
+
+    [Fact]
+    public void Parse_RouterPropsWithVisionFalse_DoesNotSetTextOnlyModalities()
+    {
+        using var models = JsonDocument.Parse(ModelsJsonWithMetaCtx);
+        const string propsJson = """
+        {
+          "role": "router",
+          "default_generation_settings": { "n_ctx": 0 },
+          "modalities": { "vision": false }
+        }
+        """;
+        using var props = JsonDocument.Parse(propsJson);
+        var probe = new BackendProbe("Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", models.RootElement, props.RootElement);
+
+        var result = new LlamaCppBackendStrategy().Parse(probe);
+
+        Assert.NotNull(result);
+        Assert.Equal(131_072, result.ContextWindowTokens);
+        Assert.Null(result.InputModalities);
+        Assert.Null(result.OutputModalities);
     }
 
     [Fact]

@@ -1786,6 +1786,9 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     services.AddHttpClient();
     services.AddSingleton<DaemonApi>();
 
+    // Whether an external supervisor (e.g. the Docker entrypoint) owns the daemon lifecycle.
+    services.AddSingleton<IContainerSupervisor, ContainerSupervisor>();
+
     return paths;
 }
 

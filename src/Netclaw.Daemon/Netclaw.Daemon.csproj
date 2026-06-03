@@ -8,6 +8,13 @@
         <Nullable>enable</Nullable>
         <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
         <InvariantGlobalization>false</InvariantGlobalization>
+        <!-- Workstation GC: netclawd is a single-tenant, low-concurrency daemon
+             usually run in a memory-limited container. Server GC (the Web SDK
+             default) inflates peak RSS and is slow to return memory to the OS,
+             which turns transient allocation spikes into cgroup OOM kills. The
+             daemon's concurrency profile doesn't benefit from Server GC. See #1294. -->
+        <ServerGarbageCollection>false</ServerGarbageCollection>
+        <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
         <!-- OpenAI Responses API (ResponsesClient) is still marked experimental -->
         <NoWarn>$(NoWarn);OPENAI001</NoWarn>
 

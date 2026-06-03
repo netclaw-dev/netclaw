@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
@@ -23,9 +22,10 @@ namespace Netclaw.Daemon.Services;
 /// mutation path.
 /// </para>
 /// <para>
-/// <see cref="DaemonConfig"/> properties (bind address, exposure mode) are
-/// excluded from hot-reload. If those values change, a warning is logged and
-/// the operator must restart the daemon manually.
+/// Every valid config change — including <see cref="DaemonConfig"/> properties
+/// (bind address, exposure mode) — triggers a coordinated in-process restart via
+/// <see cref="IDaemonRestartCoordinator"/>. That restart rebuilds the host and
+/// re-binds Kestrel, so network settings take effect without an external restart.
 /// </para>
 /// </summary>
 public sealed class ConfigWatcherService : IHostedService, IDisposable
@@ -33,7 +33,6 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly IDaemonRestartCoordinator _restartCoordinator;
-    private readonly DaemonConfig _currentDaemonConfig;
     private readonly ILogger<ConfigWatcherService> _logger;
 
     private FileSystemWatcher? _watcher;
@@ -58,22 +57,34 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         NetclawPaths paths,
         TimeProvider timeProvider,
         IDaemonRestartCoordinator restartCoordinator,
-        DaemonConfig currentDaemonConfig,
         ILogger<ConfigWatcherService> logger)
     {
         _paths = paths;
         _timeProvider = timeProvider;
         _restartCoordinator = restartCoordinator;
-        _currentDaemonConfig = currentDaemonConfig;
         _logger = logger;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var configDir = Path.GetDirectoryName(_paths.NetclawConfigPath);
-        if (configDir is null || !Directory.Exists(configDir))
+        if (configDir is null)
         {
-            _logger.LogWarning("Config directory does not exist: {ConfigDir}. Hot-reload disabled.", configDir);
+            _logger.LogWarning("Config path has no directory: {ConfigPath}. Hot-reload disabled.", _paths.NetclawConfigPath);
+            return Task.CompletedTask;
+        }
+
+        // Ensure the directory exists so hot-reload is armed even when the daemon
+        // started before any config was written (fresh container / first boot).
+        // Otherwise a later `netclaw init` write would never be observed and the
+        // wizard — which now relies on the watcher to apply config — would hang.
+        try
+        {
+            Directory.CreateDirectory(configDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _logger.LogWarning(ex, "Could not create config directory: {ConfigDir}. Hot-reload disabled.", configDir);
             return Task.CompletedTask;
         }
 
@@ -202,29 +213,10 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
                 return;
             }
 
-            // Daemon section changes (bind address, exposure mode) are not applied via
-            // hot-reload — they affect network infrastructure and require a clean restart.
-            // Warn the operator and skip; all other config changes will take effect on
-            // the next manual restart.
-            DaemonConfig newDaemonConfig;
-            try
-            {
-                newDaemonConfig = ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Could not read Daemon section from updated config; skipping hot-reload.");
-                return;
-            }
-
-            if (newDaemonConfig != _currentDaemonConfig)
-            {
-                _logger.LogWarning(
-                    "Daemon configuration changed (bind address or exposure mode). " +
-                    "These settings are not applied via hot-reload — restart the daemon manually to apply the new network configuration.");
-                return;
-            }
-
+            // Every valid config change — including Daemon-section settings (bind
+            // address, exposure mode) — is applied via the coordinated in-process
+            // restart below. That restart rebuilds the host and re-binds Kestrel, so
+            // network settings take effect without stopping/spawning the process.
             _logger.LogInformation("Config valid. Starting coordinated daemon restart.");
             await _restartCoordinator.RequestConfigRestartAsync(cancellationToken);
         }
@@ -232,17 +224,6 @@ public sealed class ConfigWatcherService : IHostedService, IDisposable
         {
             _logger.LogError(ex, "Config reload failed. Keeping previous config.");
         }
-    }
-
-    internal static DaemonConfig ReadDaemonConfigFromFile(string path)
-    {
-        if (!File.Exists(path))
-            return new DaemonConfig();
-
-        var config = new ConfigurationBuilder()
-            .AddJsonFile(path, optional: false, reloadOnChange: false)
-            .Build();
-        return DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
     }
 
     private bool ValidateConfigJson(string path)

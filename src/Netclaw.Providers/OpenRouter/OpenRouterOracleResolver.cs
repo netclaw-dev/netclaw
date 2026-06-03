@@ -133,11 +133,7 @@ public sealed class OpenRouterOracleResolver : IModelCapabilityResolver
                     output = ParseModalityArray(outputMods);
             }
 
-            if (model.TryGetProperty("context_length", out var ctxLen) &&
-                ctxLen.ValueKind == JsonValueKind.Number)
-            {
-                contextWindow = ctxLen.GetInt32();
-            }
+            contextWindow = ProbeHelpers.TryReadPositiveInt32(model, "context_length");
 
             result[id] = new ResolvedModelCapabilities(id, input, output, contextWindow);
         }

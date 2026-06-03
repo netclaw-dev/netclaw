@@ -31,7 +31,6 @@ public sealed class ConfigWatcherServiceTests : IDisposable
             _paths,
             _time,
             _restartCoordinator,
-            new DaemonConfig(),
             NullLogger<ConfigWatcherService>.Instance);
     }
 
@@ -96,21 +95,13 @@ public sealed class ConfigWatcherServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DaemonSectionChanged_SkipsRestartAndLogsWarning()
+    public async Task DaemonSectionChange_TriggersRestart()
     {
-        // Port differs from the default DaemonConfig (5199) injected into _sut
-        File.WriteAllText(_paths.NetclawConfigPath, """{ "Daemon": { "Port": 9999 } }""");
-
-        await _sut.ApplyReloadAsync(CancellationToken.None);
-
-        Assert.Equal(0, _restartCoordinator.RequestCount);
-    }
-
-    [Fact]
-    public async Task DaemonSectionMatchingCurrentConfig_TriggersRestart()
-    {
-        // Explicit Daemon section that matches the running defaults — not a change
-        File.WriteAllText(_paths.NetclawConfigPath, """{ "Daemon": { "Host": "127.0.0.1", "Port": 5199, "ExposureMode": "local" } }""");
+        // Regression guard for #1279: Daemon-section changes (bind address, exposure
+        // mode) are now applied via the coordinated in-process restart rather than
+        // skipped. The restart rebuilds the host and re-binds, and the init wizard
+        // relies on this so that writing a new exposure mode actually takes effect.
+        File.WriteAllText(_paths.NetclawConfigPath, """{ "Daemon": { "Port": 9999, "ExposureMode": "reverse-proxy" } }""");
 
         await _sut.ApplyReloadAsync(CancellationToken.None);
 
@@ -156,24 +147,6 @@ public sealed class ConfigWatcherServiceTests : IDisposable
         await _sut.PendingReload;
 
         Assert.Equal(1, _restartCoordinator.RequestCount);
-    }
-
-    [Fact]
-    public void ReadDaemonConfigFromFile_MissingFile_ReturnsDefaults()
-    {
-        var result = ConfigWatcherService.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
-
-        Assert.Equal(new DaemonConfig(), result);
-    }
-
-    [Fact]
-    public void ReadDaemonConfigFromFile_NoDaemonSection_ReturnsDefaults()
-    {
-        File.WriteAllText(_paths.NetclawConfigPath, """{ "Providers": {} }""");
-
-        var result = ConfigWatcherService.ReadDaemonConfigFromFile(_paths.NetclawConfigPath);
-
-        Assert.Equal(new DaemonConfig(), result);
     }
 
     public void Dispose()

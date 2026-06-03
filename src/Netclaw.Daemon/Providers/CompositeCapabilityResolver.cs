@@ -85,7 +85,11 @@ public sealed class CompositeCapabilityResolver : IModelCapabilityResolver
             anyResultProduced = true;
             inputModalities ??= result.InputModalities;
             outputModalities ??= result.OutputModalities;
-            contextWindowTokens ??= result.ContextWindowTokens;
+            // Context windows are positive-only. A 0 from provider metadata is an
+            // unknown sentinel, not a resolved value, and must not block a later
+            // resolver from supplying the real limit.
+            if (contextWindowTokens is null && result.ContextWindowTokens is > 0)
+                contextWindowTokens = result.ContextWindowTokens;
 
             _logger.LogDebug(
                 "Resolved partial capabilities for {ModelId} via {Resolver}: input={Input}, output={Output}, ctx={Ctx}",

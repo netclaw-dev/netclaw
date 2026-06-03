@@ -103,15 +103,16 @@ public class ShellToolTests
     public async Task Output_truncation_applies()
     {
         var tool = new ShellTool(new ToolConfig { MaxOutputChars = 50 });
-        // Generate output longer than 50 chars — use cross-platform command
-        var command = OperatingSystem.IsWindows()
-            ? "python -c \"print('x' * 200)\""
-            : "printf 'x%.0s' {1..200}";
-        var args = ToolInput.Create("Command", command);
+        // Write >50 chars to stdout with a command that needs no interpreter.
+        // `echo` is a builtin on both bash and cmd.exe; a long literal is
+        // deterministic. (python on the Windows runner resolves to the Store
+        // stub, which writes to stderr — so the truncation would land on stderr
+        // and the marker would read "[stderr truncated", not "[stdout truncated".)
+        var args = ToolInput.Create("Command", $"echo {new string('x', 200)}");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
-        Assert.Contains("[output truncated]", result);
+        Assert.Contains("[stdout truncated", result);
     }
 
     [Fact]
@@ -276,6 +277,72 @@ public class ShellToolTests
         }
     }
 
+    // ── Working directory must exist (#1286): fail loudly with the mkdir remedy ──
+    // instead of letting Process.Start surface an opaque, platform-specific error.
+
+    [Fact]
+    public async Task Missing_explicit_working_directory_returns_helpful_error()
+    {
+        var missingDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var args = ToolInput.Create("Command", "echo hi", "WorkingDirectory", missingDir);
+
+        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+
+        Assert.Contains("does not exist", result);
+        Assert.Contains(missingDir, result);
+        Assert.Contains("mkdir", result);
+        // The process must never start with a missing cwd...
+        Assert.DoesNotContain("Exit code", result);
+        // ...and the tool must not silently create the directory either.
+        Assert.False(Directory.Exists(missingDir));
+    }
+
+    [Fact]
+    public async Task Working_directory_that_is_a_file_returns_not_a_directory_error()
+    {
+        var filePath = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        File.WriteAllText(filePath, "not a dir");
+        try
+        {
+            var args = ToolInput.Create("Command", "echo hi", "WorkingDirectory", filePath);
+
+            var result = await _tool.ExecuteAsync(args, CancellationToken.None);
+
+            Assert.Contains("is a file, not a directory", result);
+            Assert.Contains(filePath, result);
+            Assert.DoesNotContain("Exit code", result);
+        }
+        finally
+        {
+            if (File.Exists(filePath)) File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task Missing_project_directory_returns_helpful_error()
+    {
+        // No explicit arg, so the resolution chain falls back to ProjectDirectory —
+        // proving the existence guard covers the fallback paths, not just explicit args.
+        var sessionDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        var missingProjectDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            var context = new ToolExecutionContext("session-1", sessionDir) { Audience = TrustAudience.Personal, ProjectDirectory = missingProjectDir };
+            var args = ToolInput.Create("Command", "echo hi");
+
+            var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("does not exist", result);
+            Assert.Contains(missingProjectDir, result);
+            Assert.DoesNotContain("Exit code", result);
+        }
+        finally
+        {
+            if (Directory.Exists(sessionDir)) Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task Null_arguments_returns_error()
     {
@@ -298,6 +365,111 @@ public class ShellToolTests
 
         Assert.StartsWith(new string('x', 50), result);
         Assert.EndsWith("[output truncated]", result);
+    }
+
+    // ── BoundedDrainAsync ──
+
+    [Fact]
+    public async Task BoundedDrain_short_output_returned_verbatim()
+    {
+        var input = "hello world";
+        var reader = new StringReader(input);
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
+        Assert.Equal(input, text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_empty_input_returns_empty()
+    {
+        var reader = new StringReader("");
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
+        Assert.Equal("", text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_output_exactly_at_cap_not_truncated()
+    {
+        var input = new string('a', 100);
+        var reader = new StringReader(input);
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
+        Assert.Equal(input, text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_long_output_truncated_with_head_and_tail()
+    {
+        // 100-char head marker + separator + 100-char tail marker, with filler in the middle
+        var head = new string('H', 100);
+        var middle = new string('M', 5000);
+        var tail = new string('T', 100);
+        var input = head + middle + tail;
+
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 200);
+
+        Assert.True(truncated);
+        Assert.StartsWith(new string('H', 100), text);  // head preserved
+        Assert.EndsWith(new string('T', 100), text);    // tail preserved
+        Assert.Contains("...", text);                    // separator present
+        Assert.DoesNotContain("M", text);                // middle discarded
+    }
+
+    [Fact]
+    public async Task BoundedDrain_head_and_tail_split_evenly()
+    {
+        // maxChars=10 → headCap=5, tailCap=5
+        var input = "AAAAAXXXXXXBBBBB"; // 16 chars: 5 head, 6 overflow discard, 5 tail
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 10);
+
+        Assert.True(truncated);
+        Assert.StartsWith("AAAAA", text);
+        Assert.EndsWith("BBBBB", text);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_disabled_cap_returns_full_output()
+    {
+        var input = new string('x', 10_000);
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 0);
+        Assert.Equal(input, text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public async Task BoundedDrain_tail_ring_wraps_across_small_chunks()
+    {
+        // Drives the ring's wraparound + start-advance path that the StringReader
+        // tests skip: each read delivers a chunk smaller than tailCap, so the tail
+        // window is rebuilt incrementally and must wrap rather than reset wholesale.
+        // maxChars=10 → headCap=5 ("ABCDE"), tailCap=5; last 5 of "FGHIJKLMNO" = "KLMNO".
+        var reader = new ChunkedReader("ABCDEFGHIJKLMNO", chunkSize: 3);
+
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 10);
+
+        Assert.True(truncated);
+        Assert.Equal("ABCDE\n...\nKLMNO", text);
+    }
+
+    // Hands out at most chunkSize chars per read so tests can exercise the tail
+    // ring's incremental wrap path — real pipe reads arrive in arbitrary slices,
+    // not the single 4KB gulp a StringReader gives.
+    private sealed class ChunkedReader(string data, int chunkSize) : TextReader
+    {
+        private int _pos;
+
+        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        {
+            var remaining = data.Length - _pos;
+            if (remaining <= 0)
+                return ValueTask.FromResult(0);
+
+            var n = Math.Min(Math.Min(chunkSize, buffer.Length), remaining);
+            data.AsSpan(_pos, n).CopyTo(buffer.Span);
+            _pos += n;
+            return ValueTask.FromResult(n);
+        }
     }
 
     [Fact]

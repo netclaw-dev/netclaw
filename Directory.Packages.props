@@ -84,6 +84,10 @@
     <PackageVersion Include="Aspire.Hosting.Testing" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="CommunityToolkit.Aspire.Hosting.Ollama" Version="$(CommunityToolkitAspireVersion)" />
   </ItemGroup>
+  <!-- Benchmarks (benchmarks/Netclaw.Benchmarks only) -->
+  <ItemGroup>
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+  </ItemGroup>
   <!-- Source generators -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.3.0" />

@@ -20,9 +20,10 @@
 # Docker pattern; failures when neither buildx nor --build-arg supply a
 # value are intentional ("no silent fallbacks" — see CLAUDE.md).
 #
-# A wrapper entrypoint (entrypoint.sh) runs as PID 1 and supervises the
-# netclawd process, restarting it on exit so the container survives
-# config-update restarts and `netclaw init` wizard flows.
+# tini runs as PID 1 — it reaps orphaned zombies (netclawd's tool subprocesses
+# that reparent to PID 1) and forwards signals — and launches entrypoint.sh,
+# which supervises the netclawd process, restarting it on exit so the container
+# survives config-update restarts and `netclaw init` wizard flows.
 #
 # The daemon runs as a dedicated non-root user (netclaw, UID 1654) for
 # defense-in-depth. The daemon fails loudly when required
@@ -54,6 +55,8 @@ ARG NETCLAW_VERSION=unknown
 #   VCS/GitHub:  git, gh
 #   Python:      python3, python3-pip, python3-venv
 #   Privileges:  gosu (entrypoint ownership repair, then drop to netclaw)
+#   Init/PID 1:  tini (reaps orphaned subprocess zombies, forwards signals) — https://github.com/krallin/tini
+#                Unpinned like the rest of this apt set; ubuntu:24.04 pins it at 0.19.0 for the LTS life.
 #   Crypto:      libsodium23 (required by NSec for Ed25519 signature verification)
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -62,6 +65,7 @@ RUN apt-get update \
       wget \
       procps \
       gosu \
+      tini \
       git \
       jq \
       sqlite3 \
@@ -101,6 +105,12 @@ ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
 # Block in-place binary self-update — the image tag IS the version.
 # Update availability checks still run so operators see when a new version exists.
 ENV NETCLAW_Daemon__DisableSelfUpdate=true
+# Declare that an external supervisor (entrypoint.sh, PID 1) owns the daemon
+# lifecycle. The CLI refuses to spawn a detached netclawd in this mode so
+# `netclaw init` / `netclaw daemon start` cannot split-brain with the
+# supervised daemon (#1279). Config changes are applied via an in-process
+# restart through the running daemon instead.
+ENV NETCLAW_CONTAINER_SUPERVISOR=entrypoint
 
 # Persist identity, config, data, and session state on an operator-mounted
 # volume. Real operators must `netclaw init` (or bind-mount a pre-initialized
@@ -123,4 +133,9 @@ LABEL org.opencontainers.image.source="https://github.com/netclaw-dev/netclaw" \
       org.opencontainers.image.version="${NETCLAW_VERSION}" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-ENTRYPOINT ["/opt/netclaw/entrypoint.sh"]
+# tini as PID 1 reaps zombies reparented from netclawd's tool subprocesses
+# (entrypoint.sh only `wait`s its own direct child) and forwards signals for a clean
+# `docker stop` (#1287). `-g` forwards to the whole process group, not just the direct
+# child, so a stop tears down netclawd AND any in-flight tool subprocesses together
+# instead of leaving grandchildren to linger until the stop-timeout SIGKILL.
+ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/opt/netclaw/entrypoint.sh"]
