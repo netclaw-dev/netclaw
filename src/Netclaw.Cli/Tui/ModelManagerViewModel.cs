@@ -32,7 +32,6 @@ public enum ModelManagerState
 public sealed class ModelManagerViewModel : ReactiveViewModel
 {
     private const int MaxDisplayedModels = 30;
-    private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
 
     private readonly NetclawPaths _paths;
     private readonly IProviderProbe _probe;
@@ -177,23 +176,13 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        var modelEntry = new Dictionary<string, object>
-        {
-            ["Provider"] = SelectedProvider,
-            ["ModelId"] = SelectedModelId,
-            ["Provenance"] = provenance.ToString()
-        };
-
-        if (discoveredModel?.ContextWindowTokens is { } contextWindow)
-            modelEntry["ContextWindow"] = contextWindow;
-
-        if (discoveredModel is not null)
-        {
-            modelEntry["InputModalities"] = discoveredModel.InputModalities.ToString();
-            modelEntry["OutputModalities"] = discoveredModel.OutputModalities.ToString();
-        }
-
-        modelsSection[roleKey] = modelEntry;
+        modelsSection[roleKey] = ModelEntryWriter.BuildModelEntry(
+            SelectedProvider,
+            SelectedModelId,
+            provenance,
+            discoveredModel?.ContextWindowTokens,
+            discoveredModel?.InputModalities,
+            discoveredModel?.OutputModalities);
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
 
         Refresh();
@@ -335,8 +324,11 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
         try
         {
+            // Whole-probe wall-clock (covers pre-request work like OAuth token exchange);
+            // ProbeTimeouts.InteractiveWallClock stays above the descriptor's per-request
+            // deadline so it never truncates a legitimately slow self-hosted probe (#1292).
             result = await _probe.ProbeAsync(provider.Entry, ct)
-                .WaitAsync(ProbeHardTimeout, ct);
+                .WaitAsync(ProbeTimeouts.InteractiveWallClock, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -345,7 +337,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         catch (TimeoutException)
         {
             result = new ProviderProbeResult(false,
-                $"Validation timed out after {(int)ProbeHardTimeout.TotalSeconds} seconds. Check network connectivity and try again.", []);
+                $"Validation timed out after {(int)ProbeTimeouts.InteractiveWallClock.TotalSeconds} seconds. Check network connectivity and try again.", []);
         }
         catch (Exception ex)
         {

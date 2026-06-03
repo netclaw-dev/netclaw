@@ -264,7 +264,9 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Available = false,
                 State = "unknown",
-                CurrentVersion = BuildInfo.Version,
+                // FullVersion to match the post-check branch (result.CurrentVersion is
+                // the full version), so a beta build doesn't show a stripped core here.
+                CurrentVersion = BuildInfo.FullVersion,
                 SelfUpdateDisabled = daemonConfig.DisableSelfUpdate,
             };
         }

@@ -5,7 +5,11 @@
 #   .\install.ps1 -Component cli
 #   .\install.ps1 -Component daemon
 #   .\install.ps1 -InstallDir C:\tools\netclaw
+#   .\install.ps1 -Channel beta      # Opt into prereleases
 #   .\install.ps1 -DryRun
+#
+# -Channel beta installs the newest prerelease (or latest stable if no prerelease
+# exists). -Version pins an exact version and overrides -Channel (e.g. 0.19.0-beta.1).
 
 param(
     [ValidateSet("all", "cli", "daemon")]
@@ -14,6 +18,10 @@ param(
     [string]$InstallDir = "",
 
     [string]$Version = "",
+
+    # Release channel: "stable" (default) or "beta" (opt into prereleases).
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "stable",
 
     # Resolve and report what would be installed, but install nothing.
     [switch]$DryRun
@@ -89,6 +97,7 @@ if (-not $InstallDir) {
 Write-Host "Netclaw installer"
 Write-Host "  Platform: win-x64"
 Write-Host "  Install dir: $InstallDir"
+Write-Host "  Channel: $Channel"
 if ($DryRun) {
     Write-Host "  Mode: dry run (no changes will be made)"
 }
@@ -103,9 +112,18 @@ try {
     exit 1
 }
 
-# Determine version
+# Determine version. Precedence: explicit pin > channel selection > stable latest.
 if ($Version) {
     $targetVersion = $Version
+} elseif ($Channel -eq "beta") {
+    # Beta channel resolves to latestPrerelease (the newest of {stable, prerelease}).
+    $targetVersion = $manifest.latestPrerelease
+    if (-not $targetVersion) {
+        # Manifest predates the prerelease channel — use latest stable and say so
+        # loudly. This is the newest known version, not a silent default.
+        Write-Host "  Note: manifest has no prerelease channel; using latest stable."
+        $targetVersion = $manifest.latest
+    }
 } else {
     $targetVersion = $manifest.latest
 }

@@ -13,7 +13,8 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot ".." "..")).Path
 $InstallPs1 = Join-Path $RepoRoot "scripts" "install.ps1"
-$Version = "0.0.0"
+$Version = "0.0.0"            # stable -> manifest.latest
+$BetaVersion = "0.0.1-beta1"  # prerelease -> manifest.latestPrerelease
 $Rid = "win-x64"
 
 $script:Pass = 0
@@ -23,51 +24,55 @@ function Fail([string]$m) { Write-Host "FAIL: $m"; $script:Fail++ }
 
 $Work = Join-Path ([System.IO.Path]::GetTempPath()) ("netclaw-install-smoke-" + [Guid]::NewGuid().ToString('N'))
 $Serve = Join-Path $Work "serve"
-$VersionDir = Join-Path $Serve $Version
 $BinDir = Join-Path $Work "bin"
-New-Item -ItemType Directory -Path $VersionDir, $BinDir -Force | Out-Null
+New-Item -ItemType Directory -Path $Serve, $BinDir -Force | Out-Null
 
 $ServerProc = $null
 try {
     # 1. Stand-in binaries - install.ps1 only needs a file named <component>.exe
     foreach ($name in @("netclaw", "netclawd")) {
-        Set-Content -Path (Join-Path $BinDir "$name.exe") -Value "stand-in $name $Version" -NoNewline
+        Set-Content -Path (Join-Path $BinDir "$name.exe") -Value "stand-in $name" -NoNewline
     }
 
-    # 2. Package zip archives + collect asset metadata
-    $assets = @()
-    foreach ($comp in @("netclaw", "netclawd")) {
-        $archiveName = "$comp-$Version-$Rid.zip"
-        $archivePath = Join-Path $VersionDir $archiveName
-        Compress-Archive -Path (Join-Path $BinDir "$comp.exe") -DestinationPath $archivePath -Force
-        $hash = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-        $assets += [ordered]@{
-            component = $comp
-            rid       = $Rid
-            url       = "PLACEHOLDER/$Version/$archiveName"
-            sha256    = $hash
-            sizeBytes = (Get-Item $archivePath).Length
-        }
-    }
-
-    # 3. Pick a free port, then write the manifest with localhost URLs
+    # 2. Pick a free port (asset URLs embed it)
     $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
     $listener.Start()
     $Port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
     $listener.Stop()
     $BaseUrl = "http://127.0.0.1:$Port"
-    foreach ($a in $assets) { $a.url = $a.url.Replace("PLACEHOLDER", $BaseUrl) }
+
+    # 3. Package zip archives for a stable AND a prerelease, and write a manifest with
+    #    latest (stable) + latestPrerelease (prerelease). Two versions let us prove
+    #    channel selection: default -> latest, -Channel beta -> latestPrerelease.
+    function New-ReleaseEntry([string]$ver) {
+        $verDir = Join-Path $Serve $ver
+        New-Item -ItemType Directory -Path $verDir -Force | Out-Null
+        $entryAssets = @()
+        foreach ($comp in @("netclaw", "netclawd")) {
+            $archiveName = "$comp-$ver-$Rid.zip"
+            $archivePath = Join-Path $verDir $archiveName
+            Compress-Archive -Path (Join-Path $BinDir "$comp.exe") -DestinationPath $archivePath -Force
+            $hash = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $entryAssets += [ordered]@{
+                component = $comp
+                rid       = $Rid
+                url       = "$BaseUrl/$ver/$archiveName"
+                sha256    = $hash
+                sizeBytes = (Get-Item $archivePath).Length
+            }
+        }
+        return [ordered]@{ version = $ver; assets = $entryAssets }
+    }
+
+    $stableEntry = New-ReleaseEntry $Version
+    $betaEntry = New-ReleaseEntry $BetaVersion
 
     $manifest = [ordered]@{
-        schemaVersion = 1
-        feedType      = "releases"
-        latest        = $Version
-        releases      = @(
-            [ordered]@{
-                version = $Version
-                assets  = $assets
-            }
-        )
+        schemaVersion    = 1
+        feedType         = "releases"
+        latest           = $Version
+        latestPrerelease = $BetaVersion
+        releases         = @($betaEntry, $stableEntry)
     }
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path (Join-Path $Serve "manifest.json") -Encoding utf8
 
@@ -148,6 +153,35 @@ try {
     } else {
         Fail "PATH instruction: should read from User scope with GetEnvironmentVariable('PATH', 'User')"
     }
+
+    # 8. Release channel resolution (dry-run)
+    Write-Host ""
+    Write-Host "=== release channel resolution ==="
+    $shouldNotExist = Join-Path $Work "should-not-exist"
+
+    function Assert-Resolves([string]$desc, [string]$want, [string[]]$extraArgs) {
+        $out = & pwsh -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun @extraArgs 2>&1 | Out-String
+        $pattern = "(?m)^\s+Version:\s+$([regex]::Escape($want))\s*$"
+        if ($LASTEXITCODE -eq 0 -and $out -match $pattern) {
+            Pass "channel: $desc -> $want"
+        } else {
+            Fail "channel: $desc (exit=$LASTEXITCODE, expected Version: $want)"
+            Write-Host ($out.TrimEnd())
+        }
+    }
+
+    Assert-Resolves "default install -> latest stable"    $Version     @()
+    Assert-Resolves "-Channel stable -> latest stable"    $Version     @("-Channel", "stable")
+    Assert-Resolves "-Channel beta -> latest prerelease"  $BetaVersion @("-Channel", "beta")
+    Assert-Resolves "-Version pin overrides -Channel"     $BetaVersion @("-Channel", "stable", "-Version", $BetaVersion)
+
+    # An unknown channel must be rejected by the ValidateSet, not silently default.
+    & pwsh -NoProfile -File $InstallPs1 -InstallDir $shouldNotExist -DryRun -Channel bogus 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Pass "channel: unknown value rejected"
+    } else {
+        Fail "channel: unknown value should fail (exit=$LASTEXITCODE)"
+    }
 }
 finally {
     if ($ServerProc -and -not $ServerProc.HasExited) { $ServerProc.Kill() }
@@ -162,3 +196,7 @@ if ($script:Fail -gt 0) {
     exit 1
 }
 Write-Host "install smoke (ps1): PASSED"
+# Exit explicitly on the result, not on $LASTEXITCODE — the channel checks above run
+# `pwsh -Channel bogus` (which exits non-zero by design), and without this the script
+# would fall off the end and inherit that non-zero code despite all assertions passing.
+exit 0

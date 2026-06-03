@@ -124,6 +124,12 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     public abstract JsonElement ParameterSchema { get; }
 
     /// <summary>
+    /// Inline output budget; <c>0</c> = use the session content budget. First-party
+    /// tools override this to opt into a smaller (verbose) budget.
+    /// </summary>
+    public virtual int InlineOutputBudgetChars => 0;
+
+    /// <summary>
     /// Deserialize raw LLM arguments into the typed params record.
     /// Implemented by the source generator to handle JsonElement and native CLR types.
     /// </summary>

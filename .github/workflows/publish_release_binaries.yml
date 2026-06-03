@@ -23,23 +23,51 @@ jobs:
         lfs: true
         fetch-depth: 0
 
-    - name: Validate tag matches VersionPrefix
+    - name: Validate tag matches VersionPrefix/VersionSuffix
       shell: bash
       run: |
         TAG_VERSION="${{ github.ref_name }}"
-        PROPS_VERSION=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('Directory.Build.props').getroot(); node=root.find('.//VersionPrefix'); print((node.text or '').strip() if node is not None else '')")
+        # Split a prerelease tag (e.g. 0.19.0-beta1) into core + suffix. The .NET SDK
+        # keeps the semver suffix in <VersionSuffix>, not <VersionPrefix>, so validate
+        # each half. A stable tag (e.g. 0.18.1) has no suffix.
+        TAG_PREFIX="${TAG_VERSION%%-*}"
+        if [ "$TAG_VERSION" = "$TAG_PREFIX" ]; then
+          TAG_SUFFIX=""
+        else
+          TAG_SUFFIX="${TAG_VERSION#*-}"
+        fi
 
-        if [ -z "$PROPS_VERSION" ]; then
+        # Enforce the dotted prerelease convention: each '.'-separated identifier in the
+        # suffix must be all-letters or all-digits (e.g. 'beta.1'), never mixed ('beta1').
+        # A mixed identifier is one opaque alphanumeric token that SemVer orders
+        # lexically, so 'beta10' would rank BELOW 'beta2' — in this repo's comparator and
+        # in the release manifest. The dotted form makes the number a numeric identifier.
+        if [ -n "$TAG_SUFFIX" ]; then
+          IFS='.' read -ra _suffix_ids <<< "$TAG_SUFFIX"
+          for _id in "${_suffix_ids[@]}"; do
+            if ! [[ "$_id" =~ ^[A-Za-z]+$ || "$_id" =~ ^[0-9]+$ ]]; then
+              echo "Invalid prerelease identifier '$_id' in tag '$TAG_VERSION': mixes letters and digits." >&2
+              echo "  Use the dotted form so the number orders numerically, e.g. '${TAG_PREFIX}-beta.1' (not '${TAG_PREFIX}-beta1')." >&2
+              exit 1
+            fi
+          done
+        fi
+
+        PROPS_PREFIX=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('Directory.Build.props').getroot(); node=root.find('.//VersionPrefix'); print((node.text or '').strip() if node is not None else '')")
+        PROPS_SUFFIX=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('Directory.Build.props').getroot(); node=root.find('.//VersionSuffix'); print((node.text or '').strip() if node is not None else '')")
+
+        if [ -z "$PROPS_PREFIX" ]; then
           echo "Directory.Build.props is missing VersionPrefix" >&2
           exit 1
         fi
 
-        if [ "$TAG_VERSION" != "$PROPS_VERSION" ]; then
-          echo "Tag version ($TAG_VERSION) does not match Directory.Build.props VersionPrefix ($PROPS_VERSION)" >&2
+        if [ "$TAG_PREFIX" != "$PROPS_PREFIX" ] || [ "$TAG_SUFFIX" != "$PROPS_SUFFIX" ]; then
+          echo "Tag ($TAG_VERSION) does not match Directory.Build.props (VersionPrefix=$PROPS_PREFIX, VersionSuffix=${PROPS_SUFFIX:-<none>})" >&2
+          echo "  For this tag set <VersionPrefix>$TAG_PREFIX</VersionPrefix> and <VersionSuffix>$TAG_SUFFIX</VersionSuffix>." >&2
           exit 1
         fi
 
-        echo "Version check passed: $TAG_VERSION"
+        echo "Version check passed: $TAG_VERSION (prefix=$TAG_PREFIX suffix=${TAG_SUFFIX:-<none>})"
 
     - name: Extract latest release notes
       shell: pwsh
@@ -57,7 +85,9 @@ jobs:
       id: create_release
       with:
         draft: false
-        prerelease: false
+        # A tag with a '-' is a semver prerelease (e.g. 0.19.0-beta1) → mark it a
+        # GitHub prerelease so it never becomes the repo's "Latest" release.
+        prerelease: ${{ contains(github.ref_name, '-') }}
         release_name: 'Netclaw ${{ github.ref_name }}'
         tag_name: ${{ github.ref }}
         body_path: RELEASE_NOTES_LATEST.md
@@ -307,7 +337,14 @@ jobs:
         MAJOR_MINOR=$(echo "$STRIPPED" | awk -F. '{print $1"."$2}')
         REPO="ghcr.io/netclaw-dev/netclaw"
 
-        TAGS="${REPO}:${VERSION},${REPO}:latest,${REPO}:${MAJOR_MINOR}"
+        # A prerelease tag (e.g. 0.19.0-beta1) must NOT move the floating stable tags
+        # (:latest, :major.minor). It only gets its exact-version tag. The rolling
+        # :beta tag is handled separately (see the update-docker-beta-tag job), which
+        # tracks latestPrerelease so :beta survives a stable that supersedes a beta.
+        case "$VERSION" in
+          *-*) TAGS="${REPO}:${VERSION}" ;;
+          *)   TAGS="${REPO}:${VERSION},${REPO}:latest,${REPO}:${MAJOR_MINOR}" ;;
+        esac
         echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
         echo "Tags: $TAGS"
 
@@ -330,6 +367,10 @@ jobs:
     needs: publish-binaries
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      # The version the beta channel / Docker :beta tag should resolve to
+      # (newest of {stable, prerelease}). Consumed by update-docker-beta-tag.
+      latest_prerelease: ${{ steps.pointers.outputs.latest_prerelease }}
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -366,6 +407,17 @@ jobs:
           "${{ github.ref_name }}" \
           ./checksums \
           "https://releases.netclaw.dev"
+
+    - name: Read channel pointers
+      id: pointers
+      run: |
+        LP=$(python3 -c "import json; print(json.load(open('./feeds/releases/manifest.json')).get('latestPrerelease',''))")
+        if [ -z "$LP" ]; then
+          echo "Generated manifest is missing latestPrerelease" >&2
+          exit 1
+        fi
+        echo "latest_prerelease=$LP" >> "$GITHUB_OUTPUT"
+        echo "latestPrerelease=$LP"
 
     - name: Install minisign
       run: |
@@ -467,7 +519,50 @@ jobs:
       run: rm -f /tmp/netclaw-manifest.key
 
   # ────────────────────────────────────────────────────────────────────
-  # Job 5: Publish system skills feed to R2
+  # Job 5: Move the rolling Docker :beta tag to the newest prerelease
+  # ────────────────────────────────────────────────────────────────────
+  # :beta tracks latestPrerelease (newest of {stable, prerelease}), mirroring the
+  # install-script beta channel. Needs publish-docker (so the freshly built image
+  # exists) and publish-binary-manifest (for the latestPrerelease value). When a
+  # stable supersedes a beta, latestPrerelease == that stable and :beta follows it;
+  # when an old stable line is patched while a newer beta is live, latestPrerelease
+  # stays on the beta and :beta does not regress.
+  update-docker-beta-tag:
+    name: Update Docker :beta tag
+    needs: [publish-docker, publish-binary-manifest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Log in to GHCR
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Point :beta at latestPrerelease
+      shell: bash
+      run: |
+        set -euo pipefail
+        REPO="ghcr.io/netclaw-dev/netclaw"
+        LP="${{ needs.publish-binary-manifest.outputs.latest_prerelease }}"
+        if [ -z "$LP" ]; then
+          echo "latest_prerelease output is empty — cannot move :beta" >&2
+          exit 1
+        fi
+        echo "Pointing ${REPO}:beta at ${REPO}:${LP}"
+        # imagetools create copies the (multi-arch) manifest list from the source tag
+        # to :beta without rebuilding. The source image already exists in GHCR.
+        docker buildx imagetools create --tag "${REPO}:beta" "${REPO}:${LP}"
+
+  # ────────────────────────────────────────────────────────────────────
+  # Job 6: Publish system skills feed to R2
   # ────────────────────────────────────────────────────────────────────
   publish-skills:
     name: Publish Skills Feed

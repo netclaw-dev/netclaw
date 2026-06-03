@@ -156,3 +156,20 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./scripts/smoke/install-smoke.ps1
+
+  semver-conformance:
+    name: SemVer Conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      # The C# side (SemVerConformanceTests) runs in the Test job; this asserts the
+      # release-manifest generator's precedence key agrees with the same shared fixture,
+      # so the two implementations can't silently drift.
+      - name: "Generator precedence key matches the shared fixture"
+        run: python3 feeds/scripts/semver_key.py --check feeds/scripts/semver-order.txt

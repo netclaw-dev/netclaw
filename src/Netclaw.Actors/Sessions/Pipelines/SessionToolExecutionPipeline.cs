@@ -225,7 +225,8 @@ internal static class SessionToolExecutionPipeline
             spawnChildActor,
             projectDirectory,
             turnContext,
-            modelInputModalities);
+            modelInputModalities,
+            maxInlineToolResultChars);
         context.RequestedTimeoutSeconds = (int)timeout.TotalSeconds;
 
         // Re-drive of an ApprovedOnce approval: the user already clicked
@@ -343,7 +344,7 @@ internal static class SessionToolExecutionPipeline
                 var deniedMessage = new SerializableChatMessage
                 {
                     Role = Protocol.ChatRole.Tool,
-                    Content = ClampToolResult(resultText, maxInlineToolResultChars),
+                    Content = resultText,
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
                 };
@@ -409,7 +410,7 @@ internal static class SessionToolExecutionPipeline
                 return new ToolCallResult(new SerializableChatMessage
                 {
                     Role = Protocol.ChatRole.Tool,
-                    Content = ClampToolResult(resultText, maxInlineToolResultChars),
+                    Content = resultText,
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
                 }, [], context.FileAttachments, completedRuns, acceptedFindings);
@@ -563,7 +564,9 @@ internal static class SessionToolExecutionPipeline
 
         modelInputBudget ??= new ModelInputBatchBudget(MaxModelInputBatchBytes);
         var modelInputMaterialization = MaterializeModelInputFiles(context, sessionDir, logger, modelInputBudget);
-        resultText = ClampToolResult(resultText, maxInlineToolResultChars);
+        // No inline clamp here: DispatchingToolExecutor already bounds every tool
+        // result to the inline budget N (and spills the overflow). Clamping again
+        // would re-window the already-windowed+steered result.
         if (modelInputMaterialization.RequestedCount > modelInputMaterialization.MediaReferences.Count)
             resultText = AppendModelInputHandoffWarning(
                 resultText,
@@ -928,7 +931,8 @@ internal static class SessionToolExecutionPipeline
         Func<object, string, CancellationToken, Task<object>> spawnChildActor,
         string? projectDirectory,
         TurnContext? turnContext,
-        ModelModality modelInputModalities)
+        ModelModality modelInputModalities,
+        int maxInlineToolResultChars)
     {
         // A turn with no authority context carries no trust context — fall closed
         // to the most-restrictive audience. The default is resolved once, here,
@@ -936,6 +940,9 @@ internal static class SessionToolExecutionPipeline
         var context = new ToolExecutionContext(sessionId.Value, sessionDir)
         {
             Audience = turnContext?.Audience ?? source?.Audience ?? TrustAudience.Public,
+            // The session content budget; DispatchingToolExecutor uses it (or a
+            // tool's own override) to bound results and spill the overflow.
+            MaxInlineToolResultChars = maxInlineToolResultChars,
         };
         context.Boundary = turnContext?.Boundary ?? source?.Boundary;
         context.ChannelType = turnContext?.ChannelType?.ToWireValue()
@@ -972,19 +979,6 @@ internal static class SessionToolExecutionPipeline
         Rationale = meta?.Rationale,
         TimeoutHintSeconds = meta?.TimeoutHintSeconds
     };
-
-    /// <summary>
-    /// Truncates a tool result to fit within the configured inline character limit.
-    /// </summary>
-    public static string ClampToolResult(string resultText, int maxInlineToolResultChars)
-    {
-        if (maxInlineToolResultChars <= 0 || resultText.Length <= maxInlineToolResultChars)
-            return resultText;
-
-        var omittedChars = resultText.Length - maxInlineToolResultChars;
-        return resultText[..maxInlineToolResultChars]
-               + $"\n[tool result truncated: omitted {omittedChars} chars to protect context window]";
-    }
 
     /// <summary>
     /// Returns a one-line agent-facing hint pointing at <c>set_working_directory</c>

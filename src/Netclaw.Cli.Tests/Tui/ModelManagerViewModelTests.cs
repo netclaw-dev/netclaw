@@ -163,8 +163,11 @@ public sealed class ModelManagerViewModelTests : IDisposable
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
         Assert.Equal("model-a", main.GetProperty("ModelId").GetString());
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
-        Assert.Equal("Text", main.GetProperty("InputModalities").GetString());
-        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
+        // An Ollama /api/tags listing reports no modalities, so discovery must NOT
+        // persist a guessed "Text" override (#1290) — leaving them unset lets the
+        // daemon resolve real capabilities at runtime instead of being short-circuited.
+        Assert.False(main.TryGetProperty("InputModalities", out _));
+        Assert.False(main.TryGetProperty("OutputModalities", out _));
     }
 
     [Fact]

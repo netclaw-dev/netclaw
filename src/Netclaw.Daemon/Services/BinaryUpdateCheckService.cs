@@ -31,6 +31,7 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly string _currentVersion;
     private readonly string _upgradeHint;
+    private readonly UpdateChannel _channel;
 
     public BinaryUpdateCheckService(
         HttpClient httpClient,
@@ -38,7 +39,10 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
         DaemonConfig daemonConfig,
         IOperationalNotificationSink? notificationSink = null,
         TimeProvider? timeProvider = null)
-        : this(httpClient, logger, BuildInfo.Version, daemonConfig.DisableSelfUpdate, notificationSink, timeProvider)
+        // FullVersion (not Version) so a beta build reports its prerelease suffix and
+        // can be compared against the beta channel rather than stranding on its core.
+        : this(httpClient, logger, BuildInfo.FullVersion, daemonConfig.DisableSelfUpdate,
+            notificationSink, timeProvider, daemonConfig.UpdateChannel)
     {
     }
 
@@ -49,7 +53,8 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
         string currentVersion,
         bool selfUpdateDisabled = false,
         IOperationalNotificationSink? notificationSink = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        UpdateChannel channel = UpdateChannel.Stable)
     {
         _httpClient = httpClient;
         _logger = logger;
@@ -59,6 +64,7 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
             : "Run 'netclaw update' to upgrade.";
         _notificationSink = notificationSink;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _channel = channel;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -79,7 +85,7 @@ internal sealed class BinaryUpdateCheckService : BackgroundService
         try
         {
             var result = await UpdateCheckService.CheckForUpdateAsync(
-                _httpClient, _currentVersion, cancellationToken);
+                _httpClient, _currentVersion, cancellationToken, _channel);
 
             if (result.IsUpdateAvailable)
             {

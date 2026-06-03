@@ -32,10 +32,13 @@ public sealed record SessionTuning
     public int KeepRecentToolResults { get; init; } = 3;
 
     /// <summary>
-    /// Maximum number of characters from a single tool result that may be
-    /// inlined into conversation history. Oversized results are truncated to
-    /// protect the context window from verbose tool payloads (DOM dumps,
-    /// large JSON blobs, etc.).
+    /// The session <i>content</i> inline budget: the default maximum characters of
+    /// a tool result inlined into conversation history, for tools whose output the
+    /// model needs to read in full (file_read, web_fetch, memory recall, MCP).
+    /// Oversized results are truncated to a head+tail window by the dispatcher and
+    /// the full (redacted) output is spilled to a session file with a steer to read
+    /// a slice / grep. Verbose tools (shell) override this with a much smaller
+    /// per-tool budget (<see cref="Netclaw.Tools.INetclawTool.InlineOutputBudgetChars"/>).
     /// </summary>
     public int MaxInlineToolResultChars { get; init; } = 12_000;
 

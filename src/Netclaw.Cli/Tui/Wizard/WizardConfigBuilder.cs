@@ -92,29 +92,15 @@ public sealed class WizardConfigBuilder
         // Models section
         if (Model is not null)
         {
-            var modelEntry = new Dictionary<string, object>
-            {
-                ["Provider"] = Model.Provider
-            };
-
-            if (!string.IsNullOrWhiteSpace(Model.ModelId))
-                modelEntry["ModelId"] = Model.ModelId;
-
-            if (Model.ContextWindow is { } contextWindow)
-                modelEntry["ContextWindow"] = contextWindow;
-
-            if (Model.Provenance is { } provenance)
-                modelEntry["Provenance"] = provenance.ToString();
-
-            if (Model.InputModalities is { } inputModalities)
-                modelEntry["InputModalities"] = inputModalities.ToString();
-
-            if (Model.OutputModalities is { } outputModalities)
-                modelEntry["OutputModalities"] = outputModalities.ToString();
-
             config["Models"] = new Dictionary<string, object>
             {
-                ["Main"] = modelEntry
+                ["Main"] = ModelEntryWriter.BuildModelEntry(
+                    Model.Provider,
+                    Model.ModelId,
+                    Model.Provenance,
+                    Model.ContextWindow,
+                    Model.InputModalities,
+                    Model.OutputModalities)
             };
         }
 

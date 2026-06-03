@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.8.9"
+  version: "2.9.0"
 ---
 
 # Netclaw Operations
@@ -218,7 +218,8 @@ Rules:
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json`.
-- Output captured to `~/.netclaw/jobs/{id}/output.log`.
+- Output is captured (bounded; head+tail for very large output) to
+  `~/.netclaw/jobs/{id}/output.log` — `file_read`/`grep` it for detail beyond the tail.
 
 Monitoring tools:
 
@@ -234,6 +235,26 @@ results proactively when the job completes.
 
 Active background jobs appear in the `[active-background-jobs]` section of the
 session context on every turn.
+
+## Large tool output
+
+Tool output is bounded to a small inline budget
+(`Session.Tuning.MaxInlineToolResultChars`, default 2000 chars) so it never floods
+the context window. When a tool's output exceeds that budget you get a head+tail
+view inline plus a pointer to the full output — not the whole thing:
+
+- **`shell_execute`** spills the full (redacted) output to
+  `{session}/tool-calls/{toolCallId}.log` and gives you the path. Read a slice with
+  `file_read` (`StartLine`/`Limit`) or `grep` it — do NOT re-run the command to see more.
+- **`file_read`** on a large file returns the head and steers you to read a
+  specific range with `StartLine`/`Limit` or `grep` (`StartLine` is a 1-based line
+  number — line 1 is the first line). Don't `cat` a huge file through
+  `shell_execute` to get around it — that just spills again.
+- **`background_job`** output goes to `~/.netclaw/jobs/{id}/output.log` (bounded);
+  `check_background_job` returns a tail, and you can `file_read`/`grep` the log for the rest.
+
+Reading a targeted range or grepping is always cheaper than re-running a command or
+re-reading a whole file. Secret-bearing values are redacted from all tool output.
 
 ## Tool Discovery
 

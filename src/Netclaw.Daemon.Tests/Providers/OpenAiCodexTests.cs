@@ -271,7 +271,10 @@ public sealed class OpenAiCodexTests
             Assert.Equal("gpt-live-codex", model.ModelId.Value);
             Assert.Equal(272000, model.ContextWindowTokens);
             Assert.Equal(ModelModality.Text | ModelModality.Image, model.InputModalities);
-            Assert.Equal(ModelModality.Text, model.OutputModalities);
+            // The catalog row omits output_modalities; discovery reports it as unknown
+            // (null) rather than guessing Text, so the daemon resolves it at runtime
+            // instead of a guess being persisted as a permanent override (#1290).
+            Assert.Null(model.OutputModalities);
 
             Assert.NotNull(capturedRequest);
             Assert.Equal(

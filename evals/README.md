@@ -68,7 +68,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Grounding & Alignment | 3 | Uses tools to verify facts, admits uncertainty |
 | Autonomy & Execution | 2 | Executes tasks rather than describing them |
 | Subagents | 1 | Delegates through `spawn_agent` and verifies headless subagents complete ambiguous work without clarification loops |
-| Complex Task Execution | 3 | Multi-step tool chains complete successfully |
+| Complex Task Execution | 5 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct |
 | Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |
 
 Each case defines multiple natural phrasings of the same intent. Each

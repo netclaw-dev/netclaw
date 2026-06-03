@@ -161,15 +161,17 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
             if (inputModalities is null)
                 missingInputModalities.Add(id);
 
-            var outputModalities = ReadModalities(model, "output_modalities")
-                                    ?? ModelModality.Text;
-
+            // Pass modalities through exactly as reported. Do NOT substitute Text for an
+            // absent value: an unknown that gets persisted as Text becomes a permanent
+            // config override that beats real detection (#1290). Input is additionally
+            // guarded below — the probe fails if any model omits it — so what we persist
+            // is always provider-reported, never guessed.
             models.Add(new DiscoveredModel
             {
                 ModelId = new(id),
                 ContextWindowTokens = contextWindow,
-                InputModalities = inputModalities ?? ModelModality.Text,
-                OutputModalities = outputModalities,
+                InputModalities = inputModalities,
+                OutputModalities = ReadModalities(model, "output_modalities"),
             });
         }
 

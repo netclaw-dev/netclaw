@@ -44,7 +44,8 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             },
             ParseModels,
-            ct);
+            ct,
+            timeout: ProbeTimeouts.SelfHosted);
     }
 
     internal static ProviderProbeResult ParseModels(string json)

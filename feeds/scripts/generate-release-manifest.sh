@@ -104,6 +104,47 @@ except:
     fi
 fi
 
+# Compute the channel pointers with semver-correct precedence over the union of
+# {this version} ∪ {versions already in the manifest}:
+#   latest           = newest STABLE version (no prerelease suffix); "" if none yet
+#   latestPrerelease = newest of ALL versions (always >= latest), so the beta channel
+#                      automatically rolls onto a stable release once it supersedes a
+#                      prior beta. This is what install.sh/install.ps1 --channel beta
+#                      and the Docker :beta tag resolve to.
+# python3 is required here — channel pointers must be correct, so we fail loudly
+# rather than guess if it is missing.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 is required to compute release channel pointers" >&2
+    exit 1
+fi
+
+POINTERS=$(SCRIPT_DIR="$SCRIPT_DIR" python3 - "$VERSION" "$MANIFEST_PATH" <<'PY'
+import json, os, sys
+
+# Import the shared precedence key (also used by the conformance check) so the generator
+# and the C# comparator are guaranteed to use the same SemVer ordering.
+sys.path.insert(0, os.environ["SCRIPT_DIR"])
+from semver_key import semver_key
+
+version = sys.argv[1]
+manifest_path = sys.argv[2]
+
+versions = {version}
+try:
+    with open(manifest_path) as f:
+        existing = json.load(f)
+    versions.update(r["version"] for r in existing.get("releases", []))
+except Exception:
+    pass  # no existing manifest (first release) — just this version
+
+stable = [v for v in versions if "-" not in v]
+print(max(stable, key=semver_key) if stable else "")
+print(max(versions, key=semver_key))
+PY
+)
+LATEST=$(printf '%s\n' "$POINTERS" | sed -n '1p')
+LATEST_PRERELEASE=$(printf '%s\n' "$POINTERS" | sed -n '2p')
+
 # GitHub release notes URL
 RELEASE_NOTES_URL="https://github.com/netclaw-dev/netclaw/releases/tag/${VERSION}"
 
@@ -113,7 +154,8 @@ cat > "$MANIFEST_PATH" << EOF
   "schemaVersion": 1,
   "feedType": "releases",
   "updatedAt": "${NOW}",
-  "latest": "${VERSION}",
+  "latest": "${LATEST}",
+  "latestPrerelease": "${LATEST_PRERELEASE}",
   "releases": [
     {
       "version": "${VERSION}",

@@ -249,8 +249,8 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
 
         var result = toolMessage!.Contents.OfType<FunctionResultContent>().Single().Result?.ToString();
         Assert.NotNull(result);
-        Assert.Contains("tool result truncated", result, StringComparison.OrdinalIgnoreCase);
-        Assert.True(result!.Length < 300);
+        Assert.Contains("truncated", result, StringComparison.OrdinalIgnoreCase);
+        Assert.True(result!.Length < 500); // windowed to the 120-char budget + steer (vs the raw 800)
     }
 
     [Fact]
@@ -360,7 +360,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         return Task.CompletedTask;
     }
 
-    public Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
+    public async Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
 
@@ -370,7 +370,16 @@ internal sealed class FakeToolExecutor : IToolExecutor
         }
 
         var result = Results.GetValueOrDefault(toolCall.Name, $"[fake result for {toolCall.Name}]");
-        return Task.FromResult(result);
+        // Mirror DispatchingToolExecutor's post-processing so integration tests see
+        // the same redact + inline-bound + spill the real executor applies. The fake
+        // has no tool instance, so it uses the session content budget (per-tool
+        // verbose overrides are exercised in DispatchingToolExecutorTests).
+        result = Netclaw.Security.SecretOutputRedactor.Redact(result);
+        var budget = context?.MaxInlineToolResultChars is > 0 and var b
+            ? b
+            : Netclaw.Actors.Tools.ToolOutputSpill.DefaultContentBudget;
+        return await Netclaw.Actors.Tools.ToolOutputSpill.BoundAndSpillAsync(
+            result, toolCall.CallId, budget, context, ct);
     }
 }
 

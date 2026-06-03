@@ -201,6 +201,32 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ContributeConfig_DiscoveredModelWithoutModalities_PersistsNone()
+    {
+        // An openai-compatible /v1/models listing reports no modalities, so the
+        // discovered model leaves them unset. The wizard must NOT bake a guessed Text
+        // into config — that override would beat real detection on every daemon boot
+        // and silently demote a multimodal model to text-only (#1290).
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
+        step.SelectedProviderType = "openai-compatible";
+        step.SelectedAuthMethod = AuthMethod.None;
+        step.SelectedModelId = "qwen-vl";
+        step.DiscoveredModels.Add(new DiscoveredModel
+        {
+            ModelId = new Netclaw.Configuration.ModelId("qwen-vl"),
+            ContextWindowTokens = 32768,
+        });
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Model);
+        Assert.Equal(32768, builder.Model!.ContextWindow);
+        Assert.Null(builder.Model.InputModalities);
+        Assert.Null(builder.Model.OutputModalities);
+    }
+
+    [Fact]
     public void ContributeConfig_NoProvider_NoSection()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe);

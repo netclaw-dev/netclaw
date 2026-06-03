@@ -96,6 +96,30 @@ public sealed class DaemonConfigTests
         Assert.Equal(ExposureMode.Local, DaemonConfig.ParseExposureMode(value));
     }
 
+    [Theory]
+    [InlineData("stable", UpdateChannel.Stable)]
+    [InlineData("beta", UpdateChannel.Beta)]
+    [InlineData("BETA", UpdateChannel.Beta)]
+    public void ParseUpdateChannel_parses_known_values(string value, UpdateChannel expected)
+    {
+        Assert.Equal(expected, DaemonConfig.ParseUpdateChannel(value));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void ParseUpdateChannel_returns_stable_for_null_or_empty(string? value)
+    {
+        Assert.Equal(UpdateChannel.Stable, DaemonConfig.ParseUpdateChannel(value));
+    }
+
+    [Fact]
+    public void ParseUpdateChannel_throws_on_unknown_value()
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => DaemonConfig.ParseUpdateChannel("nightly"));
+    }
+
     [Fact]
     public void BindFromConfiguration_reads_DisableSelfUpdate_true()
     {

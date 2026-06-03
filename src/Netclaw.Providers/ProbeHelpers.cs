@@ -14,7 +14,8 @@ namespace Netclaw.Providers;
 /// </summary>
 internal static class ProbeHelpers
 {
-    private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(10);
+    // Probe timeout budgets live in the shared ProbeTimeouts type so the providers
+    // layer and the interactive CLI/TUI callers cannot drift apart (see #1292).
 
     /// <summary>
     /// Parses the OpenAI-style model listing response (used by OpenRouter, Anthropic, OpenAI).
@@ -92,18 +93,25 @@ internal static class ProbeHelpers
         string? entryEndpoint,
         Action<HttpRequestMessage> configureRequest,
         Func<string, ProviderProbeResult> parseResponse,
-        CancellationToken ct)
+        CancellationToken ct,
+        TimeSpan? timeout = null)
     {
+        var effectiveTimeout = timeout ?? ProbeTimeouts.Default;
+
+        // Resolved up front so it is in scope for the timeout message below — a probe
+        // that black-holes against a wrong/blank endpoint (e.g. a self-hosted provider
+        // that fell back to the localhost default) should name that endpoint instead
+        // of failing anonymously.
+        var baseUrl = string.IsNullOrWhiteSpace(entryEndpoint)
+            ? defaultEndpoint
+            : entryEndpoint.TrimEnd('/');
+        var url = $"{baseUrl}{modelListingPath}";
+
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ProbeTimeout);
+        timeoutCts.CancelAfter(effectiveTimeout);
 
         try
         {
-            var baseUrl = string.IsNullOrWhiteSpace(entryEndpoint)
-                ? defaultEndpoint
-                : entryEndpoint.TrimEnd('/');
-            var url = $"{baseUrl}{modelListingPath}";
-
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             configureRequest(request);
 
@@ -121,7 +129,9 @@ internal static class ProbeHelpers
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             return new ProviderProbeResult(false,
-                "Connection timed out after 10 seconds. Check that the endpoint is reachable.", []);
+                $"No response from {baseUrl} after {(int)effectiveTimeout.TotalSeconds}s. "
+                + "The server may be slow, loading a model, or unreachable — "
+                + "confirm it is up, then try again.", []);
         }
         catch (OperationCanceledException)
         {

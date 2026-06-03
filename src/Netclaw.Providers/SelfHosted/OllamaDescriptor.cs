@@ -40,7 +40,8 @@ public sealed class OllamaDescriptor : IProviderDescriptor
             entry.Endpoint,
             configureRequest: _ => { }, // No auth headers needed
             parseResponse: ParseOllamaModels,
-            ct);
+            ct,
+            timeout: ProbeTimeouts.SelfHosted);
     }
 
     private static ProviderProbeResult ParseOllamaModels(string json)

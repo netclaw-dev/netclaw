@@ -3,13 +3,20 @@
 #
 # Usage:
 #   curl -sSL https://releases.netclaw.dev/install.sh | bash
-#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli      # CLI only
-#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon   # Daemon only
+#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli            # CLI only
+#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon         # Daemon only
+#   curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta # Opt into prereleases
 #   INSTALL_DIR=/opt/netclaw curl -sSL https://releases.netclaw.dev/install.sh | bash
 #
+# Arguments:
+#   all|cli|daemon          — Which component(s) to install (default: all)
+#   --channel stable|beta   — Release channel (default: stable). 'beta' installs the
+#                             newest prerelease (or latest stable if no prerelease exists).
+#   --dry-run               — Resolve and report what would happen; install nothing.
+#
 # Environment variables:
-#   INSTALL_DIR   — Install directory (default: ~/.netclaw/bin)
-#   NETCLAW_VERSION — Specific version to install (default: latest)
+#   INSTALL_DIR     — Install directory (default: ~/.netclaw/bin)
+#   NETCLAW_VERSION — Specific version to install (overrides --channel; e.g. 0.19.0-beta.1)
 
 set -euo pipefail
 
@@ -27,13 +34,26 @@ MANIFEST_URL="${MANIFEST_URL:-https://releases.netclaw.dev/manifest.json}"
 # ── Argument parsing ──
 COMPONENT="all"   # "all", "cli", or "daemon"
 DRY_RUN=false     # --dry-run: resolve and report what would happen, install nothing
-for arg in "$@"; do
-    case "$arg" in
-        --dry-run) DRY_RUN=true ;;
-        all|cli|daemon) COMPONENT="$arg" ;;
-        *) echo "Usage: install.sh [all|cli|daemon] [--dry-run]" >&2; exit 1 ;;
+CHANNEL="stable"  # release channel: "stable" (default) or "beta" (opt into prereleases)
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY_RUN=true; shift ;;
+        --channel)
+            if [ $# -lt 2 ]; then
+                echo "Error: --channel requires a value (stable|beta)" >&2; exit 1
+            fi
+            CHANNEL="$2"; shift 2 ;;
+        --channel=*) CHANNEL="${1#*=}"; shift ;;
+        all|cli|daemon) COMPONENT="$1"; shift ;;
+        *) echo "Usage: install.sh [all|cli|daemon] [--channel stable|beta] [--dry-run]" >&2; exit 1 ;;
     esac
 done
+
+# Validate channel — fail loudly on an unknown value rather than silently defaulting.
+case "$CHANNEL" in
+    stable|beta) ;;
+    *) echo "Error: unknown channel '$CHANNEL' (expected 'stable' or 'beta')" >&2; exit 1 ;;
+esac
 
 # ── Platform detection ──
 detect_platform() {
@@ -121,6 +141,7 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.netclaw/bin}"
 echo "Netclaw installer"
 echo "  Platform: $RID"
 echo "  Install dir: $INSTALL_DIR"
+echo "  Channel: $CHANNEL"
 if [ "$DRY_RUN" = true ]; then
     echo "  Mode: dry run (no changes will be made)"
 fi
@@ -133,9 +154,18 @@ MANIFEST=$(curl -sSL --fail "$MANIFEST_URL") || {
     exit 1
 }
 
-# Determine version
+# Determine version. Precedence: explicit pin > channel selection > stable latest.
 if [ -n "${NETCLAW_VERSION:-}" ]; then
     VERSION="$NETCLAW_VERSION"
+elif [ "$CHANNEL" = "beta" ]; then
+    # Beta channel resolves to latestPrerelease (the newest of {stable, prerelease}).
+    VERSION=$(json_field "$MANIFEST" ".latestPrerelease")
+    if [ -z "$VERSION" ] || [ "$VERSION" = "null" ]; then
+        # Manifest predates the prerelease channel — use latest stable and say so
+        # loudly. This is the newest known version, not a silent default.
+        echo "  Note: manifest has no prerelease channel; using latest stable." >&2
+        VERSION=$(json_field "$MANIFEST" ".latest")
+    fi
 else
     VERSION=$(json_field "$MANIFEST" ".latest")
 fi

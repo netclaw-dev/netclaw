@@ -100,19 +100,20 @@ public class ShellToolTests
     }
 
     [Fact]
-    public async Task Output_truncation_applies()
+    public async Task ShellTool_returns_raw_combined_output_without_spilling()
     {
-        var tool = new ShellTool(new ToolConfig { MaxOutputChars = 50 });
-        // Write >50 chars to stdout with a command that needs no interpreter.
-        // `echo` is a builtin on both bash and cmd.exe; a long literal is
-        // deterministic. (python on the Windows runner resolves to the Store
-        // stub, which writes to stderr — so the truncation would land on stderr
-        // and the marker would read "[stderr truncated", not "[stdout truncated".)
+        // ShellTool only returns its (bounded) raw output now — redaction and the
+        // inline-budget bound + spill happen centrally in DispatchingToolExecutor
+        // (covered by DispatchingToolExecutorTests). `echo` is a builtin on both
+        // bash and cmd.exe; a long literal is deterministic on stdout.
+        var tool = new ShellTool(new ToolConfig());
         var args = ToolInput.Create("Command", $"echo {new string('x', 200)}");
 
         var result = await tool.ExecuteAsync(args, CancellationToken.None);
 
-        Assert.Contains("[stdout truncated", result);
+        Assert.Contains("Exit code: 0", result);
+        Assert.Contains(new string('x', 200), result); // full output, not yet windowed/spilled
+        Assert.DoesNotContain("saved to", result);      // ShellTool itself does not spill
     }
 
     [Fact]
@@ -367,111 +368,6 @@ public class ShellToolTests
         Assert.EndsWith("[output truncated]", result);
     }
 
-    // ── BoundedDrainAsync ──
-
-    [Fact]
-    public async Task BoundedDrain_short_output_returned_verbatim()
-    {
-        var input = "hello world";
-        var reader = new StringReader(input);
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
-        Assert.Equal(input, text);
-        Assert.False(truncated);
-    }
-
-    [Fact]
-    public async Task BoundedDrain_empty_input_returns_empty()
-    {
-        var reader = new StringReader("");
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
-        Assert.Equal("", text);
-        Assert.False(truncated);
-    }
-
-    [Fact]
-    public async Task BoundedDrain_output_exactly_at_cap_not_truncated()
-    {
-        var input = new string('a', 100);
-        var reader = new StringReader(input);
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 100);
-        Assert.Equal(input, text);
-        Assert.False(truncated);
-    }
-
-    [Fact]
-    public async Task BoundedDrain_long_output_truncated_with_head_and_tail()
-    {
-        // 100-char head marker + separator + 100-char tail marker, with filler in the middle
-        var head = new string('H', 100);
-        var middle = new string('M', 5000);
-        var tail = new string('T', 100);
-        var input = head + middle + tail;
-
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 200);
-
-        Assert.True(truncated);
-        Assert.StartsWith(new string('H', 100), text);  // head preserved
-        Assert.EndsWith(new string('T', 100), text);    // tail preserved
-        Assert.Contains("...", text);                    // separator present
-        Assert.DoesNotContain("M", text);                // middle discarded
-    }
-
-    [Fact]
-    public async Task BoundedDrain_head_and_tail_split_evenly()
-    {
-        // maxChars=10 → headCap=5, tailCap=5
-        var input = "AAAAAXXXXXXBBBBB"; // 16 chars: 5 head, 6 overflow discard, 5 tail
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 10);
-
-        Assert.True(truncated);
-        Assert.StartsWith("AAAAA", text);
-        Assert.EndsWith("BBBBB", text);
-    }
-
-    [Fact]
-    public async Task BoundedDrain_disabled_cap_returns_full_output()
-    {
-        var input = new string('x', 10_000);
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(new StringReader(input), 0);
-        Assert.Equal(input, text);
-        Assert.False(truncated);
-    }
-
-    [Fact]
-    public async Task BoundedDrain_tail_ring_wraps_across_small_chunks()
-    {
-        // Drives the ring's wraparound + start-advance path that the StringReader
-        // tests skip: each read delivers a chunk smaller than tailCap, so the tail
-        // window is rebuilt incrementally and must wrap rather than reset wholesale.
-        // maxChars=10 → headCap=5 ("ABCDE"), tailCap=5; last 5 of "FGHIJKLMNO" = "KLMNO".
-        var reader = new ChunkedReader("ABCDEFGHIJKLMNO", chunkSize: 3);
-
-        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 10);
-
-        Assert.True(truncated);
-        Assert.Equal("ABCDE\n...\nKLMNO", text);
-    }
-
-    // Hands out at most chunkSize chars per read so tests can exercise the tail
-    // ring's incremental wrap path — real pipe reads arrive in arbitrary slices,
-    // not the single 4KB gulp a StringReader gives.
-    private sealed class ChunkedReader(string data, int chunkSize) : TextReader
-    {
-        private int _pos;
-
-        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
-        {
-            var remaining = data.Length - _pos;
-            if (remaining <= 0)
-                return ValueTask.FromResult(0);
-
-            var n = Math.Min(Math.Min(chunkSize, buffer.Length), remaining);
-            data.AsSpan(_pos, n).CopyTo(buffer.Span);
-            _pos += n;
-            return ValueTask.FromResult(n);
-        }
-    }
-
     [Fact]
     public async Task Command_referencing_denied_path_returns_access_denied()
     {
@@ -487,16 +383,6 @@ public class ShellToolTests
         Assert.Contains("Access denied", result);
     }
 
-    [Fact]
-    public async Task Execute_redacts_secret_like_output()
-    {
-        var args = ToolInput.Create("Command", "echo API_KEY=secret123");
-
-        var result = await _tool.ExecuteAsync(args, CancellationToken.None);
-
-        Assert.Contains("API_KEY=***REDACTED***", result);
-        Assert.DoesNotContain("secret123", result);
-    }
 
     [Fact]
     public async Task High_risk_glob_on_netclaw_config_is_blocked()

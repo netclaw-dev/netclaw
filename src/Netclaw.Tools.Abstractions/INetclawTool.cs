@@ -44,6 +44,16 @@ public interface INetclawTool
     /// <summary>ACL grant category for policy filtering.</summary>
     string GrantCategory { get; }
 
+    /// <summary>
+    /// Inline character budget for this tool's result before the dispatcher
+    /// windows it (head+tail) and spills the full output to a session file with a
+    /// steer. <c>0</c> means "use the session content budget"
+    /// (<c>SessionTuning.MaxInlineToolResultChars</c>) — the default for content
+    /// tools whose output the model needs to read. Verbose tools (e.g. shell)
+    /// override this to a small value so their noisy output is bounded aggressively.
+    /// </summary>
+    int InlineOutputBudgetChars => 0;
+
     /// <summary>JSON Schema describing the tool's parameters.</summary>
     JsonElement ParameterSchema { get; }
 

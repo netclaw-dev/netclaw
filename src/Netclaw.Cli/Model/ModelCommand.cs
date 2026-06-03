@@ -144,7 +144,9 @@ internal static class ModelCommand
         if (contextWindow is null && ShouldProbeForMetadata(providerEntry))
         {
             probe ??= ProviderCommand.CreateDefaultRegistry();
-            var probeResult = await probe.ProbeAsync(providerEntry, CancellationToken.None);
+            ProviderProbeResult probeResult;
+            await using (ProbeProgressReporter.Start(ResolveProbeEndpoint(probe, providerEntry)))
+                probeResult = await probe.ProbeAsync(providerEntry, CancellationToken.None);
             if (!probeResult.Success)
             {
                 writer.WriteLine($"Error: Could not resolve model metadata from provider: {probeResult.ErrorMessage}");
@@ -168,23 +170,13 @@ internal static class ModelCommand
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        var modelEntry = new Dictionary<string, object>
-        {
-            ["Provider"] = providerName,
-            ["ModelId"] = modelId,
-            ["Provenance"] = provenance.ToString()
-        };
-
-        if (contextWindow.HasValue)
-            modelEntry["ContextWindow"] = contextWindow.Value;
-        else if (discoveredModel?.ContextWindowTokens is { } discoveredContextWindow)
-            modelEntry["ContextWindow"] = discoveredContextWindow;
-
-        if (discoveredModel is not null)
-        {
-            modelEntry["InputModalities"] = discoveredModel.InputModalities.ToString();
-            modelEntry["OutputModalities"] = discoveredModel.OutputModalities.ToString();
-        }
+        var modelEntry = ModelEntryWriter.BuildModelEntry(
+            providerName,
+            modelId,
+            provenance,
+            contextWindow ?? discoveredModel?.ContextWindowTokens,
+            discoveredModel?.InputModalities,
+            discoveredModel?.OutputModalities);
 
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
@@ -196,6 +188,26 @@ internal static class ModelCommand
     private static bool ShouldProbeForMetadata(ProviderEntry entry)
         => string.Equals(entry.Type, "openai", StringComparison.OrdinalIgnoreCase)
            && entry.AuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce;
+
+    /// <summary>
+    /// The endpoint the probe will actually hit, for display. When a provider has no
+    /// explicit endpoint we surface the descriptor's default (e.g. a self-hosted
+    /// provider that silently fell back to localhost) so the target is visible rather
+    /// than hidden behind an anonymous wait (#1292).
+    /// </summary>
+    private static string ResolveProbeEndpoint(IProviderProbe probe, ProviderEntry entry)
+    {
+        // Match the normalization ExecuteProbeAsync applies (it trims a trailing slash
+        // before appending the model-listing path) so the surfaced endpoint is the one
+        // actually probed, not a cosmetically different string.
+        if (!string.IsNullOrWhiteSpace(entry.Endpoint))
+            return entry.Endpoint.TrimEnd('/');
+
+        return probe is ProviderDescriptorRegistry registry
+               && registry.TryGet(entry.Type, out var descriptor)
+            ? descriptor.DefaultEndpoint
+            : "(default endpoint)";
+    }
 
     private static async Task<int> RunDiscoverAsync(string[] args, NetclawPaths paths, IProviderProbe? probe, TextWriter writer)
     {
@@ -217,9 +229,12 @@ internal static class ModelCommand
         // Use the registry as the probe (it implements IProviderProbe)
         probe ??= ProviderCommand.CreateDefaultRegistry();
 
-        writer.WriteLine($"Discovering models from '{providerName}' ({entry.Type})...");
+        var probeEndpoint = ResolveProbeEndpoint(probe, entry);
+        writer.WriteLine($"Discovering models from '{providerName}' ({entry.Type}) at {probeEndpoint}...");
 
-        var result = await probe.ProbeAsync(entry, CancellationToken.None);
+        ProviderProbeResult result;
+        await using (ProbeProgressReporter.Start(probeEndpoint))
+            result = await probe.ProbeAsync(entry, CancellationToken.None);
 
         if (!result.Success)
         {

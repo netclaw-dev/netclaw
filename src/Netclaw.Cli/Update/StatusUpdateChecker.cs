@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 
 namespace Netclaw.Cli.Update;
@@ -23,7 +24,8 @@ internal static class StatusUpdateChecker
         HttpClient httpClient,
         string currentVersion,
         CancellationToken cancellationToken = default,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        UpdateChannel channel = UpdateChannel.Stable)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         cts.CancelAfter(timeout ?? TimeSpan.FromSeconds(3));
@@ -35,7 +37,7 @@ internal static class StatusUpdateChecker
                 return new StatusUpdateResult("unknown", currentVersion, null, null,
                     $"{fetchResult.Status}: {fetchResult.ErrorMessage}");
 
-            var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion);
+            var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion, channel);
             return result.IsUpdateAvailable
                 ? new StatusUpdateResult("update-available", result.CurrentVersion, result.LatestVersion, result.ReleaseNotesUrl)
                 : new StatusUpdateResult("up-to-date", result.CurrentVersion, null, null);

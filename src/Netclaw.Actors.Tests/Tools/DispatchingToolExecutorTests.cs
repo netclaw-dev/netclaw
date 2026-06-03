@@ -68,6 +68,112 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Verbose_tool_output_over_budget_is_windowed_and_spilled()
+    {
+        var sessionDir = Path.Combine(Path.GetTempPath(), "nc-disp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            // shell_execute declares the small verbose budget (2000); echo > 2000 chars.
+            var toolCall = new FunctionCallContent("call-spill", "shell_execute",
+                ToolInput.Create("Command", $"echo {new string('x', 3000)}"));
+            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
+            {
+                Audience = TrustAudience.Personal,
+            };
+
+            var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
+
+            Assert.True(result.Length < 3000);                 // windowed inline, not the full 3000
+            Assert.Contains("output saved to", result);
+            Assert.Contains("file_read", result);
+            var spill = Path.Combine(sessionDir, "tool-calls", "call-spill.log");
+            Assert.True(File.Exists(spill));
+            Assert.Contains(new string('x', 100), await File.ReadAllTextAsync(spill, CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Spilled_output_is_redacted_before_write()
+    {
+        var sessionDir = Path.Combine(Path.GetTempPath(), "nc-disp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            // Secret + padding so it both redacts and exceeds the shell budget → spills.
+            var toolCall = new FunctionCallContent("call-redact", "shell_execute",
+                ToolInput.Create("Command", $"echo API_KEY=supersecret123 {new string('x', 3000)}"));
+            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
+            {
+                Audience = TrustAudience.Personal,
+            };
+
+            var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
+            var onDisk = await File.ReadAllTextAsync(
+                Path.Combine(sessionDir, "tool-calls", "call-redact.log"), CancellationToken.None);
+
+            Assert.DoesNotContain("supersecret123", result);
+            Assert.DoesNotContain("supersecret123", onDisk); // redacted before the spill write
+        }
+        finally
+        {
+            Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Small_output_is_redacted_without_spilling()
+    {
+        // Redaction happens centrally for every result, spill or not.
+        var toolCall = new FunctionCallContent("call-r", "shell_execute",
+            ToolInput.Create("Command", "echo API_KEY=secret123"));
+        var context = new Netclaw.Tools.ToolExecutionContext("signalr/thread-1", null)
+        {
+            Audience = TrustAudience.Personal,
+        };
+
+        var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
+
+        Assert.Contains("API_KEY=***REDACTED***", result);
+        Assert.DoesNotContain("secret123", result);
+        Assert.DoesNotContain("saved to", result); // small → no spill
+    }
+
+    [Fact]
+    public async Task Content_tool_under_default_budget_not_spilled()
+    {
+        var sessionDir = Path.Combine(Path.GetTempPath(), "nc-disp-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(sessionDir);
+        try
+        {
+            // file_read has no verbose override → the 12000-char content budget; a
+            // small file is returned whole with no spill.
+            var file = Path.Combine(sessionDir, "note.txt");
+            await File.WriteAllTextAsync(file, "hello content", CancellationToken.None);
+            var toolCall = new FunctionCallContent("call-content", "file_read",
+                ToolInput.Create("Path", file));
+            var context = new Netclaw.Tools.ToolExecutionContext("slack/thread-1", sessionDir)
+            {
+                Audience = TrustAudience.Personal,
+            };
+
+            var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
+
+            Assert.Contains("hello content", result);
+            Assert.DoesNotContain("saved to", result);
+            Assert.False(Directory.Exists(Path.Combine(sessionDir, "tool-calls")));
+        }
+        finally
+        {
+            Directory.Delete(sessionDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Routes_shell_execute()
     {
         var toolCall = new FunctionCallContent(
