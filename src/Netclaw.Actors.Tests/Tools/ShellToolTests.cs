@@ -371,6 +371,41 @@ public class ShellToolTests
     }
 
     [Fact]
+    public async Task BoundedDrain_tail_ring_wraps_across_small_chunks()
+    {
+        // Drives the ring's wraparound + start-advance path that the StringReader
+        // tests skip: each read delivers a chunk smaller than tailCap, so the tail
+        // window is rebuilt incrementally and must wrap rather than reset wholesale.
+        // maxChars=10 → headCap=5 ("ABCDE"), tailCap=5; last 5 of "FGHIJKLMNO" = "KLMNO".
+        var reader = new ChunkedReader("ABCDEFGHIJKLMNO", chunkSize: 3);
+
+        var (text, truncated) = await ShellTool.BoundedDrainAsync(reader, 10);
+
+        Assert.True(truncated);
+        Assert.Equal("ABCDE\n...\nKLMNO", text);
+    }
+
+    // Hands out at most chunkSize chars per read so tests can exercise the tail
+    // ring's incremental wrap path — real pipe reads arrive in arbitrary slices,
+    // not the single 4KB gulp a StringReader gives.
+    private sealed class ChunkedReader(string data, int chunkSize) : TextReader
+    {
+        private int _pos;
+
+        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        {
+            var remaining = data.Length - _pos;
+            if (remaining <= 0)
+                return ValueTask.FromResult(0);
+
+            var n = Math.Min(Math.Min(chunkSize, buffer.Length), remaining);
+            data.AsSpan(_pos, n).CopyTo(buffer.Span);
+            _pos += n;
+            return ValueTask.FromResult(n);
+        }
+    }
+
+    [Fact]
     public async Task Command_referencing_denied_path_returns_access_denied()
     {
         var secretsPath = "/home/user/.netclaw/config/secrets.json";

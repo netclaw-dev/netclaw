@@ -40,4 +40,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj" />
   </Folder>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Netclaw.Benchmarks/Netclaw.Benchmarks.csproj" />
+  </Folder>
 </Solution>
