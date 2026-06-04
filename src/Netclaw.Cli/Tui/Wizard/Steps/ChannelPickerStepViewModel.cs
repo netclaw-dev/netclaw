@@ -76,6 +76,15 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     internal string SelectedAdapterDisplayName => _adapters[CursorIndex].DisplayName;
 
     internal string DoneActionText { get; set; } = "continue to next step";
+    internal string DoneKeyActionLabel { get; set; } = "Done";
+    internal ConsoleKey DoneKey { get; set; } = ConsoleKey.D;
+    internal string DoneKeyLabel => DoneKey switch
+    {
+        ConsoleKey.D => "d",
+        ConsoleKey.S => "s",
+        _ => DoneKey.ToString()
+    };
+
     internal bool PreserveDisabledAdapterDrafts { get; set; }
 
     internal bool IsAdapterEnabled(int index) =>
@@ -185,7 +194,7 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
         if (_mode == Mode.SubFlow && _activeAdapter is not null)
             return _activeAdapter.Vm.GetHelpText();
 
-        return "  Select which communication channels to connect. Press [d] when done.";
+        return $"  Select which communication channels to connect. Press [{DoneKeyLabel}] when done.";
     }
 
     public bool TryAdvance()

@@ -12,7 +12,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 
 /// <summary>
 /// Termina view for the unified channel picker step.
-/// Picker mode: checklist with ↑/↓ cursor, Space to toggle, Enter/E to configure, D to finish.
+/// Picker mode: checklist with ↑/↓ cursor, Space to toggle, Enter/E to configure, configurable done key to finish.
 /// Sub-flow mode: delegates rendering and input to the active adapter's view.
 /// </summary>
 public sealed class ChannelPickerStepView : IWizardStepView
@@ -79,8 +79,8 @@ public sealed class ChannelPickerStepView : IWizardStepView
 
         var hasConfigured = _vm.AnyAdapterConfigured;
         var hintText = hasConfigured
-            ? $"  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel    [d] Done - {_vm.DoneActionText}"
-            : $"  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [d] Done - {_vm.DoneActionText}";
+            ? $"  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel    [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}"
+            : $"  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}";
 
         layout = layout.WithChild(new TextNode(hintText).WithForeground(Color.BrightBlack));
 
@@ -98,6 +98,12 @@ public sealed class ChannelPickerStepView : IWizardStepView
         // Picker mode: custom keyboard navigation
         var keyInfo = key.KeyInfo;
         var adapters = _vm.Adapters;
+
+        if (keyInfo.Key == _vm.DoneKey)
+        {
+            _callbacks.AdvanceStep();
+            return true;
+        }
 
         switch (keyInfo.Key)
         {
@@ -130,10 +136,6 @@ public sealed class ChannelPickerStepView : IWizardStepView
                     _vm.ToggleAdapter(_vm.CursorIndex);
                 }
                 _callbacks.InvalidateAndRedraw();
-                return true;
-
-            case ConsoleKey.D:
-                _callbacks.AdvanceStep();
                 return true;
 
             case ConsoleKey.E:

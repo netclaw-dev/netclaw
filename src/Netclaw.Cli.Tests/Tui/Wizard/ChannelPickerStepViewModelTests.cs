@@ -9,6 +9,7 @@ using Netclaw.Cli.Tui.Wizard;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
 using R3;
+using Termina.Input;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Wizard;
@@ -355,13 +356,17 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
 
     // ── Regression tests for subscription accumulation (#792) ──
 
-    private StepViewCallbacks CreateTestCallbacks(CompositeDisposable subs) => new()
+    private StepViewCallbacks CreateTestCallbacks(
+        CompositeDisposable subs,
+        Action? advanceStep = null,
+        Action<string>? setStatusMessage = null) => new()
     {
         Subscriptions = subs,
         InvalidateContent = () => { },
         InvalidateHelp = () => { },
-        AdvanceStep = () => { },
+        AdvanceStep = advanceStep ?? (() => { }),
         RequestRedraw = () => { },
+        SetStatusMessage = setStatusMessage,
     };
 
     [Fact]
@@ -408,5 +413,31 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
         Assert.True(subs.Count <= countAtBotToken,
             $"Subscriptions should not accumulate across sub-steps: " +
             $"bot token had {countAtBotToken}, app token has {subs.Count}");
+    }
+
+    [Fact]
+    public void SubFlow_PastedSlackBotTokenSurvivesReRenderBeforeSubmit()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);
+        var view = new ChannelPickerStepView();
+        using var subs = new CompositeDisposable();
+        var status = "not-cleared";
+        var callbacks = CreateTestCallbacks(
+            subs,
+            advanceStep: () => picker.TryAdvance(),
+            setStatusMessage: message => status = message);
+
+        picker.OnEnter(Context, NavigationDirection.Forward);
+        picker.ToggleAdapter(0);
+        var slack = (SlackStepViewModel)picker.ActiveAdapterVm!;
+
+        view.BuildContent(picker, callbacks);
+        view.HandlePaste(new PasteEvent("xoxb-pasted-token"));
+        view.BuildContent(picker, callbacks);
+        view.HandleKeyPress(new KeyPressed(new ConsoleKeyInfo('\r', ConsoleKey.Enter, shift: false, alt: false, control: false)));
+
+        Assert.Equal(2, slack.CurrentSubStep);
+        Assert.Equal("xoxb-pasted-token", slack.BotToken);
+        Assert.Equal(string.Empty, status);
     }
 }

@@ -44,6 +44,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         ParseChannelNames(ChannelNamesInput).Count;
     public string? BotToken { get; set; }
     public string? AppToken { get; set; }
+    internal string? BotTokenDraft { get; set; }
+    internal string? AppTokenDraft { get; set; }
     public bool HasPersistedBotToken { get; set; }
     public bool HasPersistedAppToken { get; set; }
     public string? ChannelNamesInput { get; set; }
@@ -134,6 +136,8 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         SlackEnabled = false;
         BotToken = null;
         AppToken = null;
+        BotTokenDraft = null;
+        AppTokenDraft = null;
         ChannelNamesInput = null;
         AllowDirectMessages = false;
         RestrictToSpecificUsers = false;

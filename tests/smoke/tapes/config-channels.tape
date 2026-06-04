@@ -73,7 +73,7 @@ Escape
 Wait+Screen@10s /Which channels would you like to connect/
 Wait+Screen@10s /3 channels/
 
-Type "d"
+Type "s"
 Wait+Screen@10s /Channel settings saved/
 Enter
 Wait+Screen@10s /Settings Areas/

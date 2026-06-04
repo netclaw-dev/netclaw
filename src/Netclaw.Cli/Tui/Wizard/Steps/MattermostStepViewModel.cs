@@ -42,12 +42,15 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
 
     public string? ServerUrl { get; set; }
     public string? BotToken { get; set; }
+    internal string? ServerUrlDraft { get; set; }
+    internal string? BotTokenDraft { get; set; }
     public bool HasPersistedBotToken { get; set; }
     public string? ChannelIdsInput { get; set; }
     public bool AllowDirectMessages { get; set; }
     public bool RestrictToSpecificUsers { get; set; }
     public string? AllowedUserIdsInput { get; set; }
     public string? CallbackUrl { get; set; }
+    internal string? CallbackUrlDraft { get; set; }
 
     internal bool SkipEnableSubStep { get; set; }
 
@@ -162,11 +165,14 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
         MattermostEnabled = false;
         ServerUrl = null;
         BotToken = null;
+        ServerUrlDraft = null;
+        BotTokenDraft = null;
         ChannelIdsInput = null;
         AllowDirectMessages = false;
         RestrictToSpecificUsers = false;
         AllowedUserIdsInput = null;
         CallbackUrl = null;
+        CallbackUrlDraft = null;
         var startSubStep = SkipEnableSubStep ? 1 : 0;
         _currentSubStep = startSubStep;
         _highWaterSubStep = startSubStep;

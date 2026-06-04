@@ -49,6 +49,13 @@ internal static class WizardStepHelpers
     internal static ILayoutNode BuildTextInputPanel(TextInputNode input, string title)
         => NetclawTuiChrome.BuildTextInputPanel(input, title);
 
+    internal static void SeedTextInput(TextInputNode input, string? text)
+    {
+        input.Text = text ?? string.Empty;
+        if (!string.IsNullOrEmpty(input.Text))
+            input.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+    }
+
     internal static List<string> ParseUserIds(string? input)
         => string.IsNullOrWhiteSpace(input)
             ? []

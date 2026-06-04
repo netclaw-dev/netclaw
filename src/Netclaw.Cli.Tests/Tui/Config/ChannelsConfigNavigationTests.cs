@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
+using Netclaw.Cli.Discord;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Config;
@@ -96,7 +97,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         AssertTypedCredentials(channelsVm, channelType);
-        Assert.Equal("Credential changes staged. Press Esc, then d to save.", channelsVm.Status.Value.Text);
+        Assert.Equal("Credential changes staged. Press Esc, then s to save.", channelsVm.Status.Value.Text);
     }
 
     [Theory]
@@ -124,6 +125,29 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
     }
 
     [Fact]
+    public async Task Channels_FirstTimeSlackSetup_AcceptsPastedCredentialInput()
+    {
+        WriteEmptyChannelFiles();
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Enable Slack and enter first-time setup.
+        input.EnqueuePaste("xoxb-pasted-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("xapp-pasted-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        var slack = channelsVm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        Assert.Equal("xoxb-pasted-token", slack.BotToken);
+        Assert.Equal("xapp-pasted-token", slack.AppToken);
+    }
+
+    [Fact]
     public async Task Channels_AddChannel_AcceptsPastedChannelInput()
     {
         var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
@@ -141,7 +165,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "pasted-channel" && !row.IsAddAction);
-        Assert.Equal("Added pasted-channel. Press Esc, then d to save.", channelsVm.Status.Value.Text);
+        Assert.Equal("Added pasted-channel. Press Esc, then s to save.", channelsVm.Status.Value.Text);
     }
 
     [Fact]
@@ -178,7 +202,39 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.DoesNotContain(channelsVm.GetChannelRows(), row => row.Id == "C01");
-        Assert.Equal("Removed C01. Press Esc, then d to save.", channelsVm.Status.Value.Text);
+        Assert.Equal("Removed C01. Press Esc, then s to save.", channelsVm.Status.Value.Text);
+    }
+
+    [Fact]
+    public async Task Channels_ChannelPermissions_RendersResolvedDiscordLabelWithoutRawId()
+    {
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedDiscordChannel("123456789", "general", "NetclawTest")],
+                [])
+        };
+        var app = CreateHeadlessApp(
+            out var input,
+            out var dashboardVm,
+            out _,
+            out var terminal,
+            discordProbe: discordProbe);
+        OpenChannels(dashboardVm);
+        MoveToAdapter(input, ChannelType.Discord);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Open configured Discord management.
+        input.EnqueueKey(ConsoleKey.Enter); // Manage channels and permissions.
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+        Assert.Contains("NetclawTest / #general", screen);
+        Assert.DoesNotContain("123456789", screen);
     }
 
     [Fact]
@@ -394,8 +450,26 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         out VirtualInputSource input,
         out ConfigDashboardViewModel dashboardVm,
         out Func<ChannelsConfigViewModel?> getChannelsVm)
+        => CreateHeadlessApp(
+            out input,
+            out dashboardVm,
+            out getChannelsVm,
+            out _,
+            slackProbe: null,
+            discordProbe: null,
+            mattermostProbe: null);
+
+    private TerminaApplication CreateHeadlessApp(
+        out VirtualInputSource input,
+        out ConfigDashboardViewModel dashboardVm,
+        out Func<ChannelsConfigViewModel?> getChannelsVm,
+        out VirtualTerminal terminal,
+        FakeSlackProbe? slackProbe = null,
+        FakeDiscordProbe? discordProbe = null,
+        FakeMattermostProbe? mattermostProbe = null)
     {
-        var terminal = new VirtualTerminal(120, 40);
+        var terminalInstance = new VirtualTerminal(120, 40);
+        terminal = terminalInstance;
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
 
@@ -405,7 +479,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         ChannelsConfigViewModel? capturedChannelsVm = null;
 
         var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
+        services.AddSingleton<IAnsiTerminal>(terminalInstance);
         services.AddSingleton(tuiNavigation);
         services.AddTerminaVirtualInput(virtualInput);
         services.AddTermina("/config", builder =>
@@ -425,9 +499,9 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 {
                     capturedChannelsVm = new ChannelsConfigViewModel(
                         _paths,
-                        new FakeSlackProbe(),
-                        new FakeDiscordProbe(),
-                        new FakeMattermostProbe(),
+                        slackProbe ?? new FakeSlackProbe(),
+                        discordProbe ?? new FakeDiscordProbe(),
+                        mattermostProbe ?? new FakeMattermostProbe(),
                         tuiNavigation);
                     return capturedChannelsVm;
                 });

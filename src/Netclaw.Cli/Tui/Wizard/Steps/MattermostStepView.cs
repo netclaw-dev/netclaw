@@ -21,6 +21,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class MattermostStepView : IWizardStepView
 {
+    private MattermostStepViewModel? _vm;
     private SelectionListNode<string>? _enabledList;
     private TextInputNode? _serverUrlInput;
     private TextInputNode? _botTokenInput;
@@ -37,6 +38,7 @@ public sealed class MattermostStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (MattermostStepViewModel)stepVm;
+        _vm = vm;
 
         return vm.CurrentSubStep switch
         {
@@ -85,9 +87,7 @@ public sealed class MattermostStepView : IWizardStepView
     {
         _serverUrlInput = new TextInputNode()
             .WithPlaceholder("https://mm.example.com");
-
-        if (!string.IsNullOrWhiteSpace(vm.ServerUrl))
-            _serverUrlInput.Text = vm.ServerUrl;
+        WizardStepHelpers.SeedTextInput(_serverUrlInput, vm.ServerUrlDraft ?? vm.ServerUrl);
 
         _serverUrlInput.OnFocused();
         _lastFocusedInput = _serverUrlInput;
@@ -98,6 +98,7 @@ public sealed class MattermostStepView : IWizardStepView
             {
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    vm.ServerUrlDraft = null;
                     callbacks.ShowValidationError(ChannelsEditorValidationMessages.MattermostServerUrlRequired);
                     return;
                 }
@@ -109,6 +110,7 @@ public sealed class MattermostStepView : IWizardStepView
                 }
 
                 vm.ServerUrl = text.Trim();
+                vm.ServerUrlDraft = vm.ServerUrl;
                 callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
@@ -124,6 +126,7 @@ public sealed class MattermostStepView : IWizardStepView
         _botTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("Mattermost bot access token");
+        WizardStepHelpers.SeedTextInput(_botTokenInput, vm.BotTokenDraft ?? vm.BotToken);
 
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
@@ -134,6 +137,7 @@ public sealed class MattermostStepView : IWizardStepView
             {
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    vm.BotTokenDraft = null;
                     if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
                     {
                         callbacks.ClearStatusMessage();
@@ -148,6 +152,7 @@ public sealed class MattermostStepView : IWizardStepView
                 }
 
                 vm.BotToken = text;
+                vm.BotTokenDraft = text;
                 callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
@@ -167,9 +172,7 @@ public sealed class MattermostStepView : IWizardStepView
     {
         _channelIdsInput = new TextInputNode()
             .WithPlaceholder("4xp9p3onpins8..., 9rp7q1...  (leave blank to skip)");
-
-        if (!string.IsNullOrWhiteSpace(vm.ChannelIdsInput))
-            _channelIdsInput.Text = vm.ChannelIdsInput;
+        WizardStepHelpers.SeedTextInput(_channelIdsInput, vm.ChannelIdsInput);
 
         _channelIdsInput.OnFocused();
         _lastFocusedInput = _channelIdsInput;
@@ -233,9 +236,7 @@ public sealed class MattermostStepView : IWizardStepView
     {
         _allowedUserIdsInput = new TextInputNode()
             .WithPlaceholder("4xp9p3onpins8..., 9rp...  (Mattermost user IDs)");
-
-        if (!string.IsNullOrWhiteSpace(vm.AllowedUserIdsInput))
-            _allowedUserIdsInput.Text = vm.AllowedUserIdsInput;
+        WizardStepHelpers.SeedTextInput(_allowedUserIdsInput, vm.AllowedUserIdsInput);
 
         _allowedUserIdsInput.OnFocused();
         _lastFocusedInput = _allowedUserIdsInput;
@@ -259,9 +260,7 @@ public sealed class MattermostStepView : IWizardStepView
     {
         _callbackUrlInput = new TextInputNode()
             .WithPlaceholder("https://netclaw.example.com/api/mattermost/actions  (leave blank to skip)");
-
-        if (!string.IsNullOrWhiteSpace(vm.CallbackUrl))
-            _callbackUrlInput.Text = vm.CallbackUrl;
+        WizardStepHelpers.SeedTextInput(_callbackUrlInput, vm.CallbackUrlDraft ?? vm.CallbackUrl);
 
         _callbackUrlInput.OnFocused();
         _lastFocusedInput = _callbackUrlInput;
@@ -277,6 +276,7 @@ public sealed class MattermostStepView : IWizardStepView
                 }
 
                 vm.CallbackUrl = string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+                vm.CallbackUrlDraft = vm.CallbackUrl;
                 callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
@@ -305,6 +305,8 @@ public sealed class MattermostStepView : IWizardStepView
         if (_lastFocusedInput is not null)
         {
             _lastFocusedInput.HandleInput(key.KeyInfo);
+            if (key.KeyInfo.Key != ConsoleKey.Enter)
+                StageFocusedInput();
             return true;
         }
 
@@ -314,6 +316,24 @@ public sealed class MattermostStepView : IWizardStepView
     public void HandlePaste(PasteEvent paste)
     {
         _lastFocusedInput?.HandlePaste(paste);
+        StageFocusedInput();
+    }
+
+    private void StageFocusedInput()
+    {
+        if (_vm is null)
+            return;
+
+        if (ReferenceEquals(_lastFocusedInput, _serverUrlInput))
+            _vm.ServerUrlDraft = _serverUrlInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _botTokenInput))
+            _vm.BotTokenDraft = _botTokenInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _channelIdsInput))
+            _vm.ChannelIdsInput = _channelIdsInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _allowedUserIdsInput))
+            _vm.AllowedUserIdsInput = _allowedUserIdsInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _callbackUrlInput))
+            _vm.CallbackUrlDraft = _callbackUrlInput?.Text;
     }
 
     public void ClearFocusState()

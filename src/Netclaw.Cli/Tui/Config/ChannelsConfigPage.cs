@@ -149,11 +149,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         var displayNameWidth = Math.Clamp(
             editableRows.Select(static row => row.DisplayName.Length).DefaultIfEmpty(16).Max(),
             16,
-            36);
-        var idWidth = Math.Clamp(
-            editableRows.Select(static row => row.Id.Length).DefaultIfEmpty(10).Max(),
-            10,
-            24);
+            56);
 
         for (var i = 0; i < rows.Count; i++)
         {
@@ -161,7 +157,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             var focused = i == ViewModel.ChannelRowIndex;
             var line = row.IsAddAction
                 ? $"{FocusPrefix(focused)}{row.DisplayName}"
-                : $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {Column(row.Id, idWidth)} {AudienceCycle(row.Audience)}";
+                : $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";
             layout = layout.WithChild(Row(line, focused));
         }
 
@@ -351,7 +347,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                     ChannelsConfigScreen.ResetConfirm => " [↑/↓] Navigate  [Enter] Select  [Esc] Menu  [Ctrl+Q] Quit",
                     _ => ViewModel.Step.IsInSubFlow
                         ? " [Enter] Next  [Esc] Back  [Ctrl+Q] Quit"
-                        : " [↑/↓] Navigate  [Space] Toggle  [Enter] Open  [d] Save  [Esc] Back  [Ctrl+Q] Quit"
+                        : " [↑/↓] Navigate  [Space] Toggle  [Enter] Open  [s] Save  [Esc] Back  [Ctrl+Q] Quit"
                 };
 
             return NetclawTuiChrome.BuildKeyHintLine(text);

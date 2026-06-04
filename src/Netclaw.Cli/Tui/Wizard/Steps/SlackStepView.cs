@@ -20,6 +20,7 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class SlackStepView : IWizardStepView
 {
+    private SlackStepViewModel? _vm;
     private SelectionListNode<string>? _enabledList;
     private TextInputNode? _botTokenInput;
     private TextInputNode? _appTokenInput;
@@ -35,6 +36,7 @@ public sealed class SlackStepView : IWizardStepView
     public ILayoutNode BuildContent(IWizardStepViewModel stepVm, StepViewCallbacks callbacks)
     {
         var vm = (SlackStepViewModel)stepVm;
+        _vm = vm;
 
         return vm.CurrentSubStep switch
         {
@@ -83,6 +85,7 @@ public sealed class SlackStepView : IWizardStepView
         _botTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("xoxb-...");
+        WizardStepHelpers.SeedTextInput(_botTokenInput, vm.BotTokenDraft ?? vm.BotToken);
 
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
@@ -93,6 +96,7 @@ public sealed class SlackStepView : IWizardStepView
             {
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    vm.BotTokenDraft = null;
                     if (vm.HasPersistedBotToken || !string.IsNullOrWhiteSpace(vm.BotToken))
                     {
                         callbacks.ClearStatusMessage();
@@ -112,6 +116,7 @@ public sealed class SlackStepView : IWizardStepView
                     return;
                 }
                 vm.BotToken = text;
+                vm.BotTokenDraft = text;
                 callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
@@ -132,6 +137,7 @@ public sealed class SlackStepView : IWizardStepView
         _appTokenInput = new TextInputNode()
             .AsPassword()
             .WithPlaceholder("xapp-...");
+        WizardStepHelpers.SeedTextInput(_appTokenInput, vm.AppTokenDraft ?? vm.AppToken);
 
         _appTokenInput.OnFocused();
         _lastFocusedInput = _appTokenInput;
@@ -142,6 +148,7 @@ public sealed class SlackStepView : IWizardStepView
             {
                 if (string.IsNullOrWhiteSpace(text))
                 {
+                    vm.AppTokenDraft = null;
                     if (vm.HasPersistedAppToken || !string.IsNullOrWhiteSpace(vm.AppToken))
                     {
                         callbacks.ClearStatusMessage();
@@ -161,6 +168,7 @@ public sealed class SlackStepView : IWizardStepView
                     return;
                 }
                 vm.AppToken = text;
+                vm.AppTokenDraft = text;
                 callbacks.ClearStatusMessage();
                 callbacks.AdvanceStep();
             })
@@ -180,9 +188,7 @@ public sealed class SlackStepView : IWizardStepView
     {
         _channelNamesInput = new TextInputNode()
             .WithPlaceholder("general, dev, random  (leave blank to skip)");
-
-        if (!string.IsNullOrWhiteSpace(vm.ChannelNamesInput))
-            _channelNamesInput.Text = vm.ChannelNamesInput;
+        WizardStepHelpers.SeedTextInput(_channelNamesInput, vm.ChannelNamesInput);
 
         _channelNamesInput.OnFocused();
         _lastFocusedInput = _channelNamesInput;
@@ -246,9 +252,7 @@ public sealed class SlackStepView : IWizardStepView
     {
         _allowedUserIdsInput = new TextInputNode()
             .WithPlaceholder("U01ABC123, U02DEF456  (Slack user IDs, comma-separated)");
-
-        if (!string.IsNullOrWhiteSpace(vm.AllowedUserIdsInput))
-            _allowedUserIdsInput.Text = vm.AllowedUserIdsInput;
+        WizardStepHelpers.SeedTextInput(_allowedUserIdsInput, vm.AllowedUserIdsInput);
 
         _allowedUserIdsInput.OnFocused();
         _lastFocusedInput = _allowedUserIdsInput;
@@ -278,6 +282,8 @@ public sealed class SlackStepView : IWizardStepView
         if (_lastFocusedInput is not null)
         {
             _lastFocusedInput.HandleInput(key.KeyInfo);
+            if (key.KeyInfo.Key != ConsoleKey.Enter)
+                StageFocusedInput();
             return true;
         }
         return false;
@@ -286,6 +292,22 @@ public sealed class SlackStepView : IWizardStepView
     public void HandlePaste(PasteEvent paste)
     {
         _lastFocusedInput?.HandlePaste(paste);
+        StageFocusedInput();
+    }
+
+    private void StageFocusedInput()
+    {
+        if (_vm is null)
+            return;
+
+        if (ReferenceEquals(_lastFocusedInput, _botTokenInput))
+            _vm.BotTokenDraft = _botTokenInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _appTokenInput))
+            _vm.AppTokenDraft = _appTokenInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _channelNamesInput))
+            _vm.ChannelNamesInput = _channelNamesInput?.Text;
+        else if (ReferenceEquals(_lastFocusedInput, _allowedUserIdsInput))
+            _vm.AllowedUserIdsInput = _allowedUserIdsInput?.Text;
     }
 
     public void ClearFocusState()

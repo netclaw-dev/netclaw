@@ -21,7 +21,7 @@ namespace Netclaw.Cli.Tui.Config;
 
 public sealed class ChannelsConfigViewModel : ReactiveViewModel
 {
-    private const string SaveFromManagementHint = "Press Esc, then d to save.";
+    private const string SaveFromManagementHint = "Press Esc, then s to save.";
 
     private readonly NetclawPaths _paths;
     private readonly ISlackProbe _slackProbe;
@@ -59,7 +59,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         Step = new ChannelPickerStepViewModel(slackProbe, discordProbe)
         {
-            DoneActionText = "save channel settings",
+            DoneActionText = "channel settings",
+            DoneKeyActionLabel = "Save",
+            DoneKey = ConsoleKey.S,
             PreserveDisabledAdapterDrafts = true
         };
         _context = new WizardContext
@@ -250,7 +252,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         UpdateAdapterPickerSummary(type);
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
         Status.Value = new ConfigStatusMessage(
-            $"Set {GetAdapterDisplayName(type)} channel audiences, then press Esc and d to save.",
+            $"Set {GetAdapterDisplayName(type)} channel audiences, then press Esc and s to save.",
             ConfigStatusTone.Neutral);
         StartChannelLabelResolution(type);
     }
