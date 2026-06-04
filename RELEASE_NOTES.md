@@ -1,3 +1,19 @@
+#### 0.23.0-beta.3 2026-06-04 ####
+
+Netclaw v0.23.0-beta.3 — beta channel fix release for non-root container operations
+
+This is a prerelease on the beta channel. Stable installs are unaffected and remain on 0.22.1; only opt-in beta testers are offered this build.
+
+**Try the beta**
+
+* Linux / macOS: `curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta`
+* Windows: download `install.ps1`, then `./install.ps1 -Channel beta`
+* Docker: `docker pull ghcr.io/netclaw-dev/netclaw:beta`
+
+**Bug Fixes**
+
+* **`docker exec`/`kubectl exec -- netclaw` works again when run as root** — the container daemon runs as the unprivileged `netclaw` user, but `docker exec`/`kubectl exec` default to the image's root user, and `netclaw init` (the documented first-run setup) is invoked exactly that way. A root-context CLI invocation extracted the .NET single-file bundle into a per-`$HOME` directory the runtime locks `root:root` (and wrote `netclaw init` config root-owned), after which the non-root daemon could no longer run its own CLI — failing with `Failure processing application bundle / Failed to create directory ... Error code: 13` (EACCES). `/usr/local/bin/netclaw` is now a self-dropping launcher that transparently re-execs as the `netclaw` user when invoked as root, so exec'd CLI usage works on any orchestrator with no `gosu`/`-u` knowledge required. Documented in ADR-004 and locked in by a standalone-`docker` regression test (`scripts/docker/test-nonroot-cli.sh`). ([#PRNUM#](https://github.com/netclaw-dev/netclaw/pull/PRNUM#))
+
 #### 0.23.0-beta.2 2026-06-03 ####
 
 Netclaw v0.23.0-beta.2 — beta channel fix release for non-root container deployments

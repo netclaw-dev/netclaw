@@ -9,8 +9,8 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.23.0</VersionPrefix>
-    <VersionSuffix>beta.2</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.23.0-beta.2 — beta channel fix release for non-root container deployments
+    <VersionSuffix>beta.3</VersionSuffix>
+    <PackageReleaseNotes>Netclaw v0.23.0-beta.3 — beta channel fix release for non-root container operations
 
 This is a prerelease on the beta channel. Stable installs are unaffected and remain on 0.22.1; only opt-in beta testers are offered this build.
 
@@ -22,9 +22,7 @@ This is a prerelease on the beta channel. Stable installs are unaffected and rem
 
 **Bug Fixes**
 
-* **Container no longer crash-loops on a read-only `/tools` mount** — the bind-mount ownership repair added in 0.23.0-beta.1 (#1281) ran a recursive `chown` over `/tools` and aborted fatally when the mount was read-only, crash-looping the container. `/tools` is a PATH directory the agent only reads from, so the entrypoint now treats it as best-effort: it never recursively chowns it and never fails when it is read-only or already correctly owned. ([#1321](https://github.com/netclaw-dev/netclaw/pull/1321))
-
-* **Non-root agent can install tools at runtime again** — because the daemon runs as the unprivileged `netclaw` user it cannot write system `PATH` directories or `apt-get` without root. The image now ships user-writable, on-`PATH` install locations (`~/.local/bin`, `~/.dotnet`, `~/.dotnet/tools`, and a mounted `/tools/bin`) so a runtime-installed `dotnet`, `pip --user` tool, or .NET global tool resolves as a bare command in the agent's non-interactive shell. ([#1321](https://github.com/netclaw-dev/netclaw/pull/1321))
+* **`docker exec`/`kubectl exec -- netclaw` works again as root** — the daemon runs as the unprivileged `netclaw` user, but `exec` defaults to the image's root user, and `netclaw init` is invoked that way. A root-context CLI run extracted the .NET single-file bundle into a per-`$HOME` dir locked `root:root` (and wrote config root-owned), after which the non-root daemon could no longer run its own CLI (`Failed to create directory ... Error code: 13`). `/usr/local/bin/netclaw` is now a self-dropping launcher that re-execs as the `netclaw` user when invoked as root, so exec'd CLI usage just works on any orchestrator. See ADR-004; locked in by a standalone-`docker` regression test. ([#PRNUM#](https://github.com/netclaw-dev/netclaw/pull/PRNUM#))
 </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>

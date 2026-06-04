@@ -92,9 +92,14 @@ WORKDIR /opt/netclaw
 COPY publish/cli-${TARGETARCH}/netclaw /opt/netclaw/cli/netclaw
 COPY publish/daemon-${TARGETARCH}/netclawd /opt/netclaw/daemon/netclawd
 COPY docker/entrypoint.sh /opt/netclaw/entrypoint.sh
+# `netclaw` on PATH is a self-dropping launcher (not a bare symlink) so a
+# root-context `docker exec`/`kubectl exec -- netclaw <cmd>` re-execs as the
+# netclaw user — see docker/netclaw-cli-launcher.sh and ADR-004. netclawd stays a
+# plain symlink: it is only ever launched by the supervised entrypoint, which has
+# already dropped to netclaw, so it never runs the root path.
+COPY docker/netclaw-cli-launcher.sh /usr/local/bin/netclaw
 
-RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/entrypoint.sh \
- && ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
+RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/entrypoint.sh /usr/local/bin/netclaw \
  && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
 
 # Non-root runtime user — limits blast radius of daemon-owned tool execution.
