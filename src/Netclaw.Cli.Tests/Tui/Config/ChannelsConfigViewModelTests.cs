@@ -608,6 +608,54 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Open_management_resolves_persisted_slack_channel_labels()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("general", "C01")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem();
+
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(["C01"], slackProbe.LastResolvedNames);
+        var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "C01");
+        Assert.Equal("#general", row.DisplayName);
+    }
+
+    [Fact]
+    public void Open_management_resolves_persisted_discord_channel_labels()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedDiscordChannel("123456789", "ops", "Stannard Labs")],
+                [])
+        };
+        using var vm = CreateViewModel(discordProbe: discordProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Discord);
+        vm.ActivateManagementMenuItem();
+
+        Assert.Equal(1, discordProbe.ResolveCallCount);
+        Assert.Equal(["123456789"], discordProbe.LastResolvedIds);
+        var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "123456789");
+        Assert.Equal("Stannard Labs / #ops", row.DisplayName);
+    }
+
+    [Fact]
     public void Save_rejects_unresolved_mattermost_channel_id()
     {
         WriteAllChannelConfig();

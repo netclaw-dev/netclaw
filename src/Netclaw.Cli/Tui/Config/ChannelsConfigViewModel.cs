@@ -42,6 +42,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private int _audienceSelectionIndex;
     private int _directMessagesRowIndex;
     private int _resetConfirmIndex;
+    private CancellationTokenSource? _labelResolutionCts;
 
     public ChannelsConfigViewModel(
         NetclawPaths paths,
@@ -251,6 +252,39 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Status.Value = new ConfigStatusMessage(
             $"Set {GetAdapterDisplayName(type)} channel audiences, then press Esc and d to save.",
             ConfigStatusTone.Neutral);
+        StartChannelLabelResolution(type);
+    }
+
+    internal async Task RefreshChannelLabelsAsync(ChannelType type, CancellationToken ct = default)
+    {
+        if (!Step.IsAdapterEnabled(type))
+            return;
+
+        var channelIds = GetChannelIds(type);
+        if (channelIds.Count == 0)
+            return;
+
+        try
+        {
+            switch (type)
+            {
+                case ChannelType.Slack:
+                    await RefreshSlackChannelLabelsAsync(channelIds, ct);
+                    break;
+                case ChannelType.Discord:
+                    await RefreshDiscordChannelLabelsAsync(channelIds, ct);
+                    break;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Status.Value = new ConfigStatusMessage(
+                $"{GetAdapterDisplayName(type)} channel label lookup failed: {ex.Message}",
+                ConfigStatusTone.Warning);
+        }
     }
 
     internal IReadOnlyList<ChannelsManagementMenuItem> GetManagementMenuItems()
@@ -282,6 +316,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             case ChannelsManagementAction.ManageChannels:
                 _channelRowIndex = 0;
                 Screen.Value = ChannelsConfigScreen.ChannelPermissions;
+                StartChannelLabelResolution(_activeAdapterType);
                 break;
             case ChannelsManagementAction.AddChannel:
                 BeginAddChannel();
@@ -787,6 +822,56 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         return null;
     }
 
+    private async Task RefreshSlackChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
+    {
+        var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(botToken))
+            return;
+
+        var result = await _slackProbe.ResolveChannelNamesAsync(botToken, channelIds, ct);
+        if (ct.IsCancellationRequested)
+            return;
+
+        slack.LastChannelResolution = result;
+        ApplyChannelLabelResolutionStatus(ChannelType.Slack, result.ErrorMessage, result.Unresolved);
+        NotifyContentChanged();
+    }
+
+    private async Task RefreshDiscordChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
+    {
+        var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+        var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
+        if (string.IsNullOrWhiteSpace(botToken))
+            return;
+
+        var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
+        if (ct.IsCancellationRequested)
+            return;
+
+        discord.LastChannelResolution = result;
+        ApplyChannelLabelResolutionStatus(ChannelType.Discord, result.ErrorMessage, result.Unresolved);
+        NotifyContentChanged();
+    }
+
+    private void ApplyChannelLabelResolutionStatus(ChannelType type, string? errorMessage, IReadOnlyList<string> unresolved)
+    {
+        if (!string.IsNullOrWhiteSpace(errorMessage))
+        {
+            Status.Value = new ConfigStatusMessage(
+                $"{GetAdapterDisplayName(type)} channel label lookup failed: {errorMessage}",
+                ConfigStatusTone.Warning);
+            return;
+        }
+
+        if (unresolved.Count > 0)
+        {
+            Status.Value = new ConfigStatusMessage(
+                $"{GetAdapterDisplayName(type)} channel labels not found: {string.Join(", ", unresolved)}",
+                ConfigStatusTone.Warning);
+        }
+    }
+
     private static ChannelsEditorValidationIssue Error(string fieldId, string message)
         => new(fieldId, message, ConfigValidationSeverity.Error);
 
@@ -937,6 +1022,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
+        _labelResolutionCts?.Cancel();
+        _labelResolutionCts?.Dispose();
         IsSaved.Dispose();
         Screen.Dispose();
         Status.Dispose();
@@ -1284,6 +1371,17 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     {
         OnStepContentChanged?.Invoke();
         RequestRedraw();
+    }
+
+    private void StartChannelLabelResolution(ChannelType type)
+    {
+        if (type is not (ChannelType.Slack or ChannelType.Discord))
+            return;
+
+        _labelResolutionCts?.Cancel();
+        _labelResolutionCts?.Dispose();
+        _labelResolutionCts = new CancellationTokenSource();
+        _ = RefreshChannelLabelsAsync(type, _labelResolutionCts.Token);
     }
 
     private static Dictionary<string, object>? LoadExistingConfig(NetclawPaths paths)

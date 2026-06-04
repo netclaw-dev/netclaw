@@ -176,7 +176,7 @@ public sealed class SlackProbe : ISlackProbe
 
                         if (matchedInput is not null)
                         {
-                            resolved.Add(new ResolvedSlackChannel(matchedInput, id));
+                            resolved.Add(new ResolvedSlackChannel(name ?? nameNormalized ?? matchedInput, id));
                             remaining.Remove(matchedInput);
                         }
                     }

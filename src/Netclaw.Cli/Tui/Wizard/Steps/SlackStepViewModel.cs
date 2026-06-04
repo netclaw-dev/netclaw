@@ -332,8 +332,9 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
         if (entry.IsDmRow || LastChannelResolution is null)
             return entry.Id;
 
-        var resolved = LastChannelResolution.Resolved.FirstOrDefault(
-            channel => string.Equals(channel.Name, entry.Id, StringComparison.OrdinalIgnoreCase));
+        var resolved = LastChannelResolution.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.Name, entry.Id, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(channel.Id, entry.Id, StringComparison.Ordinal));
 
         return string.IsNullOrWhiteSpace(resolved?.Id) ? entry.Id : resolved.Id;
     }
