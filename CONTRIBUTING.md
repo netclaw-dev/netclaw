@@ -172,3 +172,57 @@ Or point the CLI at the daemon binary explicitly:
 export NETCLAW_DAEMON_PATH="$PWD/out/netclawd"
 alias netclaw="$PWD/out/netclaw"
 ```
+
+## Releasing
+
+Releases are cut by pushing a git tag; `.github/workflows/publish_release_binaries.yml`
+does the rest (GitHub release, signed binary manifest + archives to R2, multi-arch Docker
+image, and the system skills feed). The pushed tag MUST match `Directory.Build.props` —
+`<VersionPrefix>` for a stable tag, and `<VersionPrefix>` + `<VersionSuffix>` for a
+prerelease — or the workflow's version gate fails the release.
+
+### Stable release
+
+1. Bump `<VersionPrefix>` in `Directory.Build.props` (e.g. `0.22.1` → `0.22.2`); leave
+   `<VersionSuffix>` empty.
+2. Add a release-notes section to `RELEASE_NOTES.md` (`#### X.Y.Z YYYY-MM-DD ####`).
+3. Commit, then tag and push the bare version:
+   ```bash
+   git tag 0.22.2 && git push origin 0.22.2
+   ```
+4. The workflow publishes a normal GitHub release, moves Docker `:latest` and
+   `:major.minor`, and sets the manifest `latest` pointer to the new version.
+
+### Beta / prerelease release
+
+Prereleases ship to opt-in testers without touching any stable surface.
+
+1. Set BOTH halves in `Directory.Build.props`:
+   ```xml
+   <VersionPrefix>0.23.0</VersionPrefix>
+   <VersionSuffix>beta.1</VersionSuffix>
+   ```
+   Use the **dotted** `beta.N` form (`beta.1`, `beta.2`, … `beta.10`) — never `beta1`.
+   A non-dotted identifier compares lexically (so `beta10` would rank below `beta2`), and
+   the release version gate rejects it.
+2. Add a `RELEASE_NOTES.md` section for `0.23.0-beta.1`.
+3. Commit, then tag and push the full version (prefix `-` suffix):
+   ```bash
+   git tag 0.23.0-beta.1 && git push origin 0.23.0-beta.1
+   ```
+4. The workflow detects the `-` and: marks the GitHub release a **prerelease**; pushes
+   only the exact-version Docker tag (leaving `:latest` / `:major.minor` on the newest
+   stable); and advances the rolling `:beta` tag and the manifest `latestPrerelease`
+   pointer.
+
+Testers opt in:
+
+```bash
+curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta   # -Channel beta on Windows
+docker pull ghcr.io/netclaw-dev/netclaw:beta
+NETCLAW_VERSION=0.23.0-beta.1 curl -sSL https://releases.netclaw.dev/install.sh | bash   # pin exact
+```
+
+When the matching stable ships, beta installs and `:beta` automatically roll onto it (the
+beta channel resolves to the newest of {stable, prerelease}). Stable installs are never
+offered a prerelease.
