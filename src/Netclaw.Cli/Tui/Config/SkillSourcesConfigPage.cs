@@ -70,10 +70,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                     "HTTP(S) skill-server base URL; discovery is probed before save."))
                 .WithChild(Row(2,
                     $"Skill feed API key        {apiKeyState}",
-                    "Optional bearer token; leave blank to preserve the stored token."))
-                .WithChild(Row(3,
-                    "Save                     apply changes",
-                    "Delivery and feature toggles are not edited here."));
+                    "Optional bearer token; leave blank to preserve the stored token."));
         });
 
         return _contentNode;
@@ -88,7 +85,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [Up/Down] Navigate  [Type/Paste] Edit  [Backspace] Delete  [Enter] Save/Open  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [Up/Down] Navigate  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {

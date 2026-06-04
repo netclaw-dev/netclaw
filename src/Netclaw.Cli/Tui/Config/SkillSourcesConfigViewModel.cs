@@ -98,8 +98,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     [
         "External skill directory",
         "Skill feed URL",
-        "Skill feed API key",
-        "Save"
+        "Skill feed API key"
     ];
 
     public void MoveSelection(int delta)
@@ -266,8 +265,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     public void ActivateSelected()
     {
-        if (SelectedRow.Value == 3)
-            Save();
+        Save();
     }
 
     public void GoBack()

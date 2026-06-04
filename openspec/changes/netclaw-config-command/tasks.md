@@ -127,19 +127,19 @@
 
 ## 16. Shared autosave config interaction
 
-- [ ] 16.1 Introduce a shared autosave interaction component/contract for
+- [x] 16.1 Introduce a shared autosave interaction component/contract for
   inline config editors.
-- [ ] 16.2 Remove explicit save-key behavior and copy from inline config
+- [x] 16.2 Remove explicit save-key behavior and copy from inline config
   editors; completed actions autosave instead.
-- [ ] 16.3 Ensure `Esc` only navigates/cancels and never persists edits.
-- [ ] 16.4 Ensure each autosave validates before writing and leaves files
+- [x] 16.3 Ensure `Esc` only navigates/cancels and never persists edits.
+- [x] 16.4 Ensure each autosave validates before writing and leaves files
   unchanged on validation failure.
-- [ ] 16.5 Ensure writes are section-preserving and field-scoped to editor
+- [x] 16.5 Ensure writes are section-preserving and field-scoped to editor
   ownership boundaries.
-- [ ] 16.6 Harden Channels persistence so provider enable/disable, add/remove,
+- [x] 16.6 Harden Channels persistence so provider enable/disable, add/remove,
   audience, allowed-user, direct-message, and credential actions autosave
   provider-granular changes without wiping unrelated providers.
-- [ ] 16.7 Add the regression: seed Slack and Discord, add a Discord channel,
+- [x] 16.7 Add the regression: seed Slack and Discord, add a Discord channel,
   disable Slack, press `Esc`, and verify only completed autosaves occurred
   with Slack dormant setup preserved.
 

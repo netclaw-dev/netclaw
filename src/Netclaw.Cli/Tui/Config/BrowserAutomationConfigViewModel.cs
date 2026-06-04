@@ -111,7 +111,6 @@ internal sealed class BrowserAutomationConfigViewModel : ReactiveViewModel
     [
         "Enabled",
         "Backend",
-        "Save",
         "MCP permissions"
     ];
 
@@ -122,16 +121,27 @@ internal sealed class BrowserAutomationConfigViewModel : ReactiveViewModel
             SelectedRow.Value = next;
     }
 
-    public void ToggleEnabled()
+    public bool ToggleEnabled()
     {
+        var previous = Enabled.Value;
         Enabled.Value = !Enabled.Value;
+        if (AutosaveCompletedAction(
+            Enabled.Value
+                ? $"Browser Automation saved as {SelectedCanonicalServerName}. Use MCP permissions to grant access."
+                : "Browser Automation disabled and canonical browser MCP profiles removed."))
+        {
+            return true;
+        }
+
+        Enabled.Value = previous;
         IsSaved.Value = false;
-        ClearStatus();
         RequestRedraw();
+        return false;
     }
 
-    public void CycleBackend(int delta)
+    public bool CycleBackend(int delta)
     {
+        var previousIndex = SelectedBackendIndex.Value;
         var next = SelectedBackendIndex.Value + delta;
         if (next < 0)
             next = Backends.Length - 1;
@@ -140,9 +150,19 @@ internal sealed class BrowserAutomationConfigViewModel : ReactiveViewModel
 
         SelectedBackendIndex.Value = next;
         Prerequisites.Value = _probe.Detect(SelectedBackend);
+        if (AutosaveCompletedAction(
+            Enabled.Value
+                ? $"Browser Automation saved as {SelectedCanonicalServerName}. Use MCP permissions to grant access."
+                : "Browser Automation backend preference updated; browser profiles remain disabled."))
+        {
+            return true;
+        }
+
+        SelectedBackendIndex.Value = previousIndex;
+        Prerequisites.Value = _probe.Detect(SelectedBackend);
         IsSaved.Value = false;
-        ClearStatus();
         RequestRedraw();
+        return false;
     }
 
     public void ActivateSelected()
@@ -156,15 +176,17 @@ internal sealed class BrowserAutomationConfigViewModel : ReactiveViewModel
                 CycleBackend(1);
                 break;
             case 2:
-                Save();
-                break;
-            case 3:
                 OpenMcpPermissions();
                 break;
         }
     }
 
     public bool Save()
+        => Save(Enabled.Value
+            ? $"Browser Automation saved as {SelectedCanonicalServerName}. Use MCP permissions to grant access."
+            : "Browser Automation disabled and canonical browser MCP profiles removed.");
+
+    private bool Save(string successMessage)
     {
         Prerequisites.Value = _probe.Detect(SelectedBackend);
         if (Enabled.Value && !Prerequisites.Value.CanEnable)
@@ -194,14 +216,17 @@ internal sealed class BrowserAutomationConfigViewModel : ReactiveViewModel
 
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
         IsSaved.Value = true;
-        Status.Value = new ConfigStatusMessage(
-            Enabled.Value
-                ? $"Browser Automation saved as {SelectedCanonicalServerName}. Use MCP permissions to grant access."
-                : "Browser Automation disabled and canonical browser MCP profiles removed.",
-            ConfigStatusTone.Success);
+        Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         RequestRedraw();
         return true;
     }
+
+    private bool AutosaveCompletedAction(string successMessage)
+        => ConfigAutosave.Run(
+            () => Save(successMessage),
+            Status,
+            "Browser Automation autosave failed",
+            RequestRedraw);
 
     public void OpenMcpPermissions()
     {

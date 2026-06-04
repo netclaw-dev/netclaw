@@ -74,10 +74,7 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
                     "Operational alert target; Slack URLs get Slack format automatically."))
                 .WithChild(Row(3,
                     $"Outbound auth header       {authState}",
-                    "Optional 'Header-Name: value'; leave blank to preserve stored headers."))
-                .WithChild(Row(4,
-                    "Save                       apply changes",
-                    "Does not edit retries, deduplication, or delivery policy."));
+                    "Optional 'Header-Name: value'; leave blank to preserve stored headers."));
         });
 
         return _contentNode;
@@ -92,7 +89,7 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [Up/Down] Navigate  [Space] Toggle  [Type/Paste] Edit  [Backspace] Delete  [Enter] Save/Open  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [Up/Down] Navigate  [Space] Toggle/Save  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {
@@ -121,7 +118,10 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
                 ViewModel.ToggleTelemetry();
                 return;
             case ConsoleKey.Enter:
-                ViewModel.Save();
+                if (ViewModel.SelectedRow.Value == 0)
+                    ViewModel.ActivateSelected();
+                else
+                    ViewModel.Save();
                 return;
             case ConsoleKey.Backspace:
                 ViewModel.Backspace();

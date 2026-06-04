@@ -44,12 +44,11 @@ public sealed class BrowserAutomationConfigViewModelTests : IDisposable
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new BrowserAutomationConfigViewModel(_paths, new FakeProbe(false));
 
-        vm.ToggleEnabled();
-
-        Assert.False(vm.Save());
+        Assert.False(vm.ToggleEnabled());
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("missing", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(vm.Enabled.Value);
     }
 
     [Fact]

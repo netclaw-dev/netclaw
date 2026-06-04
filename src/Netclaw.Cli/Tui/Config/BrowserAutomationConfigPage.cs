@@ -58,9 +58,6 @@ internal sealed class BrowserAutomationConfigPage : ReactivePage<BrowserAutomati
                 $"Backend                 {ViewModel.SelectedBackendLabel}",
                 $"Profile: {ViewModel.SelectedCanonicalServerName}"));
             layout = layout.WithChild(Row(2,
-                "Save                    apply MCP profile changes",
-                "Refuses enablement when local runtime prerequisites are missing."));
-            layout = layout.WithChild(Row(3,
                 "MCP permissions          open grant editor",
                 "Grant browser_automation access per audience in `netclaw mcp permissions`."));
 
@@ -97,7 +94,7 @@ internal sealed class BrowserAutomationConfigPage : ReactivePage<BrowserAutomati
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space/Enter] Select  [←/→] Backend  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space/Enter] Select/Save  [←/→] Backend/Save  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {

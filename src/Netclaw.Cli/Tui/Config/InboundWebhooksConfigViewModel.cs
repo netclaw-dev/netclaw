@@ -59,12 +59,17 @@ internal sealed class InboundWebhooksConfigViewModel : ReactiveViewModel
             SelectedRow.Value = next;
     }
 
-    public void ToggleEnabled()
+    public bool ToggleEnabled()
     {
+        var previous = Enabled.Value;
         Enabled.Value = !Enabled.Value;
+        if (AutosaveCompletedAction("Inbound Webhooks enabled state saved."))
+            return true;
+
+        Enabled.Value = previous;
         IsSaved.Value = false;
-        ClearStatus();
         RequestRedraw();
+        return false;
     }
 
     public void AppendTimeoutText(string text)
@@ -93,6 +98,9 @@ internal sealed class InboundWebhooksConfigViewModel : ReactiveViewModel
     }
 
     public bool Save()
+        => Save("Inbound Webhooks settings saved.");
+
+    private bool Save(string successMessage)
     {
         RouteSummary.Value = ReadRouteSummary();
         if (!TryParseTimeout(TimeoutDraft.Value, out var timeoutSeconds, out var timeoutError))
@@ -120,10 +128,17 @@ internal sealed class InboundWebhooksConfigViewModel : ReactiveViewModel
         _acceptedTimeoutText = timeoutSeconds.ToString();
         TimeoutDraft.Value = _acceptedTimeoutText;
         IsSaved.Value = true;
-        Status.Value = new ConfigStatusMessage("Inbound Webhooks settings saved.", ConfigStatusTone.Success);
+        Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         RequestRedraw();
         return true;
     }
+
+    private bool AutosaveCompletedAction(string successMessage)
+        => ConfigAutosave.Run(
+            () => Save(successMessage),
+            Status,
+            "Inbound Webhooks autosave failed",
+            RequestRedraw);
 
     public void GoBack()
     {

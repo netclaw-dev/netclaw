@@ -2,7 +2,7 @@
 #
 # Exercises:
 #   netclaw config -> Channels -> configured Slack management menu
-#   -> channel permission edit -> add channel -> allowed users -> save.
+#   -> channel permission edit -> add channel -> allowed users -> autosave.
 # Verifies configured Slack does not re-prompt for credentials during re-entry.
 
 Output "/tmp/tape-config-channels.gif"
@@ -46,7 +46,7 @@ Enter
 Wait+Screen@10s /Added C09/
 Wait+Screen@10s /C09/
 
-# Update allowed users from the management menu.
+# Update allowed users from the management menu. Completed actions autosave.
 Escape
 Wait+Screen@10s /What would you like to do/
 Down 2
@@ -56,7 +56,7 @@ Right 32
 Backspace 32
 Type "U09"
 Enter
-Wait+Screen@10s /Allowed users staged/
+Wait+Screen@10s /Allowed users saved/
 
 # Rotate credentials using typed input, not paste.
 Down 2
@@ -66,16 +66,14 @@ Type "xoxb-smoke-typed"
 Tab
 Type "xapp-smoke-typed"
 Enter
-Wait+Screen@10s /Credential changes staged/
+Wait+Screen@10s /Credential changes saved/
 
-# Return to picker and save.
+# Return to picker and then to Settings Areas. No explicit save key is required.
 Escape
 Wait+Screen@10s /Which channels would you like to connect/
 Wait+Screen@10s /3 channels/
 
-Type "s"
-Wait+Screen@10s /Channel settings saved/
-Enter
+Escape
 Wait+Screen@10s /Settings Areas/
 
 Ctrl+Q

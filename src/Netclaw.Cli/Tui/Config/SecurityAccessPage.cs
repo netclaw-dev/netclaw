@@ -224,9 +224,9 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     {
         _keyBindingsNode = new DynamicLayoutNode(() => NetclawTuiChrome.BuildKeyHintLine(ViewModel.Mode.Value switch
         {
-            SecurityAccessEditorMode.Posture => " [↑/↓] Navigate  [Enter] Save  [Esc] Security & Access  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.Posture => " [↑/↓] Navigate  [Enter] Apply  [Esc] Security & Access  [Ctrl+Q] Quit",
             SecurityAccessEditorMode.PostureCascade => " [↑/↓] Navigate  [Enter] Apply  [Esc] Back  [Ctrl+Q] Quit",
-            SecurityAccessEditorMode.Features => " [↑/↓] Navigate  [Space/Enter] Toggle + Save  [Esc] Security & Access  [Ctrl+Q] Quit",
+            SecurityAccessEditorMode.Features => " [↑/↓] Navigate  [Space/Enter] Toggle/Save  [Esc] Security & Access  [Ctrl+Q] Quit",
             SecurityAccessEditorMode.AudienceList => " [↑/↓] Navigate  [Enter] Edit Audience  [Esc] Security & Access  [Ctrl+Q] Quit",
             SecurityAccessEditorMode.AudienceProfile => " [↑/↓] Navigate  [←/→] Change  [Space/Enter] Toggle/Apply  [Esc] Audiences  [Ctrl+Q] Quit",
             _ => " [↑/↓] Navigate  [Enter] Open  [Esc] Back  [Ctrl+Q] Quit"

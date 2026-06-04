@@ -51,7 +51,6 @@ Enter
 Wait+Screen@10s /Inbound Webhooks settings saved/
 Up
 Space
-Enter
 Wait+Screen@10s /cannot be enabled until at least one valid route exists/
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/

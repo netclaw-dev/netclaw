@@ -79,8 +79,14 @@ public sealed class ChannelPickerStepView : IWizardStepView
 
         var hasConfigured = _vm.AnyAdapterConfigured;
         var hintText = hasConfigured
-            ? $"  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel    [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}"
-            : $"  ↑/↓ to navigate, Space to toggle, Enter to configure selected.\n  [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}";
+            ? "  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel"
+            : "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.";
+        if (_vm.ShowDoneAction)
+        {
+            hintText += hasConfigured
+                ? $"    [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}"
+                : $"\n  [{_vm.DoneKeyLabel}] {_vm.DoneKeyActionLabel} - {_vm.DoneActionText}";
+        }
 
         layout = layout.WithChild(new TextNode(hintText).WithForeground(Color.BrightBlack));
 
@@ -99,7 +105,7 @@ public sealed class ChannelPickerStepView : IWizardStepView
         var keyInfo = key.KeyInfo;
         var adapters = _vm.Adapters;
 
-        if (keyInfo.Key == _vm.DoneKey)
+        if (_vm.ShowDoneAction && keyInfo.Key == _vm.DoneKey)
         {
             _callbacks.AdvanceStep();
             return true;

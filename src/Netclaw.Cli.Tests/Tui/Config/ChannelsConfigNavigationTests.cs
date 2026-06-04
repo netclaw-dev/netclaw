@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui;
@@ -96,8 +97,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         await app.RunAsync(cts.Token);
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
-        AssertTypedCredentials(channelsVm, channelType);
-        Assert.Equal("Credential changes staged. Press Esc, then s to save.", channelsVm.Status.Value.Text);
+        AssertPersistedCredentials(channelType, typed: true);
+        Assert.Equal("Credential changes saved.", channelsVm.Status.Value.Text);
     }
 
     [Theory]
@@ -121,7 +122,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, channelsVm.Screen.Value);
         Assert.Equal(channelType, channelsVm.ActiveAdapterType);
-        AssertFirstTimeSetup(channelsVm, channelType);
+        AssertFirstTimeSetupPersisted(channelsVm, channelType);
     }
 
     [Fact]
@@ -156,7 +157,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         input.EnqueueKey(ConsoleKey.Enter); // Open configured Slack management.
         input.EnqueueKey(ConsoleKey.DownArrow); // Add channel.
         input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueuePaste("#pasted-channel");
+        input.EnqueuePaste("#C09");
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -164,8 +165,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         await app.RunAsync(cts.Token);
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
-        Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "pasted-channel" && !row.IsAddAction);
-        Assert.Equal("Added pasted-channel. Press Esc, then s to save.", channelsVm.Status.Value.Text);
+        Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "C09" && !row.IsAddAction);
+        Assert.Equal("Added C09 and saved.", channelsVm.Status.Value.Text);
     }
 
     [Fact]
@@ -202,7 +203,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.DoesNotContain(channelsVm.GetChannelRows(), row => row.Id == "C01");
-        Assert.Equal("Removed C01. Press Esc, then s to save.", channelsVm.Status.Value.Text);
+        Assert.Equal("Removed C01 and saved.", channelsVm.Status.Value.Text);
     }
 
     [Fact]
@@ -346,7 +347,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 input.EnqueueKey(ConsoleKey.Enter);
                 input.EnqueueString("xapp-first-time-token");
                 input.EnqueueKey(ConsoleKey.Enter);
-                input.EnqueueString("C-first-time");
+                input.EnqueueString("C123456");
                 input.EnqueueKey(ConsoleKey.Enter);
                 SelectSecondOption(input); // Disable DMs.
                 SelectSecondOption(input); // Allow anyone in allowed channels.
@@ -381,54 +382,72 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         input.EnqueueKey(ConsoleKey.Enter);
     }
 
-    private static void AssertTypedCredentials(ChannelsConfigViewModel vm, ChannelType channelType)
+    private void AssertPersistedCredentials(ChannelType channelType, bool typed)
     {
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
         switch (channelType)
         {
             case ChannelType.Slack:
-                var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-                Assert.Equal("xoxb-typed-token", slack.BotToken);
-                Assert.Equal("xapp-typed-token", slack.AppToken);
+                AssertSecret(secrets, "Slack.BotToken", typed ? "xoxb-typed-token" : "xoxb-first-time-token");
+                AssertSecret(secrets, "Slack.AppToken", typed ? "xapp-typed-token" : "xapp-first-time-token");
                 break;
             case ChannelType.Discord:
-                var discord = vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-                Assert.Equal("discord-typed-token", discord.BotToken);
+                AssertSecret(secrets, "Discord.BotToken", typed ? "discord-typed-token" : "discord-first-time-token");
                 break;
             case ChannelType.Mattermost:
-                var mattermost = vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-                Assert.Equal("https://typed-mattermost.example.com", mattermost.ServerUrl);
-                Assert.Equal("mattermost-typed-token", mattermost.BotToken);
+                Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.ServerUrl", out var serverUrl));
+                Assert.Equal(typed ? "https://typed-mattermost.example.com" : "https://first-time-mattermost.example.com", serverUrl);
+                AssertSecret(secrets, "Mattermost.BotToken", typed ? "mattermost-typed-token" : "mattermost-first-time-token");
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null);
         }
     }
 
-    private static void AssertFirstTimeSetup(ChannelsConfigViewModel vm, ChannelType channelType)
+    private void AssertFirstTimeSetupPersisted(ChannelsConfigViewModel vm, ChannelType channelType)
     {
+        AssertPersistedCredentials(channelType, typed: false);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         switch (channelType)
         {
             case ChannelType.Slack:
                 var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
-                Assert.Equal("xoxb-first-time-token", slack.BotToken);
-                Assert.Equal("xapp-first-time-token", slack.AppToken);
-                Assert.Equal("C-first-time", slack.ChannelNamesInput);
+                Assert.True(slack.HasPersistedBotToken);
+                Assert.True(slack.HasPersistedAppToken);
+                Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var slackChannelsRaw));
+                Assert.Equal(["C123456"], ToStringArray(slackChannelsRaw));
                 break;
             case ChannelType.Discord:
                 var discord = vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
-                Assert.Equal("discord-first-time-token", discord.BotToken);
-                Assert.Equal("123456789012345678", discord.ChannelIdsInput);
+                Assert.True(discord.HasPersistedBotToken);
+                Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.AllowedChannelIds", out var discordChannelsRaw));
+                Assert.Equal(["123456789012345678"], ToStringArray(discordChannelsRaw));
                 break;
             case ChannelType.Mattermost:
                 var mattermost = vm.Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
-                Assert.Equal("https://first-time-mattermost.example.com", mattermost.ServerUrl);
-                Assert.Equal("mattermost-first-time-token", mattermost.BotToken);
-                Assert.Equal("town-square", mattermost.ChannelIdsInput);
+                Assert.True(mattermost.HasPersistedBotToken);
+                Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.AllowedChannelIds", out var mattermostChannelsRaw));
+                Assert.Equal(["town-square"], ToStringArray(mattermostChannelsRaw));
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null);
         }
     }
+
+    private void AssertSecret(Dictionary<string, object> secrets, string path, string expected)
+    {
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, path, out var raw));
+        Assert.Equal(expected, ConfigFileHelper.DecryptIfEncrypted(_paths, raw?.ToString()));
+    }
+
+    private static string[] ToStringArray(object? raw)
+        => Assert.IsType<object[]>(raw).Select(static value => value switch
+        {
+            string text => text,
+            System.Text.Json.JsonElement { ValueKind: System.Text.Json.JsonValueKind.String } element => element.GetString()!,
+            _ => throw new InvalidOperationException("Expected string array value.")
+        }).ToArray();
 
     private void WriteEmptyChannelFiles()
     {

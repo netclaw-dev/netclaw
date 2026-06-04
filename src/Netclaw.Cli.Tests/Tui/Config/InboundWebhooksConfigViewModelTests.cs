@@ -76,12 +76,11 @@ public sealed class InboundWebhooksConfigViewModelTests : IDisposable
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new InboundWebhooksConfigViewModel(_paths);
 
-        vm.ToggleEnabled();
-
-        Assert.False(vm.Save());
+        Assert.False(vm.ToggleEnabled());
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("at least one valid route", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(vm.Enabled.Value);
         Assert.Empty(Directory.EnumerateFiles(_paths.WebhooksDirectory));
     }
 

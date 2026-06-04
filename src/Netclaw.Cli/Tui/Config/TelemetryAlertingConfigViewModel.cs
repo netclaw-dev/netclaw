@@ -54,8 +54,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         "Telemetry enabled",
         "OTLP endpoint",
         "Outbound webhook URL",
-        "Outbound webhook auth header",
-        "Save"
+        "Outbound webhook auth header"
     ];
 
     public void MoveSelection(int delta)
@@ -65,10 +64,17 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             SelectedRow.Value = next;
     }
 
-    public void ToggleTelemetry()
+    public bool ToggleTelemetry()
     {
+        var previous = TelemetryEnabled.Value;
         TelemetryEnabled.Value = !TelemetryEnabled.Value;
-        MarkDirty();
+        if (AutosaveCompletedAction("Telemetry enabled state saved."))
+            return true;
+
+        TelemetryEnabled.Value = previous;
+        IsSaved.Value = false;
+        RequestRedraw();
+        return false;
     }
 
     public void AppendText(string text)
@@ -118,13 +124,13 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             case 0:
                 ToggleTelemetry();
                 break;
-            case 4:
-                Save();
-                break;
         }
     }
 
     public bool Save()
+        => Save("Telemetry & Alerting settings saved.");
+
+    private bool Save(string successMessage)
     {
         var endpoint = string.IsNullOrWhiteSpace(OtlpEndpointDraft.Value)
             ? DefaultOtlpEndpoint
@@ -208,10 +214,17 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         OutboundWebhookUrlDraft.Value = string.Empty;
         OutboundWebhookAuthHeaderDraft.Value = string.Empty;
         IsSaved.Value = true;
-        Status.Value = new ConfigStatusMessage("Telemetry & Alerting settings saved.", ConfigStatusTone.Success);
+        Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         RequestRedraw();
         return true;
     }
+
+    private bool AutosaveCompletedAction(string successMessage)
+        => ConfigAutosave.Run(
+            () => Save(successMessage),
+            Status,
+            "Telemetry & Alerting autosave failed",
+            RequestRedraw);
 
     public void GoBack()
     {

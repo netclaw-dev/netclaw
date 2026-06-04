@@ -73,13 +73,6 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
     {
         _contentNode = new DynamicLayoutNode(() =>
         {
-            if (ViewModel.IsSaved.Value)
-            {
-                return WorkflowViewComponents.BuildSavedScreen(
-                    "Channel settings saved.",
-                    "Press Enter to return to Settings Areas or Esc to review channels.");
-            }
-
             if (ViewModel.Screen.Value != ChannelsConfigScreen.Picker)
             {
                 _stepSubs.Clear();
@@ -295,9 +288,6 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
     {
         _helpTextNode = new DynamicLayoutNode(() =>
         {
-            if (ViewModel.IsSaved.Value)
-                return (ILayoutNode)new TextNode("  Saved values were merged into netclaw.json and secrets.json.").WithForeground(Color.Gray);
-
             if (ViewModel.Screen.Value != ChannelsConfigScreen.Picker)
             {
                 var help = ViewModel.Screen.Value switch
@@ -333,9 +323,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
     {
         _keyBindingsNode = new DynamicLayoutNode(() =>
         {
-            var text = ViewModel.IsSaved.Value
-                ? " [Enter] Settings Areas  [Esc] Review channels  [Ctrl+Q] Quit"
-                : ViewModel.Screen.Value switch
+            var text = ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => " [↑/↓] Navigate  [Enter] Select  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit  [a] Add  [Del] Remove  [Esc] Menu",
@@ -347,7 +335,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                     ChannelsConfigScreen.ResetConfirm => " [↑/↓] Navigate  [Enter] Select  [Esc] Menu  [Ctrl+Q] Quit",
                     _ => ViewModel.Step.IsInSubFlow
                         ? " [Enter] Next  [Esc] Back  [Ctrl+Q] Quit"
-                        : " [↑/↓] Navigate  [Space] Toggle  [Enter] Open  [s] Save  [Esc] Back  [Ctrl+Q] Quit"
+                        : " [↑/↓] Navigate  [Space] Toggle/Save  [Enter] Open  [Esc] Back  [Ctrl+Q] Quit"
                 };
 
             return NetclawTuiChrome.BuildKeyHintLine(text);
@@ -378,14 +366,6 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             return true;
         }
 
-        if (ViewModel.IsSaved.Value)
-        {
-            if (keyInfo.Key == ConsoleKey.Enter)
-                ViewModel.GoNext();
-
-            return true;
-        }
-
         if (ViewModel.Screen.Value != ChannelsConfigScreen.Picker)
         {
             HandleManagementKey(keyInfo);
@@ -395,7 +375,13 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         if (TryOpenConfiguredAdapter(keyInfo))
             return true;
 
-        if (!ViewModel.IsSaved.Value && ViewModel.StepView.HandleKeyPress(new KeyPressed(keyInfo)))
+        if (keyInfo.Key == ConsoleKey.Spacebar && ViewModel.TryToggleSelectedAdapterFromPicker())
+        {
+            ViewModel.RequestRedraw();
+            return true;
+        }
+
+        if (ViewModel.StepView.HandleKeyPress(new KeyPressed(keyInfo)))
         {
             ViewModel.RequestRedraw();
             return true;
@@ -409,9 +395,6 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
 
     private void HandlePaste(PasteEvent paste)
     {
-        if (ViewModel.IsSaved.Value)
-            return;
-
         if (ViewModel.Screen.Value is ChannelsConfigScreen.AddChannel or ChannelsConfigScreen.AllowedUsers)
         {
             _singleInput?.HandlePaste(paste);

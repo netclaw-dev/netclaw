@@ -78,6 +78,7 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     internal string DoneActionText { get; set; } = "continue to next step";
     internal string DoneKeyActionLabel { get; set; } = "Done";
     internal ConsoleKey DoneKey { get; set; } = ConsoleKey.D;
+    internal bool ShowDoneAction { get; set; } = true;
     internal string DoneKeyLabel => DoneKey switch
     {
         ConsoleKey.D => "d",
@@ -194,7 +195,9 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
         if (_mode == Mode.SubFlow && _activeAdapter is not null)
             return _activeAdapter.Vm.GetHelpText();
 
-        return $"  Select which communication channels to connect. Press [{DoneKeyLabel}] when done.";
+        return ShowDoneAction
+            ? $"  Select which communication channels to connect. Press [{DoneKeyLabel}] when done."
+            : "  Select which communication channels to connect. Completed actions save automatically.";
     }
 
     public bool TryAdvance()

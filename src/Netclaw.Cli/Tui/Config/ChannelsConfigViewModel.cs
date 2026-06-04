@@ -21,8 +21,6 @@ namespace Netclaw.Cli.Tui.Config;
 
 public sealed class ChannelsConfigViewModel : ReactiveViewModel
 {
-    private const string SaveFromManagementHint = "Press Esc, then s to save.";
-
     private readonly NetclawPaths _paths;
     private readonly ISlackProbe _slackProbe;
     private readonly IDiscordProbe _discordProbe;
@@ -60,8 +58,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Step = new ChannelPickerStepViewModel(slackProbe, discordProbe)
         {
             DoneActionText = "channel settings",
-            DoneKeyActionLabel = "Save",
+            DoneKeyActionLabel = "Apply",
             DoneKey = ConsoleKey.S,
+            ShowDoneAction = false,
             PreserveDisabledAdapterDrafts = true
         };
         _context = new WizardContext
@@ -115,19 +114,16 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     public void GoNext()
     {
-        if (IsSaved.Value)
-        {
-            ReturnToDashboard();
-            return;
-        }
-
         if (Step.IsInSubFlow)
         {
             var activeAdapter = Step.ActiveAdapterType;
             if (Step.TryAdvance())
             {
                 if (!Step.IsInSubFlow && activeAdapter is { } completedAdapter)
+                {
                     OpenChannelPermissionsAfterInitialSetup(completedAdapter);
+                    AutosaveCompletedAction($"{GetAdapterDisplayName(completedAdapter)} channel setup saved.");
+                }
 
                 NotifyContentChanged();
             }
@@ -135,19 +131,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
         }
 
-        _ = SaveFromInputAsync();
+        ReturnToDashboard();
     }
 
     public void GoBack()
     {
-        if (IsSaved.Value)
-        {
-            IsSaved.Value = false;
-            Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
-            NotifyContentChanged();
-            return;
-        }
-
         if (Screen.Value != ChannelsConfigScreen.Picker)
         {
             GoBackWithinManagement();
@@ -164,17 +152,20 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         ReturnToDashboard();
     }
 
-    public void Save()
+    public bool Save()
         => SaveAsync().GetAwaiter().GetResult();
 
-    public async Task SaveAsync(CancellationToken ct = default)
+    public async Task<bool> SaveAsync(CancellationToken ct = default)
+        => await SaveAsync("Channels saved.", ct);
+
+    private async Task<bool> SaveAsync(string successMessage, CancellationToken ct = default)
     {
         var validation = ValidateCurrentStep();
         if (validation.HasErrors)
         {
             Status.Value = BuildValidationErrorStatus(validation, "Fix channel validation errors before saving.");
             RequestRedraw();
-            return;
+            return false;
         }
 
         Status.Value = new ConfigStatusMessage("Validating channel access...", ConfigStatusTone.Neutral);
@@ -185,7 +176,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             Status.Value = BuildValidationErrorStatus(dynamicValidation, "Fix channel validation errors before saving.");
             RequestRedraw();
-            return;
+            return false;
         }
 
         var session = new ConfigEditorSession(_paths);
@@ -205,23 +196,18 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Step.OnEnter(_context, NavigationDirection.Forward);
         _mapper.ApplyToStep(Step, savedDraft);
         IsSaved.Value = true;
-        Screen.Value = ChannelsConfigScreen.Picker;
-        Status.Value = new ConfigStatusMessage("Channels saved.", ConfigStatusTone.Success);
+        Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         NotifyContentChanged();
+        return true;
     }
 
-    internal async Task SaveFromInputAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            await SaveAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            Status.Value = new ConfigStatusMessage($"Channel settings save failed: {ex.Message}", ConfigStatusTone.Error);
-            RequestRedraw();
-        }
-    }
+    internal async Task<bool> SaveFromInputAsync(CancellationToken ct = default)
+        => await ConfigAutosave.RunAsync(
+            token => SaveAsync("Channels saved.", token),
+            Status,
+            "Channel settings save failed",
+            RequestRedraw,
+            ct);
 
     internal bool TryOpenSelectedAdapterManagement()
     {
@@ -233,6 +219,26 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return false;
 
         OpenAdapterManagement(type);
+        return true;
+    }
+
+    internal bool TryToggleSelectedAdapterFromPicker()
+    {
+        if (!Step.IsInPickerMode)
+            return false;
+
+        var type = Step.SelectedAdapterType;
+        var selectedIndex = GetAdapterIndex(type);
+        var wasEnabled = Step.IsAdapterEnabled(type);
+        _activeAdapterType = type;
+
+        Step.ToggleAdapter(selectedIndex);
+        if (Step.IsInSubFlow)
+            return true;
+
+        UpdateAdapterPickerSummary(type);
+        AutosaveCompletedAction($"{GetAdapterDisplayName(type)} {(!wasEnabled ? "enabled" : "disabled")} and saved.");
+        NotifyContentChanged();
         return true;
     }
 
@@ -252,7 +258,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         UpdateAdapterPickerSummary(type);
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
         Status.Value = new ConfigStatusMessage(
-            $"Set {GetAdapterDisplayName(type)} channel audiences, then press Esc and s to save.",
+            $"Set {GetAdapterDisplayName(type)} channel audiences. Completed actions save automatically.",
             ConfigStatusTone.Neutral);
         StartChannelLabelResolution(type);
     }
@@ -456,7 +462,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         UpdateAdapterPickerSummary(_activeAdapterType);
         _channelRowIndex = Clamp(_channelRowIndex, GetChannelRows().Count);
-        Status.Value = new ConfigStatusMessage($"Removed {row.DisplayName}. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
+        AutosaveCompletedAction($"Removed {row.DisplayName} and saved.");
         NotifyContentChanged();
     }
 
@@ -498,7 +504,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         UpdateAdapterPickerSummary(_activeAdapterType);
         _channelRowIndex = Math.Max(GetChannelRows().Count - 2, 0);
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        Status.Value = new ConfigStatusMessage($"Added {channelId}. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
+        AutosaveCompletedAction($"Added {channelId} and saved.");
         NotifyContentChanged();
     }
 
@@ -519,7 +525,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         SetChannelAudience(_activeAdapterType, _editingAudienceId, AudienceOptions[_audienceSelectionIndex]);
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        Status.Value = new ConfigStatusMessage($"Updated {_editingAudienceLabel} audience. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
+        AutosaveCompletedAction($"Updated {_editingAudienceLabel} audience and saved.");
         NotifyContentChanged();
     }
 
@@ -537,7 +543,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetAllowedUserIds(_activeAdapterType, userIds);
         UpdateAdapterPickerSummary(_activeAdapterType);
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
-        Status.Value = new ConfigStatusMessage($"Allowed users staged. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
+        AutosaveCompletedAction("Allowed users saved.");
         NotifyContentChanged();
     }
 
@@ -575,7 +581,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetChannelAudience(_activeAdapterType, "dm", AudienceOptions[_audienceSelectionIndex]);
         UpdateAdapterPickerSummary(_activeAdapterType);
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
-        Status.Value = new ConfigStatusMessage($"Direct message settings staged. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
+        AutosaveCompletedAction("Direct message settings saved.");
         NotifyContentChanged();
     }
 
@@ -677,7 +683,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
-        Status.Value = new ConfigStatusMessage($"Credential changes staged. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
+        AutosaveCompletedAction("Credential changes saved.");
         NotifyContentChanged();
     }
 
@@ -1011,8 +1017,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _mapper.ApplyToStep(Step, savedDraft);
         _activeAdapterType = resetType;
         Screen.Value = ChannelsConfigScreen.Picker;
-        IsSaved.Value = true;
         Status.Value = new ConfigStatusMessage($"{resetName} reset saved.", ConfigStatusTone.Success);
+        IsSaved.Value = true;
         NotifyContentChanged();
     }
 
@@ -1055,20 +1061,28 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private void SetActiveAdapterEnabled(bool enabled)
     {
-        var selectedIndex = Step.Adapters
-            .Select((entry, index) => (entry.Type, index))
-            .Single(entry => entry.Type == _activeAdapterType)
-            .index;
+        var selectedIndex = GetAdapterIndex(_activeAdapterType);
 
         if (Step.IsAdapterEnabled(_activeAdapterType) != enabled)
             Step.ToggleAdapter(selectedIndex);
 
         UpdateAdapterPickerSummary(_activeAdapterType);
 
-        Status.Value = new ConfigStatusMessage(
-            $"{ActiveAdapterName} {(enabled ? "enabled" : "disabled")}. {SaveFromManagementHint}",
-            ConfigStatusTone.Neutral);
+        AutosaveCompletedAction($"{ActiveAdapterName} {(enabled ? "enabled" : "disabled")} and saved.");
     }
+
+    private bool AutosaveCompletedAction(string successMessage)
+        => ConfigAutosave.Run(
+            () => SaveAsync(successMessage).GetAwaiter().GetResult(),
+            Status,
+            "Channel settings save failed",
+            RequestRedraw);
+
+    private int GetAdapterIndex(ChannelType type)
+        => Step.Adapters
+            .Select((entry, index) => (entry.Type, index))
+            .Single(entry => entry.Type == type)
+            .index;
 
     private void UpdateAdapterPickerSummary(ChannelType type)
     {

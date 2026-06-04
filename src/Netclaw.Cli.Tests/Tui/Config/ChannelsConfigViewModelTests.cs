@@ -248,7 +248,7 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Back_from_saved_returns_to_channel_picker()
+    public void Back_from_saved_picker_returns_to_dashboard_or_quits()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
@@ -257,8 +257,67 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
 
         vm.GoBack();
 
-        Assert.False(vm.IsSaved.Value);
-        Assert.False(vm.ShutdownRequestedForTest);
+        Assert.True(vm.IsSaved.Value);
+        Assert.True(vm.ShutdownRequestedForTest);
+    }
+
+    [Fact]
+    public void Esc_from_incomplete_add_channel_draft_writes_nothing()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "C99";
+
+        vm.GoBack();
+
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public void Discord_add_then_slack_disable_then_escape_preserves_provider_config()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Discord);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "987654321";
+
+        vm.ApplyAddChannel();
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        MoveToManagementAction(vm, ChannelsManagementAction.ToggleEnabled);
+        vm.ActivateManagementMenuItem();
+        vm.GoBack();
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.Enabled", out var slackEnabled));
+        Assert.False(Assert.IsType<bool>(slackEnabled));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var slackChannelsRaw));
+        Assert.Equal(["C01"], ToStringArray(slackChannelsRaw));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var slackAudiencesRaw));
+        Assert.Equal("team", ToStringDictionary(slackAudiencesRaw)["C01"]);
+
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.Enabled", out var discordEnabled));
+        Assert.True(Assert.IsType<bool>(discordEnabled));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.AllowedChannelIds", out var discordChannelsRaw));
+        Assert.Equal(["123456789", "987654321"], ToStringArray(discordChannelsRaw));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.ChannelAudiences", out var discordAudiencesRaw));
+        var discordAudiences = ToStringDictionary(discordAudiencesRaw);
+        Assert.Equal("team", discordAudiences["123456789"]);
+        Assert.Equal("team", discordAudiences["987654321"]);
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var slackBotToken));
+        Assert.Equal("xoxb-test", ConfigFileHelper.DecryptIfEncrypted(_paths, slackBotToken?.ToString()));
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Discord.BotToken", out var discordBotToken));
+        Assert.Equal("discord-token", ConfigFileHelper.DecryptIfEncrypted(_paths, discordBotToken?.ToString()));
     }
 
     [Fact]
@@ -503,7 +562,6 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.AddChannelInput = "fart";
 
         vm.ApplyAddChannel();
-        vm.Save();
 
         Assert.False(vm.IsSaved.Value);
         Assert.Equal("Slack channel not found: #fart", vm.Status.Value.Text);
@@ -705,6 +763,16 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         vm.ActivateManagementMenuItem();
         vm.MoveResetConfirmation(1);
         vm.ApplyResetConfirmation();
+    }
+
+    private static void MoveToManagementAction(ChannelsConfigViewModel vm, ChannelsManagementAction action)
+    {
+        var index = vm.GetManagementMenuItems()
+            .Select((item, itemIndex) => (item, itemIndex))
+            .Single(entry => entry.item.Action == action)
+            .itemIndex;
+
+        vm.MoveManagementMenu(index);
     }
 
     private static int GetAdapterIndex(ChannelsConfigViewModel vm, ChannelType type)
