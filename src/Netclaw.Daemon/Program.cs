@@ -291,6 +291,10 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     app.MapLifecycleEndpoints();
 
+    app.MapDiscordConfigEndpoints();
+
+    app.MapModelCatalogEndpoints();
+
     // Register tools that need DI-resolved dependencies after the container is built.
     ChannelToolRegistration.RegisterChannelTools(app.Services);
     SkillToolRegistration.RegisterSkillTools(app.Services);
@@ -1065,6 +1069,9 @@ static void ConfigureDaemonServices(
     services.AddSlackChannelIntegration(configuration);
     services.AddDiscordChannelIntegration(configuration);
     services.AddMattermostChannelIntegration(configuration);
+    services.AddSingleton<DiscordConfigPersistence>();
+    services.AddSingleton<ModelCatalogPersistence>();
+    services.AddSingleton<ModelCatalogService>();
 
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();
