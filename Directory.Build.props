@@ -22,7 +22,7 @@ This is a prerelease on the beta channel. Stable installs are unaffected and rem
 
 **Bug Fixes**
 
-* **`docker exec`/`kubectl exec -- netclaw` works again as root** — the daemon runs as the unprivileged `netclaw` user, but `exec` defaults to the image's root user, and `netclaw init` is invoked that way. A root-context CLI run extracted the .NET single-file bundle into a per-`$HOME` dir locked `root:root` (and wrote config root-owned), after which the non-root daemon could no longer run its own CLI (`Failed to create directory ... Error code: 13`). `/usr/local/bin/netclaw` is now a self-dropping launcher that re-execs as the `netclaw` user when invoked as root, so exec'd CLI usage just works on any orchestrator. See ADR-004; locked in by a standalone-`docker` regression test. ([#PRNUM#](https://github.com/netclaw-dev/netclaw/pull/PRNUM#))
+* **`docker exec`/`kubectl exec -- netclaw` works again as root** — the daemon runs as the unprivileged `netclaw` user, but `exec` defaults to the image's root user, and `netclaw init` is invoked that way. A root-context CLI run extracted the .NET single-file bundle into a per-`$HOME` dir locked `root:root` (and wrote config root-owned), after which the non-root daemon could no longer run its own CLI (`Failed to create directory ... Error code: 13`). `/usr/local/bin/netclaw` is now a self-dropping launcher that re-execs as the `netclaw` user when invoked as root, so exec'd CLI usage just works on any orchestrator. See ADR-004; locked in by a standalone-`docker` regression test. ([#1322](https://github.com/netclaw-dev/netclaw/pull/1322))
 </PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
