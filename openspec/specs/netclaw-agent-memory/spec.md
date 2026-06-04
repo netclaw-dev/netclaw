@@ -11,9 +11,7 @@ self-configuration through conversation, checkpoint-driven memory curation,
 automatic pre-turn recall, and the standard configuration directory structure.
 This capability makes Netclaw a persistent, context-aware agent rather than a
 stateless chat endpoint.
-
 ## Requirements
-
 ### Requirement: Layered system prompt assembly
 
 The system SHALL assemble session context from ordered layers: `SOUL.md`,
@@ -464,3 +462,31 @@ manual-control surface.
 - **WHEN** the redesigned memory subsystem is active
 - **THEN** those tool names continue to function
 - **AND** they execute against the SQLite memory service and policy pipeline
+
+### Requirement: Approval-resumed memory decisions use turn context
+
+Memory recall, memory curation, and memory checkpoint payloads created during an approval-resumed session turn SHALL use the active or restored turn context for audience, boundary, and adopted-context policy inputs. They SHALL NOT derive those inputs from missing live transport metadata after recovery.
+
+#### Scenario: Recovered third-party adopted context suppresses automatic curation
+
+- **GIVEN** an approval-paused turn was originally created with third-party adopted context
+- **AND** the session cold-recovers before the approval response arrives
+- **WHEN** the approved tool redrive completes and memory curation evaluates proposals for the resumed turn
+- **THEN** curation reads `HasThirdPartyAdoptedContext` from the restored turn context
+- **AND** automatic memory formation is suppressed unless the authorized user explicitly elevated the adopted fact
+
+#### Scenario: Self-only adopted context does not suppress solely by presence
+
+- **GIVEN** an approval-paused turn was originally created with self-only adopted context
+- **WHEN** the recovered turn resumes and memory policy evaluates the turn
+- **THEN** memory policy sees adopted context as present
+- **AND** `HasThirdPartyAdoptedContext` remains false
+- **AND** automatic memory suppression is not triggered solely by adopted-context presence
+
+#### Scenario: Recovered memory boundary matches original turn
+
+- **GIVEN** an approval-paused Team turn was recovered after restart
+- **WHEN** memory recall or checkpoint payloads are created during the resumed continuation
+- **THEN** their audience and boundary come from the restored turn context
+- **AND** they do not fall back to Public because live `MessageSource` is absent
+

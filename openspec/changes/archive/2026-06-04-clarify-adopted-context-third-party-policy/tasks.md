@@ -26,4 +26,4 @@
 
 - [x] 5.1 `/opsx-verify clarify-adopted-context-third-party-policy` once implementation lands.
 - [x] 5.2 `/opsx-sync clarify-adopted-context-third-party-policy` to propagate the deltas into the main capability specs.
-- [ ] 5.3 `/opsx-archive clarify-adopted-context-third-party-policy` after merge.
+- [x] 5.3 `/opsx-archive clarify-adopted-context-third-party-policy` after merge.

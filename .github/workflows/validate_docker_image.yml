@@ -16,6 +16,7 @@ on:
     paths:
       - 'docker/Dockerfile'
       - 'docker/entrypoint.sh'
+      - 'docker/netclaw-cli-launcher.sh'
       - 'scripts/docker/**'
       - 'src/**'
       - 'global.json'
@@ -30,6 +31,7 @@ on:
     paths:
       - 'docker/Dockerfile'
       - 'docker/entrypoint.sh'
+      - 'docker/netclaw-cli-launcher.sh'
       - 'scripts/docker/**'
       - 'src/**'
       - 'global.json'
@@ -171,6 +173,13 @@ jobs:
           chmod +x scripts/docker/test-daemon-lifecycle.sh
           scripts/docker/test-daemon-lifecycle.sh "netclawd-pr:${{ steps.tag.outputs.tag }}"
 
+      - name: "Regression ADR-004: root 'docker exec -- netclaw' must drop to the netclaw user"
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/docker/test-nonroot-cli.sh
+          scripts/docker/test-nonroot-cli.sh "netclawd-pr:${{ steps.tag.outputs.tag }}"
+
       - name: "Lint: ARG TARGETARCH must have no default (#1091)"
         shell: bash
         run: |
@@ -217,3 +226,4 @@ jobs:
           docker rm -f netclaw-validate-ok 2>/dev/null || true
           docker rm -f netclaw-validate-bind-mount 2>/dev/null || true
           docker rm -f netclaw-lifecycle-1279 2>/dev/null || true
+          docker rm -f netclaw-nonroot-cli 2>/dev/null || true

@@ -43,10 +43,18 @@ ARG NETCLAW_VERSION=unknown
 
 # Pre-install the general-purpose toolkit an autonomous agent is expected
 # to reach for via its shell_execute tool. An Ubuntu base (not a chiseled
-# runtime) is used deliberately so operators can `apt-get install`
-# additional tools at runtime for high-permissions use cases the agent
-# discovers on its own — the pre-installed set is what the agent should
-# have on hand without needing to install anything first.
+# runtime) is used deliberately so additional tools can be added at runtime
+# for high-permissions use cases the agent discovers on its own — the
+# pre-installed set is what the agent should have on hand without needing to
+# install anything first.
+#
+# NOTE: the daemon runs as the non-root `netclaw` user, so it cannot
+# `apt-get install` (no root) or write system PATH dirs at runtime. Agent-driven
+# runtime installs must target the user-writable, on-PATH locations created
+# below (~/.local/bin, ~/.dotnet, ~/.dotnet/tools) — e.g. `dotnet-install.sh`
+# defaults to ~/.dotnet, `pip install --user` lands in ~/.local/bin. System-wide
+# `apt-get install` remains an operator action (`docker exec -u root`, or baking
+# a derived image).
 #
 # Categories:
 #   TLS + HTTP:  ca-certificates, curl, wget
@@ -84,24 +92,38 @@ WORKDIR /opt/netclaw
 COPY publish/cli-${TARGETARCH}/netclaw /opt/netclaw/cli/netclaw
 COPY publish/daemon-${TARGETARCH}/netclawd /opt/netclaw/daemon/netclawd
 COPY docker/entrypoint.sh /opt/netclaw/entrypoint.sh
+# `netclaw` on PATH is a self-dropping launcher (not a bare symlink) so a
+# root-context `docker exec`/`kubectl exec -- netclaw <cmd>` re-execs as the
+# netclaw user — see docker/netclaw-cli-launcher.sh and ADR-004. netclawd stays a
+# plain symlink: it is only ever launched by the supervised entrypoint, which has
+# already dropped to netclaw, so it never runs the root path.
+COPY docker/netclaw-cli-launcher.sh /usr/local/bin/netclaw
 
-RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/entrypoint.sh \
- && ln -s /opt/netclaw/cli/netclaw /usr/local/bin/netclaw \
+RUN chmod +x /opt/netclaw/cli/netclaw /opt/netclaw/daemon/netclawd /opt/netclaw/entrypoint.sh /usr/local/bin/netclaw \
  && ln -s /opt/netclaw/daemon/netclawd /usr/local/bin/netclawd
 
 # Non-root runtime user — limits blast radius of daemon-owned tool execution.
 # The entrypoint starts as root only to repair bind-mount ownership, then
 # re-execs itself as this user before launching netclawd.
 # Pre-create the data and tools directories so image-owned paths inherit
-# correct ownership when operators use Docker named volumes.
+# correct ownership when operators use Docker named volumes. ~/.local/bin and
+# ~/.dotnet(/tools) are the user-writable, on-PATH targets for agent-driven
+# runtime tool installs (the daemon is non-root and cannot write system dirs).
 RUN groupadd --gid 1654 netclaw \
  && useradd --uid 1654 --gid netclaw --create-home netclaw \
  && mkdir -p /home/netclaw/.netclaw /tools \
- && chown -R netclaw:netclaw /home/netclaw/.netclaw /tools
+            /home/netclaw/.local/bin /home/netclaw/.dotnet/tools \
+ && chown -R netclaw:netclaw /home/netclaw/.netclaw /tools /home/netclaw/.local /home/netclaw/.dotnet
 
 ENV HOME=/home/netclaw
 ENV NETCLAW_HOME=/home/netclaw/.netclaw
 ENV NETCLAW_DAEMON_PATH=/opt/netclaw/daemon/netclawd
+# Make the user-writable install locations (and a mounted /tools/bin toolset)
+# resolve as bare commands in the non-root agent's non-interactive shells, which
+# never source ~/.bashrc/~/.profile. dotnet-install.sh -> ~/.dotnet; .NET global
+# tools -> ~/.dotnet/tools; pip --user -> ~/.local/bin; operator/init-container
+# toolsets mounted at /tools -> /tools/bin.
+ENV PATH=/home/netclaw/.local/bin:/home/netclaw/.dotnet:/home/netclaw/.dotnet/tools:/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # Block in-place binary self-update — the image tag IS the version.
 # Update availability checks still run so operators see when a new version exists.
 ENV NETCLAW_Daemon__DisableSelfUpdate=true

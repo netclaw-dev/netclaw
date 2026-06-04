@@ -1,3 +1,8 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: Pairing code generation`
+- TO: `### Requirement: Pairing code generation stays daemon-host local`
+
 ## MODIFIED Requirements
 
 ### Requirement: Bearer token authentication scheme

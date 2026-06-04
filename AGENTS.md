@@ -112,6 +112,25 @@ auto-fix common schema validation errors. To ensure smooth upgrades for existing
 - When **removing** a property, no special action is needed — the resolver detects and
   removes properties disallowed by `additionalProperties: false`.
 
+## Release Channel Rule
+
+Releases are cut by pushing a git tag (full procedure: `CONTRIBUTING.md` → Releasing).
+Two conventions the release version gate enforces — violate them and the release fails:
+
+- The tag MUST match `Directory.Build.props`: `<VersionPrefix>` for a stable tag,
+  `<VersionPrefix>` + `<VersionSuffix>` for a prerelease.
+- Prerelease tags MUST use the **dotted** `beta.N` form (`0.23.0-beta.1`, never `beta1`).
+  A mixed identifier like `beta1` is one opaque token that SemVer orders lexically, so
+  `beta10` would rank below `beta2` — in the C# comparator *and* the manifest generator.
+
+A tag with a `-` is a prerelease: it becomes a GitHub prerelease and only advances the
+Docker `:beta` tag and the manifest `latestPrerelease`. A stable tag moves `:latest`,
+`:major.minor`, and the manifest `latest`. The C# `SemVer` comparator and the bash
+generator's `feeds/scripts/semver_key.py` are two implementations of one precedence rule
+kept in lockstep by a shared fixture (`feeds/scripts/semver-order.txt`) — change both
+(and the fixture) together if precedence ever changes. Never hand-edit the release
+manifest or installer feed.
+
 ## Universal Quality Bar
 
 - secure-by-default behavior for gateway and tools

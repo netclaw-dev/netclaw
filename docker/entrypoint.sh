@@ -47,12 +47,43 @@ ensure_runtime_ownership() {
     exit 1
 }
 
+# Best-effort accessibility for /tools — a PATH directory the agent only ever
+# READS and executes from, never writes. Unlike the data dir, /tools is commonly
+# supplied as a read-only mount carrying a large, pre-provisioned, immutable
+# toolset (e.g. a vendored .NET SDK). So this MUST NOT recursively chown it
+# (pointlessly expensive over thousands of files, and a guaranteed failure on a
+# read-only mount) and MUST NOT treat a read-only mount as fatal — doing so
+# crash-loops the container for a perfectly valid configuration. We only confirm
+# the runtime user can traverse and read it; if it happens to be writable we
+# opportunistically fix the top-level owner so a fresh named volume is usable.
+ensure_tools_accessible() {
+    local path="$1"
+
+    mkdir -p "$path" 2>/dev/null || true
+
+    if gosu "$NETCLAW_USER" test -r "$path" && gosu "$NETCLAW_USER" test -x "$path"; then
+        if [[ -w "$path" ]]; then
+            local owner
+            owner="$(stat -c '%u:%g' "$path" 2>/dev/null || true)"
+            [[ "$owner" == "${NETCLAW_UID}:${NETCLAW_GID}" ]] || \
+                chown "${NETCLAW_UID}:${NETCLAW_GID}" "$path" 2>/dev/null || true
+        fi
+        return 0
+    fi
+
+    echo "[entrypoint] WARN: $path is not readable/traversable by ${NETCLAW_USER} and is not writable (read-only mount?); continuing." >&2
+    echo "[entrypoint] Tools mounted there must be world-readable/executable, or pre-owned by uid/gid ${NETCLAW_UID}:${NETCLAW_GID}." >&2
+    return 0
+}
+
 if [[ "$(id -u)" == "0" ]]; then
     export HOME="$NETCLAW_USER_HOME"
     export NETCLAW_HOME="$NETCLAW_DATA_DIR"
 
+    # The data dir must be writable by the runtime user — fatal if we cannot
+    # deliver that. /tools only needs to be readable — never fatal (see above).
     ensure_runtime_ownership "$NETCLAW_DATA_DIR"
-    ensure_runtime_ownership /tools
+    ensure_tools_accessible /tools
 
     exec gosu "$NETCLAW_USER" "$0" "$@"
 fi
