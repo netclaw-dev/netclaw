@@ -96,7 +96,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         AssertTypedCredentials(channelsVm, channelType);
-        Assert.Equal("Credential changes staged. Press d to save.", channelsVm.Status.Value.Text);
+        Assert.Equal("Credential changes staged. Press Esc, then d to save.", channelsVm.Status.Value.Text);
     }
 
     [Theory]
@@ -141,7 +141,44 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "pasted-channel" && !row.IsAddAction);
-        Assert.Equal("Added pasted-channel. Press d to save.", channelsVm.Status.Value.Text);
+        Assert.Equal("Added pasted-channel. Press Esc, then d to save.", channelsVm.Status.Value.Text);
+    }
+
+    [Fact]
+    public async Task Channels_ChannelPermissions_DoesNotRemoveSelectedChannelWithDoneKey()
+    {
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Open configured Slack management.
+        input.EnqueueKey(ConsoleKey.Enter); // Manage channels and permissions.
+        input.EnqueueKey(ConsoleKey.D);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "C01" && !row.IsAddAction);
+    }
+
+    [Fact]
+    public async Task Channels_ChannelPermissions_DeleteRemovesSelectedChannel()
+    {
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Open configured Slack management.
+        input.EnqueueKey(ConsoleKey.Enter); // Manage channels and permissions.
+        input.EnqueueKey(ConsoleKey.Delete);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        Assert.DoesNotContain(channelsVm.GetChannelRows(), row => row.Id == "C01");
+        Assert.Equal("Removed C01. Press Esc, then d to save.", channelsVm.Status.Value.Text);
     }
 
     [Fact]

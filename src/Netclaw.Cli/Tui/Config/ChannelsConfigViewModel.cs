@@ -21,6 +21,8 @@ namespace Netclaw.Cli.Tui.Config;
 
 public sealed class ChannelsConfigViewModel : ReactiveViewModel
 {
+    private const string SaveFromManagementHint = "Press Esc, then d to save.";
+
     private readonly NetclawPaths _paths;
     private readonly ISlackProbe _slackProbe;
     private readonly IDiscordProbe _discordProbe;
@@ -417,7 +419,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         UpdateAdapterPickerSummary(_activeAdapterType);
         _channelRowIndex = Clamp(_channelRowIndex, GetChannelRows().Count);
-        Status.Value = new ConfigStatusMessage($"Removed {row.DisplayName}. Press d to save.", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage($"Removed {row.DisplayName}. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -459,7 +461,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         UpdateAdapterPickerSummary(_activeAdapterType);
         _channelRowIndex = Math.Max(GetChannelRows().Count - 2, 0);
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        Status.Value = new ConfigStatusMessage($"Added {channelId}. Press d to save.", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage($"Added {channelId}. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -480,7 +482,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         SetChannelAudience(_activeAdapterType, _editingAudienceId, AudienceOptions[_audienceSelectionIndex]);
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        Status.Value = new ConfigStatusMessage($"Updated {_editingAudienceLabel} audience. Press d to save.", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage($"Updated {_editingAudienceLabel} audience. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -498,7 +500,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetAllowedUserIds(_activeAdapterType, userIds);
         UpdateAdapterPickerSummary(_activeAdapterType);
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
-        Status.Value = new ConfigStatusMessage("Allowed users staged. Press d to save.", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage($"Allowed users staged. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -536,7 +538,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetChannelAudience(_activeAdapterType, "dm", AudienceOptions[_audienceSelectionIndex]);
         UpdateAdapterPickerSummary(_activeAdapterType);
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
-        Status.Value = new ConfigStatusMessage("Direct message settings staged. Press d to save.", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage($"Direct message settings staged. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -638,7 +640,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
-        Status.Value = new ConfigStatusMessage("Credential changes staged. Press d to save.", ConfigStatusTone.Neutral);
+        Status.Value = new ConfigStatusMessage($"Credential changes staged. {SaveFromManagementHint}", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -975,7 +977,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         UpdateAdapterPickerSummary(_activeAdapterType);
 
         Status.Value = new ConfigStatusMessage(
-            $"{ActiveAdapterName} {(enabled ? "enabled" : "disabled")}. Press d to save.",
+            $"{ActiveAdapterName} {(enabled ? "enabled" : "disabled")}. {SaveFromManagementHint}",
             ConfigStatusTone.Neutral);
     }
 
@@ -1185,14 +1187,30 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _ => type.ToString()
     };
 
-    private static string FormatChannelLabel(ChannelType type, string channelId)
+    private string FormatChannelLabel(ChannelType type, string channelId)
         => type switch
         {
-            ChannelType.Slack => channelId,
-            ChannelType.Discord => channelId,
+            ChannelType.Slack => FormatSlackChannelLabel(channelId),
+            ChannelType.Discord => FormatDiscordChannelLabel(channelId),
             ChannelType.Mattermost => channelId,
             _ => channelId
         };
+
+    private string FormatSlackChannelLabel(string channelId)
+    {
+        var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        var resolved = slack.LastChannelResolution?.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.Id, channelId, StringComparison.Ordinal));
+        return resolved is null ? channelId : $"#{resolved.Name}";
+    }
+
+    private string FormatDiscordChannelLabel(string channelId)
+    {
+        var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+        var resolved = discord.LastChannelResolution?.Resolved.FirstOrDefault(channel =>
+            string.Equals(channel.ChannelId, channelId, StringComparison.Ordinal));
+        return resolved?.ToDisplayName() ?? channelId;
+    }
 
     private static int AudienceIndex(TrustAudience audience)
     {

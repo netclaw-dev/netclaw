@@ -145,13 +145,23 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             layout = layout.WithChild(Hint("  No allowed channels configured."));
         }
 
+        var editableRows = rows.Where(static row => !row.IsAddAction).ToArray();
+        var displayNameWidth = Math.Clamp(
+            editableRows.Select(static row => row.DisplayName.Length).DefaultIfEmpty(16).Max(),
+            16,
+            36);
+        var idWidth = Math.Clamp(
+            editableRows.Select(static row => row.Id.Length).DefaultIfEmpty(10).Max(),
+            10,
+            24);
+
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
             var focused = i == ViewModel.ChannelRowIndex;
             var line = row.IsAddAction
                 ? $"{FocusPrefix(focused)}{row.DisplayName}"
-                : $"{FocusPrefix(focused)}{row.DisplayName,-28} {row.Id,-18} {AudienceCycle(row.Audience)}";
+                : $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {Column(row.Id, idWidth)} {AudienceCycle(row.Audience)}";
             layout = layout.WithChild(Row(line, focused));
         }
 
@@ -297,7 +307,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 var help = ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => "  Manage this adapter without re-entering credentials.",
-                    ChannelsConfigScreen.ChannelPermissions => "  Enter edits an audience. a adds a channel. d removes the selected channel.",
+                    ChannelsConfigScreen.ChannelPermissions => "  Enter edits an audience. a adds a channel. Delete removes the selected channel.",
                     ChannelsConfigScreen.EditAudience => "  Select the audience profile for this channel.",
                     ChannelsConfigScreen.AddChannel => "  Enter applies the channel draft. Esc cancels.",
                     ChannelsConfigScreen.AllowedUsers => "  Use comma-separated user IDs. Blank means unrestricted users in allowed channels.",
@@ -332,7 +342,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 : ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => " [↑/↓] Navigate  [Enter] Select  [Esc] Channels  [Ctrl+Q] Quit",
-                    ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit  [a] Add  [d] Remove  [Esc] Menu",
+                    ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit  [a] Add  [Del] Remove  [Esc] Menu",
                     ChannelsConfigScreen.EditAudience => " [↑/↓] Navigate  [Enter] Apply  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AddChannel => " [↑/↓] Audience  [Enter] Add  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AllowedUsers => " [Enter] Apply  [Esc] Menu  [Ctrl+Q] Quit",
@@ -521,7 +531,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             case ConsoleKey.A:
                 ViewModel.BeginAddChannel();
                 break;
-            case ConsoleKey.D:
+            case ConsoleKey.Delete:
                 ViewModel.RemoveSelectedChannel();
                 break;
         }
@@ -754,6 +764,16 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
     };
 
     private static string AudienceCycle(TrustAudience audience) => $"[◀ {AudienceLabel(audience),-8} ▶]";
+
+    private static string Column(string value, int width)
+    {
+        if (value.Length <= width)
+            return value.PadRight(width);
+
+        return width <= 3
+            ? value[..width]
+            : string.Concat(value.AsSpan(0, width - 3), "...");
+    }
 
     private static Color ToColor(ConfigStatusTone tone) => tone switch
     {

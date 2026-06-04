@@ -476,6 +476,10 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         var audiences = ToStringDictionary(audiencesRaw);
         Assert.Equal("team", audiences["C09"]);
         Assert.DoesNotContain("netclaw-support", audiences.Keys);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "C09");
+        Assert.Equal("#netclaw-support", row.DisplayName);
     }
 
     [Fact]
@@ -579,6 +583,28 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal("discord-token", discordProbe.LastBotToken);
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
         Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public void Save_uses_resolved_discord_channel_names_in_management_rows()
+    {
+        WriteAllChannelConfig();
+        WriteAllChannelSecrets();
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedDiscordChannel("123456789", "netclaw", "Stannard Labs")],
+                [])
+        };
+        using var vm = CreateViewModel(discordProbe: discordProbe);
+
+        vm.Save();
+        vm.OpenAdapterManagement(ChannelType.Discord);
+
+        var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "123456789");
+        Assert.Equal("Stannard Labs / #netclaw", row.DisplayName);
     }
 
     [Fact]
