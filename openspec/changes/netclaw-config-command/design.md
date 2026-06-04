@@ -138,6 +138,29 @@ placeholder shell renders.
 Leaf editors get substantive round-trip and smoke coverage. Routed handoffs
 get shallow routing coverage only.
 
+### D11. Inline config editors autosave completed actions through one shared contract
+
+Inline config editors use a shared autosave interaction component instead of
+page-specific save buttons or one-off status text. The standard behavior is:
+
+- `Esc` backs out or cancels incomplete input; it never saves.
+- Completed actions save immediately after validation.
+- Text and multi-field input becomes a completed action only when accepted
+  with `Enter` / Apply.
+- Toggles, audience changes, enable/disable, add/remove, and confirmed reset
+  actions are completed actions.
+- Structural validation failures block writes and leave disk unchanged.
+- Runtime/probe failures may offer `Save anyway` only after the structurally
+  valid draft is known.
+- Each write is section-preserving and field-scoped to the editor's ownership
+  boundary.
+
+Alternative considered: explicit `[s] Save` staged editing. Rejected because
+the existing config surfaces behave like action editors, and mixing staged
+edits with navigation caused operators to lose unrelated channel configuration.
+The safer user model is “doing the thing saves the thing,” with `Esc` reserved
+for navigation/cancel.
+
 ## Risks / Trade-offs
 
 - The domain-oriented IA introduces more navigation depth.
@@ -151,6 +174,9 @@ get shallow routing coverage only.
 - Exposure-mode auto-pairing can fail on inconsistent state.
   Mitigation: fail loudly and route to doctor/docs/#875 rather than doing
   inline repair.
+- Autosave can surprise operators if every keypress writes.
+  Mitigation: only completed actions autosave; incomplete text entry remains
+  an in-memory draft until accepted with `Enter` / Apply.
 
 ## Migration Plan
 

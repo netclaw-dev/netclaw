@@ -190,6 +190,83 @@ Runtime/probe failures MAY present `Save anyway`.
 - **THEN** the editor may show `Save anyway`
 - **AND** the operator can choose to persist the structurally valid config
 
+### Requirement: Inline config editors autosave completed actions consistently
+
+Every inline `netclaw config` leaf editor SHALL use a shared autosave
+interaction contract. The UI SHALL NOT require an explicit save key for
+ordinary config edits.
+
+Completed actions SHALL save immediately after validation. Completed actions
+include accepted text or multi-field forms, toggles, audience changes,
+enable/disable actions, add/remove actions, and confirmed reset actions.
+Incomplete text input SHALL remain an in-memory draft until accepted with
+`Enter` or an equivalent Apply action.
+
+`Esc` SHALL only navigate back or cancel incomplete input. It SHALL NOT save
+pending edits and SHALL NOT be required to complete a save.
+
+All autosaves SHALL be atomic: validation SHALL complete before files are
+written, and failed validation SHALL leave persisted config and secrets
+unchanged.
+
+#### Scenario: Completed toggle autosaves immediately
+
+- **GIVEN** an inline config leaf editor contains a boolean toggle
+- **WHEN** the operator toggles the setting
+- **THEN** the editor validates the resulting state
+- **AND** persists the change immediately when validation succeeds
+- **AND** shows a saved status without asking the operator to press a save key
+
+#### Scenario: Esc cancels draft text without persisting
+
+- **GIVEN** an inline config leaf editor contains a text field
+- **AND** the operator has typed a draft value but has not accepted it
+- **WHEN** the operator presses `Esc`
+- **THEN** the editor navigates back or cancels the draft
+- **AND** the persisted config is unchanged
+
+#### Scenario: Invalid completed action writes nothing
+
+- **GIVEN** an inline config leaf editor contains a structurally invalid draft
+- **WHEN** the operator accepts the action
+- **THEN** validation fails
+- **AND** no config or secrets file is modified
+- **AND** the UI shows the validation error
+
+### Requirement: Inline config persistence is section-preserving
+
+Inline config leaf editors SHALL persist only the sections, providers,
+fields, and sidecar files they own. Saving one provider or sub-area SHALL NOT
+delete or reset unrelated providers, inactive values, secrets, audiences, or
+sidecar files.
+
+Disable actions SHALL preserve dormant configuration and secrets while writing
+only the runtime-enabled flag. Destructive removal SHALL require an explicit
+reset/confirm action and SHALL be scoped to the confirmed target.
+
+#### Scenario: Disabling one channel provider preserves its dormant setup
+
+- **GIVEN** Slack has saved channels, audiences, allowed users, and secrets
+- **WHEN** the operator disables Slack from the Channels config area
+- **THEN** Slack `Enabled` is persisted as `false`
+- **AND** Slack channels, audiences, allowed users, and secrets remain
+  persisted
+
+#### Scenario: Saving one channel provider does not wipe another provider
+
+- **GIVEN** Slack and Discord both have saved channel configuration
+- **WHEN** the operator adds a Discord channel and the action autosaves
+- **THEN** the Discord addition is persisted
+- **AND** the saved Slack configuration remains present and unchanged except
+  for any explicit Slack action the operator completed
+
+#### Scenario: Reset is the only provider-destructive action
+
+- **GIVEN** a provider has saved channel configuration and secrets
+- **WHEN** the operator confirms reset for that provider
+- **THEN** only that provider's config and secrets are removed
+- **AND** other providers remain unchanged
+
 ### Requirement: Coverage follows leaf ownership
 
 Leaf editors SHALL receive substantive round-trip and smoke coverage.

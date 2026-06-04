@@ -81,6 +81,13 @@ Source PRDs: `PRD-004-cli-onboarding-and-config.md`,
   it edits before save, including local references and external probes when
   relevant. Structurally invalid config remains non-overridable; runtime or
   probe failures MAY offer `Save anyway`.
+- Inline leaf editors use one shared autosave interaction contract: completed
+  actions persist immediately after validation, `Esc` only navigates or
+  cancels incomplete input, and there is no explicit save key for ordinary
+  config edits.
+- Autosaves are atomic and section-preserving. An editor writes only the
+  fields it owns; disabling a provider or feature preserves dormant values,
+  while destructive removal requires an explicit reset/confirm action.
 - Round-trip preservation and test assertions are semantic, not
   byte-identical.
 - Leaf editors receive substantive round-trip and smoke coverage. Routed
@@ -88,7 +95,8 @@ Source PRDs: `PRD-004-cli-onboarding-and-config.md`,
 
 **In scope (MVP):** `netclaw config`, domain-oriented dashboard IA, routed
 handoffs for providers/models, leaf editors for the in-scope areas above,
-generalized validation behavior, exposure-mode dialogs within the existing
+generalized validation behavior, shared autosave interaction behavior,
+section-preserving persistence, exposure-mode dialogs within the existing
 config shape, missing-install refusal, and coverage aligned to leaf-vs-
 routed responsibilities.
 
@@ -124,6 +132,7 @@ sections.
 - Exposure-mode editing and validation.
 - Test surface for leaf editors, routing coverage, and generalized save
   validation.
+- Shared config TUI interaction component for autosaving completed actions.
 
 **Security and operational impact:**
 
@@ -135,3 +144,7 @@ sections.
 - Validation behavior is generalized beyond issue `#1151`; structural
   invalidity still blocks writes, while runtime reachability failures can
   be overridden with `Save anyway`.
+- Navigation no longer implies persistence. Completed config actions save
+  immediately, while `Esc` remains safe navigation/cancel behavior.
+- Section-preserving writes prevent one editor or provider action from
+  deleting unrelated persisted configuration.
