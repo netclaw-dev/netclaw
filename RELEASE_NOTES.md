@@ -12,9 +12,9 @@ This is a prerelease on the beta channel. Stable installs are unaffected and rem
 
 **Bug Fixes**
 
-* **Container no longer crash-loops on a read-only `/tools` mount** — the bind-mount ownership repair added in 0.23.0-beta.1 (#1281) ran a recursive `chown` over `/tools` and aborted fatally when the mount was read-only, crash-looping the container. `/tools` is a PATH directory the agent only reads from, so the entrypoint now treats it as best-effort: it never recursively chowns it and never fails when it is read-only or already correctly owned. ([#PRNUM#](https://github.com/netclaw-dev/netclaw/pull/PRNUM#))
+* **Container no longer crash-loops on a read-only `/tools` mount** — the bind-mount ownership repair added in 0.23.0-beta.1 (#1281) ran a recursive `chown` over `/tools` and aborted fatally when the mount was read-only, crash-looping the container. `/tools` is a PATH directory the agent only reads from, so the entrypoint now treats it as best-effort: it never recursively chowns it and never fails when it is read-only or already correctly owned. ([#1321](https://github.com/netclaw-dev/netclaw/pull/1321))
 
-* **Non-root agent can install tools at runtime again** — because the daemon runs as the unprivileged `netclaw` user it cannot write system `PATH` directories or `apt-get` without root. The image now ships user-writable, on-`PATH` install locations (`~/.local/bin`, `~/.dotnet`, `~/.dotnet/tools`, and a mounted `/tools/bin`) so a runtime-installed `dotnet`, `pip --user` tool, or .NET global tool resolves as a bare command in the agent's non-interactive shell. ([#PRNUM#](https://github.com/netclaw-dev/netclaw/pull/PRNUM#))
+* **Non-root agent can install tools at runtime again** — because the daemon runs as the unprivileged `netclaw` user it cannot write system `PATH` directories or `apt-get` without root. The image now ships user-writable, on-`PATH` install locations (`~/.local/bin`, `~/.dotnet`, `~/.dotnet/tools`, and a mounted `/tools/bin`) so a runtime-installed `dotnet`, `pip --user` tool, or .NET global tool resolves as a bare command in the agent's non-interactive shell. ([#1321](https://github.com/netclaw-dev/netclaw/pull/1321))
 
 #### 0.23.0-beta.1 2026-06-03 ####
 
