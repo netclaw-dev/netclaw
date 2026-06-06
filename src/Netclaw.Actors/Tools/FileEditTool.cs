@@ -58,8 +58,8 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         // Full-write mode: Content is supplied without OldString
         if (args.Content is not null)
         {
-            if (args.OldString is not null)
-                return "Error: 'Content' and 'OldString' are mutually exclusive. " +
+            if (args.OldString is not null || args.NewString is not null || args.ReplaceAll is not null)
+                return "Error: 'Content' and 'OldString'/'NewString'/'ReplaceAll' are mutually exclusive. " +
                        "Use Content for a full file write, or OldString/NewString for targeted replacement.";
 
             return await WriteFileAsync(args.Path, args.Content, context, ct);

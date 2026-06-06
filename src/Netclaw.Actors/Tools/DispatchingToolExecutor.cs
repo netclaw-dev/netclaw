@@ -149,12 +149,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                     yield return new ToolCompletedUpdate(modelResult);
                     break;
                 case ToolActivityUpdate { OutputChunk: not null } activity:
-                    yield return activity with
-                    {
-                        OutputChunk = tool.SuppressOutputRedaction
-                            ? activity.OutputChunk
-                            : SecretOutputRedactor.Redact(activity.OutputChunk)
-                    };
+                    yield return activity with { OutputChunk = SecretOutputRedactor.Redact(activity.OutputChunk) };
                     break;
                 default:
                     yield return update;

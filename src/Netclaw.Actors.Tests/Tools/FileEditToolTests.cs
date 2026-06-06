@@ -228,6 +228,30 @@ public class FileEditToolTests : IDisposable
         Assert.False(File.Exists(filePath));
     }
 
+    [Fact]
+    public async Task Content_and_NewString_are_mutually_exclusive()
+    {
+        var filePath = Path.Combine(_dir.Path, "conflict2.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create(
+            "Path", filePath, "Content", "full", "NewString", "new"), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("mutually exclusive", result);
+        Assert.False(File.Exists(filePath));
+    }
+
+    [Fact]
+    public async Task Content_and_ReplaceAll_are_mutually_exclusive()
+    {
+        var filePath = Path.Combine(_dir.Path, "conflict3.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create(
+            "Path", filePath, "Content", "full", "ReplaceAll", true), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("mutually exclusive", result);
+        Assert.False(File.Exists(filePath));
+    }
+
     private ToolExecutionContext CreatePersonalContext()
         => new("signalr/thread-1", _sessionDir)
         {

@@ -10,7 +10,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Bounds an already-redacted tool result to the inline budget <c>N</c>
+/// Bounds a tool result to the inline budget <c>N</c>
 /// (<see cref="ToolExecutionContext.MaxInlineToolResultChars"/>) and, when it
 /// exceeds <c>N</c>, spills the full result to
 /// <c>{SessionDirectory}/tool-calls/{toolCallId}.log</c> and steers the model to
@@ -19,12 +19,11 @@ namespace Netclaw.Actors.Tools;
 /// <remarks>
 /// Called from <c>DispatchingToolExecutor</c> for <i>every</i> tool, right after
 /// the central redaction — so bounding + spill happen once, uniformly, for the
-/// main session and sub-agents alike (both funnel through the dispatcher), and
-/// the spilled file is redacted for free. Tools only bound their own <i>capture</i>
-/// for memory safety; they do not window or spill. The input here is already
-/// redacted, so this method does NOT redact again. <c>file_read</c> keeps its
-/// result at or under <c>N</c> and steers to the original file, so it never spills
-/// here (its content is its own backing store).
+/// main session and sub-agents alike (both funnel through the dispatcher). Tools
+/// only bound their own <i>capture</i> for memory safety; they do not window or
+/// spill. The two-param overload accepts separate model-facing and spill content
+/// so that tools with <c>SuppressOutputRedaction</c> can return raw results to the
+/// model while still writing redacted content to the spill file on disk.
 /// </remarks>
 internal static class ToolOutputSpill
 {
