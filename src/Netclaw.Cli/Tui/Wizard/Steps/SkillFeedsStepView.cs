@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -23,8 +24,6 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class SkillFeedsStepView : IWizardStepView
 {
-    private static readonly string[] SpinnerFrames = ["⠋", "⠙", "⠸", "⠴", "⠦", "⠇"];
-
     private SelectionListNode<string>? _connectList;
     private TextInputNode? _urlInput;
     private TextInputNode? _nameInput;
@@ -34,7 +33,6 @@ public sealed class SkillFeedsStepView : IWizardStepView
     private TextInputBaseNode? _lastFocusedInput;
     private StepViewCallbacks? _callbacks;
     private SkillFeedsStepViewModel? _vm;
-    private int _spinnerTick;
 
     public string StepId => WizardStepIds.SkillFeeds;
 
@@ -143,10 +141,8 @@ public sealed class SkillFeedsStepView : IWizardStepView
 
         if (_vm!.IsProbing)
         {
-            var frame = SpinnerFrames[_spinnerTick++ % SpinnerFrames.Length];
             return Layouts.Vertical()
-                .WithChild(new TextNode($"  {frame} Discovering skills at {_vm.CurrentUrl} ...")
-                    .WithForeground(Color.Cyan));
+                .WithChild(SpinnerViews.Labeled($"Discovering skills at {_vm.CurrentUrl} ...", Color.Cyan));
         }
 
         if (_vm.LastProbeError is not null)
@@ -321,6 +317,5 @@ public sealed class SkillFeedsStepView : IWizardStepView
         _nameInput = null;
         _errorActionList = null;
         _addAnotherList = null;
-        _spinnerTick = 0;
     }
 }

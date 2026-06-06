@@ -59,7 +59,6 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
-    public ReactiveProperty<int> SpinnerTick { get; } = new(0);
 
     public bool IsApplicable(WizardContext context) => true;
 
@@ -213,18 +212,16 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         ProbeResult.Value = result;
     }
 
+    // Drives only the cosmetic "(Ns)" elapsed counter now that the spinner glyph
+    // self-animates via SpinnerNode; a 1 Hz tick is all that's needed.
     private async Task RunProbeTimerAsync(CancellationToken ct)
     {
-        var tickCount = 0;
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(120, ct); }
+            try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { return; }
 
-            tickCount++;
-            SpinnerTick.Value = tickCount;
-            if (tickCount % 8 == 0)
-                ProbeElapsedSeconds.Value++;
+            ProbeElapsedSeconds.Value++;
         }
     }
 
@@ -388,6 +385,5 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
-        SpinnerTick.Dispose();
     }
 }

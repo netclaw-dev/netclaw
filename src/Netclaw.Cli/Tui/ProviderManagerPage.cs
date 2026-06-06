@@ -24,7 +24,6 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 {
-    private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
     private readonly IClipboardService? _clipboardService;
 
     public ProviderManagerPage(IClipboardService? clipboardService = null)
@@ -108,22 +107,9 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             .Subscribe(_ => _contentNode.Invalidate())
             .DisposeWith(Subscriptions);
 
-        // Animate spinners during loading, validation, and OAuth flows
-        ViewModel.SpinnerTick
-            .Subscribe(_ =>
-            {
-                _contentNode.Invalidate();
-                ViewModel.RequestRedraw();
-            })
-            .DisposeWith(Subscriptions);
-
-        ViewModel.EagerProbeElapsedSeconds
-            .Subscribe(_ =>
-            {
-                _contentNode.Invalidate();
-                ViewModel.RequestRedraw();
-            })
-            .DisposeWith(Subscriptions);
+        // Spinners during loading/validation/OAuth self-animate via SpinnerNode
+        // (see SpinnerViews) and propagate their own redraws up the layout tree —
+        // no per-surface tick subscription required.
 
         return _contentNode;
     }
@@ -184,30 +170,25 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private ILayoutNode BuildLoadingView()
     {
-        var elapsed = ViewModel.EagerProbeElapsedSeconds.Value;
-        var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
-
         var children = Layouts.Vertical();
-        children.WithChild(new TextNode($"  {frame} Checking configured providers...")
-            .WithForeground(Color.Yellow));
+        children.WithChild(SpinnerViews.Labeled("Checking configured providers...", Color.Yellow));
         children.WithChild(new TextNode("").Height(1));
 
         foreach (var item in ViewModel.DisplayProviders)
         {
             if (!item.IsConfigured) continue;
 
-            var (statusChar, color) = item.Health switch
-            {
-                ProviderHealthStatus.Healthy => ("\u2713", Color.Green),
-                ProviderHealthStatus.Unhealthy => ("\u26a0", Color.Red),
-                _ => (SpinnerFrames[elapsed % SpinnerFrames.Length], Color.Yellow)
-            };
-
             var label = item.ConfiguredName is not null
                 ? $"{item.ConfiguredName} ({item.DisplayName})"
                 : item.DisplayName;
-            children.WithChild(new TextNode($"  {statusChar} {label}")
-                .WithForeground(color));
+
+            // Still-probing providers get a live spinner; completed ones a glyph.
+            children.WithChild(item.Health switch
+            {
+                ProviderHealthStatus.Healthy => (ILayoutNode)new TextNode($"  \u2713 {label}").WithForeground(Color.Green),
+                ProviderHealthStatus.Unhealthy => new TextNode($"  \u26a0 {label}").WithForeground(Color.Red),
+                _ => SpinnerViews.Labeled(label, Color.Yellow)
+            });
         }
 
         return children;
@@ -480,9 +461,6 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             case DeviceFlowState.WaitingForUser:
             case DeviceFlowState.Polling:
             {
-                var elapsed = ViewModel.ProbeElapsedSeconds.Value;
-                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
-
                 // Prefer verification_uri_complete (RFC 8628 §3.3.1, with user
                 // code embedded) so [O] opens a one-click-complete URL.
                 var displayUri = ViewModel.OAuth.VerificationUriComplete ?? ViewModel.OAuth.VerificationUri;
@@ -516,8 +494,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     children.WithChild(new TextNode("").Height(1));
                 }
 
-                children.WithChild(new TextNode($"  {frame} Waiting for authorization...")
-                    .WithForeground(Color.Yellow));
+                children.WithChild(SpinnerViews.Labeled("Waiting for authorization...", Color.Yellow));
                 break;
             }
 
@@ -553,8 +530,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             ViewModel.OAuth.FlowState.Value,
             ViewModel.OAuth.BrowserOpenFailed,
             ViewModel.OAuth.VerificationUri,
-            ViewModel.SpinnerTick.Value,
-            ViewModel.ProbeElapsedSeconds.Value,
+            ViewModel.ProbeElapsedSeconds,
             ViewModel.OAuth.ErrorMessage,
             _clipboardService,
             ref _redirectUrlInput,
@@ -574,15 +550,13 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
 
     private ILayoutNode BuildValidatingView()
     {
-        var elapsed = ViewModel.ProbeElapsedSeconds.Value;
-        var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
         var result = ViewModel.ProbeResult.Value;
 
         if (ViewModel.IsProbing.Value)
         {
             return Layouts.Vertical()
-                .WithChild(new TextNode($"  {frame} Validating connection... ({elapsed}s)")
-                    .WithForeground(Color.Yellow));
+                .WithChild(SpinnerViews.WithElapsed(
+                    "Validating connection...", Color.Yellow, ViewModel.ProbeElapsedSeconds));
         }
 
         if (result is { Success: true })

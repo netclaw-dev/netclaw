@@ -143,8 +143,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // from cancelled calls are ignored when their CallId doesn't match.
     private long _activeCallId;
 
-    // Tracks whether any content was streamed this call — used to gate transient retry logic
-    // (mid-stream failures can't be retried because partial output was already emitted)
+    // Tracks whether any content was streamed this call — selects the watchdog timeout
+    // (the generous prefill budget before the first token vs the tighter inter-delta
+    // budget after).
     private bool _anyContentStreamed;
 
     // Per-turn diagnostic correlation (ephemeral)
@@ -160,10 +161,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Guards against infinite compaction loops: if a post-compaction buffer drain
     // overflows again, fail the turn. Reset at the start of each new user turn.
     private int _compactionOverflowRetryCount;
-
-    // Per-turn retry counter for transient streaming failures (5xx, 429)
-    private int _streamingRetryAttempt;
-    private static readonly object StreamingRetryTimerKey = new();
 
     // Skill registry for slash-command dispatch
     private readonly Skills.SkillRegistry? _skillRegistry;
@@ -603,33 +600,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
                 // Use the configured context window as the token count estimate since
                 // the provider rejected the request without returning usage stats.
-                Timers.Cancel(StreamingRetryTimerKey);
                 Self.Tell(new CompactionTriggered(_model.ContextWindowTokens));
                 TransitionTo(SessionPhase.Compacting);
                 return;
             }
 
-            // Pre-stream transient failure: retry with backoff if no data was streamed yet.
-            // IsTransientStreamingError handles ProviderException (which wraps HTTP status codes)
-            // while RetryPolicy only provides the attempt limit and backoff delay.
-            if (!_anyContentStreamed && IsTransientStreamingError(msg.Cause))
-            {
-                var policy = _config.Tuning.StreamingRetryPolicy;
-                if (_streamingRetryAttempt < policy.MaxRetries)
-                {
-                    var delay = policy.GetDelay(_streamingRetryAttempt);
-                    _streamingRetryAttempt++;
-                    TurnLog().Warning(msg.Cause,
-                        "turn_llm_transient_failure — retrying in {DelayMs:F0}ms (attempt {Attempt}/{Max})",
-                        delay.TotalMilliseconds, _streamingRetryAttempt, policy.MaxRetries);
-                    Timers.StartSingleTimer(
-                        StreamingRetryTimerKey,
-                        new RetryLlmCallAfterBackoff(_streamingRetryAttempt),
-                        delay);
-                    return; // Stay in Processing, watchdog is already stopped
-                }
-            }
-
+            // Transient-failure retry is owned entirely by the transport
+            // (RetryingChatClient, pre-first-chunk) and is already exhausted by the time
+            // the failure reaches here, so a failed turn is terminal.
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
             // Evict discovered tools to prevent a poisoned tool set from cascading
@@ -640,12 +618,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
             FailCurrentTurn(errorMessage, msg.Cause, category);
-        });
-
-        Command<RetryLlmCallAfterBackoff>(msg =>
-        {
-            TurnLog().Info("turn_streaming_retry attempt={Attempt}", msg.Attempt);
-            FireLlmCall();
         });
 
         Command<ProcessingWatchdogExpired>(msg =>
@@ -1369,7 +1341,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (resumeToolLoop || hadBufferedMessages)
         {
-            _streamingRetryAttempt = 0;
             FireLlmCall();
             TransitionTo(SessionPhase.Processing);
         }
@@ -1641,9 +1612,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 new(Microsoft.Extensions.AI.ChatRole.User,
                     CompactionPromptBuilder.BuildMemoryExtractionUserPrompt(history))
             };
-            var extractionResponse = await client.GetResponseAsync(extractionMessages,
-                cancellationToken: cts.Token);
-            var extractedText = extractionResponse.Messages[^1].Text ?? string.Empty;
+            var extractionResult = await StreamingResponseReader.ReadAsync(
+                client, extractionMessages, options: null, cts.Token);
+            var extractedText = extractionResult.Response.Text ?? string.Empty;
             self.Tell(new MemoryExtractionCompleted { ExtractedMemories = extractedText });
         }
         catch (Exception ex)
@@ -2007,7 +1978,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _buffer.Clear();
             _recallManager.ResetForNewTurn(); // New user input — resolve recall fresh
-            _streamingRetryAttempt = 0;
             FireLlmCall();
             // Already in Processing — no transition needed, just fired a new LLM call
             return;
@@ -2213,7 +2183,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _state = _state.AddUserMessage(userContent, mediaRefs.Count > 0 ? mediaRefs : null);
         TryReplyAck();
         _recallManager.ResetForNewTurn();
-        _streamingRetryAttempt = 0;
         _compactionOverflowRetryCount = 0;
         FireInitialTurnLlmCall(executableUserContent);
         TransitionTo(SessionPhase.Processing);
@@ -2480,13 +2449,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     internal static bool IsContextOverflowError(Exception? ex)
         => LlmFailureClassifier.IsContextOverflow(ex);
-
-    /// <summary>
-    /// Detect transient streaming errors that are safe to retry when no data
-    /// has been streamed yet (5xx server errors, 429 rate limits, network failures).
-    /// </summary>
-    internal static bool IsTransientStreamingError(Exception? ex)
-        => LlmFailureClassifier.IsTransientStreaming(ex);
 
     private string GetSessionDirectory() =>
         SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath);
@@ -4153,7 +4115,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _pendingToolInteractions.Clear();
         _resolvedToolApprovals.Clear();
         ClearApprovalTurnState();
-        Timers.Cancel(StreamingRetryTimerKey);
         _state = _state.AddErrorReply(errorMessage);
 
         var correlationId = Guid.NewGuid();

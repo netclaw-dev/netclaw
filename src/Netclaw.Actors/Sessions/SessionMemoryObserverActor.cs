@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Serialization;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 
@@ -354,8 +355,8 @@ public sealed class SessionMemoryObserverActor : ReceivePersistentActor
                     sessionId, turnCount, transcript, existingProposals))
             };
 
-            var response = await client.GetResponseAsync(messages, cancellationToken: cts.Token);
-            var text = response.Messages[^1].Text ?? string.Empty;
+            var response = (await StreamingResponseReader.ReadAsync(client, messages, options: null, cts.Token)).Response;
+            var text = response.Text ?? string.Empty;
 
             inputTokens = response.Usage?.InputTokenCount;
             outputTokens = response.Usage?.OutputTokenCount;

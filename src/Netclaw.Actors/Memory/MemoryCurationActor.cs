@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using SessionId = Netclaw.Actors.Protocol.SessionId;
 
@@ -315,8 +316,8 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 MaxOutputTokens = 512
             };
 
-            var response = await llmClient.GetResponseAsync(messages, options, cts.Token);
-            var responseText = response.Text?.Trim();
+            var result = await StreamingResponseReader.ReadAsync(llmClient, messages, options, cts.Token);
+            var responseText = result.Response.Text?.Trim();
             var decision = string.IsNullOrWhiteSpace(responseText)
                 ? null
                 : CurationPromptBuilder.ParseResponse(responseText);

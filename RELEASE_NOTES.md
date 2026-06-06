@@ -1,3 +1,23 @@
+#### 0.23.0-beta.4 2026-06-04 ####
+
+Netclaw v0.23.0-beta.4 — streaming-native chat stack, composable routing, and spinner standardization
+
+This is a prerelease on the beta channel. Stable installs are unaffected and remain on 0.22.1; only opt-in beta testers are offered this build.
+
+**Try the beta**
+
+* Linux / macOS: `curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta`
+* Windows: download `install.ps1`, then `./install.ps1 -Channel beta`
+* Docker: `docker pull ghcr.io/netclaw-dev/netclaw:beta`
+
+**Features**
+
+* **Streaming-native chat-client stack with composable routing** — the `IChatClient` stack has been redesigned so the streaming-vs-non-streaming transport distinction no longer leaks into callers. Netclaw now issues only streaming requests across all 8 providers, eliminating the OpenAI Codex `400 "Stream must be set to true"` error and preventing reasoning content drops on some providers. Resilience and observability are compositional via `Microsoft.Extensions.AI.ChatClientBuilder` — each (provider, model) pipeline is assembled as `Logging → Retry → VendorOptions → raw`. A `RoutingChatClient` walks ordered candidate lists for failover, and `LoggingChatClient` is now stateless with session-correlated log tags (`SessionId`). The transport-level retry policy is configurable via `Session:Tuning:StreamingRetryPolicy`, replacing the previous overlapping actor-level retry. ([#1313](https://github.com/netclaw-dev/netclaw/pull/1313))
+
+**Bug Fixes**
+
+* **Standardized self-animating spinner across probe surfaces** — replaced five hand-rolled, drifted probe/validation spinners with Termina's shared `SpinnerNode` helper. Fixes the frozen ModelManager spinner, the ~1fps crawl on provider validation/probe spinners, and inconsistent animation cadence. Views now just drop in the spinner node — no per-surface tick field or hand-wired redraw subscription. ([#1312](https://github.com/netclaw-dev/netclaw/pull/1312), [#1327](https://github.com/netclaw-dev/netclaw/pull/1327))
+
 #### 0.23.0-beta.3 2026-06-04 ####
 
 Netclaw v0.23.0-beta.3 — beta channel fix release for non-root container operations

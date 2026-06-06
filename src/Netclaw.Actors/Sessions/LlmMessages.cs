@@ -220,9 +220,3 @@ internal sealed record PassivationTimeout : INoSerializationVerificationNeeded;
 /// signal. See <c>LlmSessionActor.CompletePassivation</c>.
 /// </summary>
 internal sealed record PassivationFinalStop : INoSerializationVerificationNeeded;
-
-/// <summary>
-/// Timer-fired message that triggers an LLM call retry after exponential backoff.
-/// Carries the attempt number for observability logging.
-/// </summary>
-internal sealed record RetryLlmCallAfterBackoff(int Attempt) : INoSerializationVerificationNeeded;

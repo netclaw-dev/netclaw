@@ -56,6 +56,23 @@ internal readonly record struct StreamReadResult(
 /// </summary>
 internal static class StreamingResponseReader
 {
+    private static readonly Action<ChatResponseUpdate, StreamUpdateClassification, StreamDiagnostics> NoOp =
+        static (_, _, _) => { };
+
+    /// <summary>
+    /// Convenience overload for callers that only want the aggregated response with
+    /// no per-update dispatch — title generation, memory distillation, compaction
+    /// observation, memory curation. Streams under the hood (the only transport
+    /// Netclaw issues) and aggregates with the same empty-response fallback, so the
+    /// caller can read <c>result.Response.Text</c> without an empty-Messages guard.
+    /// </summary>
+    public static Task<StreamReadResult> ReadAsync(
+        IChatClient client,
+        IEnumerable<AiChatMessage> messages,
+        ChatOptions? options,
+        CancellationToken ct)
+        => ReadAsync(client, messages, options, NoOp, ct);
+
     public static async Task<StreamReadResult> ReadAsync(
         IChatClient client,
         IEnumerable<AiChatMessage> messages,
