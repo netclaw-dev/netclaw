@@ -14,15 +14,15 @@
 
 ## 3. Single media-store seam (both writers, no cache, no config)
 
-- [ ] 3.1 Normalize images inside `SessionMediaStore.WriteDataContent` (chat attachments + persisted message media); non-image media passes through unchanged. Store the normalized artifact only; build the `SerializableMediaReference` from the written bytes' length/MIME (PNG→JPEG may change the MIME).
-- [ ] 3.2 Normalize images inside `SessionMediaStore.CopyFile` (the `file_read` model-input handoff via `MaterializeModelInputFiles`); non-image media copies through unchanged.
-- [ ] 3.3 Confirm `ChatMessageConverter.ToAiMessage` needs no change — it reads the already-bounded persisted artifact. (No per-turn cache; the media store is the dedup.)
-- [ ] 3.4 Seam tests: write/copy an oversized image through each writer, read the stored artifact back, assert bounded + correct MIME; assert non-image media (e.g. a PDF) is byte-unchanged.
+- [x] 3.1 Normalize images inside `SessionMediaStore.WriteDataContent` (chat attachments + persisted message media); non-image media passes through unchanged. Store the normalized artifact only; build the `SerializableMediaReference` from the written bytes' length/MIME (PNG→JPEG may change the MIME).
+- [x] 3.2 Normalize images inside `SessionMediaStore.CopyFile` (the `file_read` model-input handoff via `MaterializeModelInputFiles`); non-image media copies through unchanged. `CopyFile` is now nullable; the caller skips a drop and releases its batch reservation.
+- [x] 3.3 Confirm `ChatMessageConverter.ToAiMessage` needs no change — it reads the already-bounded persisted artifact. (No per-turn cache; the media store is the dedup.)
+- [x] 3.4 Seam tests (`SessionMediaStoreImageTests`): oversized chat/file_read image bounded + correct MIME; non-image (audio) byte-unchanged passthrough; small image passthrough; undecodable image dropped + nothing written. Also fixed existing fake-fixture tests via `TestImages` (full Actors suite green, 2200).
 
 ## 4. Fail-loud drop
 
-- [ ] 4.1 On `Dropped` at the media-store write, do not persist a media reference; surface a visible `[image omitted: <reason>]` note on the owning message/handoff. No silent fallback to raw bytes.
-- [ ] 4.2 Tests: undecodable/oversized image at write → note + no media reference + raw bytes never persisted; bounded image → stored artifact within budget + correct MIME.
+- [~] 4.1 No media reference is persisted on a drop (both writers — done). file_read drops surface via the existing model-input handoff warning (`RequestedCount > MediaReferences.Count`). REMAINING: the chat-attachment path (`WriteDataContent` → `ChannelPipeline`/`ChatMessageConverter`) currently drops silently (returns null) — still needs a visible `[image omitted: <reason>]` note on the owning message.
+- [~] 4.2 Drop + nothing-written + bounded-MIME are covered by `SessionMediaStoreImageTests`. REMAINING: a test asserting the chat-path `[image omitted]` note once 4.1 surfaces it.
 
 ## 5. Quality gates + docs
 
