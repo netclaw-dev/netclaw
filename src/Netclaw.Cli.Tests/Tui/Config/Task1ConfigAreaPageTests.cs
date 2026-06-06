@@ -79,6 +79,45 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_local_path_screen_renders_visible_input_box()
+    {
+        var app = CreateSkillSourcesApp(out var input, out _, out var terminal);
+
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+        Assert.True(screen.Contains("Folder path", StringComparison.Ordinal),
+            $"Expected folder path input label in terminal output. Screen:\n{terminal}");
+        Assert.True(screen.Contains("Type here...", StringComparison.Ordinal),
+            $"Expected visible empty input placeholder in terminal output. Screen:\n{terminal}");
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_url_screen_explains_skill_server_project()
+    {
+        var app = CreateSkillSourcesApp(out var input, out _, out var terminal);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+        Assert.True(screen.Contains("Server URL", StringComparison.Ordinal),
+            $"Expected server URL input label in terminal output. Screen:\n{terminal}");
+        Assert.True(screen.Contains("Type here...", StringComparison.Ordinal),
+            $"Expected visible empty input placeholder in terminal output. Screen:\n{terminal}");
+        Assert.True(screen.Contains("https://github.com/netclaw-dev/skill-server", StringComparison.Ordinal),
+            $"Expected skill-server project callout in terminal output. Screen:\n{terminal}");
+    }
+
+    [Fact]
     public async Task Telemetry_alerting_page_accepts_typed_and_pasted_values()
     {
         var app = CreateTelemetryAlertingApp(out var input, out var vm);
@@ -144,8 +183,11 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     private TerminaApplication CreateSkillSourcesApp(out VirtualInputSource input, out SkillSourcesConfigViewModel vm)
+        => CreateSkillSourcesApp(out input, out vm, out _);
+
+    private TerminaApplication CreateSkillSourcesApp(out VirtualInputSource input, out SkillSourcesConfigViewModel vm, out VirtualTerminal terminal)
     {
-        var terminal = new VirtualTerminal(120, 40);
+        terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
         var capturedVm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe());

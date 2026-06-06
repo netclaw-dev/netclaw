@@ -69,7 +69,13 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 "Add a remote skill server.",
                 "Server URL",
                 ViewModel.Draft.Value,
-                "Netclaw probes /.well-known/agent-skills/index.json before save."),
+                "Netclaw probes /.well-known/agent-skills/index.json before save.",
+                "What is a skill server?",
+                [
+                    "A skill server is a Netclaw skill-server instance that publishes",
+                    "agent skills over HTTP for a team or organization.",
+                    "Project: https://github.com/netclaw-dev/skill-server"
+                ]),
             SkillSourcesScreen.AddRemoteAuth => BuildChoice(
                 "How should Netclaw authenticate to this server?",
                 "Choose bearer token only when the server requires it.",
@@ -165,14 +171,45 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         return layout;
     }
 
-    private ILayoutNode BuildTextDraft(string title, string fieldLabel, string value, string hint)
-        => Layouts.Vertical()
+    private ILayoutNode BuildTextDraft(
+        string title,
+        string fieldLabel,
+        string value,
+        string hint,
+        string? calloutTitle = null,
+        IReadOnlyList<string>? calloutLines = null)
+    {
+        var layout = Layouts.Vertical()
             .WithChild(Header($"  {title}"))
             .WithChild(Layouts.Empty().Height(1))
-            .WithChild(Text($"  {fieldLabel}", Color.White))
-            .WithChild(Text($"  {value}", Color.Cyan))
+            .WithChild(BuildDraftInput(fieldLabel, value))
             .WithChild(Layouts.Empty().Height(1))
             .WithChild(Hint($"  {hint}"));
+
+        if (calloutTitle is not null && calloutLines is { Count: > 0 })
+            layout = layout
+                .WithChild(Layouts.Empty().Height(1))
+                .WithChild(BuildCallout(calloutTitle, calloutLines));
+
+        return layout;
+    }
+
+    private static LayoutNode BuildDraftInput(string fieldLabel, string value)
+    {
+        var display = string.IsNullOrWhiteSpace(value) ? "Type here..." : value;
+        var color = string.IsNullOrWhiteSpace(value) ? Color.BrightBlack : Color.Cyan;
+        return NetclawTuiChrome.BuildPanel(fieldLabel, Text($" {display}", color), Color.Gray)
+            .Height(3);
+    }
+
+    private static ILayoutNode BuildCallout(string title, IReadOnlyList<string> lines)
+    {
+        var content = Layouts.Vertical();
+        foreach (var line in lines)
+            content = content.WithChild(Text($"  {line}", Color.Yellow));
+
+        return NetclawTuiChrome.BuildPanel(title, content, Color.Yellow);
+    }
 
     private ILayoutNode BuildChoice(string title, string hint, IReadOnlyList<string> choices)
     {
