@@ -90,14 +90,24 @@ SHALL be able to add or remove patterns via configuration.
 
 The system SHALL extract verb-chain prefix patterns from shell commands
 using tokenization. The verb chain SHALL consist of non-flag tokens from
-the start of the command until the first flag (`-`), path, or URL
-argument. Extraction is greedy: bare-word operands that are neither flags,
-paths, nor URLs (subcommands, remote names, branch names, refs) SHALL
-remain in the verb chain — the extractor SHALL NOT attempt to distinguish
-subcommands from positional operands. For shell approval units, `&&`,
-`||`, and `;` SHALL split into separate units, while `|` SHALL remain
-inside the current unit. For `bash -c` or `sh -c` wrappers, the inner
-command SHALL be extracted and scanned recursively.
+the start of the command until the first flag (`-`), path, URL, or bare
+integer argument. Extraction is greedy: bare-word operands that are
+neither flags, paths, URLs, nor integers (subcommands, remote names,
+branch names, refs) SHALL remain in the verb chain — the extractor SHALL
+NOT attempt to distinguish subcommands from positional operands.
+
+> **Why integers are excluded:** Bare integers (pure digit sequences like
+> `123`, `8080`, `30`) are never CLI subcommands. They represent
+> call-specific values — ticket IDs, port numbers, timeouts — that vary
+> between invocations of the same verb chain. Baking them into the pattern
+> produces overly-specific approval entries that do not generalize:
+> `freshdesk ticket get 123` vs `freshdesk ticket get 456` would create
+> two unrelated entries, forcing separate approval for each unique value.
+
+For shell approval units, `&&`, `||`, and `;` SHALL split into separate
+units, while `|` SHALL remain inside the current unit. For `bash -c` or
+`sh -c` wrappers, the inner command SHALL be extracted and scanned
+recursively.
 
 When `ShellTokenizer.SplitCompoundCommand` detects bash control-flow
 tokens or unbalanced quotes/brackets, it SHALL return an empty
@@ -120,6 +130,34 @@ chain. Compound commands SHALL produce N entries from one user click on
 - **THEN** the pattern is `git push origin main`
 - **AND** the bare-word operands `origin` and `main` remain in the verb
   chain because greedy extraction does not strip positional operands
+
+#### Scenario: Verb chain strips bare integer positional argument
+
+- **GIVEN** the command `freshdesk ticket get 123`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `freshdesk ticket get`
+- **AND** the bare integer `123` is excluded because it is call-specific
+
+#### Scenario: Verb chain generalizes across different integer values
+
+- **GIVEN** commands `nc host 8080` and `nc host 9090`
+- **WHEN** patterns are extracted for both
+- **THEN** both produce the same pattern `nc host`
+- **AND** approval granted for one integer value covers all values of the same verb chain
+
+#### Scenario: Verb chain terminates at integer (not just skips it)
+
+- **GIVEN** the command `timeout 30 curl http://example.com`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `timeout`
+- **AND** everything after the integer (including wrapped subcommands like `curl`) is dropped from the pattern
+
+#### Scenario: Non-bare numeric tokens are preserved
+
+- **GIVEN** the command `docker run --name test123 --port=8080 -e VAR=1e5`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern includes `test123`, `--port=8080`, and `VAR=1e5`
+- **AND** only pure digit-only tokens are treated as integers
 
 #### Scenario: Verb chain stops at flag
 
