@@ -188,6 +188,57 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Location_detail_row_opens_local_path_editor()
+    {
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        AddLocalFolder(vm, externalDir, "team-skills");
+        MoveToDetailAction(vm, SkillSourceDetailAction.Location);
+        vm.ActivateSelected();
+
+        Assert.Equal(SkillSourcesScreen.ChangeLocation, vm.Screen.Value);
+        Assert.Equal(externalDir, vm.Draft.Value);
+    }
+
+    [Fact]
+    public void Location_detail_row_opens_remote_url_editor()
+    {
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
+        MoveToDetailAction(vm, SkillSourceDetailAction.Location);
+        vm.ActivateSelected();
+
+        Assert.Equal(SkillSourcesScreen.ChangeLocation, vm.Screen.Value);
+        Assert.Equal("https://skills.example.test", vm.Draft.Value);
+    }
+
+    [Fact]
+    public void Local_source_status_warns_when_runtime_scan_reports_issues()
+    {
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        var invalidSkillDir = Path.Combine(externalDir, "broken-skill");
+        Directory.CreateDirectory(invalidSkillDir);
+        File.WriteAllText(Path.Combine(invalidSkillDir, "SKILL.md"), "not frontmatter");
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"ExternalSkills\":{{\"Sources\":[{{\"Name\":\"team-skills\",\"Path\":\"{externalDir.Replace("\\", "\\\\", StringComparison.Ordinal)}\",\"Enabled\":true,\"AllowSymlinks\":false}}]}}}}");
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        var source = Assert.Single(vm.Sources);
+        Assert.Equal(ConfigStatusTone.Warning, source.StatusTone);
+        Assert.Contains("scan warning", source.StatusText, StringComparison.OrdinalIgnoreCase);
+
+        OpenLocalDetail(vm, "team-skills");
+        MoveToDetailAction(vm, SkillSourceDetailAction.Rescan);
+        vm.ActivateSelected();
+
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("scan warning", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Remove_token_explicitly_deletes_feed_api_key()
     {
         var protector = SecretsProtection.CreateProtector(_paths);
@@ -256,6 +307,17 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         var index = vm.InventoryRows
             .Select((row, idx) => (row, idx))
             .Single(entry => entry.row.SourceKind == SkillSourceKind.RemoteSkillServer && entry.row.SourceName == name)
+            .idx;
+        vm.SelectedRow.Value = index;
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+    }
+
+    private static void OpenLocalDetail(SkillSourcesConfigViewModel vm, string name)
+    {
+        var index = vm.InventoryRows
+            .Select((row, idx) => (row, idx))
+            .Single(entry => entry.row.SourceKind == SkillSourceKind.LocalFolder && entry.row.SourceName == name)
             .idx;
         vm.SelectedRow.Value = index;
         vm.ActivateSelected();

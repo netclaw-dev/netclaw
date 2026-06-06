@@ -6,6 +6,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
+using Netclaw.Actors.Skills;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
@@ -134,6 +135,8 @@ internal sealed record SkillSourceDetailRow(
     string Label,
     string Detail,
     ConfigStatusTone Tone);
+
+internal sealed record LocalSkillScanDisplay(int Count, string? Warning);
 
 internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 {
@@ -430,13 +433,21 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             case SkillSourceDetailAction.TestConnection:
                 TestSource(source);
                 break;
+            case SkillSourceDetailAction.Location:
+                if (source.Kind == SkillSourceKind.LocalFolder && source.IsWellKnown)
+                {
+                    SetStatus("Well-known source paths are managed automatically.", ConfigStatusTone.Neutral);
+                    break;
+                }
+
+                BeginChangeLocation(source);
+                break;
             case SkillSourceDetailAction.Rename:
                 _editingAction = SkillSourceDetailAction.Rename;
                 ShowTextScreen(SkillSourcesScreen.RenameSource, source.Name);
                 break;
             case SkillSourceDetailAction.ChangeLocation:
-                _editingAction = SkillSourceDetailAction.ChangeLocation;
-                ShowTextScreen(SkillSourcesScreen.ChangeLocation, source.Location);
+                BeginChangeLocation(source);
                 break;
             case SkillSourceDetailAction.SyncInterval:
                 CycleRemoteSyncInterval(source.Name);
@@ -519,6 +530,12 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     {
         ClearPendingFlow();
         ShowTextScreen(SkillSourcesScreen.AddRemoteUrl, string.Empty);
+    }
+
+    private void BeginChangeLocation(SkillSourceDisplay source)
+    {
+        _editingAction = SkillSourceDetailAction.ChangeLocation;
+        ShowTextScreen(SkillSourcesScreen.ChangeLocation, source.Location);
     }
 
     private void ContinueAddRemoteUrl()
@@ -716,7 +733,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         {
             if (Directory.Exists(source.Location))
             {
-                SetStatus($"Local folder '{source.Name}' is readable ({CountLocalSkills(source.Location)} skills discovered).", ConfigStatusTone.Success);
+                var scan = ScanLocalSkills(source.Location, source.AllowSymlinks);
+                if (scan.Warning is null)
+                {
+                    SetStatus($"Local folder '{source.Name}' is readable ({scan.Count} skills discovered).", ConfigStatusTone.Success);
+                }
+                else
+                {
+                    SetStatus($"Local folder '{source.Name}' scan warning: {scan.Warning}", ConfigStatusTone.Warning);
+                }
             }
             else
             {
@@ -1080,7 +1105,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         {
             var location = ResolveLocalDisplayPath(source);
             var exists = Directory.Exists(location);
-            var count = exists ? CountLocalSkills(location) : 0;
+            var scan = exists ? ScanLocalSkills(location, source.AllowSymlinks) : null;
+            var hasScanWarning = scan?.Warning is not null;
             yield return new SkillSourceDisplay(
                 SkillSourceKind.LocalFolder,
                 source.Name,
@@ -1090,8 +1116,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
                 source.AllowSymlinks,
                 false,
                 DefaultFeedTimeoutSeconds,
-                exists ? $"{count} skill{Plural(count)}" : "missing folder",
-                exists ? ConfigStatusTone.Success : ConfigStatusTone.Warning);
+                exists ? hasScanWarning ? $"scan warning ({scan!.Count} skill{Plural(scan.Count)})" : $"{scan!.Count} skill{Plural(scan.Count)}" : "missing folder",
+                exists && !hasScanWarning ? ConfigStatusTone.Success : ConfigStatusTone.Warning);
         }
 
         foreach (var feed in feeds.Feeds.OrderBy(static f => f.Name, StringComparer.OrdinalIgnoreCase))
@@ -1458,15 +1484,20 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             }).ToArray(),
         };
 
-    private static int CountLocalSkills(string directory)
+    private static LocalSkillScanDisplay ScanLocalSkills(string directory, bool allowSymlinks)
     {
         try
         {
-            return Directory.EnumerateFiles(directory, "SKILL.md", SearchOption.AllDirectories).Count();
+            var result = SkillScanner.Scan(directory, allowSymlinks, strictNameMatch: false);
+            if (result.Issues.Count == 0)
+                return new LocalSkillScanDisplay(result.AcceptedSkills.Count, null);
+
+            var firstIssue = result.Issues[0];
+            return new LocalSkillScanDisplay(result.AcceptedSkills.Count, $"{firstIssue.Kind}: {firstIssue.Message}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
         {
-            return 0;
+            return new LocalSkillScanDisplay(0, ex.Message);
         }
     }
 
