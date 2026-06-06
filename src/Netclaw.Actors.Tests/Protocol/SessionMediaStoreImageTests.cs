@@ -24,7 +24,7 @@ public sealed class SessionMediaStoreImageTests
         using var dir = new TempDir();
         var src = GenerateImage(4000, 3000, SKEncodedImageFormat.Png);
 
-        var reference = SessionMediaStore.WriteDataContent(new DataContent(src, "image/png"), dir.Path);
+        var reference = SessionMediaStore.WriteDataContent(new DataContent(src, "image/png"), dir.Path).Reference;
 
         Assert.NotNull(reference);
         var (w, h) = StoredDims(dir.Path, reference!);
@@ -72,7 +72,7 @@ public sealed class SessionMediaStoreImageTests
         using var dir = new TempDir();
         var src = GenerateImage(500, 400, SKEncodedImageFormat.Png);
 
-        var reference = SessionMediaStore.WriteDataContent(new DataContent(src, "image/png"), dir.Path);
+        var reference = SessionMediaStore.WriteDataContent(new DataContent(src, "image/png"), dir.Path).Reference;
 
         Assert.NotNull(reference);
         Assert.Equal(src, StoredBytes(dir.Path, reference!)); // within caps → not re-encoded
@@ -86,9 +86,10 @@ public sealed class SessionMediaStoreImageTests
         var garbage = new byte[2048];
         new Random(9).NextBytes(garbage);
 
-        var reference = SessionMediaStore.WriteDataContent(new DataContent(garbage, "image/png"), dir.Path);
+        var write = SessionMediaStore.WriteDataContent(new DataContent(garbage, "image/png"), dir.Path);
 
-        Assert.Null(reference); // refused, not persisted, never written raw
+        Assert.Null(write.Reference); // refused, not persisted, never written raw
+        Assert.NotNull(write.DroppedReason); // reason carried so the caller can surface a note
         Assert.Empty(MediaFiles(dir.Path)); // nothing written (media dir not even created)
     }
 

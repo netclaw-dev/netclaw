@@ -365,6 +365,27 @@ public class ChatMessageConverterTests
     }
 
     [Fact]
+    public void FromAiMessage_appends_omitted_note_when_image_is_dropped()
+    {
+        using var tempDir = new TempSessionDir();
+        // Undecodable "image": the egress normalizer drops it. The chat path must
+        // surface a visible note instead of silently losing the attachment.
+        var garbage = new byte[1024];
+        new Random(5).NextBytes(garbage);
+        var ai = new AiChatMessage(AiChatRole.User,
+        [
+            new TextContent("Look at this"),
+            new DataContent(garbage, "image/png")
+        ]);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
+
+        Assert.Empty(msg.MediaReferences); // not persisted, never shipped raw
+        Assert.Contains("Look at this", msg.Content); // original text preserved
+        Assert.Contains("[image omitted:", msg.Content); // omission surfaced
+    }
+
+    [Fact]
     public void ToAiMessage_skips_missing_media_files_gracefully()
     {
         using var tempDir = new TempSessionDir();

@@ -331,9 +331,11 @@ public sealed class SessionPipeline : ISessionPipeline
             var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory);
             foreach (var data in dataContents)
             {
-                var mediaRef = SessionMediaStore.WriteDataContent(data, sessionDir);
-                if (mediaRef is not null)
-                    mediaRefs.Add(mediaRef);
+                var write = SessionMediaStore.WriteDataContent(data, sessionDir);
+                if (write.Reference is not null)
+                    mediaRefs.Add(write.Reference);
+                else if (write.DroppedReason is not null)
+                    content = SessionMediaStore.AppendOmittedImageNote(content, write.DroppedReason);
             }
         }
 

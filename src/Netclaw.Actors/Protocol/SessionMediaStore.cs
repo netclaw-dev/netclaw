@@ -70,24 +70,35 @@ internal static class SessionMediaStore
         return mediaDir;
     }
 
-    public static SerializableMediaReference? WriteDataContent(DataContent data, string sessionDir)
+    public static MediaWriteResult WriteDataContent(DataContent data, string sessionDir)
     {
         var bytes = data.Data.ToArray();
         if (bytes.Length == 0)
-            return null;
+            return MediaWriteResult.Skipped;
 
         var mimeType = new MimeType(data.MediaType);
         if (!TryGetMediaModality(mimeType, out var modality))
-            return null;
+            return MediaWriteResult.Skipped;
 
-        if (NormalizeImage(ref bytes, ref mimeType, modality) == ImageGate.Dropped)
-            return null; // image could not be bounded; caller surfaces the omission
+        var (dropped, reason) = NormalizeImage(ref bytes, ref mimeType, modality);
+        if (dropped)
+            return MediaWriteResult.Drop(reason); // caller surfaces the omission note
 
         var mediaDir = GetOrCreateMediaDirectory(sessionDir);
         var fileName = CreateMediaFileName(mimeType);
         File.WriteAllBytes(Path.Combine(mediaDir, fileName), bytes);
 
-        return CreateReference(fileName, mimeType, modality, bytes.Length);
+        return MediaWriteResult.Written(CreateReference(fileName, mimeType, modality, bytes.Length));
+    }
+
+    /// <summary>
+    /// Appends a visible <c>[image omitted: reason]</c> note to a message's content
+    /// so a dropped image is surfaced to the model rather than vanishing silently.
+    /// </summary>
+    public static string AppendOmittedImageNote(string content, string reason)
+    {
+        var note = $"[image omitted: {reason}]";
+        return string.IsNullOrEmpty(content) ? note : content + "\n" + note;
     }
 
     /// <summary>
@@ -113,7 +124,10 @@ internal static class SessionMediaStore
         }
 
         var bytes = File.ReadAllBytes(sourcePath);
-        if (NormalizeImage(ref bytes, ref mimeType, modality) == ImageGate.Dropped)
+        // file_read drops surface via the model-input handoff warning (the
+        // RequestedCount > MediaReferences.Count gap), so the per-image reason
+        // is not needed here.
+        if (NormalizeImage(ref bytes, ref mimeType, modality).Dropped)
             return null;
 
         var fileName = CreateMediaFileName(mimeType);
@@ -121,25 +135,40 @@ internal static class SessionMediaStore
         return CreateReference(fileName, mimeType, modality, bytes.Length);
     }
 
-    private enum ImageGate { Kept, Dropped }
-
     /// <summary>
     /// Bounds an image in place before it is persisted. Non-image media is left
     /// untouched. On a normalized result the bytes and MIME are replaced with the
-    /// bounded artifact (PNG may become JPEG); on a drop the image is refused.
+    /// bounded artifact (PNG may become JPEG). On a drop, returns the reason so the
+    /// caller can surface a visible omission note instead of silently discarding.
     /// </summary>
-    private static ImageGate NormalizeImage(ref byte[] bytes, ref MimeType mimeType, MediaModality modality)
+    private static (bool Dropped, string? Reason) NormalizeImage(
+        ref byte[] bytes, ref MimeType mimeType, MediaModality modality)
     {
         if (modality != MediaModality.Image)
-            return ImageGate.Kept;
+            return (false, null);
 
         var result = ImageNormalizer.Normalize(bytes, ImageOptions);
         if (result.Outcome == ImageNormalizationOutcome.Dropped)
-            return ImageGate.Dropped;
+            return (true, result.Reason);
 
         bytes = result.Bytes!;
         mimeType = new MimeType(result.MediaType!);
-        return ImageGate.Kept;
+        return (false, null);
+    }
+
+    /// <summary>
+    /// Outcome of a media write: a written reference, a silent skip (non-media /
+    /// empty), or a drop carrying the reason for the omission note.
+    /// </summary>
+    public readonly record struct MediaWriteResult(SerializableMediaReference? Reference, string? DroppedReason)
+    {
+        /// <summary>Non-media or empty content — nothing written, no note.</summary>
+        public static MediaWriteResult Skipped => default;
+
+        public static MediaWriteResult Written(SerializableMediaReference reference) => new(reference, null);
+
+        public static MediaWriteResult Drop(string? reason)
+            => new(null, reason ?? "image could not be processed");
     }
 
     private static string CreateMediaFileName(MimeType mimeType)
