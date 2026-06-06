@@ -8,8 +8,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.23.0-beta.5</VersionPrefix>
-    <VersionSuffix>beta.4</VersionSuffix>
+    <VersionPrefix>0.23.0</VersionPrefix>
+    <VersionSuffix>beta.5</VersionSuffix>
     <PackageReleaseNotes>Netclaw v0.23.0-beta.5 — shell approval pattern fix and MCP SDK bump
 
 This is a prerelease on the beta channel. Stable installs are unaffected and remain on 0.22.1; only opt-in beta testers are offered this build.
