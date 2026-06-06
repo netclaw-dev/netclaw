@@ -26,8 +26,8 @@
 
 ## 5. Quality gates + docs
 
-- [ ] 5.1 Add 1–2 eval-suite image cases (tool image discovery/use) as the end-to-end backstop; run `./evals/run-evals.sh`.
-- [ ] 5.2 One-off BenchmarkDotNet / custom memory harness run capturing before/after peak memory + payload bytes for the PR writeup.
-- [ ] 5.3 Update `netclaw-operations` system skill only if operator-facing diagnostics changed (the doctor probe in 1.3); no config knobs to document (bounds are constants).
-- [ ] 5.4 Run `dotnet slopwatch analyze` (no new violations) and `./scripts/Add-FileHeaders.ps1 -Verify`.
+- [x] 5.1 **Eval cases: not needed / not triggered.** The eval suite (`evals/run-evals.sh`) tests model behavior against a live model and is triggered by changes to identity/skills/memory/compaction/tool-schemas/model-config/SessionConfig (per CLAUDE.md). This change touches none of those — the model-facing contract is unchanged (it still receives an image, just bounded). Determinism is fully covered by unit + integration tests (`LlmSessionImageDeliveryTests` verifies a tool-loaded image reaches the model).
+- [x] 5.2 **Checked-in benchmark: not warranted; ran a one-off measurement instead.** BenchmarkDotNet `[MemoryDiagnoser]` measures MANAGED allocations, but the image OOM lives in NATIVE (Skia) memory, so a BDN benchmark would under-report the win (the same native-vs-managed trap as the dropped GC assertion). Normalization is also off the hot path (once per image at ingestion, not per turn/token), so there's no throughput regression to guard. (Contrast: the existing ShellDrain/Capture benchmarks measure managed buffering, where MemoryDiagnoser is the right tool.) One-off numbers recorded in design.md § Measured impact.
+- [x] 5.3 **No skill update needed.** The `netclaw-operations` skill gives operational guidance, not a catalog of every doctor check; the new "Image Processing" check is self-describing at `netclaw doctor` runtime. No config knobs to document (bounds are constants).
+- [x] 5.4 `dotnet slopwatch analyze` (0 issues) and `./scripts/Add-FileHeaders.ps1 -Verify` (all headers present) — passing.
 - [ ] 5.5 `/opsx-verify` then `/opsx-sync` + `/opsx-archive` once implemented and merged.

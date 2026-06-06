@@ -238,6 +238,24 @@ Rollback: revert the change — the bounds are constants with no runtime switch,
 design (a switch that disabled normalization would re-open the OOM). The
 native-asset add is additive.
 
+## Measured impact
+
+One-off measurement through the implemented normalizer (default caps: 1568px /
+5MB / JPEG q85). The headline is the **native decoded-bitmap** memory — the OOM
+metric — which now scales with the target, not the source, and is paid **once at
+ingestion** instead of on every turn the image stays in the window:
+
+| Source | Decoded bitmap (full → shrink-on-decode) | Output payload |
+|--------|------------------------------------------|----------------|
+| 8000×8000 (64MP) | **244 MB → 15 MB** (sample 1/4) | 1568×1568, 123 KB JPEG |
+| 6000×4000 (24MP) | **92 MB → 23 MB** (sample 1/2) | 1568×1045, 83 KB JPEG |
+| 3840×2160 (4K)   | **32 MB → 8 MB** (sample 1/2)  | 1568×882, 65 KB JPEG |
+
+This is the *per-image* peak; pre-change a single message could admit 10 files
+and re-materialize all of them every turn. (BenchmarkDotNet was not used — its
+`MemoryDiagnoser` only sees managed allocations, not the native Skia bitmap; see
+tasks.md 5.2.)
+
 ## Open Questions
 
 - Exact default constants — confirm 1568px / 5MB / JPEG q85.
