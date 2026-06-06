@@ -33,6 +33,8 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private static readonly Encoding StrictUtf32Be = new UTF32Encoding(bigEndian: true, byteOrderMark: true, throwOnInvalidCharacters: true);
     private static readonly Encoding Windows1252 = new Windows1252Encoding();
 
+    public override bool SuppressOutputRedaction => true;
+
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy? _pathPolicy;
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;

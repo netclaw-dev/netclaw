@@ -44,18 +44,30 @@ internal static class ToolOutputSpill
     /// resolves <paramref name="budget"/> from the tool's per-tool override or the
     /// session content budget.
     /// </summary>
-    public static async Task<string> BoundAndSpillAsync(
+    public static Task<string> BoundAndSpillAsync(
         string redactedResult, string? toolCallId, int budget, ToolExecutionContext? context, CancellationToken ct)
+        => BoundAndSpillAsync(modelFacingResult: redactedResult, spillContent: redactedResult,
+            toolCallId, budget, context, ct);
+
+    /// <summary>
+    /// Overload that separates the model-facing result from the spill content.
+    /// When a tool suppresses output redaction, <paramref name="modelFacingResult"/>
+    /// is the raw (unredacted) result while <paramref name="spillContent"/> is the
+    /// redacted version written to disk.
+    /// </summary>
+    public static async Task<string> BoundAndSpillAsync(
+        string modelFacingResult, string spillContent, string? toolCallId, int budget,
+        ToolExecutionContext? context, CancellationToken ct)
     {
         if (budget <= 0)
             budget = DefaultContentBudget;
 
-        if (redactedResult.Length <= budget)
-            return redactedResult;
+        if (modelFacingResult.Length <= budget)
+            return modelFacingResult;
 
-        var inline = BoundedOutputReader.Window(redactedResult, budget);
-        var spillPath = await TryWriteSpillAsync(redactedResult, toolCallId, context, ct);
-        return Compose(inline, spillPath, redactedResult.Length, budget);
+        var inline = BoundedOutputReader.Window(modelFacingResult, budget);
+        var spillPath = await TryWriteSpillAsync(spillContent, toolCallId, context, ct);
+        return Compose(inline, spillPath, modelFacingResult.Length, budget);
     }
 
     private static async Task<string?> TryWriteSpillAsync(
