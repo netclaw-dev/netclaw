@@ -17,7 +17,6 @@ namespace Netclaw.Cli.Tui.Config;
 
 internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorViewModel>
 {
-    private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
     private SelectionListNode<string>? _dialogList;
     private TextInputNode? _textInput;
     private string? _textInputFieldPath;
@@ -46,8 +45,6 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
         ViewModel.Status.Subscribe(_ => _contentNode?.Invalidate())
             .DisposeWith(Subscriptions);
         ViewModel.ValidationSummary.Subscribe(_ => _contentNode?.Invalidate())
-            .DisposeWith(Subscriptions);
-        ViewModel.ValidationSpinnerTick.Subscribe(_ => _contentNode?.Invalidate())
             .DisposeWith(Subscriptions);
     }
 
@@ -131,13 +128,11 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
     }
 
     private ILayoutNode BuildValidatingScreen()
-    {
-        var frame = SpinnerFrames[ViewModel.ValidationSpinnerTick.Value % SpinnerFrames.Length];
-        return WorkflowViewComponents.BuildValidatingScreen(
-            heading: "Validating Search configuration...",
-            message: $"{frame} {ViewModel.GetValidatingMessage()}",
-            supportText: "This may take a few seconds.");
-    }
+        => Layouts.Vertical()
+            .WithSpacing(1)
+            .WithChild(new TextNode("  Validating Search configuration...").WithForeground(Color.White))
+            .WithChild(SpinnerViews.Labeled(ViewModel.GetValidatingMessage(), Color.Yellow))
+            .WithChild(new TextNode("  This may take a few seconds.").WithForeground(Color.Gray));
 
     private ILayoutNode BuildSavedScreen()
         => WorkflowViewComponents.BuildSavedScreen(

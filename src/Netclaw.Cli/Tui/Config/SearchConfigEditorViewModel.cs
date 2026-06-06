@@ -48,7 +48,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     private SearchEditorModel _model;
     private SearchEditorValidationResult _validation = SearchEditorValidationResult.Empty;
     private SearchProbeResult? _lastProbeResult;
-    private CancellationTokenSource? _validationSpinnerCts;
 
     public IReadOnlyList<ProjectedConfigField> Fields => _spec.Fields;
 
@@ -77,7 +76,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         ValidationSummary = new ReactiveProperty<ConfigValidationSummary>(ConfigValidationSummary.Empty);
         ActiveDialog = new ReactiveProperty<SearchConfigEditorDialog>(SearchConfigEditorDialog.None);
         CurrentScreen = new ReactiveProperty<SearchConfigEditorScreen>(SearchConfigEditorScreen.ProviderSelection);
-        ValidationSpinnerTick = new ReactiveProperty<int>(0);
         Revalidate();
     }
 
@@ -85,7 +83,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
     public ReactiveProperty<ConfigValidationSummary> ValidationSummary { get; }
     public ReactiveProperty<SearchConfigEditorDialog> ActiveDialog { get; }
     public ReactiveProperty<SearchConfigEditorScreen> CurrentScreen { get; }
-    public ReactiveProperty<int> ValidationSpinnerTick { get; }
 
     public bool IsDirty => ComputeIsDirty();
     public SearchProbeResult? LastProbeResult => _lastProbeResult;
@@ -122,7 +119,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public override void Dispose()
     {
-        CancelValidationSpinner();
         foreach (var value in FieldValues.Values)
             value.Dispose();
 
@@ -130,7 +126,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         ValidationSummary.Dispose();
         ActiveDialog.Dispose();
         CurrentScreen.Dispose();
-        ValidationSpinnerTick.Dispose();
         base.Dispose();
     }
 
@@ -233,7 +228,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void BeginBackendSelection()
     {
-        CancelValidationSpinner();
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
@@ -315,7 +309,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         }
         catch (Exception ex)
         {
-            CancelValidationSpinner();
             CurrentScreen.Value = SearchConfigEditorScreen.Entry;
             Status.Value = new ConfigStatusMessage($"Search settings save failed: {ex.Message}", ConfigStatusTone.Error);
             RequestRedraw();
@@ -324,7 +317,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void SaveWithoutProbeOverride()
     {
-        CancelValidationSpinner();
         Revalidate();
         if (_validation.HasErrors)
         {
@@ -352,7 +344,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void NavigateBack()
     {
-        CancelValidationSpinner();
         ReloadPersistedDraft();
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.ProviderSelection;
@@ -363,7 +354,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     public void RequestQuit()
     {
-        CancelValidationSpinner();
         ShutdownRequestedForTest = true;
         Shutdown();
     }
@@ -435,7 +425,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
 
     private void ReloadPersistedDraft()
     {
-        CancelValidationSpinner();
         _model = _mapper.Load(_paths);
         SyncAllFieldValues();
         _lastProbeResult = null;
@@ -449,13 +438,11 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         ActiveDialog.Value = SearchConfigEditorDialog.None;
         CurrentScreen.Value = SearchConfigEditorScreen.Validating;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
-        StartValidationSpinner(ct);
         RequestRedraw();
 
         _lastProbeResult = await ProbeAsync(ct);
         if (!_lastProbeResult.Success)
         {
-            CancelValidationSpinner();
             CurrentScreen.Value = SearchConfigEditorScreen.Entry;
             Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, ConfigStatusTone.Warning);
             ActiveDialog.Value = SearchConfigEditorDialog.ProbeWarning;
@@ -463,7 +450,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
             return false;
         }
 
-        CancelValidationSpinner();
         if (persistOnSuccess)
         {
             SaveWithoutProbeOverride();
@@ -474,36 +460,6 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, _lastProbeResult.Tone);
         RequestRedraw();
         return true;
-    }
-
-    private void StartValidationSpinner(CancellationToken ct)
-    {
-        CancelValidationSpinner();
-        ValidationSpinnerTick.Value = 0;
-        _validationSpinnerCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _ = RunValidationSpinnerAsync(_validationSpinnerCts.Token);
-    }
-
-    private void CancelValidationSpinner()
-    {
-        _validationSpinnerCts?.Cancel();
-        _validationSpinnerCts?.Dispose();
-        _validationSpinnerCts = null;
-        ValidationSpinnerTick.Value = 0;
-    }
-
-    private async Task RunValidationSpinnerAsync(CancellationToken ct)
-    {
-        var tick = 0;
-        while (!ct.IsCancellationRequested)
-        {
-            try { await Task.Delay(120, ct); }
-            catch (OperationCanceledException) { return; }
-
-            tick++;
-            ValidationSpinnerTick.Value = tick;
-            RequestRedraw();
-        }
     }
 
     private async Task<SearchProbeResult> ProbeAsync(CancellationToken ct)
