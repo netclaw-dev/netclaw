@@ -76,6 +76,25 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         Assert.Equal("/config", app.CurrentPath);
     }
 
+    [Fact]
+    public async Task Channels_DoneAddingChannelsRow_ReturnsToDashboardUsingTerminaHistory()
+    {
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.NotNull(getChannelsVm());
+        Assert.Equal("/config", app.CurrentPath);
+    }
+
     [Theory]
     [InlineData(ChannelType.Slack)]
     [InlineData(ChannelType.Discord)]
@@ -185,6 +204,28 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "C01" && !row.IsAddAction);
+    }
+
+    [Fact]
+    public async Task Channels_ChannelPermissions_DoneRow_ReturnsToAdapterMenu()
+    {
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+        MoveToAdapter(input, ChannelType.Discord);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Open configured Discord management.
+        input.EnqueueKey(ConsoleKey.Enter); // Manage channels and permissions.
+        input.EnqueueKey(ConsoleKey.DownArrow); // + Add channel.
+        input.EnqueueKey(ConsoleKey.DownArrow); // Done adding channels.
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        Assert.Equal(ChannelsConfigScreen.AdapterMenu, channelsVm.Screen.Value);
+        Assert.Equal("Done adding channels. Completed changes are already saved.", channelsVm.Status.Value.Text);
     }
 
     [Fact]

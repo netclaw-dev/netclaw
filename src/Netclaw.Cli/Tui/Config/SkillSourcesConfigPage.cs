@@ -85,7 +85,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [Up/Down] Navigate  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {

@@ -89,7 +89,7 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [Up/Down] Navigate  [Space] Toggle/Save  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space] Toggle/Save  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {

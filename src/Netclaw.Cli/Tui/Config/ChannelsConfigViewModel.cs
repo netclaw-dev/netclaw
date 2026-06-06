@@ -57,10 +57,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         Step = new ChannelPickerStepViewModel(slackProbe, discordProbe)
         {
-            DoneActionText = "channel settings",
-            DoneKeyActionLabel = "Apply",
-            DoneKey = ConsoleKey.S,
+            DoneActionText = "return to Settings Areas",
+            DoneKeyActionLabel = "Done",
+            DoneKey = ConsoleKey.D,
             ShowDoneAction = false,
+            ShowDonePickerRow = true,
+            DonePickerRowLabel = "Done adding channels",
             PreserveDisabledAdapterDrafts = true
         };
         _context = new WizardContext
@@ -211,7 +213,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal bool TryOpenSelectedAdapterManagement()
     {
-        if (!Step.IsInPickerMode)
+        if (!Step.IsInPickerMode || !Step.IsAdapterRowSelected)
             return false;
 
         var type = Step.SelectedAdapterType;
@@ -224,7 +226,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     internal bool TryToggleSelectedAdapterFromPicker()
     {
-        if (!Step.IsInPickerMode)
+        if (!Step.IsInPickerMode || !Step.IsAdapterRowSelected)
             return false;
 
         var type = Step.SelectedAdapterType;
@@ -371,7 +373,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 FormatChannelLabel(_activeAdapterType, channelId),
                 GetChannelAudience(_activeAdapterType, channelId, DefaultChannelAudience()),
                 IsDirectMessage: false,
-                IsAddAction: false));
+                IsAddAction: false,
+                IsDoneAction: false));
         }
 
         if (GetAllowDirectMessages(_activeAdapterType))
@@ -381,7 +384,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 "Direct messages",
                 GetChannelAudience(_activeAdapterType, "dm", DefaultDirectMessageAudience()),
                 IsDirectMessage: true,
-                IsAddAction: false));
+                IsAddAction: false,
+                IsDoneAction: false));
         }
 
         if (includeAddAction)
@@ -391,7 +395,15 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 "+ Add channel",
                 DefaultChannelAudience(),
                 IsDirectMessage: false,
-                IsAddAction: true));
+                IsAddAction: true,
+                IsDoneAction: false));
+            rows.Add(new ChannelPermissionRow(
+                string.Empty,
+                "Done adding channels",
+                DefaultChannelAudience(),
+                IsDirectMessage: false,
+                IsAddAction: false,
+                IsDoneAction: true));
         }
 
         if (_channelRowIndex >= rows.Count)
@@ -419,6 +431,12 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
         }
 
+        if (row.IsDoneAction)
+        {
+            FinishChannelPermissions();
+            return;
+        }
+
         _editingAudienceId = row.Id;
         _editingAudienceLabel = row.DisplayName;
         _editingAudienceIsDm = row.IsDirectMessage;
@@ -434,7 +452,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
 
         var row = rows[_channelRowIndex];
-        if (row.IsAddAction)
+        if (row.IsAction)
             return;
 
         var currentIndex = AudienceIndex(row.Audience);
@@ -450,7 +468,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
 
         var row = rows[_channelRowIndex];
-        if (row.IsAddAction || row.IsDirectMessage)
+        if (row.IsAction || row.IsDirectMessage)
             return;
 
         var remaining = GetChannelIds(_activeAdapterType)
@@ -502,9 +520,19 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetChannelIds(_activeAdapterType, [.. existing, channelId]);
         SetChannelAudience(_activeAdapterType, channelId, AudienceOptions[_audienceSelectionIndex]);
         UpdateAdapterPickerSummary(_activeAdapterType);
-        _channelRowIndex = Math.Max(GetChannelRows().Count - 2, 0);
+        _channelRowIndex = GetChannelRows()
+            .Select((row, index) => (row, index))
+            .Single(entry => string.Equals(entry.row.Id, channelId, StringComparison.Ordinal))
+            .index;
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
         AutosaveCompletedAction($"Added {channelId} and saved.");
+        NotifyContentChanged();
+    }
+
+    internal void FinishChannelPermissions()
+    {
+        Screen.Value = ChannelsConfigScreen.AdapterMenu;
+        Status.Value = new ConfigStatusMessage("Done adding channels. Completed changes are already saved.", ConfigStatusTone.Neutral);
         NotifyContentChanged();
     }
 
@@ -1456,7 +1484,11 @@ internal sealed record ChannelPermissionRow(
     string DisplayName,
     TrustAudience Audience,
     bool IsDirectMessage,
-    bool IsAddAction);
+    bool IsAddAction,
+    bool IsDoneAction)
+{
+    internal bool IsAction => IsAddAction || IsDoneAction;
+}
 
 internal sealed record CredentialFieldSpec(
     string Key,

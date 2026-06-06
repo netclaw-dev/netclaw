@@ -416,6 +416,32 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void Picker_DoneRow_EnterAdvancesWithoutTogglingAdapter()
+    {
+        using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe)
+        {
+            ShowDoneAction = false,
+            ShowDonePickerRow = true,
+            DonePickerRowLabel = "Done adding channels"
+        };
+        var view = new ChannelPickerStepView();
+        using var subs = new CompositeDisposable();
+        var advanced = false;
+        var callbacks = CreateTestCallbacks(subs, advanceStep: () => advanced = true);
+
+        picker.OnEnter(Context, NavigationDirection.Forward);
+        view.BuildContent(picker, callbacks);
+        picker.CursorIndex = picker.Adapters.Count;
+
+        Assert.True(view.HandleKeyPress(new KeyPressed(new ConsoleKeyInfo('\r', ConsoleKey.Enter, shift: false, alt: false, control: false))));
+
+        Assert.True(advanced);
+        Assert.False(picker.IsAdapterEnabled(ChannelType.Slack));
+        Assert.False(picker.IsAdapterEnabled(ChannelType.Discord));
+        Assert.False(picker.IsAdapterEnabled(ChannelType.Mattermost));
+    }
+
+    [Fact]
     public void SubFlow_PastedSlackBotTokenSurvivesReRenderBeforeSubmit()
     {
         using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe);

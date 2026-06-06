@@ -6,6 +6,8 @@ This directory contains management UI planning artifacts for Netclaw.
 
 - `UI-001-ops-console-mockup.md` - page architecture, wireframes, and
   component behavior
+- `TUI-002-netclaw-config-wireframes.md` - `netclaw config` dashboard and
+  autosave editor interaction patterns
 - `TUI-004-search-config-progressive-disclosure-poc.md` - redesign POC for the
   Search settings flow using progressive disclosure
 - `TUI-001-command-wireframes.md` - Termina TUI wireframes for `netclaw init`,

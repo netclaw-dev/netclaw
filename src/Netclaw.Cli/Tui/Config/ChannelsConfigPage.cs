@@ -133,12 +133,12 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             .WithChild(Layouts.Empty().Height(1));
 
         var rows = ViewModel.GetChannelRows();
-        if (rows.Count == 1 && rows[0].IsAddAction)
+        if (rows.All(static row => row.IsAction))
         {
             layout = layout.WithChild(Hint("  No allowed channels configured."));
         }
 
-        var editableRows = rows.Where(static row => !row.IsAddAction).ToArray();
+        var editableRows = rows.Where(static row => !row.IsAction).ToArray();
         var displayNameWidth = Math.Clamp(
             editableRows.Select(static row => row.DisplayName.Length).DefaultIfEmpty(16).Max(),
             16,
@@ -148,7 +148,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         {
             var row = rows[i];
             var focused = i == ViewModel.ChannelRowIndex;
-            var line = row.IsAddAction
+            var line = row.IsAction
                 ? $"{FocusPrefix(focused)}{row.DisplayName}"
                 : $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";
             layout = layout.WithChild(Row(line, focused));
@@ -293,7 +293,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 var help = ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => "  Manage this adapter without re-entering credentials.",
-                    ChannelsConfigScreen.ChannelPermissions => "  Enter edits an audience. a adds a channel. Delete removes the selected channel.",
+                    ChannelsConfigScreen.ChannelPermissions => "  Enter edits an audience or activates Done. a adds a channel. Delete removes the selected channel.",
                     ChannelsConfigScreen.EditAudience => "  Select the audience profile for this channel.",
                     ChannelsConfigScreen.AddChannel => "  Enter applies the channel draft. Esc cancels.",
                     ChannelsConfigScreen.AllowedUsers => "  Use comma-separated user IDs. Blank means unrestricted users in allowed channels.",
@@ -326,7 +326,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             var text = ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => " [↑/↓] Navigate  [Enter] Select  [Esc] Channels  [Ctrl+Q] Quit",
-                    ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit  [a] Add  [Del] Remove  [Esc] Menu",
+                    ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit/Done  [a] Add  [Del] Remove  [Esc] Menu",
                     ChannelsConfigScreen.EditAudience => " [↑/↓] Navigate  [Enter] Apply  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AddChannel => " [↑/↓] Audience  [Enter] Add  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AllowedUsers => " [Enter] Apply  [Esc] Menu  [Ctrl+Q] Quit",
@@ -335,7 +335,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                     ChannelsConfigScreen.ResetConfirm => " [↑/↓] Navigate  [Enter] Select  [Esc] Menu  [Ctrl+Q] Quit",
                     _ => ViewModel.Step.IsInSubFlow
                         ? " [Enter] Next  [Esc] Back  [Ctrl+Q] Quit"
-                        : " [↑/↓] Navigate  [Space] Toggle/Save  [Enter] Open  [Esc] Back  [Ctrl+Q] Quit"
+                        : " [↑/↓] Navigate  [Space] Toggle/Save  [Enter] Open/Done  [Esc] Back  [Ctrl+Q] Quit"
                 };
 
             return NetclawTuiChrome.BuildKeyHintLine(text);

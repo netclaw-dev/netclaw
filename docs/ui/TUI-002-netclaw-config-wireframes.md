@@ -16,8 +16,10 @@ flat list of every editable leaf. Operators reach the high-churn settings
 surfaces without leaving the terminal, without re-entering existing secrets,
 and without hand-editing `netclaw.json`.
 
-Leaf editors remain reentrant by construction and validate before save, but
-the root dashboard groups them by operator intent.
+Leaf editors remain reentrant by construction and validate before persistence.
+Completed inline actions autosave; typed drafts and multi-field forms persist
+only when explicitly applied. The root dashboard groups editors by operator
+intent and has no save action of its own.
 
 ## Termina Component Vocabulary
 
@@ -46,16 +48,49 @@ A footer hint on the dashboard reads:
 
 ### Keystroke conventions
 
-| Key             | Effect                                                                |
-|-----------------|-----------------------------------------------------------------------|
-| `↑` / `↓`       | Move focus within list                                                |
-| `←` / `→`       | Move focus across action row (Save / Cancel / etc.)                   |
-| `Tab` / `Shift+Tab` | Move focus across fields in a form                                |
-| `Enter`         | Activate focused element (open editor, submit, toggle)                |
-| `Esc`           | Cancel / go back. Confirms discard if section has unsaved changes.    |
-| `d`             | In list editors: delete focused item (with inline `[y/N]` confirm)    |
-| `q`             | Dashboard quit only                                                   |
-| `Space`         | Toggle focused checkbox                                               |
+| Key             | Effect                                                                 |
+|-----------------|------------------------------------------------------------------------|
+| `↑` / `↓`       | Move focus within a list or row editor                                  |
+| `←` / `→`       | Change a focused cycle value; if the change is complete, autosave        |
+| `Tab` / `Shift+Tab` | Move focus across fields in a multi-field form                     |
+| `Enter`         | Activate focused element; `Apply` accepts a draft/form and validates     |
+| `Esc`           | Go back, or cancel an incomplete draft/input without persisting it        |
+| `Delete`        | Remove focused item when the footer exposes remove semantics             |
+| `Ctrl+Q`        | Quit the TUI from any page                                              |
+| `Space`         | Toggle focused checkbox; if the change is complete, autosave             |
+
+### Autosave interaction contract
+
+`netclaw config` uses completed-action autosave for inline editors. There is no
+root save action and ordinary leaf editors SHOULD NOT expose a separate `Save`
+row when the operator has already completed an action.
+
+Rules:
+
+- Completed actions autosave immediately after validation. Examples: toggling a
+  feature, changing an audience cycle, adding/removing a channel, applying
+  allowed users, applying rotated credentials, changing a backend preference, or
+  confirming reset.
+- `Apply` means "accept this typed draft or multi-field form, then validate and
+  autosave." It is not a separate staged save button.
+- `Done` means "leave this task/context." It never writes by itself. It is used
+  when the operator benefits from an explicit finish affordance even though
+  completed edits are already saved.
+- `Esc` navigates back or cancels incomplete input only. It never persists
+  edits.
+- Failed validation leaves persisted files unchanged. If a toggle or cycle value
+  cannot be saved, the visible state rolls back to the last persisted value.
+- Writes are section-preserving and field-scoped: a Channels edit must not wipe
+  unrelated providers; a Browser Automation edit must not rewrite unrelated MCP
+  profiles; secret fields preserve existing secrets when left blank.
+
+Footer wording:
+
+- Use `Toggle/Save` only for a focused toggle that writes immediately.
+- Use `Apply` for typed drafts and multi-field forms that write after Enter.
+- Use `Done` for navigation-only finish rows.
+- Use `Back`, `Menu`, `Channels`, or `Settings Areas` to name the actual return
+  destination.
 
 ### Footer hint style
 
@@ -92,13 +127,9 @@ netclaw config
         │     └── Mattermost
         ├── Config.4   Inbound Webhooks
         ├── Config.5   Skill Sources
-        │     ├── External Skill Directories
-        │     └── Skill Feeds
         ├── Config.6   Search
         ├── Config.7   Browser Automation
         ├── Config.8   Telemetry & Alerting
-        │     ├── Telemetry
-        │     └── Outbound Webhooks
         ├── Config.9   Security & Access
         │     ├── Security Posture
         │     ├── Enabled Features
@@ -116,55 +147,55 @@ netclaw config  (when no netclaw.json exists)
 
 Reusable patterns referenced by the per-editor sections below.
 
-### T1. Single-value editor (no secret, no sub-pages)
+### T1. Single-value inline editor
 
 ```
 ╭─ <Section Title> ───────────────────────────────────────────╮
 │                                                             │
-│  <Field 1 label>:                                           │
-│  <input or selector>                                        │
+│  <Explanation of what this setting controls.>               │
 │                                                             │
-│  <Field N label>:                                           │
-│  <input or selector>                                        │
+│  Current: <current value>                                   │
+│  New:     <typed draft or selected value>                   │
 │                                                             │
-│  [ Save ]    [ Cancel ]                                     │
+│  <Helper copy, only if useful.>                             │
 │                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
+│ Type/Paste edit · Backspace delete · Enter apply · Esc back │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
 Transitions:
-- `Tab` cycles fields.
-- `Enter` on Save → run blessing → write or block.
-- `Enter` or `Esc` on Cancel → discard-confirm (T7) if dirty → return to dashboard.
+- Typing changes draft state only.
+- `Enter` validates and writes the accepted draft.
+- `Esc` returns without persisting an incomplete draft.
+- Success/failure is shown in the status line.
 
-### T2. Multi-value list with inline edits
+### T2. Multi-value list with action rows
 
 ```
 ╭─ <Section Title> ───────────────────────────────────────────╮
 │                                                             │
-│  ▸ <item 1 display>                                         │
+│  ▸ <item 1 display>                         [◀ Value ▶]    │
 │    <item 2 display>                                         │
 │    <item 3 display>                                         │
 │                                                             │
 │    + Add <item-noun>                                        │
+│    Done <verb phrase>                                       │
 │                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Enter edit · d remove · Esc cancel           │
+│ ↑/↓ navigate · ←/→ change/save · Enter edit/done · Esc back │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
 Transitions:
-- `Enter` on an item → inline edit overlay (single-line input).
-- `Enter` on `+ Add` → inline empty input overlay.
-- `d` on an item → inline `Remove? [y/N]` prompt; `y` removes, anything else cancels.
-- `Enter` on Save → write list to schema array → return to dashboard.
-- `Esc` on Cancel → discard-confirm if dirty.
+- `←` / `→` on an item changes the value and autosaves immediately.
+- `Enter` on an item opens the relevant edit sub-flow.
+- `Enter` on `+ Add` opens an add draft; accepting the draft autosaves.
+- `Enter` on `Done ...` exits the local task/context without writing.
+- `Delete` on a removable item removes it and autosaves immediately.
+- `Esc` returns to the parent menu.
 
 ### T3. Multi-value list with sub-page items
 
-Same as T2 visually. `Enter` on item or `+ Add` opens a sub-page (T4)
+Same as T2 visually. `Enter` on item or `+ Add` opens a sub-page/form (T4)
 instead of inline edit.
 
 ```
@@ -174,14 +205,13 @@ instead of inline edit.
 │    <item 2 name>          <item 2 status>                   │
 │                                                             │
 │    + Add <item-noun>                                        │
+│    Back                                                     │
 │                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Enter edit · d remove · Esc cancel           │
+│ ↑/↓ navigate · Enter open/back · Esc back                   │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### T4. Item sub-page (form)
+### T4. Item sub-page or multi-field form
 
 ```
 ╭─ <Parent Title> › <Edit Mode> ──────────────────────────────╮
@@ -192,21 +222,17 @@ instead of inline edit.
 │  <Field N>:                                                 │
 │  <input>                                                    │
 │                                                             │
-│  [ Save ]    [ Cancel ]    [ Delete <item-noun> ]           │
+│  <Existing secret helper, only when applicable.>            │
 │                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
+│ Tab field · Enter apply · Esc back                          │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-`Delete` button shown only on Edit mode, not Add. Activating it → T5 with
-destructive copy.
-
 Transitions:
-- `Save` returns to the parent list with the new/updated item applied to
-  in-memory state. Disk write happens on the parent's outer `Save`.
-- `Cancel` returns to parent list without applying.
-- `Delete` opens T5; on confirm, removes from in-memory list, returns to
-  parent.
+- `Enter` validates the full draft/form and autosaves.
+- Secret fields are blank by default; blank means preserve the stored secret.
+- `Esc` returns to parent without persisting incomplete draft input.
+- Destructive delete/reset actions use T5 before writing.
 
 ### T5. Confirmation dialog (default-Cancel)
 
@@ -224,45 +250,32 @@ Transitions:
 Default focus on Cancel. `Enter` or `Esc` cancels. `Tab` + `Enter` on
 "Yes" confirms.
 
-### T6. Inline validation banner
+### T6. Inline validation status
 
-Rendered above the action row of any editor while doctor blessing finds
-issues. ERROR variant:
+Rendered in the status line, or immediately below the affected row when the
+error needs row-local context. ERROR variant:
 
 ```
-│  ╭─ Issues ───────────────────────────────────────────────╮ │
-│  │ ✗ Brave backend requires an API key                    │ │
-│  │ ⚠ Endpoint TLS certificate expires in 14 days          │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  [ Save ]  (disabled)   [ Cancel ]                          │
+│  Browser Automation cannot be enabled: Playwright missing.  │
 ```
 
 WARN-only variant:
 
 ```
-│  ╭─ Warnings ─────────────────────────────────────────────╮ │
-│  │ ⚠ Endpoint TLS certificate expires in 14 days          │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  [ Save anyway ]   [ Cancel ]                               │
+│  Slack channel label lookup failed: rate limited.           │
 ```
 
-### T7. Unsaved-changes discard confirm
+Validation failures block the write and leave persisted files unchanged.
+Warnings may leave the already-valid screen open with a yellow status line.
 
-```
-╭─ Discard changes? ──────────────────────────────────────────╮
-│                                                             │
-│  You have unsaved changes in this section.                  │
-│  Closing now will lose them.                                │
-│                                                             │
-│  ▸ [ Keep editing ]    [ Discard ]                          │
-│                                                             │
-│ Default: Keep editing (Esc or Enter)                        │
-╰─────────────────────────────────────────────────────────────╯
-```
+### T7. Incomplete-draft cancel rule
 
-Shown when user hits Esc on a section editor with dirty state.
+Most config editors do not need a discard-confirm dialog because completed
+actions save immediately and incomplete drafts have not been persisted. `Esc`
+from a typed draft or form cancels that draft and returns to the parent screen.
+Use a discard-confirm dialog only when a future editor intentionally supports a
+long-lived staged state that can span multiple completed sub-actions before any
+write.
 
 ### T8. Empty list placeholder
 
@@ -272,10 +285,9 @@ Shown when user hits Esc on a section editor with dirty state.
 │   (no <item-noun> configured)                               │
 │                                                             │
 │  ▸ + Add <item-noun>                                        │
+│    Back                                                     │
 │                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ Enter add · Esc cancel                                      │
+│ Enter add/back · Esc back                                   │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -356,12 +368,15 @@ to stderr and exits non-zero.
 │   ▶ [✓] Slack                2 channels, 1 user             │
 │     [ ] Discord              disabled, saved setup          │
 │     [ ] Mattermost                                         │
+│     Done adding channels     Return to Settings Areas       │
 │                                                             │
 │  ↑/↓ to navigate, Space to toggle, Enter to open selected.  │
+│  Select Done when finished; completed changes are already   │
+│  saved.                                                     │
 │  Unconfigured adapters open first-time setup. Configured    │
 │  adapters open management without prompting for credentials.│
 │                                                             │
-│ ↑/↓ navigate · Space toggle · Enter open · d save           │
+│ ↑/↓ navigate · Space toggle/save · Enter open/done · Esc back│
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -374,11 +389,13 @@ Unconfigured adapters reuse the original `netclaw init` sub-flow visuals:
 - Mattermost: server URL -> bot token -> channel IDs -> DMs -> user access
   choice -> allowed user IDs when restricted -> optional callback URL.
 
-**Save model:** First-time setup sub-flows update in-memory state, then drop
+**Autosave model:** First-time setup sub-flows update in-memory state, then drop
 the operator directly into Channels & Permissions so every new channel gets an
-explicit audience before save. Disk write happens only when the operator
-returns to the picker and presses `d`/Done. The save uses the shared
-config-editor merge pipeline, preserving unrelated config and secrets.
+explicit audience. Completing setup, toggling an existing adapter, adding or
+removing a channel, changing an audience, applying allowed users, applying DM
+settings, rotating credentials, and confirming reset all validate and autosave
+through the shared config-editor merge pipeline. `Done adding channels` is a
+navigation affordance only; it never writes by itself.
 
 **Secret reentrancy:** Configured adapters do not ask for credentials on
 normal re-entry. Secret fields are shown only from first-time setup or explicit
@@ -422,8 +439,8 @@ with their provider APIs before the config merge is written.
 
 The same menu is used for Slack, Discord, and Mattermost. Disable/enable only
 changes `<Adapter>.Enabled`; dormant channel fields and stored credentials are
-preserved. Reset is immediate: confirming reset deletes the adapter config
-section and its secrets before returning to the picker/saved screen.
+preserved. Reset is immediate after confirmation: confirming reset deletes the
+adapter config section and its secrets before returning to the picker.
 
 ### 3.3 Channels and permissions
 
@@ -437,10 +454,12 @@ section and its secrets before returning to the picker/saved screen.
 │     C02                    C02                [◀ Team     ▶]│
 │     Direct messages        dm                 [◀ Personal ▶]│
 │     + Add channel                                           │
+│     Done adding channels                                    │
 │                                                             │
 │  Audience controls which tools and data this channel can use│
 │                                                             │
-│ ↑/↓ navigate · ←/→ audience · Enter edit · a add · d remove │
+│ ↑/↓ navigate · ←/→ audience/save · Enter edit/done · a add  │
+│ Delete remove · Esc menu                                    │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -449,7 +468,9 @@ Channel rows write `<Adapter>.AllowedChannelIds` and
 `<Adapter>.AllowDirectMessages` plus `<Adapter>.ChannelAudiences["dm"]`.
 Removing a channel removes both the channel ID and its audience mapping. DM
 audience is preserved when DMs are disabled so re-enabling DMs restores the
-operator's last chosen audience.
+operator's last chosen audience. The `+ Add channel` action opens a typed draft;
+accepting it validates and autosaves. `Done adding channels` returns to the
+adapter management menu and does not write.
 
 ### 3.4 Credentials and reset
 
@@ -473,25 +494,36 @@ operator's last chosen audience.
 Slack exposes bot token and Socket Mode app token. Discord exposes bot token.
 Mattermost exposes server URL, bot token, and optional callback URL. Blank
 secret submissions preserve existing secrets; non-blank secret submissions
-replace only that secret.
+replace only that secret. Enter validates the full credential draft and
+autosaves only if validation succeeds.
 
 ---
 
 ## Config.5 — Skill Sources
 
-### 5.1 Skill Sources sub-page
+The MVP Skill Sources editor is a compact inline editor, not a nested list
+manager. It edits the high-churn defaults and leaves richer multi-feed/list
+management to later work.
 
 ```
 ╭─ Skill Sources ─────────────────────────────────────────────╮
 │                                                             │
-│  ▸ External Skill Directories   2 configured                │
-│    Skill Feeds                  1 configured                │
+│  Configure external skill directories and private feeds.    │
+│  Skill feature enablement stays in Security & Access.       │
 │                                                             │
-│  [ Open ]    [ Back ]                                       │
+│  Current: external directories=2, skill feeds=1             │
 │                                                             │
-│ ↑/↓ navigate · Enter open · Esc back                        │
+│  ▸ External skill directory  ~/work/team-skills             │
+│    Skill feed URL            https://skills.example.com     │
+│    Skill feed API key        (stored token preserved)       │
+│                                                             │
+│ ↑/↓ navigate · Type/Paste edit · Backspace delete           │
+│ Enter apply · Esc Settings Areas                            │
 ╰─────────────────────────────────────────────────────────────╯
 ```
+
+`Enter` validates and autosaves the typed draft. Blank API key preserves an
+existing stored bearer token.
 
 ---
 
@@ -838,39 +870,29 @@ toggle, or return behavior is caught.
 
 ## Config.8 — Telemetry & Alerting
 
-### 8.1 Telemetry & Alerting sub-page
+### 8.1 Telemetry & Alerting inline editor
 
 ```
 ╭─ Telemetry & Alerting ──────────────────────────────────────╮
 │                                                             │
-│  ▸ Telemetry                Disabled                        │
-│    Outbound Webhooks        2 configured                    │
+│  Configure OpenTelemetry export and operational outbound    │
+│  webhooks. Delivery-policy tuning is intentionally parked.  │
 │                                                             │
-│  [ Open ]    [ Back ]                                       │
+│  Current: telemetry=disabled, outbound webhooks=1          │
 │                                                             │
-│ ↑/↓ navigate · Enter open · Esc back                        │
+│  ▸ Telemetry enabled          [ ]                          │
+│    OTLP endpoint              http://127.0.0.1:4317        │
+│    Outbound webhook URL       https://hooks.example.com    │
+│    Outbound auth header       (stored header preserved)    │
+│                                                             │
+│ ↑/↓ navigate · Space toggle/save · Type/Paste edit         │
+│ Backspace delete · Enter apply · Esc Settings Areas        │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 8.2 Telemetry editor
-
-```
-╭─ Telemetry & Alerting › Telemetry ──────────────────────────╮
-│                                                             │
-│  Telemetry enabled:         [ X ] yes                       │
-│                                                             │
-│  OTLP endpoint:                                              │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │ http://127.0.0.1:4317                                 │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  gRPC OTLP only. Netclaw expects collector port 4317.      │
-│                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
-╰─────────────────────────────────────────────────────────────╯
-```
+Space or Enter on the telemetry row toggles and autosaves. `Enter` on text
+rows validates and autosaves the draft. Blank auth header preserves an existing
+stored header.
 
 ---
 
@@ -962,17 +984,17 @@ Empty-state (T8):
 ```
 ╭─ Inbound Webhooks ──────────────────────────────────────────╮
 │                                                             │
-│  Inbound webhooks let external systems trigger Netclaw      │
-│  via signed HTTP requests. Routes are defined per webhook   │
-│  under ~/.netclaw/config/webhooks/*.json (file-edited).     │
+│  Global webhook enablement lives here. Route files stay     │
+│  owned by `netclaw webhooks`.                               │
 │                                                             │
-│  [ X ] Inbound webhooks enabled                             │
+│  ▸ Enabled                 [ ]                              │
+│    Execution timeout       30 seconds                       │
+│    Route authoring         netclaw webhooks                 │
 │                                                             │
-│  Request timeout (seconds): 30                              │
+│  Routes: total=0, enabled=0, disabled=0, invalid=0          │
 │                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ Tab next · Space toggle · Enter activate · Esc cancel       │
+│ ↑/↓ navigate · Space toggle/save · Type edit timeout        │
+│ Enter apply · Esc Settings Areas                            │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
@@ -980,204 +1002,64 @@ Empty-state (T8):
 toggles the feature and sets the timeout. If user enables this flag
 but no routes exist, `InboundWebhookRoutesDoctorCheck` (existing)
 surfaces the empty-routes condition — per CLAUDE.md "fail loudly,"
-we do NOT silently default to dummy routes.
+we do NOT silently default to dummy routes. Failed validation rolls the
+enabled toggle back and leaves files unchanged.
 
 **Doctor checks:** `ConfigSchemaDoctorCheck`, `InboundWebhookRoutesDoctorCheck`.
 
 ---
 
-## Config.5.2 — External Skill Directories
+## Deferred Skill Sources Expansion
 
-### 10.1 List page (T2 with `PathItemEditor`)
-
-```
-╭─ External Skill Directories ────────────────────────────────╮
-│                                                             │
-│  ▸ ~/.claude/skills                                         │
-│    ~/work/team-skills                                       │
-│    ~/personal-skills                                        │
-│                                                             │
-│    + Add directory                                          │
-│                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Enter edit · d remove · Esc cancel           │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-Empty state per T8.
-
-### 10.2 Inline add/edit overlay
-
-```
-│    ~/work/team-skills                                       │
-│  ╭─ Edit directory ───────────────────────────────────────╮ │
-│  │ ~/personal-skills_                                     │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  [Enter] save  ·  [Esc] cancel                              │
-```
-
-Renders as an overlay row replacing the focused item. Validates: path
-exists, is a directory, is readable. Errors render inline below the
-input row.
-
-### 10.3 Inline delete confirm
-
-When `d` pressed on a focused item:
-
-```
-│  ▸ ~/.claude/skills        Remove? [y/N]                    │
-```
-
-Single-keypress. `y` removes; anything else cancels. No modal.
-
-**Doctor checks:** `ConfigSchemaDoctorCheck`, `ExternalSkillSourcesDoctorCheck`.
-
----
-
-## Config.5.3 — Skill Feeds
-
-### 11.1 List page (T3 with `SkillFeedItemEditor`)
-
-```
-╭─ Skill Feeds ───────────────────────────────────────────────╮
-│                                                             │
-│  ▸ corp-internal-feed       ✓ reachable                     │
-│    legacy-feed              ✗ 403 forbidden                 │
-│                                                             │
-│    + Add feed                                               │
-│                                                             │
-│  [ Save ]    [ Cancel ]                                     │
-│                                                             │
-│ ↑/↓ navigate · Enter edit · d remove · Esc cancel           │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-### 11.2 Add/edit form (T4)
-
-```
-╭─ Skill Feeds › Edit "corp-internal-feed" ───────────────────╮
-│                                                             │
-│  Name:                                                      │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │ corp-internal-feed                                     │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  Feed URL:                                                  │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │ https://skills.internal.corp/manifest.json             │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│                                                             │
-│  API key (Bearer token, optional):                          │
-│  ╭────────────────────────────────────────────────────────╮ │
-│  │                                                        │ │
-│  ╰────────────────────────────────────────────────────────╯ │
-│  (configured — leave blank to keep)                         │
-│                                                             │
-│  [ Save ]    [ Cancel ]    [ Test connection ]              │
-│  [ Delete feed ]                                            │
-│                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-### 11.3 Delete confirm (T5)
-
-```
-╭─ Remove feed "legacy-feed"? ────────────────────────────────╮
-│                                                             │
-│  This feed will be removed from SkillFeeds.Feeds. Any       │
-│  stored Bearer token for it will be deleted.                │
-│                                                             │
-│  ▸ [ Cancel ]    [ Yes, remove ]                            │
-│                                                             │
-│ Default: Cancel (Esc or Enter)                              │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-**Doctor checks:** `ConfigSchemaDoctorCheck`, `SkillFeedsDoctorCheck`
-(WARN-only — transient outages don't block saves).
+A future richer Skill Sources pass may reintroduce dedicated list managers for
+many external directories and many private feeds. If it does, use the T2/T3/T4
+autosave templates above: no outer `[ Save ] [ Cancel ]` row, `Apply` for typed
+drafts, and explicit `Back`/`Done` rows when useful.
 
 ---
 
 ## Config.7 — Browser Automation
 
-### 12.1 Status & toggle (Playwright not installed)
+### 12.1 Canonical browser MCP profile editor
 
 ```
 ╭─ Browser Automation ────────────────────────────────────────╮
 │                                                             │
-│  Headless browser support via Playwright. Used by the       │
-│  `browser` tool for web scraping and form interaction.      │
+│  Adds or removes Netclaw's canonical browser MCP profile.   │
+│  Tool grants stay in MCP permissions.                       │
 │                                                             │
-│  Status: Playwright not installed                           │
+│  ▸ Enabled                 [ ]                              │
+│    Backend                 Playwright                       │
+│    MCP permissions         open grant editor                │
 │                                                             │
-│  [   ] Browser automation enabled                           │
-│  (cannot enable until Playwright is installed)              │
+│  Runtime check: Playwright not installed                    │
+│  Manual install guidance:                                   │
+│  - dotnet tool install --global Microsoft.Playwright.CLI    │
+│  - playwright install chromium                              │
 │                                                             │
-│  [ Install instructions →  ]    [ Cancel ]                  │
-│                                                             │
-│ Tab next · Enter activate · Esc cancel                      │
+│ ↑/↓ navigate · Space/Enter activate · ←/→ backend/save      │
+│ Esc Settings Areas                                          │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-### 12.2 Status & toggle (Playwright installed)
-
-```
-╭─ Browser Automation ────────────────────────────────────────╮
-│                                                             │
-│  Status: Playwright installed (v1.42.0)                     │
-│                                                             │
-│  [ X ] Browser automation enabled                           │
-│                                                             │
-│  [ Save ]    [ Cancel ]    [ Uninstall instructions →  ]    │
-│                                                             │
-│ Tab next · Space toggle · Enter activate · Esc cancel       │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-### 12.3 Install instructions sub-page
-
-```
-╭─ Browser Automation › Install Playwright ───────────────────╮
-│                                                             │
-│  Playwright is not currently installed. To install:         │
-│                                                             │
-│    1. Run:                                                  │
-│         dotnet tool install --global Microsoft.Playwright.CLI│
-│                                                             │
-│    2. Then:                                                 │
-│         playwright install chromium                         │
-│                                                             │
-│  After installation, return to this editor and re-open to   │
-│  detect the installation.                                   │
-│                                                             │
-│  [ OK ]                                                     │
-│                                                             │
-│ Enter exit                                                  │
-╰─────────────────────────────────────────────────────────────╯
-```
-
-**Why not shell out to install:** installing global tooling from a TUI
-is too magical and platform-fragile. Print instructions; let the user
-run them in their shell. Detection on re-open is automatic
-(`BrowserAutomationDoctorCheck` resolves `playwright` from PATH at
-editor entry).
+Space or Enter on `Enabled` creates/removes canonical browser MCP profiles and
+autosaves. `←` / `→` on Backend changes the backend preference and autosaves.
+Enabling fails loudly and rolls back when runtime prerequisites are missing.
+The editor prints manual install guidance; it does not run global tool installs.
 
 **Doctor checks:** `ConfigSchemaDoctorCheck`, `BrowserAutomationDoctorCheck`.
 
 ## Daemon-restart nudge at exit
 
-Printed to stderr after Termina teardown when (a) at least one section
-saved during the session AND (b) the daemon is currently running.
+Printed to stderr after Termina teardown when (a) at least one completed action
+persisted config during the session AND (b) the daemon is currently running.
 
 ```
 Config saved. Restart the daemon to apply changes:
   netclaw daemon stop && netclaw daemon start
 ```
 
-When the daemon is not running OR no saves occurred, the nudge is
+When the daemon is not running OR no config writes occurred, the nudge is
 omitted.
 
 **Daemon detection:** `netclaw config` uses the same lightweight probe

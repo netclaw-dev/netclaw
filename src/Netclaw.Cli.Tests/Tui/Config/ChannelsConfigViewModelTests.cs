@@ -262,6 +262,39 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Config_picker_exposes_done_row_without_save_action()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        using var vm = CreateViewModel();
+
+        Assert.True(vm.Step.ShowDonePickerRow);
+        Assert.False(vm.Step.ShowDoneAction);
+        Assert.Equal("Done adding channels", vm.Step.DonePickerRowLabel);
+        Assert.Equal(vm.Step.Adapters.Count + 1, vm.Step.PickerRowCount);
+    }
+
+    [Fact]
+    public void Channel_permissions_done_row_returns_to_adapter_menu()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        using var vm = CreateViewModel();
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem();
+        var doneIndex = vm.GetChannelRows()
+            .Select((row, index) => (row, index))
+            .Single(entry => entry.row.IsDoneAction)
+            .index;
+
+        vm.MoveChannelRow(doneIndex);
+        vm.OpenSelectedChannelAudience();
+
+        Assert.Equal(ChannelsConfigScreen.AdapterMenu, vm.Screen.Value);
+        Assert.Equal("Done adding channels. Completed changes are already saved.", vm.Status.Value.Text);
+    }
+
+    [Fact]
     public void Esc_from_incomplete_add_channel_draft_writes_nothing()
     {
         WriteAllChannelConfig();

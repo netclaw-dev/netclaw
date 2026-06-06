@@ -75,12 +75,25 @@ public sealed class ChannelPickerStepView : IWizardStepView
             layout = layout.WithChild(node);
         }
 
+        if (_vm.ShowDonePickerRow)
+        {
+            var isFocused = _vm.IsDonePickerRowSelected;
+            var prefix = isFocused ? " ▶ " : "   ";
+            var node = new TextNode($"{prefix}{_vm.DonePickerRowLabel,-24} Return to Settings Areas");
+            node = isFocused
+                ? node.WithForeground(Color.Cyan).Bold()
+                : node.WithForeground(Color.White);
+            layout = layout.WithChild(node);
+        }
+
         layout = layout.WithSpacing(1);
 
         var hasConfigured = _vm.AnyAdapterConfigured;
         var hintText = hasConfigured
             ? "  ↑/↓ to navigate, Space to toggle, Enter to open selected.\n  [e] Edit configured channel"
             : "  ↑/↓ to navigate, Space to toggle, Enter to configure selected.";
+        if (_vm.ShowDonePickerRow)
+            hintText += "\n  Select Done when finished; completed changes are already saved.";
         if (_vm.ShowDoneAction)
         {
             hintText += hasConfigured
@@ -111,6 +124,12 @@ public sealed class ChannelPickerStepView : IWizardStepView
             return true;
         }
 
+        if (_vm.ShowDonePickerRow && keyInfo.Key == _vm.DoneKey)
+        {
+            _callbacks.AdvanceStep();
+            return true;
+        }
+
         switch (keyInfo.Key)
         {
             case ConsoleKey.UpArrow:
@@ -120,17 +139,26 @@ public sealed class ChannelPickerStepView : IWizardStepView
                 return true;
 
             case ConsoleKey.DownArrow:
-                if (_vm.CursorIndex < adapters.Count - 1)
+                if (_vm.CursorIndex < _vm.PickerRowCount - 1)
                     _vm.CursorIndex++;
                 _callbacks.InvalidateAndRedraw();
                 return true;
 
             case ConsoleKey.Spacebar:
+                if (!_vm.IsAdapterRowSelected)
+                    return true;
+
                 _vm.ToggleAdapter(_vm.CursorIndex);
                 _callbacks.InvalidateAndRedraw();
                 return true;
 
             case ConsoleKey.Enter:
+                if (_vm.IsDonePickerRowSelected)
+                {
+                    _callbacks.AdvanceStep();
+                    return true;
+                }
+
                 if (_vm.IsAdapterEnabled(_vm.CursorIndex))
                 {
                     // Re-enter sub-flow for editing

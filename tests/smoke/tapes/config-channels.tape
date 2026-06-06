@@ -38,17 +38,19 @@ Wait+Screen@10s /C01/
 Right
 Wait+Screen@10s /Public/
 
-# Add a new channel without touching credentials.
+# Add a new channel without touching credentials, then use the explicit done row.
 Type "a"
 Wait+Screen@10s /Add Channel/
 Type "C09"
 Enter
 Wait+Screen@10s /Added C09/
 Wait+Screen@10s /C09/
+Wait+Screen@10s /Done adding channels/
+Down 2
+Enter
+Wait+Screen@10s /What would you like to do/
 
 # Update allowed users from the management menu. Completed actions autosave.
-Escape
-Wait+Screen@10s /What would you like to do/
 Down 2
 Enter
 Wait+Screen@10s /User IDs/
@@ -68,12 +70,14 @@ Type "xapp-smoke-typed"
 Enter
 Wait+Screen@10s /Credential changes saved/
 
-# Return to picker and then to Settings Areas. No explicit save key is required.
+# Return to picker and select the explicit done row. No save key is required.
 Escape
 Wait+Screen@10s /Which channels would you like to connect/
 Wait+Screen@10s /3 channels/
+Wait+Screen@10s /Done adding channels/
 
-Escape
+Down 3
+Enter
 Wait+Screen@10s /Settings Areas/
 
 Ctrl+Q

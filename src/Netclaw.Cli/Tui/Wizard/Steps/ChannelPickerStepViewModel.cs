@@ -67,18 +67,23 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     internal int CursorIndex
     {
         get => _cursorIndex;
-        set => _cursorIndex = Math.Clamp(value, 0, Math.Max(_adapters.Count - 1, 0));
+        set => _cursorIndex = Math.Clamp(value, 0, Math.Max(PickerRowCount - 1, 0));
     }
     internal IWizardStepViewModel? ActiveAdapterVm => _activeAdapter?.Vm;
     internal IWizardStepView? ActiveAdapterView => _activeAdapter?.View;
     internal ChannelType? ActiveAdapterType => _activeAdapter?.Type;
     internal ChannelType SelectedAdapterType => _adapters[CursorIndex].Type;
     internal string SelectedAdapterDisplayName => _adapters[CursorIndex].DisplayName;
+    internal int PickerRowCount => _adapters.Count + (ShowDonePickerRow ? 1 : 0);
+    internal bool IsAdapterRowSelected => CursorIndex < _adapters.Count;
+    internal bool IsDonePickerRowSelected => ShowDonePickerRow && CursorIndex == _adapters.Count;
 
     internal string DoneActionText { get; set; } = "continue to next step";
     internal string DoneKeyActionLabel { get; set; } = "Done";
     internal ConsoleKey DoneKey { get; set; } = ConsoleKey.D;
     internal bool ShowDoneAction { get; set; } = true;
+    internal bool ShowDonePickerRow { get; set; }
+    internal string DonePickerRowLabel { get; set; } = "Done";
     internal string DoneKeyLabel => DoneKey switch
     {
         ConsoleKey.D => "d",
@@ -194,6 +199,9 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
     {
         if (_mode == Mode.SubFlow && _activeAdapter is not null)
             return _activeAdapter.Vm.GetHelpText();
+
+        if (ShowDonePickerRow)
+            return "  Select which communication channels to connect. Use Done when finished.";
 
         return ShowDoneAction
             ? $"  Select which communication channels to connect. Press [{DoneKeyLabel}] when done."

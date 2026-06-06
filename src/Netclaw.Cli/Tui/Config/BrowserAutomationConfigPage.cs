@@ -94,7 +94,7 @@ internal sealed class BrowserAutomationConfigPage : ReactivePage<BrowserAutomati
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space/Enter] Select/Save  [←/→] Backend/Save  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space/Enter] Activate  [←/→] Backend/Save  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {

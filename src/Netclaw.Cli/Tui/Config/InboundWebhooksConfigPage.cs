@@ -91,7 +91,7 @@ internal sealed class InboundWebhooksConfigPage : ReactivePage<InboundWebhooksCo
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space] Toggle/Save  [Type] Edit timeout  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
+        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space] Toggle/Save  [Type/Paste] Edit timeout  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
 
     private void HandleKeyPress(KeyPressed key)
     {
