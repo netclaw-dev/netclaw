@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -41,14 +42,9 @@ public class LlmSessionImageDeliveryTests : LlmSessionTestBase
     private readonly string _imagePath = Path.Combine(
         Path.GetTempPath(), $"netclaw-img-delivery-{Guid.NewGuid():N}.png");
 
-    // Minimal but valid PNG header (signature + IHDR start) — enough to pass the
-    // materialization magic-byte/MIME compatibility checks. Same bytes the
-    // pipeline-level media tests use.
-    private static readonly byte[] PngBytes =
-    [
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
-    ];
+    // Real PNG: the egress normalizer decodes every model-input image, so a fake
+    // magic-byte stub would now be dropped. Small enough to pass through unchanged.
+    private static readonly byte[] PngBytes = TestImages.SmallPng();
 
     public LlmSessionImageDeliveryTests(ITestOutputHelper output) : base(output) { }
 

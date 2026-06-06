@@ -1318,11 +1318,9 @@ public class SubAgentActorTests : TestKit
         public void Dispose() { }
     }
 
-    private static readonly byte[] FakePngBytes =
-    [
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52
-    ];
+    // Real PNG: the egress normalizer decodes every model-input image, so a
+    // fake magic-byte stub would now be dropped. Small enough to pass through.
+    private static readonly byte[] FakePngBytes = TestImages.SmallPng();
 }
 
 /// <summary>
