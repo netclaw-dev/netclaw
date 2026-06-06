@@ -21,10 +21,18 @@ Wait+Screen@10s /Settings Areas/
 Down 4
 Enter
 Wait+Screen@10s /Skill Sources/
-Wait+Screen@5s /External skill directory/
+Wait+Screen@5s /Places Netclaw loads skills from/
+Enter
+Wait+Screen@10s /Add a local skill folder/
 Type "/tmp/netclaw-smoke-config-ops-skills"
 Enter
-Wait+Screen@10s /Skill Sources settings saved/
+Wait+Screen@10s /Allow symlinks inside this folder/
+Enter
+Wait+Screen@10s /Review local folder source/
+Enter
+Wait+Screen@10s /Added local skill folder/
+Escape
+Wait+Screen@10s /Local folders/
 Escape
 Wait+Screen@10s /Settings Areas/
 Ctrl+Q

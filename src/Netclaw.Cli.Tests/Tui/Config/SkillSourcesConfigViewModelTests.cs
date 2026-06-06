@@ -45,17 +45,12 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Directory.CreateDirectory(externalDir);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
-        vm.AppendText(externalDir);
-        vm.MoveSelection(1);
-        vm.AppendText("https://skills.example.test");
-        vm.MoveSelection(1);
-        vm.AppendText("secret-token");
-
-        Assert.True(vm.Save());
+        AddLocalFolder(vm, externalDir, "team-skills");
+        AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
 
         var external = Bind<ExternalSkillsConfig>("ExternalSkills");
         var resolved = external.ResolveEnabledSources();
-        Assert.Contains(resolved, source => source.Name == "custom-skills" && source.Paths.Contains(externalDir));
+        Assert.Contains(resolved, source => source.Name == "team-skills" && source.Paths.Contains(externalDir));
 
         var feed = SingleFeedSection();
         Assert.Equal("custom-feed", feed["Name"]);
@@ -73,9 +68,10 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
+        BeginAddLocalFolder(vm);
         vm.AppendText("https://example.test/skills");
+        vm.ActivateSelected();
 
-        Assert.False(vm.Save());
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("local filesystem path", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
@@ -87,9 +83,10 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
+        BeginAddLocalFolder(vm);
         vm.AppendText(Path.Combine(_dir.Path, "missing-skills"));
+        vm.ActivateSelected();
 
-        Assert.False(vm.Save());
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("must already exist", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
@@ -104,9 +101,8 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Directory.CreateDirectory(externalDir);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
-        vm.AppendText(externalDir);
+        AddLocalFolder(vm, externalDir, "team-skills");
 
-        Assert.True(vm.Save());
         Assert.Equal(externalDir, Bind<ExternalSkillsConfig>("ExternalSkills").ResolveEnabledSources().Single().Paths.Single());
         Assert.Equal("ENC:not-valid-for-this-keyring", SingleFeedSection()["ApiKey"]);
     }
@@ -117,10 +113,10 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
-        vm.MoveSelection(1);
+        BeginAddRemoteServer(vm);
         vm.AppendText("file:///tmp/skills");
+        vm.ActivateSelected();
 
-        Assert.False(vm.Save());
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("HTTP or HTTPS", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
@@ -131,12 +127,15 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
-        vm.MoveSelection(1);
-        vm.AppendText("https://skills.example.test");
-        vm.MoveSelection(1);
-        vm.AppendText("token\nnext");
 
-        Assert.False(vm.Save());
+        BeginAddRemoteServer(vm);
+        vm.AppendText("https://skills.example.test");
+        vm.ActivateSelected();
+        vm.MoveSelection(1);
+        vm.ActivateSelected();
+        vm.AppendText("token\nnext");
+        vm.ActivateSelected();
+
         Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
         Assert.Contains("single-line", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
@@ -147,15 +146,20 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(false));
-        vm.MoveSelection(1);
-        vm.AppendText("https://skills.example.test");
 
-        Assert.False(vm.Save());
+        BeginAddRemoteServer(vm);
+        vm.AppendText("https://skills.example.test");
+        vm.ActivateSelected();
+        vm.ActivateSelected();
+
         Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
         Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
 
-        Assert.True(vm.Save());
+        vm.ActivateSelected();
+        ReplaceDraft(vm, "custom-feed");
+        vm.ActivateSelected();
+
         Assert.Equal("https://skills.example.test", SingleFeedSection()["Url"]);
     }
 
@@ -169,16 +173,122 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         File.WriteAllText(_paths.SecretsPath, "{\"Providers\":{\"openrouter\":{\"ApiKey\":\"ENC:provider\"}}}");
         var beforeSecrets = File.ReadAllText(_paths.SecretsPath);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
-        vm.MoveSelection(1);
-        vm.AppendText("https://new.example.test");
 
-        Assert.True(vm.Save());
+        OpenRemoteDetail(vm, "custom-feed");
+        MoveToDetailAction(vm, SkillSourceDetailAction.ChangeLocation);
+        vm.ActivateSelected();
+        ReplaceDraft(vm, "https://new.example.test");
+        vm.ActivateSelected();
 
         var feed = SingleFeedSection();
         Assert.Equal("https://new.example.test", feed["Url"]);
         Assert.Equal(encryptedApiKey, feed["ApiKey"]);
         Assert.Equal("old-token", protector.Unprotect(feed["ApiKey"]!));
         Assert.Equal(beforeSecrets, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public void Remove_token_explicitly_deletes_feed_api_key()
+    {
+        var protector = SecretsProtection.CreateProtector(_paths);
+        var encryptedApiKey = protector.Protect("old-token");
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"SkillFeeds\":{{\"Feeds\":[{{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"ApiKey\":\"{encryptedApiKey}\",\"Enabled\":true}}]}}}}");
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        OpenRemoteDetail(vm, "custom-feed");
+        MoveToDetailAction(vm, SkillSourceDetailAction.RemoveToken);
+        vm.ActivateSelected();
+
+        Assert.Null(SingleFeedSection()["ApiKey"]);
+        Assert.Equal(ConfigStatusTone.Success, vm.Status.Value.Tone);
+        Assert.Contains("token removed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void BeginAddLocalFolder(SkillSourcesConfigViewModel vm)
+    {
+        EnsureInventory(vm);
+        MoveToInventoryAction(vm, SkillSourcesInventoryAction.AddLocalFolder);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
+    }
+
+    private static void AddLocalFolder(SkillSourcesConfigViewModel vm, string path, string name)
+    {
+        BeginAddLocalFolder(vm);
+        vm.AppendText(path);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddLocalSymlinks, vm.Screen.Value);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddLocalName, vm.Screen.Value);
+        ReplaceDraft(vm, name);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+    }
+
+    private static void BeginAddRemoteServer(SkillSourcesConfigViewModel vm)
+    {
+        EnsureInventory(vm);
+        MoveToInventoryAction(vm, SkillSourcesInventoryAction.AddSkillServer);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
+    }
+
+    private static void AddRemoteServer(SkillSourcesConfigViewModel vm, string url, string token, string name)
+    {
+        BeginAddRemoteServer(vm);
+        vm.AppendText(url);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
+        vm.MoveSelection(1);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
+        vm.AppendText(token);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        ReplaceDraft(vm, name);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+    }
+
+    private static void OpenRemoteDetail(SkillSourcesConfigViewModel vm, string name)
+    {
+        var index = vm.InventoryRows
+            .Select((row, idx) => (row, idx))
+            .Single(entry => entry.row.SourceKind == SkillSourceKind.RemoteSkillServer && entry.row.SourceName == name)
+            .idx;
+        vm.SelectedRow.Value = index;
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+    }
+
+    private static void MoveToInventoryAction(SkillSourcesConfigViewModel vm, SkillSourcesInventoryAction action)
+    {
+        vm.SelectedRow.Value = vm.InventoryRows
+            .Select((row, idx) => (row, idx))
+            .Single(entry => entry.row.Action == action)
+            .idx;
+    }
+
+    private static void EnsureInventory(SkillSourcesConfigViewModel vm)
+    {
+        while (vm.Screen.Value != SkillSourcesScreen.Inventory)
+            vm.GoBack();
+    }
+
+    private static void MoveToDetailAction(SkillSourcesConfigViewModel vm, SkillSourceDetailAction action)
+    {
+        vm.SelectedRow.Value = vm.DetailRows
+            .Select((row, idx) => (row, idx))
+            .Single(entry => entry.row.Action == action)
+            .idx;
+    }
+
+    private static void ReplaceDraft(SkillSourcesConfigViewModel vm, string value)
+    {
+        while (vm.Draft.Value.Length > 0)
+            vm.Backspace();
+        vm.AppendText(value);
     }
 
     private T Bind<T>(string sectionName) where T : new()

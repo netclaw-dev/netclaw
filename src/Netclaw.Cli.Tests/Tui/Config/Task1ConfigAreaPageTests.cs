@@ -66,14 +66,16 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     {
         var app = CreateSkillSourcesApp(out var input, out var vm);
 
-        input.EnqueueString("/tmp/netclaw-");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("/tmp/netclaw smoke-");
         input.EnqueuePaste("skills");
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal("/tmp/netclaw-skills", vm.ExternalDirectoryDraft.Value);
+        Assert.Equal(SkillSourcesScreen.AddLocalPath, vm.Screen.Value);
+        Assert.Equal("/tmp/netclaw smoke-skills", vm.Draft.Value);
     }
 
     [Fact]

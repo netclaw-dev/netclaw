@@ -118,14 +118,13 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                 DynamicValidationCoverage.Required(
                     nameof(SkillSourcesConfigViewModelTests),
                     nameof(SkillSourcesConfigViewModelTests.Save_blocks_unreachable_skill_feed_until_second_save_anyway)),
-                SecretCoverage.NoExplicitDeleteFlow(
+                SecretCoverage.Required(
                     nameof(SkillSourcesConfigViewModelTests),
                     nameof(SkillSourcesConfigViewModelTests.Save_preserves_existing_feed_api_key_and_unrelated_secrets),
                     nameof(SkillSourcesConfigViewModelTests),
                     nameof(SkillSourcesConfigViewModelTests.Save_persists_external_directory_and_skill_feed_for_runtime_binding),
                     nameof(SkillSourcesConfigViewModelTests),
-                    nameof(SkillSourcesConfigViewModelTests.Save_preserves_existing_feed_api_key_and_unrelated_secrets),
-                    "Skill feed API key entry preserves blank existing values and replaces nonblank values; explicit delete is not in this config pass."),
+                    nameof(SkillSourcesConfigViewModelTests.Remove_token_explicitly_deletes_feed_api_key)),
                 new RuntimeConsumerCoverage(
                     "Daemon skill scanning and server feed sync consume ExternalSkills.Sources and SkillFeeds.Feeds.",
                     [

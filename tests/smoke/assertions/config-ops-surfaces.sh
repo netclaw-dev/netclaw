@@ -15,7 +15,7 @@ fi
 
 config_json="$(read_config_json)"
 
-assert_field '.ExternalSkills.Sources[0].Name' 'custom-skills' "$config_json" || :
+assert_field '.ExternalSkills.Sources[0].Name' 'netclaw-smoke-config-ops-skills' "$config_json" || :
 assert_field '.ExternalSkills.Sources[0].Path' '/tmp/netclaw-smoke-config-ops-skills' "$config_json" || :
 assert_field '.SkillFeeds.Feeds == null' 'true' "$config_json" || :
 assert_field '.Telemetry.Enabled' 'true' "$config_json" || :
