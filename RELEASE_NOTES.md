@@ -1,3 +1,23 @@
+#### 0.23.0-beta.5 2026-06-06 ####
+
+Netclaw v0.23.0-beta.5 — shell approval pattern fix and MCP SDK bump
+
+This is a prerelease on the beta channel. Stable installs are unaffected and remain on 0.22.1; only opt-in beta testers are offered this build.
+
+**Try the beta**
+
+* Linux / macOS: `curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta`
+* Windows: download `install.ps1`, then `./install.ps1 -Channel beta`
+* Docker: `docker pull ghcr.io/netclaw-dev/netclaw:beta`
+
+**Bug Fixes**
+
+* **Shell approval patterns no longer match bare integers** — fixed a bug where numeric argument patterns (e.g., `1`, `42`) were incorrectly matched as approval patterns for shell commands. ([#1331](https://github.com/netclaw-dev/netclaw/pull/1331))
+
+**Dependency Updates**
+
+* **ModelContextProtocol.Core and ModelContextProtocol.AspNetCore bumped to 1.4.0** — pulls in upstream MCP SDK improvements. ([#1329](https://github.com/netclaw-dev/netclaw/pull/1329), [#1330](https://github.com/netclaw-dev/netclaw/pull/1330))
+
 #### 0.23.0-beta.4 2026-06-04 ####
 
 Netclaw v0.23.0-beta.4 — streaming-native chat stack, composable routing, and spinner standardization

@@ -8,9 +8,9 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.23.0</VersionPrefix>
+    <VersionPrefix>0.23.0-beta.5</VersionPrefix>
     <VersionSuffix>beta.4</VersionSuffix>
-    <PackageReleaseNotes>Netclaw v0.23.0-beta.4 — streaming-native chat stack, composable routing, and spinner standardization
+    <PackageReleaseNotes>Netclaw v0.23.0-beta.5 — shell approval pattern fix and MCP SDK bump
 
 This is a prerelease on the beta channel. Stable installs are unaffected and remain on 0.22.1; only opt-in beta testers are offered this build.
 
@@ -20,13 +20,13 @@ This is a prerelease on the beta channel. Stable installs are unaffected and rem
 * Windows: download `install.ps1`, then `./install.ps1 -Channel beta`
 * Docker: `docker pull ghcr.io/netclaw-dev/netclaw:beta`
 
-**Features**
-
-* **Streaming-native chat-client stack with composable routing** — the `IChatClient` stack has been redesigned so the streaming-vs-non-streaming transport distinction no longer leaks into callers. Netclaw now issues only streaming requests across all 8 providers, eliminating the OpenAI Codex `400 "Stream must be set to true"` error and preventing reasoning content drops on some providers. Resilience and observability are compositional via `Microsoft.Extensions.AI.ChatClientBuilder` — each (provider, model) pipeline is assembled as `Logging → Retry → VendorOptions → raw`. A `RoutingChatClient` walks ordered candidate lists for failover, and `LoggingChatClient` is now stateless with session-correlated log tags (`SessionId`). The transport-level retry policy is configurable via `Session:Tuning:StreamingRetryPolicy`, replacing the previous overlapping actor-level retry. ([#1313](https://github.com/netclaw-dev/netclaw/pull/1313))
-
 **Bug Fixes**
 
-* **Standardized self-animating spinner across probe surfaces** — replaced five hand-rolled, drifted probe/validation spinners with Termina's shared `SpinnerNode` helper. Fixes the frozen ModelManager spinner, the ~1fps crawl on provider validation/probe spinners, and inconsistent animation cadence. Views now just drop in the spinner node — no per-surface tick field or hand-wired redraw subscription. ([#1312](https://github.com/netclaw-dev/netclaw/pull/1312), [#1327](https://github.com/netclaw-dev/netclaw/pull/1327))</PackageReleaseNotes>
+* **Shell approval patterns no longer match bare integers** — fixed a bug where numeric argument patterns (e.g., `1`, `42`) were incorrectly matched as approval patterns for shell commands. ([#1331](https://github.com/netclaw-dev/netclaw/pull/1331))
+
+**Dependency Updates**
+
+* **ModelContextProtocol.Core and ModelContextProtocol.AspNetCore bumped to 1.4.0** — pulls in upstream MCP SDK improvements. ([#1329](https://github.com/netclaw-dev/netclaw/pull/1329), [#1330](https://github.com/netclaw-dev/netclaw/pull/1330))</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
