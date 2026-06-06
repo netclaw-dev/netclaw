@@ -501,29 +501,303 @@ autosaves only if validation succeeds.
 
 ## Config.5 — Skill Sources
 
-The MVP Skill Sources editor is a compact inline editor, not a nested list
-manager. It edits the high-churn defaults and leaves richer multi-feed/list
-management to later work.
+Skill Sources manages the places Netclaw loads skills from. The UI keeps the
+same two concepts that exist in today's `netclaw init` flow:
+
+- **Local folders** — additional skill directories on disk, including detected
+  well-known folders from other agent tools and operator-provided team folders.
+- **Remote skill servers** — HTTP(S) skill feeds that implement the skill
+  discovery protocol.
+
+This surface manages source inventory and source health. Skill feature
+enablement remains in Security & Access, and individual skill browse/install
+actions remain under `netclaw skill`.
+
+### 5.1 Navigation workflow
+
+```
+netclaw config
+  └── Skill Sources
+      ├── Sources inventory
+      │   ├── Add local folder
+      │   │   ├── Enter path
+      │   │   ├── Choose symlink policy
+      │   │   ├── Probe folder + preview discovered skills
+      │   │   └── Apply -> autosave -> source detail
+      │   ├── Add skill server
+      │   │   ├── Enter server URL
+      │   │   ├── Choose auth: no auth / bearer token
+      │   │   ├── Probe discovery endpoint
+      │   │   ├── Confirm source name
+      │   │   └── Apply -> autosave -> source detail
+      │   ├── Rescan all
+      │   ├── Focus source -> source detail
+      │   └── Done -> Settings Areas
+      └── Source detail
+          ├── Toggle enabled
+          ├── Test/rescan source
+          ├── Rename / change path / change URL / rotate token
+          ├── Remove source
+          └── Done -> Sources inventory
+```
+
+### 5.2 Treatment A — unified source inventory (recommended)
+
+This treatment presents local folders and remote skill servers as one inventory,
+grouped by type. It works best when operators care about "where skills come
+from" more than about the underlying config section names.
 
 ```
 ╭─ Skill Sources ─────────────────────────────────────────────╮
 │                                                             │
-│  Configure external skill directories and private feeds.    │
-│  Skill feature enablement stays in Security & Access.       │
+│  Places Netclaw loads skills from.                          │
+│  Skill enablement stays in Security & Access.               │
 │                                                             │
-│  Current: external directories=2, skill feeds=1             │
+│  Local folders                                               │
+│  ▸ ✓ dotnet-skills       ~/.claude/skills        42 skills  │
+│    ✓ team-skills         ~/work/team-skills      11 skills  │
 │                                                             │
-│  ▸ External skill directory  ~/work/team-skills             │
-│    Skill feed URL            https://skills.example.com     │
-│    Skill feed API key        (stored token preserved)       │
+│  Remote skill servers                                        │
+│    ✓ company-feed        https://skills.acme.io   18 skills │
+│    ⚠ lab-feed            https://lab.example      auth fail │
 │                                                             │
-│ ↑/↓ navigate · Type/Paste edit · Backspace delete           │
-│ Enter apply · Esc Settings Areas                            │
+│    + Add local folder                                        │
+│    + Add skill server                                        │
+│    Rescan all                                                │
+│    Done                                                     │
+│                                                             │
+│ ↑/↓ navigate · Enter open/apply · Space toggle enabled      │
+│ Delete remove · Esc Settings Areas                          │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-`Enter` validates and autosaves the typed draft. Blank API key preserves an
-existing stored bearer token.
+The inventory never says `ExternalSkills.Sources` or `SkillFeeds.Feeds`. Those
+are persistence details. Rows show the source's user-facing name, location, and
+last known discovery result.
+
+### 5.3 Treatment B — two-lane landing
+
+This alternate treatment makes the two concepts more explicit up front. It is
+clearer for first-time operators but costs one extra click before editing an
+individual source.
+
+```
+╭─ Skill Sources ─────────────────────────────────────────────╮
+│                                                             │
+│  Choose the kind of source to manage.                       │
+│                                                             │
+│  ▸ Local skill folders                                      │
+│      2 enabled · 53 skills discovered                       │
+│      Folders Netclaw scans from this machine.               │
+│                                                             │
+│    Remote skill servers                                     │
+│      2 configured · 1 warning                               │
+│      HTTP(S) feeds that publish skill indexes.              │
+│                                                             │
+│    Rescan all sources                                       │
+│    Done                                                     │
+│                                                             │
+│ ↑/↓ navigate · Enter select · Esc Settings Areas            │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+Use Treatment A unless the inventory becomes too dense for narrow terminals.
+
+### 5.4 Local folder detail
+
+```
+╭─ Skill Sources › team-skills ───────────────────────────────╮
+│                                                             │
+│  Type: Local folder                                         │
+│  Status: ✓ 11 skills discovered                             │
+│                                                             │
+│  ▸ Enabled                 [x]                              │
+│    Path                    ~/work/team-skills               │
+│    Allow symlinks          [ ]                              │
+│    Rescan folder                                            │
+│    Rename source                                            │
+│    Change path                                              │
+│    Remove source                                            │
+│    Done                                                     │
+│                                                             │
+│ Space toggle/save · Enter apply/open · Delete remove        │
+│ Esc Skill Sources                                           │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+Changing `Enabled` or `Allow symlinks` autosaves after validation. `Change path`
+opens a typed path draft; `Apply` validates that the directory exists before
+persisting.
+
+### 5.5 Add local folder flow
+
+```
+╭─ Add Local Skill Folder ────────────────────────────────────╮
+│                                                             │
+│  Folder path                                                │
+│  ╭────────────────────────────────────────────────────────╮ │
+│  │ ~/work/team-skills                                    │ │
+│  ╰────────────────────────────────────────────────────────╯ │
+│                                                             │
+│  This must be an existing local directory.                  │
+│                                                             │
+│  [ Apply ]    [ Cancel ]                                    │
+│                                                             │
+│ Enter apply · Esc cancel                                    │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+```
+╭─ Local Folder Security ─────────────────────────────────────╮
+│                                                             │
+│  Allow symlinks inside this folder?                         │
+│                                                             │
+│  ▸ No — stricter security                                   │
+│    Yes — this folder intentionally uses symlinks            │
+│                                                             │
+│  Symlinks can make a source scan files outside the folder.  │
+│                                                             │
+│ ↑/↓ navigate · Enter apply · Esc back                       │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+```
+╭─ Review Local Folder ───────────────────────────────────────╮
+│                                                             │
+│  ✓ Folder is readable                                       │
+│  ✓ 11 skills discovered                                     │
+│                                                             │
+│  Source name                                                │
+│  ╭────────────────────────────────────────────────────────╮ │
+│  │ team-skills                                            │ │
+│  ╰────────────────────────────────────────────────────────╯ │
+│                                                             │
+│  [ Add source ]    [ Back ]    [ Cancel ]                   │
+│                                                             │
+│ Enter apply/autosave · Esc cancel                           │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+### 5.6 Remote skill server detail
+
+```
+╭─ Skill Sources › company-feed ──────────────────────────────╮
+│                                                             │
+│  Type: Remote skill server                                  │
+│  Status: ✓ connected · 18 skills discovered                 │
+│                                                             │
+│  ▸ Enabled                 [x]                              │
+│    URL                     https://skills.acme.io           │
+│    Authentication          bearer token configured          │
+│    Sync interval           60 minutes                       │
+│    Test connection                                          │
+│    Rename source                                            │
+│    Change URL                                                │
+│    Rotate token                                              │
+│    Remove token                                              │
+│    Remove source                                             │
+│    Done                                                     │
+│                                                             │
+│ Space toggle/save · Enter apply/open · Delete remove        │
+│ Esc Skill Sources                                           │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+Remote detail must distinguish preserving, rotating, and removing tokens. A
+blank token field never removes an existing token; `Remove token` is an explicit
+destructive action.
+
+### 5.7 Add remote skill server flow
+
+```
+╭─ Add Skill Server ──────────────────────────────────────────╮
+│                                                             │
+│  Server URL                                                 │
+│  ╭────────────────────────────────────────────────────────╮ │
+│  │ https://skills.acme.io                                │ │
+│  ╰────────────────────────────────────────────────────────╯ │
+│                                                             │
+│  Netclaw will probe:                                       │
+│  /.well-known/agent-skills/index.json                      │
+│                                                             │
+│  [ Continue ]    [ Cancel ]                                 │
+│                                                             │
+│ Enter continue · Esc cancel                                 │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+```
+╭─ Skill Server Authentication ───────────────────────────────╮
+│                                                             │
+│  How should Netclaw authenticate to this server?            │
+│                                                             │
+│  ▸ No auth required                                         │
+│    Bearer token                                             │
+│                                                             │
+│ ↑/↓ navigate · Enter continue · Esc back                    │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+```
+╭─ Test Skill Server ─────────────────────────────────────────╮
+│                                                             │
+│  ⠋ Discovering skills at https://skills.acme.io ...         │
+│                                                             │
+│  This may take a few seconds.                               │
+│                                                             │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+```
+╭─ Review Skill Server ───────────────────────────────────────╮
+│                                                             │
+│  ✓ Connected                                                │
+│  ✓ 18 skills discovered                                     │
+│                                                             │
+│  Source name                                                │
+│  ╭────────────────────────────────────────────────────────╮ │
+│  │ company-feed                                          │ │
+│  ╰────────────────────────────────────────────────────────╯ │
+│                                                             │
+│  [ Add source ]    [ Back ]    [ Cancel ]                   │
+│                                                             │
+│ Enter apply/autosave · Esc cancel                           │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+If the probe fails, show `Retry`, `Edit URL`, `Edit token`, and `Save anyway`.
+`Save anyway` is allowed only for reachability/auth probe failures, not for
+structurally invalid URLs.
+
+### 5.8 Remove source confirm
+
+```
+╭─ Remove Skill Source? ──────────────────────────────────────╮
+│                                                             │
+│  Remove source `company-feed` from Netclaw config?          │
+│                                                             │
+│  This does not delete remote skills or local files.         │
+│  Netclaw will stop loading skills from this source.         │
+│                                                             │
+│  ▸ Cancel                                                   │
+│    Remove source                                            │
+│                                                             │
+│ ↑/↓ navigate · Enter select · Esc cancel                    │
+╰─────────────────────────────────────────────────────────────╯
+```
+
+### 5.9 Persistence and validation rules
+
+- Local folders persist to `ExternalSkills.Sources`.
+- Remote skill servers persist to `SkillFeeds.Feeds`.
+- Completed toggles autosave immediately after validation.
+- Typed drafts persist only when `Apply` / `Add source` succeeds.
+- `Done` never writes.
+- `Esc` cancels incomplete drafts and navigates back without writing.
+- Failed validation leaves persisted files unchanged.
+- Source writes preserve unrelated sources and unrelated config sections.
+- Secret fields preserve existing tokens when left blank; token deletion is
+  explicit.
 
 ---
 
@@ -1009,12 +1283,12 @@ enabled toggle back and leaves files unchanged.
 
 ---
 
-## Deferred Skill Sources Expansion
+## Skill Sources Design Note
 
-A future richer Skill Sources pass may reintroduce dedicated list managers for
-many external directories and many private feeds. If it does, use the T2/T3/T4
-autosave templates above: no outer `[ Save ] [ Cancel ]` row, `Apply` for typed
-drafts, and explicit `Back`/`Done` rows when useful.
+The richer Skill Sources manager in Config.5 replaces the old compact inline
+editor. Keep the source-manager treatment aligned with the T2/T3/T4 autosave
+templates above: no outer `[ Save ] [ Cancel ]` row, `Apply` for typed drafts,
+and explicit `Back`/`Done` rows when useful.
 
 ---
 
