@@ -9,6 +9,12 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- `netclaw doctor` now loads SkiaSharp's native libSkiaSharp (the image-egress
+         probe). The release publish script passes this flag to every component, but
+         set it here too — intrinsic to the binary, like the daemon's csproj — so a
+         manual `dotnet publish` of the CLI also embeds the native lib instead of
+         emitting a sidecar that the single-binary Docker copy would drop. -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
 
   <ItemGroup>
