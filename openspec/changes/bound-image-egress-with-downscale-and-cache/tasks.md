@@ -21,8 +21,8 @@
 
 ## 4. Fail-loud drop
 
-- [~] 4.1 No media reference is persisted on a drop (both writers — done). file_read drops surface via the existing model-input handoff warning (`RequestedCount > MediaReferences.Count`). REMAINING: the chat-attachment path (`WriteDataContent` → `ChannelPipeline`/`ChatMessageConverter`) currently drops silently (returns null) — still needs a visible `[image omitted: <reason>]` note on the owning message.
-- [~] 4.2 Drop + nothing-written + bounded-MIME are covered by `SessionMediaStoreImageTests`. REMAINING: a test asserting the chat-path `[image omitted]` note once 4.1 surfaces it.
+- [x] 4.1 No media reference is persisted on a drop (both writers). file_read drops surface via the model-input handoff warning (`RequestedCount > MediaReferences.Count`); chat-attachment drops now surface a visible `[image omitted: <reason>]` note — `WriteDataContent` returns `MediaWriteResult { Reference?, DroppedReason? }`, and `ChannelPipeline` + `ChatMessageConverter.FromAiMessage` append the note (distinguishing a silent skip for non-media/empty from a drop).
+- [x] 4.2 Tests: `SessionMediaStoreImageTests` (drop → no reference + reason carried + nothing written; bounded → correct MIME) and `ChatMessageConverterTests.FromAiMessage_appends_omitted_note_when_image_is_dropped` (note appended + original text preserved + no media ref).
 
 ## 5. Quality gates + docs
 
