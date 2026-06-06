@@ -882,12 +882,24 @@ internal static class SessionToolExecutionPipeline
                     continue;
                 }
 
-                refs.Add(SessionMediaStore.CopyFile(
+                var mediaRef = SessionMediaStore.CopyFile(
                     file.FilePath,
                     sessionDir,
                     mimeType,
                     mediaModality,
-                    info.Length));
+                    info.Length);
+                if (mediaRef is null)
+                {
+                    // Image could not be bounded under the egress caps. Release its
+                    // reservation and skip; the RequestedCount > MediaReferences.Count
+                    // gap drives the model-input handoff warning, so this is not silent.
+                    batchBudget.Release(reservedBytes);
+                    reservedBytes = 0;
+                    logger?.LogWarning("Model input image could not be bounded, skipping: {Path}", file.FilePath);
+                    continue;
+                }
+
+                refs.Add(mediaRef);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
