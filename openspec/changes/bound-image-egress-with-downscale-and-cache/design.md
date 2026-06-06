@@ -122,6 +122,37 @@ images with alpha or where lossless matters (screenshots/diagrams), matching the
 Codex passthrough-when-supported approach. When passing through an
 already-bounded supported format, avoid a needless re-encode.
 
+**Implementation refinements (discovered while building, IMPLEMENTED):**
+- **Read alpha from the source codec, not the decoded bitmap.** A decoded
+  `SKBitmap` defaults to `Premul` regardless of whether the source had
+  transparency, so the JPEG-vs-PNG decision must use `codec.Info.AlphaType`
+  before decoding. (Opaque → JPEG, alpha → PNG.)
+- **Quality ladder before size shrink.** To hit a tight byte budget the encoder
+  tries the configured quality then a descending JPEG ladder (70/55/40) at each
+  size before reducing dimensions (×0.8, bounded steps). PNG is lossless so the
+  ladder collapses to a single pass and only size shrinks. This mirrors
+  OpenCode and converges far faster than size-only shrink.
+
+### D8: The memory bound is native and format-dependent (design correction)
+
+Two facts surfaced during implementation that correct the original framing:
+
+- **The bitmap lives in NATIVE memory.** SkiaSharp decodes into Skia's
+  unmanaged heap, so `GC.GetAllocatedBytesForCurrentThread()` (the originally
+  planned memory assertion) does **not** observe the decode at all. The memory
+  guarantee is therefore validated by (a) the unit-tested deterministic
+  `ChooseDecodeSampleSize`, which drives `SKCodec.GetScaledDimensions`, plus (b)
+  the fail-loud decode ceiling below, plus (c) output-dimension assertions on a
+  large fixture — not by a managed-heap counter.
+- **Scaled decode is format-dependent.** JPEG (DCT) and WebP support scaled
+  decode, so an oversized source of those formats never materializes full-res.
+  PNG/GIF/BMP have no native scaled decode — the codec returns full dimensions.
+  To keep a pathological huge PNG from OOMing, the normalizer enforces a
+  **fail-loud decode ceiling** (`MaxDecodeBytes`, 256 MiB ≈ 8192² RGBA): if the
+  scaled decode dimensions would exceed it, the image is **Dropped** with
+  guidance ("re-save smaller or as JPEG") rather than decoded. So the worst case
+  for any input is bounded: either scaled-down on decode, or refused.
+
 ### D6: Fail-loud drop
 
 On `Dropped`, the converter/handoff emits a `[image omitted: <reason>]` text

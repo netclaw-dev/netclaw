@@ -1,16 +1,16 @@
 ## 1. Dependency + packaging
 
-- [ ] 1.1 Add SkiaSharp + `SkiaSharp.NativeAssets.Linux.NoDependencies` (and win/macOS native assets) to `Directory.Packages.props`; reference from `Netclaw.Media`.
+- [x] 1.1 Add SkiaSharp + `SkiaSharp.NativeAssets.Linux.NoDependencies` (and win/macOS native assets) to `Directory.Packages.props`; reference from `Netclaw.Media`.
 - [ ] 1.2 Wire the Linux native asset into `docker/Dockerfile` (Debian bookworm-slim, glibc) and confirm it restores for the published RID.
 - [ ] 1.3 Add a startup/`doctor` probe that the SkiaSharp native lib loads, failing loud on a packaging regression (no silent skip).
 
 ## 2. Core normalizer (Netclaw.Media, no wiring)
 
-- [ ] 2.1 Add pure `ChooseDecodeSampleSize(srcW, srcH, longEdgeCap) -> int` with unit tests (8000×8000 @1568 → sample-size that decodes ≈2000px; already-small → 1; determinism).
-- [ ] 2.2 Add `IImageNormalizer` + SkiaSharp impl: shrink-on-decode via `SKCodec` scaled dimensions, long-edge cap + byte-budget iterative shrink (bounded steps), returning `{ outcome, bytes?, width, height, encodedByteLength, mediaType, reason? }`; throws nothing on bad input.
-- [ ] 2.3 Implement format policy (D5): JPEG re-encode for photos at configurable quality; preserve PNG for alpha/lossless; passthrough already-bounded supported formats without re-encode.
-- [ ] 2.4 Unit-test transforms: oversized-by-dimension (cap + aspect), oversized-by-bytes (under budget + terminates), already-small (no upscale), corrupt/non-image → `Dropped`, un-shrinkable → `Dropped`. Generate fixtures in-test with SkiaSharp.
-- [ ] 2.5 Memory-ceiling integration test: decode an 8000×8000 fixture, assert decoded buffer ≈ target size; coarse `GC.GetAllocatedBytesForCurrentThread()` upper-bound assertion.
+- [x] 2.1 Add pure `ChooseDecodeSampleSize(srcW, srcH, longEdgeCap) -> int` with unit tests (8000×8000 @1568 → sample-size that decodes ≈2000px; already-small → 1; determinism). [`ImageDecodeMath`]
+- [x] 2.2 Add `IImageNormalizer` + SkiaSharp impl: shrink-on-decode via `SKCodec` scaled dimensions, long-edge cap + byte-budget iterative shrink (bounded steps), returning `{ outcome, bytes?, width, height, encodedByteLength, mediaType, reason? }`; throws nothing on bad input. [`SkiaImageNormalizer`]
+- [x] 2.3 Implement format policy (D5): JPEG re-encode for photos at configurable quality; preserve PNG for alpha/lossless; passthrough already-bounded supported formats without re-encode. (Refinement: added a JPEG quality ladder + a fail-loud 256MiB decode ceiling for formats the codec cannot scale on load — see design.md.)
+- [x] 2.4 Unit-test transforms: oversized-by-dimension (cap + aspect), oversized-by-bytes (under budget + terminates), already-small (no upscale), corrupt/non-image → `Dropped`, un-shrinkable → `Dropped`. Generate fixtures in-test with SkiaSharp.
+- [x] 2.5 Memory-ceiling integration test (`Large_jpeg_source_is_bounded_via_scaled_decode`). NOTE: the planned `GC.GetAllocatedBytesForCurrentThread()` assertion was dropped — Skia decodes into NATIVE memory, which the managed GC counter does not observe. The bound is instead guaranteed by the unit-tested sample-size math + the fail-loud decode ceiling + output-dimension assertions. See design.md.
 
 ## 3. Configuration + schema
 

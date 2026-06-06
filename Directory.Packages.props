@@ -12,6 +12,7 @@
     <MattermostNetVersion>5.0.0</MattermostNetVersion>
     <MicrosoftExtensionsAIVersion>10.6.0</MicrosoftExtensionsAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.8</MicrosoftAspNetCoreVersion>
+    <SkiaSharpVersion>3.119.4</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
@@ -85,6 +86,13 @@
     <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="Aspire.Hosting.Testing" Version="$(AspireHostingVersion)" />
     <PackageVersion Include="CommunityToolkit.Aspire.Hosting.Ollama" Version="$(CommunityToolkitAspireVersion)" />
+  </ItemGroup>
+  <!-- Image normalization (Netclaw.Media). SkiaSharp ships Windows/macOS native
+       assets in the base package; Linux needs the explicit headless native asset
+       (NoDependencies = no fontconfig, we do no text rendering). -->
+  <ItemGroup>
+    <PackageVersion Include="SkiaSharp" Version="$(SkiaSharpVersion)" />
+    <PackageVersion Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="$(SkiaSharpVersion)" />
   </ItemGroup>
   <!-- Benchmarks (benchmarks/Netclaw.Benchmarks only) -->
   <ItemGroup>
