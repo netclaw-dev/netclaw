@@ -1,8 +1,8 @@
 ## 1. Dependency + packaging
 
 - [x] 1.1 Add SkiaSharp + `SkiaSharp.NativeAssets.Linux.NoDependencies` (and win/macOS native assets) to `Directory.Packages.props`; reference from `Netclaw.Media`.
-- [ ] 1.2 Wire the Linux native asset into `docker/Dockerfile` (Debian bookworm-slim, glibc) and confirm it restores for the published RID.
-- [ ] 1.3 Add a startup/`doctor` probe that the SkiaSharp native lib loads, failing loud on a packaging regression (no silent skip).
+- [x] 1.2 No `docker/Dockerfile` change needed: the daemon publishes self-contained single-file with `IncludeNativeLibrariesForSelfExtract=true`, which embeds `libSkiaSharp.so` and self-extracts at runtime (same mechanism as `e_sqlite3`); the single-binary `COPY` already carries it. RIDs (linux-x64/arm64, win-x64, osx-arm64) are all covered by the SkiaSharp native packages. (Base image is actually `ubuntu:24.04`, glibc — also fine for `NativeAssets.Linux.NoDependencies`.) Also added the same flag to `Netclaw.Cli.csproj` so the doctor probe's native lib ships in the CLI binary too.
+- [x] 1.3 `netclaw doctor` "Image Processing" check (`ImageProcessingDoctorCheck` → `ImageNormalizerProbe.TryProbe`) runs an encode→normalize round-trip and reports **Error** with remediation if the native lib fails to load. Tests in `Netclaw.Media.Tests` + `Netclaw.Cli.Tests`.
 
 ## 2. Core normalizer (Netclaw.Media, no wiring)
 
