@@ -8,17 +8,17 @@
 
 ## 2. Core page-independent Netclaw UI commit primitives
 
-- [ ] 2.1 Add `NetclawUiCommit<TDraft>`, `NetclawUiCommitTrigger`, `NetclawUiCommitResult`, `NetclawUiValidationResult`, and failure/status result types in a page-independent TUI namespace.
-- [ ] 2.2 Add `NetclawUiDynamicCheck<TDraft>` with `Required(...)` and `NotApplicable(justification)`; reject empty `NotApplicable` justification.
-- [ ] 2.3 Implement `NetclawUiCommitPipeline` with ordering `ReadDraft -> static Validate -> DynamicCheck -> PersistAsync -> AfterCommit`.
-- [ ] 2.4 Ensure static validation failure prevents dynamic validation and persistence.
-- [ ] 2.5 Ensure dynamic validation failure prevents persistence unless the declared failure policy and user action explicitly choose save-anyway.
-- [ ] 2.6 Ensure persistence exceptions are caught by the pipeline and surface visible error status instead of silent failure.
+- [x] 2.1 Add `NetclawUiCommit<TDraft>`, `NetclawUiCommitTrigger`, `NetclawUiCommitResult`, `NetclawUiValidationResult`, and failure/status result types in a page-independent TUI namespace.
+- [x] 2.2 Add `NetclawUiDynamicCheck<TDraft>` with `Required(...)` and `NotApplicable(justification)`; reject empty `NotApplicable` justification.
+- [x] 2.3 Implement `NetclawUiCommitPipeline` with ordering `ReadDraft -> static Validate -> DynamicCheck -> PersistAsync -> AfterCommit`.
+- [x] 2.4 Ensure static validation failure prevents dynamic validation and persistence.
+- [x] 2.5 Ensure dynamic validation failure prevents persistence unless the declared failure policy and user action explicitly choose save-anyway.
+- [x] 2.6 Ensure persistence exceptions are caught by the pipeline and surface visible error status instead of silent failure.
 
 ## 3. Standard validated Netclaw UI components
 
-- [ ] 3.1 Add `INetclawUiComponent` or equivalent component contract for build, input handling, paste handling, and commit ownership.
-- [ ] 3.2 Add `NetclawValidatedTextField` using the existing boxed `TextInputNode` presentation, but requiring `NetclawUiCommit<string>` for acceptance.
+- [x] 3.1 Add `INetclawUiComponent` or equivalent component contract for build, input handling, paste handling, and commit ownership.
+- [x] 3.2 Add `NetclawValidatedTextField` using the existing boxed `TextInputNode` presentation, but requiring `NetclawUiCommit<string>` for acceptance.
 - [ ] 3.3 Add `NetclawValidatedAction<TDraft>` for completed actions such as add/remove, reset, token rotation, and save-anyway.
 - [ ] 3.4 Add `NetclawValidatedToggle` and `NetclawValidatedPicker<TValue>` for immediate completed actions.
 - [ ] 3.5 Add `NetclawUiInputRouter` or `NetclawValidatedPage<TViewModel>` so pages delegate typed input, paste, backspace, `Enter`, `Space`, picker selection, and autosave triggers to validated components.
@@ -35,10 +35,10 @@
 
 ## 5. Core component and pipeline tests
 
-- [ ] 5.1 Add pipeline tests proving static validation failure leaves config/secrets/sidecar files unchanged and does not call dynamic validation.
-- [ ] 5.2 Add pipeline tests proving dynamic validation failure leaves files unchanged and surfaces the declared error/warning.
-- [ ] 5.3 Add pipeline tests proving save-anyway persists only after structural validation passes and dynamic failure policy allows override.
-- [ ] 5.4 Add component tests proving typed input, paste input, backspace, and `Enter` acceptance flow through `NetclawUiCommitPipeline`.
+- [x] 5.1 Add pipeline tests proving static validation failure leaves config/secrets/sidecar files unchanged and does not call dynamic validation.
+- [x] 5.2 Add pipeline tests proving dynamic validation failure leaves files unchanged and surfaces the declared error/warning.
+- [x] 5.3 Add pipeline tests proving save-anyway persists only after structural validation passes and dynamic failure policy allows override.
+- [x] 5.4 Add component tests proving typed input, paste input, backspace, and `Enter` acceptance flow through `NetclawUiCommitPipeline`.
 - [ ] 5.5 Add component tests proving autosave, toggle, and picker actions use the same pipeline and trigger value as explicit acceptance.
 - [ ] 5.6 Add component tests proving `Esc` cancels/navigates without committing incomplete drafts.
 
