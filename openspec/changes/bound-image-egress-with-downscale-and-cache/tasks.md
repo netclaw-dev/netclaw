@@ -8,37 +8,26 @@
 
 - [x] 2.1 Add pure `ChooseDecodeSampleSize(srcW, srcH, longEdgeCap) -> int` with unit tests (8000×8000 @1568 → sample-size that decodes ≈2000px; already-small → 1; determinism). [`ImageDecodeMath`]
 - [x] 2.2 Add `IImageNormalizer` + SkiaSharp impl: shrink-on-decode via `SKCodec` scaled dimensions, long-edge cap + byte-budget iterative shrink (bounded steps), returning `{ outcome, bytes?, width, height, encodedByteLength, mediaType, reason? }`; throws nothing on bad input. [`SkiaImageNormalizer`]
-- [x] 2.3 Implement format policy (D5): JPEG re-encode for photos at configurable quality; preserve PNG for alpha/lossless; passthrough already-bounded supported formats without re-encode. (Refinement: added a JPEG quality ladder + a fail-loud 256MiB decode ceiling for formats the codec cannot scale on load — see design.md.)
+- [x] 2.3 Implement format policy (D5): JPEG re-encode for photos at constant quality; preserve PNG for alpha/lossless; passthrough already-bounded supported formats without re-encode. (Refinement: added a JPEG quality ladder + a fail-loud 256MiB decode ceiling for formats the codec cannot scale on load — see design.md.)
 - [x] 2.4 Unit-test transforms: oversized-by-dimension (cap + aspect), oversized-by-bytes (under budget + terminates), already-small (no upscale), corrupt/non-image → `Dropped`, un-shrinkable → `Dropped`. Generate fixtures in-test with SkiaSharp.
 - [x] 2.5 Memory-ceiling integration test (`Large_jpeg_source_is_bounded_via_scaled_decode`). NOTE: the planned `GC.GetAllocatedBytesForCurrentThread()` assertion was dropped — Skia decodes into NATIVE memory, which the managed GC counter does not observe. The bound is instead guaranteed by the unit-tested sample-size math + the fail-loud decode ceiling + output-dimension assertions. See design.md.
 
-## 3. Configuration + schema
+## 3. Single media-store seam (both writers, no cache, no config)
 
-- [ ] 3.1 Add image-egress `*Config` block (long-edge cap, byte budget, JPEG quality, enabled) to `Netclaw.Configuration` with safe defaults.
-- [ ] 3.2 Update `src/Netclaw.Configuration/Schemas/netclaw-config.v1.schema.json` in the same PR (defaults present, `additionalProperties:false` compatible, `doctor --fix` friendly).
-- [ ] 3.3 Config-load tests: block present (caps honored) and absent (schema defaults validate, no `additionalProperties` violation).
+- [ ] 3.1 Normalize images inside `SessionMediaStore.WriteDataContent` (chat attachments + persisted message media); non-image media passes through unchanged. Store the normalized artifact only; build the `SerializableMediaReference` from the written bytes' length/MIME (PNG→JPEG may change the MIME).
+- [ ] 3.2 Normalize images inside `SessionMediaStore.CopyFile` (the `file_read` model-input handoff via `MaterializeModelInputFiles`); non-image media copies through unchanged.
+- [ ] 3.3 Confirm `ChatMessageConverter.ToAiMessage` needs no change — it reads the already-bounded persisted artifact. (No per-turn cache; the media store is the dedup.)
+- [ ] 3.4 Seam tests: write/copy an oversized image through each writer, read the stored artifact back, assert bounded + correct MIME; assert non-image media (e.g. a PDF) is byte-unchanged.
 
-## 4. file_read egress path + content-hash cache (Codex model)
+## 4. Fail-loud drop
 
-- [ ] 4.1 Add a content-hash-keyed encoded-image cache (LRU bounded by count/total bytes; inject `TimeProvider` if any TTL).
-- [ ] 4.2 Route `FileReadTool` `AddModelInputFile` / model-input materialization through the normalizer + cache instead of handing raw on-disk bytes to egress.
-- [ ] 4.3 Cache tests with a spy normalizer: same bytes → one invocation, different bytes → two, eviction over capacity.
+- [ ] 4.1 On `Dropped` at the media-store write, do not persist a media reference; surface a visible `[image omitted: <reason>]` note on the owning message/handoff. No silent fallback to raw bytes.
+- [ ] 4.2 Tests: undecodable/oversized image at write → note + no media reference + raw bytes never persisted; bounded image → stored artifact within budget + correct MIME.
 
-## 5. Chat-attachment ingestion path (OpenCode model)
+## 5. Quality gates + docs
 
-- [ ] 5.1 Normalize in/around `SessionMediaStore.WriteDataContent` so the persisted artifact is already bounded (store normalized-only; original not retained).
-- [ ] 5.2 Confirm `ChatMessageConverter.ToAiMessage` now reads a bounded artifact; minimal change there. If `MediaReference` gains a normalized marker, keep it serialization round-trip safe + add a round-trip test.
-- [ ] 5.3 Ingestion test: admit oversized image, read stored artifact back, assert bounded; later egress reads do not re-run the normalizer.
-
-## 6. Fail-loud drop
-
-- [ ] 6.1 On `Dropped`, emit `[image omitted: <reason>]` text content and attach no image bytes (egress + ingestion). Surface ingestion drops at admission where possible.
-- [ ] 6.2 Tests (extend `ChatMessageConverterTests`): undecodable ref → note + no `DataContent`; un-shrinkable → note, raw bytes never attached; bounded image → `DataContent.Data.Length` within budget + correct media type.
-
-## 7. Quality gates + docs
-
-- [ ] 7.1 Add 1–2 eval-suite image cases (tool image discovery/use) as the end-to-end backstop; run `./evals/run-evals.sh`.
-- [ ] 7.2 One-off BenchmarkDotNet / custom memory harness run capturing before/after peak memory + payload bytes for the PR writeup.
-- [ ] 7.3 Document the new config knobs in CLI help / operations runbook; update `netclaw-operations` system skill if config/diagnostics guidance changed.
-- [ ] 7.4 Run `dotnet slopwatch analyze` (no new violations) and `./scripts/Add-FileHeaders.ps1 -Verify`.
-- [ ] 7.5 `/opsx-verify` then `/opsx-sync` + `/opsx-archive` once implemented and merged.
+- [ ] 5.1 Add 1–2 eval-suite image cases (tool image discovery/use) as the end-to-end backstop; run `./evals/run-evals.sh`.
+- [ ] 5.2 One-off BenchmarkDotNet / custom memory harness run capturing before/after peak memory + payload bytes for the PR writeup.
+- [ ] 5.3 Update `netclaw-operations` system skill only if operator-facing diagnostics changed (the doctor probe in 1.3); no config knobs to document (bounds are constants).
+- [ ] 5.4 Run `dotnet slopwatch analyze` (no new violations) and `./scripts/Add-FileHeaders.ps1 -Verify`.
+- [ ] 5.5 `/opsx-verify` then `/opsx-sync` + `/opsx-archive` once implemented and merged.

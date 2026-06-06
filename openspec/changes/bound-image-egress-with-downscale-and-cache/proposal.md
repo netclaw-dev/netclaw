@@ -33,19 +33,22 @@ multimodal model input).
   bitmap is never materialized — the memory ceiling is the *downscaled*
   bitmap, not the source. This is the actual #1296 fix, not just a smaller
   output.
-- Two seams feed the one normalizer:
-  - **Chat attachments → normalize at ingestion** (the OpenCode model): when
-    media is admitted to the session store, store the already-shrunk artifact.
-    The egress converter then reads a small file and barely changes.
-  - **`file_read` images → downscale at egress + content-hash cache** (the
-    Codex model): these have no ingestion seam, so shrink on first send and
-    cache the encoded result keyed by content hash, making turns 2..N free.
+- **One seam: the session media-store write boundary.** Every image — chat
+  attachments (`WriteDataContent`) and `file_read` model-input handoffs
+  (`CopyFile`) — is written to session media exactly once and read back from
+  there on every turn (including turn 1). Normalizing at that boundary bounds
+  every image once at ingestion; the egress read path is unchanged and there is
+  **no separate per-turn cache** (the persisted artifact *is* the dedup). Earlier
+  drafts proposed a `file_read` content-hash cache on the false premise that
+  `file_read` images are re-read from disk each turn — they are not; `CopyFile`
+  persists them into media on first use, exactly like chat attachments.
 - **Fail loud, never silently passthrough.** An image that cannot be shrunk
   under budget (or is corrupt / undecodable) is **dropped with a visible
   `[image omitted: …]` note**, never shipped raw. No silent fallback.
-- Add a configurable image-egress block (long-edge cap, byte budget, JPEG
-  quality, enable/disable) to `Netclaw.Configuration`, with the matching
-  `netclaw-config.v1.schema.json` update in the same PR (schema-sync rule).
+- **Fixed safe constants, not configuration.** The bounds default to ~1568px /
+  ~5MB. They are **not** user-raisable: the byte budget is the memory-safety
+  lever, so a config knob could re-open the very OOM this fixes. No
+  `netclaw-config.v1.schema.json` change.
 - Add **SkiaSharp** (MIT; `SkiaSharp.NativeAssets.Linux.NoDependencies` for the
   Debian-bookworm container, native assets for win/macOS dev daemons) as a
   dependency. Rejected ImageSharp (Six Labors Split License — commercial
@@ -53,8 +56,8 @@ multimodal model input).
   MagicScaler (asymmetric cross-platform setup); see design.md.
 
 ### In scope (MVP)
-- Image downscale + re-encode at both seams, memory-bounded decode, content-hash
-  cache for the `file_read` path, fail-loud drop, configurable caps.
+- Image downscale + re-encode at the single media-store seam, memory-bounded
+  decode, fail-loud drop. Fixed safe constant bounds.
 
 ### Out of scope
 - **Provider Files API / `file_id` upload-by-reference.** Zero of nine surveyed
@@ -70,35 +73,36 @@ multimodal model input).
 ### New Capabilities
 - `bounded-image-egress`: Image bytes handed to a model SHALL be downscaled to a
   bounded payload (long-edge + byte budget) via a memory-bounded shrink-on-decode
-  normalizer; the encoded result SHALL be produced at most once per distinct
-  image (ingestion-normalized for chat media, content-hash cached for
-  `file_read`); un-shrinkable or undecodable images SHALL be dropped with a
-  visible note rather than passed through; caps SHALL be configurable.
+  normalizer; normalization SHALL happen once at the session media-store write
+  boundary so every later turn reads the already-bounded artifact (no per-turn
+  cache); un-shrinkable or undecodable images SHALL be dropped with a visible note
+  rather than passed through; the bounds SHALL be fixed memory-safe constants, not
+  raisable by configuration.
 
 ### Modified Capabilities
 - `netclaw-tools`: The `file_read` model-input image handoff (the
-  `AddModelInputFile` path under the "Model-input media eligibility" and "File
-  read tool" requirements) SHALL route the image through the bounded normalizer
-  + cache instead of handing the raw on-disk file to egress.
+  `AddModelInputFile` path under the "Model-input media eligibility" requirement)
+  SHALL normalize the image as it is copied into session media (`CopyFile`)
+  instead of handing the raw on-disk file to egress.
 
 ## Impact
 
-- **Code:** new `ImageNormalizer` + pure `ChooseDecodeSampleSize` helper (home:
-  `Netclaw.Media`); `ChatMessageConverter.ToAiMessage` (egress read);
-  `SessionMediaStore.WriteDataContent` / channel admission (ingestion
-  normalize); `FileReadTool` `AddModelInputFile` path (egress normalize +
-  cache); new `*Config` in `Netclaw.Configuration` + schema JSON.
+- **Code:** new `IImageNormalizer` + pure `ImageDecodeMath` (home:
+  `Netclaw.Media`, done); normalization hooked into the two `SessionMediaStore`
+  writers — `WriteDataContent` (chat attachments) and `CopyFile` (`file_read`
+  model-input handoff). `ChatMessageConverter` egress read is unchanged (it
+  already reads the persisted artifact). No new `*Config`, no schema change.
 - **Dependencies:** add SkiaSharp + Linux native assets; wire native assets
   into `docker/Dockerfile` (Debian bookworm-slim, glibc — no musl concern).
-- **Persistence/serialization:** if `MediaReference` gains a normalized marker,
-  it stays framework-owned and round-trip safe.
+- **Persistence/serialization:** the normalized artifact replaces the original at
+  the media-store write; stored length/MIME reflect the bounded artifact. No
+  `MediaReference` shape change required.
 - **Security/operational:** reduces peak heap per image from O(full-res bitmap +
   full base64) to O(downscaled bitmap + bounded base64), and from per-turn to
-  once — closing the #1296 OOM vector. Fail-loud drop keeps a misconfiguration
-  from silently shipping huge payloads. Operational: new config knobs documented
-  in CLI help / runbook; `netclaw doctor --fix` defaults provided for clean
-  upgrades.
+  once — closing the #1296 OOM vector. Fail-loud drop keeps a corrupt/oversized
+  image from silently shipping huge payloads. Bounds are fixed constants, so no
+  configuration can re-open the OOM.
 - **Quality gates:** eval suite (image tool cases) as the only end-to-end
   backstop; the rest is deterministic unit tests (normalizer transforms, decode
-  sample-size math, memory ceiling, cache invocation counts, fail-loud drop,
-  config/schema). Termina smoke harness does **not** apply (no TUI surface).
+  sample-size math, memory ceiling, fail-loud drop, media-store seam round-trip).
+  Termina smoke harness does **not** apply (no TUI surface).

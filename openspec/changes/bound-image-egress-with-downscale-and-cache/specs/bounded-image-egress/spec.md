@@ -4,10 +4,10 @@
 
 Before an image is serialized into a model request, the system SHALL downscale
 it to a bounded payload using a shared image normalizer: the output SHALL have
-its longest edge no greater than the configured long-edge cap (default ~1568px,
-preserving aspect ratio) AND its encoded base64 size no greater than the
-configured byte budget (default ~5MB). Images already within both bounds SHALL
-be passed through without upscaling and without unnecessary re-encoding.
+its longest edge no greater than the long-edge cap (~1568px, preserving aspect
+ratio) AND its encoded base64 size no greater than the byte budget (~5MB). Images
+already within both bounds SHALL be passed through without upscaling and without
+unnecessary re-encoding.
 
 #### Scenario: Image larger than the long-edge cap is downscaled
 
@@ -19,15 +19,14 @@ be passed through without upscaling and without unnecessary re-encoding.
 
 #### Scenario: Image exceeding the byte budget is shrunk under it
 
-- **GIVEN** an image whose encoded base64 size exceeds the configured byte budget
+- **GIVEN** an image whose encoded base64 size exceeds the byte budget
 - **WHEN** the normalizer processes the image
 - **THEN** the output's encoded base64 size is no greater than the byte budget
 - **AND** the shrink procedure terminates without unbounded iteration
 
 #### Scenario: Image already within bounds is not upscaled
 
-- **GIVEN** an image whose longest edge and encoded size are both within the
-  configured caps
+- **GIVEN** an image whose longest edge and encoded size are both within the caps
 - **WHEN** the normalizer processes the image
 - **THEN** the output dimensions are not larger than the source dimensions
 
@@ -55,34 +54,37 @@ function of source dimensions and the long-edge cap.
 - **WHEN** the decode sample-size is computed
 - **THEN** the same sample-size is returned on every call for those inputs
 
-### Requirement: Encoded image is produced at most once per distinct image
+### Requirement: Images are normalized once at the session media-store boundary
 
-The system SHALL avoid re-encoding the same image on every turn. Chat attachment
-images SHALL be normalized once at ingestion and the bounded artifact SHALL be
-persisted so that later turns read an already-bounded file. Images handed off
-from `file_read` SHALL be normalized at egress and the encoded result SHALL be
-cached keyed by image content hash, so that repeated turns referencing the same
-image reuse the cached result rather than re-decoding and re-encoding.
+The system SHALL normalize an image once, at the session media-store write
+boundary, so the persisted media artifact is already bounded. Every image reaches
+the model through the session media store — chat attachments and persisted
+message media via `WriteDataContent`, and `file_read` model-input handoffs via
+`CopyFile` — so this single boundary covers both origins. The egress read path
+SHALL read the persisted artifact unchanged and SHALL NOT re-normalize per turn.
+There SHALL be no separate per-turn encode cache: because the media store
+persists the normalized artifact once, every later turn reads the already-bounded
+bytes. Non-image media SHALL pass through the boundary unchanged.
 
-#### Scenario: Chat attachment is normalized once at ingestion
+#### Scenario: Chat attachment is normalized once on write
 
 - **GIVEN** an oversized image is admitted as a chat attachment
-- **WHEN** the attachment is written to the session media store
-- **THEN** the stored artifact is already within the configured caps
+- **WHEN** it is written to the session media store
+- **THEN** the stored artifact is already within the caps
 - **AND** later egress reads of that artifact do not re-run the normalizer
 
-#### Scenario: Repeated file_read image reuses the cached encoding
+#### Scenario: file_read image is normalized once when copied into media
 
-- **GIVEN** a `file_read` image handoff has been normalized and cached
-- **WHEN** the same image bytes are referenced again on a later turn
-- **THEN** the cached encoded result is reused
-- **AND** the normalizer is not invoked a second time for those bytes
+- **GIVEN** a `file_read` model-input handoff for an oversized image
+- **WHEN** the image is copied into the session media store
+- **THEN** the stored artifact is already within the caps
+- **AND** every later turn reads the bounded artifact rather than the original file
 
-#### Scenario: Distinct images are cached separately
+#### Scenario: Non-image media is not altered
 
-- **GIVEN** two `file_read` images with different content
-- **WHEN** both are handed off for model input
-- **THEN** each is normalized and cached under its own content hash
+- **GIVEN** a non-image file (e.g. a PDF) written to the session media store
+- **WHEN** it crosses the media-store write boundary
+- **THEN** its bytes are stored unchanged
 
 ### Requirement: Un-shrinkable or undecodable images fail loud
 
@@ -101,30 +103,24 @@ model request as a fallback.
 
 #### Scenario: Un-shrinkable image is dropped, not shipped raw
 
-- **GIVEN** an image that cannot be reduced under the configured byte budget
+- **GIVEN** an image that cannot be reduced under the byte budget
 - **WHEN** the normalizer processes it for model input
 - **THEN** the image is dropped with a visible note
 - **AND** the original unbounded bytes are not attached to the model request
 
-### Requirement: Image-egress caps are configurable
+### Requirement: Image-egress bounds are fixed memory-safe constants
 
-The system SHALL expose the image-egress bounds (long-edge cap, byte budget,
-encode quality, and an enable/disable switch) as configuration in
-`Netclaw.Configuration`. The configuration schema
-(`netclaw-config.v1.schema.json`) SHALL define these properties with safe
-defaults so that existing configurations validate and upgrade without manual
-edits.
+The image-egress bounds (long-edge cap, byte budget, encode quality) SHALL be
+fixed constants chosen for memory safety, defaulting to ≈1568px long edge and a
+≈5MB base64 budget. They SHALL NOT be raisable through runtime configuration:
+because the byte budget is the lever that bounds peak memory, exposing it as a
+user-raisable setting would let a misconfiguration re-introduce the unbounded
+condition this change exists to remove. No `netclaw-config.v1.schema.json` change
+is required.
 
-#### Scenario: Configured caps are honored
+#### Scenario: Bounds cannot be weakened by configuration
 
-- **GIVEN** a configuration setting a long-edge cap and byte budget
+- **GIVEN** a deployment with any configuration
 - **WHEN** an image is normalized
-- **THEN** the output respects the configured cap and budget rather than
-  hard-coded values
-
-#### Scenario: Existing configuration validates against the schema
-
-- **GIVEN** a configuration that omits the image-egress block
-- **WHEN** the configuration is loaded and schema-validated
-- **THEN** validation succeeds using the schema defaults
-- **AND** no schema `additionalProperties` violation is raised
+- **THEN** the long-edge cap and byte budget applied are the fixed safe constants
+- **AND** there is no configuration path that raises the byte budget above the constant

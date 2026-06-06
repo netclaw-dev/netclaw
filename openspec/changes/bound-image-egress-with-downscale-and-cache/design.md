@@ -36,7 +36,7 @@ best-in-class (OpenCode, OpenAI Codex CLI) downscale once and reuse; the worst
 - One shared normalizer behind both entry points, so there is a single place
   that owns "how an image is prepared for a model."
 - Fail loud: never silently ship unbounded bytes.
-- Configurable caps with schema sync and clean upgrades.
+- Fixed memory-safe bounds (constants) that no configuration can weaken.
 - Keep the change deterministically testable without a live LLM call.
 
 **Non-Goals:**
@@ -45,6 +45,10 @@ best-in-class (OpenCode, OpenAI Codex CLI) downscale once and reuse; the worst
 - Audio/video egress (#1266, #1297) — must **not** be folded into the inline
   path; only leave them a seam.
 - Streaming the base64 encode (moot once payloads are bounded).
+- A per-turn / content-hash encode cache (the change name's "-and-cache" is now
+  vestigial). The session media store already persists the normalized artifact
+  once; a cache would buy nothing for the OOM — see D2.
+- Runtime configuration of the bounds (would re-open the OOM — see D... bounds).
 - Changing admission caps or the audience/ACL gates.
 
 ## Decisions
@@ -75,23 +79,37 @@ uniformity**, with shrink-on-decode as the gating capability:
   shrink-on-decode, so we avoid the full-res bitmap. Use the `NoDependencies`
   Linux asset (we do no text rendering, so fontconfig is not needed).
 
-### D2: Hybrid seam — normalize-at-ingestion for chat media, downscale-at-egress + cache for file_read
+### D2: One seam — normalize at the `SessionMediaStore` write boundary (no cache)
 
-Two entry points, two correct placements, **one** normalizer:
+`SessionMediaStore` has exactly two write methods, and they are the only way bytes
+enter media:
 
-- **Chat attachments (ingestion):** normalize in/around
-  `SessionMediaStore.WriteDataContent` so the persisted artifact is already
-  bounded. The egress converter then reads a small file — `ChatMessageConverter`
-  barely changes. This is the OpenCode model and fixes the common case at the
-  source.
-- **`file_read` (egress):** there is no ingestion point, so normalize when the
-  model-input file is materialized and cache the encoded result keyed by content
-  hash. This is the Codex model and makes turns 2..N free.
+- `WriteDataContent` — chat attachments (`ChannelPipeline`) and persisted message
+  media (`ChatMessageConverter.FromAiMessage`).
+- `CopyFile` — `file_read` / model-input handoff
+  (`SessionToolExecutionPipeline.MaterializeModelInputFiles`).
 
-Alternative considered: normalize *only* at egress for both. Rejected — it
-leaves the persisted chat artifact unbounded (every recovery/compaction re-reads
-the big file) and needs the cache to carry the common case it could have avoided
-entirely.
+Both origins are read back on every turn (including turn 1) by the single egress
+read in `ChatMessageConverter.ToAiMessage` → `GetMediaPath` + `ReadAllBytes`.
+Normalize inside the two writers (gated to images; non-image media passes
+through), and **every image from either origin is bounded exactly once, at the
+moment it is persisted.** The egress read path needs no change, and there is **no
+separate per-turn encode cache.**
+
+**Correction to the earlier draft (the cache is gone).** The first design added a
+content-hash cache for `file_read` on the premise that those images are re-read
+from their original on-disk path every turn. They are not: `MaterializeModelInputFiles`
+calls `SessionMediaStore.CopyFile`, copying the image **into session media on
+first use** — after which it is a `SerializableMediaReference` rehydrated from
+media exactly like a chat attachment. The media store *is* the dedup; a cache
+would only de-duplicate an agent explicitly `file_read`-ing the *same* image on
+two separate turns (a rare micro-optimization, not the OOM fix). Dropped for
+simplicity.
+
+Alternative considered: normalize at the egress read (`ToAiMessage`) instead of
+the writers. Rejected — it would re-normalize on every turn (the exact per-turn
+cost we are removing) and would need a cache to claw it back; normalizing at the
+write boundary is strictly simpler and bounds the persisted artifact too.
 
 ### D3: Bound by long-edge AND byte budget
 
@@ -117,10 +135,10 @@ so this does not violate its "no dependency on other Netclaw projects" rule).
 
 ### D5: Format policy
 
-Re-encode photos to JPEG (configurable quality, default ~85); preserve PNG for
-images with alpha or where lossless matters (screenshots/diagrams), matching the
-Codex passthrough-when-supported approach. When passing through an
-already-bounded supported format, avoid a needless re-encode.
+Re-encode photos to JPEG (constant quality ~85); preserve PNG for images with
+alpha or where lossless matters (screenshots/diagrams), matching the Codex
+passthrough-when-supported approach. When passing through an already-bounded
+supported format, avoid a needless re-encode.
 
 **Implementation refinements (discovered while building, IMPLEMENTED):**
 - **Read alpha from the source codec, not the decoded bitmap.** A decoded
@@ -169,18 +187,15 @@ bytes-in/bytes-out. Coverage:
   N×M canvas, encode), assert output dims/bytes for oversized-by-dimension,
   oversized-by-bytes (terminates), already-small (no upscale), format rules,
   corrupt/un-shrinkable → `Dropped`.
-- **Memory ceiling** — unit-test `ChooseDecodeSampleSize` (pure integer math);
-  one integration test asserts the decoded buffer for an 8000×8000 fixture is
-  ~target-sized, plus a coarse `GC.GetAllocatedBytesForCurrentThread()` ceiling
-  ("stays under N MB", assert a bound not an exact value).
-- **Cache** — inject a spy normalizer, assert same-bytes → one invocation,
-  different-bytes → two, LRU eviction over capacity. Inject `TimeProvider` for
-  any TTL (no `Task.Delay`).
-- **Seams** — ingestion: write oversized image, read stored artifact back,
-  assert bounded. Egress: extend `ChatMessageConverterTests` to assert
-  `DataContent.Data.Length` bounded + media type; drop-with-note path.
-- **Config/schema** — config-load test with and without the block (defaults +
-  `additionalProperties:false` acceptance).
+- **Memory ceiling** — unit-test `ChooseDecodeSampleSize` (pure integer math) +
+  an integration test on a large fixture asserting a bounded output. NOTE: no
+  `GC.GetAllocatedBytesForCurrentThread()` assertion — Skia decodes into native
+  memory the managed GC counter cannot see (see D8); the bound is proven by the
+  sample-size math + the decode ceiling + output dimensions instead.
+- **Media-store seam** — write/copy an oversized image through the two
+  `SessionMediaStore` writers, read the stored artifact back, assert it is
+  bounded and that non-image media is unchanged. Extend `ChatMessageConverterTests`
+  for the drop-with-note path.
 - **End-to-end backstop** — 1–2 eval-suite image cases only. Termina smoke
   harness does **not** apply (no TUI surface).
 
@@ -197,38 +212,36 @@ bytes-in/bytes-out. Coverage:
   guards this.
 - **Lossy re-encode degrades a text-heavy screenshot** → keep PNG for
   lossless/alpha cases (D5); 1568px long edge keeps text legible (Anthropic's
-  own recommendation); quality configurable.
-- **Cache unbounded growth** → bound the `file_read` cache (LRU by count and/or
-  total bytes); it holds already-small encoded artifacts.
-- **Behavior drift between ingestion and egress paths** → both call the *same*
-  `IImageNormalizer`; the only difference is *where* and *whether the result is
-  persisted vs cached*. No second implementation.
-- **Persistence/recovery** → if `MediaReference` gains a "normalized" marker it
-  stays framework-owned and serialization round-trip safe; recovery rehydrates
-  the already-bounded artifact. The `file_read` cache is in-process and
-  rebuildable, so it needs no persistence and is safe to lose on restart (it
-  re-normalizes on next reference — correct, just not free).
+  own recommendation).
+- **Behavior drift between the two writers** → both call the *same*
+  `IImageNormalizer` with the same constant bounds. No second implementation,
+  no per-path divergence.
+- **Persistence/recovery** → the normalized artifact replaces the original at the
+  media-store write, so the stored `SerializableMediaReference` already points at
+  bounded bytes; recovery rehydrates it unchanged. No `MediaReference` shape
+  change and nothing to lose on restart (no in-process cache).
+- **`CopyFile` does more work now** → it currently does a plain file copy; for
+  images it becomes decode+normalize+write. This is once per `file_read` handoff,
+  not per turn, and is the price of bounding the artifact at the source.
 
 ## Migration Plan
 
-1. Add SkiaSharp + Linux native asset; wire into Dockerfile; add load probe.
-2. Land `IImageNormalizer` + `ChooseDecodeSampleSize` in `Netclaw.Media` with
-   unit tests (no wiring yet).
-3. Wire the egress `file_read` path + content-hash cache.
-4. Wire the ingestion (chat-media) path; persist bounded artifact.
-5. Add `*Config` + `netclaw-config.v1.schema.json` sync (defaults for clean
-   upgrade).
-6. Eval cases + benchmark before/after memory number for the PR.
+1. Add SkiaSharp + Linux native asset; wire into Dockerfile; add load probe. *(done: package)*
+2. Land `IImageNormalizer` + `ImageDecodeMath` in `Netclaw.Media` with unit
+   tests (no wiring yet). *(done)*
+3. Hook normalization into `SessionMediaStore.WriteDataContent` and `CopyFile`
+   (gated to images; non-image passthrough); persist the bounded artifact.
+4. Media-store seam tests + drop-with-note; eval cases + benchmark before/after
+   memory number for the PR.
 
-Rollback: the config enable/disable switch (D... config) turns normalization off,
-reverting to passthrough behavior without code changes; the native-asset add is
-additive.
+Rollback: revert the change — the bounds are constants with no runtime switch, by
+design (a switch that disabled normalization would re-open the OOM). The
+native-asset add is additive.
 
 ## Open Questions
 
-- Exact default caps — confirm 1568px / 5MB / JPEG q85, or expose only and ship
-  conservative defaults.
-- Whether to keep the original alongside the normalized chat artifact (cost: 2×
-  disk) or store only the normalized one (OpenCode does the latter). Leaning
-  normalized-only since the model never needs the original.
-- Cache key/eviction bounds (count vs total-bytes) and default size.
+- Exact default constants — confirm 1568px / 5MB / JPEG q85.
+- `CopyFile` returns a `SerializableMediaReference` built from the source file's
+  length/MIME; when we normalize, those must reflect the *normalized* artifact
+  (and the MIME may change PNG→JPEG). Confirm the reference is built from the
+  written bytes, not the source `FileInfo`.
