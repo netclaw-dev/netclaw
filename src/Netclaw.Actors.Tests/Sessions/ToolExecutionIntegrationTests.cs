@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -116,6 +117,139 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         Assert.Single(_fakeAuditLogger.Entries);
         Assert.Equal("web_search", _fakeAuditLogger.Entries[0].ToolName.Value);
         Assert.True(_fakeAuditLogger.Entries[0].Allowed);
+    }
+
+    [Fact]
+    public async Task User_message_during_active_tool_continuation_interrupts_and_starts_fresh_turn()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "slow query" })
+        ];
+        _fakeToolExecutor.Results["web_search"] = "old tool result";
+        var toolStarted = new TaskCompletionSource<FunctionCallContent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var toolGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeToolExecutor.NextExecutionStarted = toolStarted;
+        _fakeToolExecutor.ExecutionGate = toolGate;
+
+        var sessionId = new SessionId("test-channel/tool-interrupt");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("tool-interrupt-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Start the slow search"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var toolCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("call-1", toolCall.CallId.Value);
+        Assert.Equal("call-1", (await toolStarted.Task.WaitAsync(TestContext.Current.CancellationToken)).CallId);
+
+        var ack = await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Stop searching. Answer this instead."
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, ack.SessionId);
+
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("[fake] Response #2", text.Text);
+        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, completed.TurnNumber.Value);
+
+        Assert.Equal(2, _fakeChatClient.CallCount);
+        Assert.Equal(1, _fakeToolExecutor.CallCount);
+
+        var secondCallMessages = _fakeChatClient.ReceivedMessages[1];
+        Assert.Equal(
+            "Stop searching. Answer this instead.",
+            secondCallMessages.Last(m => m.Role == Microsoft.Extensions.AI.ChatRole.User).Text);
+        Assert.Contains(secondCallMessages, m =>
+            m.Role == Microsoft.Extensions.AI.ChatRole.Tool
+            && m.Contents.OfType<FunctionResultContent>().Any(r =>
+                r.Result?.ToString()?.Contains("interrupted by a new user message", StringComparison.Ordinal) ?? false));
+        Assert.DoesNotContain(secondCallMessages, m =>
+            m.Role == Microsoft.Extensions.AI.ChatRole.Tool
+            && m.Contents.OfType<FunctionResultContent>().Any(r =>
+                r.Result?.ToString()?.Contains("old tool result", StringComparison.Ordinal) ?? false));
+    }
+
+    [Fact]
+    public async Task Stale_tool_batch_completion_after_interrupt_is_ignored()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-1", "web_search",
+                new Dictionary<string, object?> { ["query"] = "slow query" })
+        ];
+        var toolStarted = new TaskCompletionSource<FunctionCallContent>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var toolGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeToolExecutor.NextExecutionStarted = toolStarted;
+        _fakeToolExecutor.ExecutionGate = toolGate;
+
+        var sessionId = new SessionId("test-channel/stale-tool-interrupt");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("stale-tool-interrupt-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Start the slow search"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("call-1", (await toolStarted.Task.WaitAsync(TestContext.Current.CancellationToken)).CallId);
+
+        var freshResponseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = freshResponseGate;
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Stop searching. Answer this instead."
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() => Assert.Equal(2, _fakeChatClient.CallCount),
+            TimeSpan.FromSeconds(3), TimeSpan.FromMilliseconds(100), cancellationToken: TestContext.Current.CancellationToken);
+
+        var child = await ResolveSessionActorAsync(sessionId);
+        child.Tell(new ToolExecutionCompleted
+        {
+            BatchId = 1,
+            ToolResults =
+            [
+                new SerializableChatMessage
+                {
+                    Role = Netclaw.Actors.Protocol.ChatRole.Tool,
+                    Content = "stale old tool result",
+                    ToolCallId = new ToolCallId("call-1"),
+                    Name = "web_search"
+                }
+            ]
+        });
+
+        freshResponseGate.SetResult();
+
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("[fake] Response #2", text.Text);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(2, _fakeChatClient.CallCount);
     }
 
     [Fact]
@@ -335,6 +469,13 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         Assert.True(hasWorkingContextBlock,
             $"Expected turn 2's first LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
     }
+
+    private Task<IActorRef> ResolveSessionActorAsync(SessionId sessionId)
+    {
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        return Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+    }
 }
 
 /// <summary>
@@ -352,6 +493,10 @@ internal sealed class FakeToolExecutor : IToolExecutor
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
 
+    public TaskCompletionSource<FunctionCallContent>? NextExecutionStarted { get; set; }
+
+    public TaskCompletionSource? ExecutionGate { get; set; }
+
     public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext? context = null, CancellationToken ct = default)
     {
         if (FailForTools.Contains(toolCall.Name))
@@ -367,6 +512,14 @@ internal sealed class FakeToolExecutor : IToolExecutor
         if (FailForTools.Contains(toolCall.Name))
         {
             throw new InvalidOperationException($"Tool '{toolCall.Name}' failed (simulated)");
+        }
+
+        NextExecutionStarted?.TrySetResult(toolCall);
+
+        if (ExecutionGate is { } gate)
+        {
+            using var registration = ct.Register(() => gate.TrySetCanceled(ct));
+            await gate.Task;
         }
 
         var result = Results.GetValueOrDefault(toolCall.Name, $"[fake result for {toolCall.Name}]");

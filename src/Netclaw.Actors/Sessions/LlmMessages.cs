@@ -73,6 +73,8 @@ internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerifica
 /// </summary>
 internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeeded
 {
+    public long BatchId { get; init; }
+
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
     public List<SerializableMediaReference> ModelInputMediaReferences { get; init; } = [];
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
@@ -80,9 +82,9 @@ internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeed
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
 }
 
-internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result) : INoSerializationVerificationNeeded;
+internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result, long BatchId) : INoSerializationVerificationNeeded;
 
-internal sealed record ToolExecutionBatchCompleted : INoSerializationVerificationNeeded;
+internal sealed record ToolExecutionBatchCompleted(long BatchId) : INoSerializationVerificationNeeded;
 
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {
@@ -124,6 +126,8 @@ internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNee
 /// </summary>
 internal sealed record ToolExecutionFailed : INoSerializationVerificationNeeded
 {
+    public long BatchId { get; init; }
+
     public required Exception Cause { get; init; }
 }
 

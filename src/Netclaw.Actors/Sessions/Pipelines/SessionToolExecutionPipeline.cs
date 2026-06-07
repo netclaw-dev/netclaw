@@ -94,6 +94,7 @@ internal static class SessionToolExecutionPipeline
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
         TurnContext? turnContext = null,
+        long batchId = 0,
         CancellationToken ct = default)
     {
         try
@@ -138,14 +139,14 @@ internal static class SessionToolExecutionPipeline
                     turnContext,
                     modelInputBudget);
                 if (streamToolResults)
-                    self.Tell(new ToolExecutionSingleCompleted(result));
+                    self.Tell(new ToolExecutionSingleCompleted(result, batchId));
                 return result;
             });
             var results = await Task.WhenAll(tasks);
 
             if (streamToolResults)
             {
-                self.Tell(new ToolExecutionBatchCompleted());
+                self.Tell(new ToolExecutionBatchCompleted(batchId));
                 return;
             }
 
@@ -153,6 +154,7 @@ internal static class SessionToolExecutionPipeline
             var modelInputMediaReferences = results.SelectMany(r => r.ModelInputMediaReferences).ToList();
             self.Tell(new ToolExecutionCompleted
             {
+                BatchId = batchId,
                 ToolResults = [.. results.Select(r => r.Message)],
                 ModelInputMediaReferences = modelInputMediaReferences,
                 FileAttachments = fileAttachments,
@@ -162,12 +164,13 @@ internal static class SessionToolExecutionPipeline
         }
         catch (TimeoutException ex)
         {
-            self.Tell(new ToolExecutionFailed { Cause = ex });
+            self.Tell(new ToolExecutionFailed { BatchId = batchId, Cause = ex });
         }
         catch (OperationCanceledException ex)
         {
             self.Tell(new ToolExecutionFailed
             {
+                BatchId = batchId,
                 Cause = new TimeoutException(
                     $"Tool execution exceeded timeout of {timeout.TotalSeconds:F0}s",
                     ex)
@@ -175,7 +178,7 @@ internal static class SessionToolExecutionPipeline
         }
         catch (Exception ex)
         {
-            self.Tell(new ToolExecutionFailed { Cause = ex });
+            self.Tell(new ToolExecutionFailed { BatchId = batchId, Cause = ex });
         }
     }
 

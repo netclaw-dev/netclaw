@@ -143,6 +143,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // from cancelled calls are ignored when their CallId doesn't match.
     private long _activeCallId;
 
+    // Correlation ID for the active tool batch. Incremented when a batch starts
+    // and when a running batch is interrupted so late callbacks cannot advance
+    // a superseded turn.
+    private long _activeToolBatchId;
+
     // Tracks whether any content was streamed this call — selects the watchdog timeout
     // (the generous prefill budget before the first token vs the tighter inter-delta
     // budget after).
@@ -462,6 +467,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _deliveryRetry.Clear();
+
+            if (ShouldInterruptActiveToolContinuation(cmd))
+            {
+                InterruptActiveToolContinuation(cmd);
+                return;
+            }
+
             _log.Info("Buffering user message (LLM call in progress)");
             _buffer.Add(cmd);
             TryReplyAck();
@@ -501,7 +513,22 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionSingleCompleted>(msg =>
         {
+            if (!IsCurrentToolBatchCallback(msg.BatchId))
+            {
+                TurnLog().Info("turn_stale_tool_single_ignored batchId={BatchId} activeBatchId={ActiveBatchId}",
+                    msg.BatchId, _activeToolBatchId);
+                return;
+            }
+
             var result = msg.Result;
+            var callId = result.Message.ToolCallId?.Value;
+            if (callId is null || !_activeToolBatch.ExpectsCall(callId))
+            {
+                TurnLog().Info("turn_stale_tool_result_ignored batchId={BatchId} callId={CallId}",
+                    msg.BatchId, callId ?? "-");
+                return;
+            }
+
             Persist(new ToolCallRecorded
             {
                 SessionId = _sessionId,
@@ -515,8 +542,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             });
         });
 
-        Command<ToolExecutionBatchCompleted>(_ =>
+        Command<ToolExecutionBatchCompleted>(msg =>
         {
+            if (!IsCurrentToolBatchCallback(msg.BatchId))
+            {
+                TurnLog().Info("turn_stale_tool_batch_ignored batchId={BatchId} activeBatchId={ActiveBatchId}",
+                    msg.BatchId, _activeToolBatchId);
+                return;
+            }
+
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
             _activeToolBatch.MarkExecutionTaskCompleted();
@@ -527,6 +561,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionFailed>(msg =>
         {
+            if (!IsCurrentToolBatchCallback(msg.BatchId))
+            {
+                TurnLog().Info("turn_stale_tool_failure_ignored batchId={BatchId} activeBatchId={ActiveBatchId}",
+                    msg.BatchId, _activeToolBatchId);
+                return;
+            }
+
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
             _pendingModelInputMediaReferences.Clear();
@@ -779,6 +820,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleToolExecutionCompleted(ToolExecutionCompleted msg)
     {
+        if (!IsCurrentToolBatchCallback(msg.BatchId))
+        {
+            TurnLog().Info("turn_stale_tool_execution_ignored batchId={BatchId} activeBatchId={ActiveBatchId}",
+                msg.BatchId, _activeToolBatchId);
+            return;
+        }
+
         _watchdog.Stop(Timers);
         CancelAndDisposeToolExecutionCts();
 
@@ -1856,6 +1904,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         CancelAndDisposeToolExecutionCts();
         _activeToolExecutionCts = new CancellationTokenSource();
         var toolExecutionCt = _activeToolExecutionCts.Token;
+        var batchId = ++_activeToolBatchId;
 
         _ = SessionToolExecutionPipeline.ExecuteToolsAsync(executor, toolCalls, sessionId, _currentTurnSource, auditLogger, tp, sessionDir, maxInlineToolResultChars, toolExecutionTimeout, self, emitSubAgentOutput, spawnChildActor,
             approvalChannel: _approvalChannel,
@@ -1871,6 +1920,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             oneTimeApprovalPreSeed: oneTimeApprovalPreSeed,
             decisionOverride: decisionOverride,
             turnContext: _currentTurnContext,
+            batchId: batchId,
             ct: toolExecutionCt);
     }
 
@@ -1985,6 +2035,69 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
+    }
+
+    private bool ShouldInterruptActiveToolContinuation(SendUserMessage cmd)
+        => IsRealUserMessage(cmd) && HasActiveToolContinuation();
+
+    private static bool IsRealUserMessage(SendUserMessage cmd)
+        => string.IsNullOrEmpty(cmd.Source?.ReminderId)
+           && string.IsNullOrEmpty(cmd.Source?.BackgroundJobId);
+
+    private bool HasActiveToolContinuation()
+        => _activeToolBatch.HasActiveBatch
+           || _turnState.ToolIterationCount > 0
+           || _pendingToolInteractions.Count > 0
+           || _resolvedToolApprovals.Count > 0;
+
+    private void InterruptActiveToolContinuation(SendUserMessage cmd)
+    {
+        TurnLog().Info(
+            "turn_tool_loop_interrupted_by_user_message iteration={Iteration} callCount={CallCount} activeBatchId={ActiveBatchId} pendingApprovals={PendingApprovals} resolvedApprovals={ResolvedApprovals}",
+            _turnState.ToolIterationCount,
+            _turnState.ToolCallCount,
+            _activeToolBatchId,
+            _pendingToolInteractions.Count,
+            _resolvedToolApprovals.Count);
+
+        _watchdog.Stop(Timers);
+        CancelAndDisposeLlmCts();
+        _activeCallId++;
+        CancelAndDisposeToolExecutionCts();
+        _activeToolBatchId++;
+        CompleteReminderInFlight(_currentTurnSource?.ReminderId);
+        CompleteBackgroundJobInFlight(_currentTurnSource?.BackgroundJobId);
+
+        var abandoned = BuildToolBatchAbandonedEvent(
+            "Tool call was not completed — the request was interrupted by a new user message.");
+        if (abandoned.ToolResults.Count > 0)
+        {
+            Persist(abandoned, evt =>
+            {
+                ApplyToolBatchAbandoned(evt);
+                StartFreshTurnAfterInterruptedToolLoop(cmd);
+            });
+            return;
+        }
+
+        ClearInterruptedToolContinuationState();
+        StartFreshTurnAfterInterruptedToolLoop(cmd);
+    }
+
+    private void ClearInterruptedToolContinuationState()
+    {
+        _pendingToolInteractions.Clear();
+        _resolvedToolApprovals.Clear();
+        ClearApprovalTurnState();
+        ClearActiveToolBatchTracking();
+    }
+
+    private void StartFreshTurnAfterInterruptedToolLoop(SendUserMessage cmd)
+    {
+        if (_currentPhase == SessionPhase.Processing)
+            TransitionTo(SessionPhase.Ready);
+
+        ContinueIncomingUserMessage(cmd);
     }
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
@@ -3328,6 +3441,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeToolBatch.Clear();
         _pendingModelInputMediaReferences.Clear();
     }
+
+    private bool IsCurrentToolBatchCallback(long batchId)
+        => batchId == _activeToolBatchId && _activeToolBatch.HasActiveBatch;
 
     private void MaybeSnapshot()
     {
