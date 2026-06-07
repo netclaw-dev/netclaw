@@ -1292,18 +1292,18 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private void ShowTextScreen(SkillSourcesScreen screen, string seed)
     {
-        Screen.Value = screen;
         SelectedRow.Value = 0;
         Draft.Value = seed;
+        Screen.Value = screen;
         ClearStatus();
         RequestRedraw();
     }
 
     private void ShowChoiceScreen(SkillSourcesScreen screen, int row)
     {
-        Screen.Value = screen;
         SelectedRow.Value = row;
         Draft.Value = string.Empty;
+        Screen.Value = screen;
         ClearStatus();
         RequestRedraw();
     }

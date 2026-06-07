@@ -43,6 +43,7 @@ internal sealed class NetclawValidatedTextField : INetclawUiComponent
 
     public ILayoutNode Build()
     {
+        _text = _commit.ReadDraft();
         var display = string.IsNullOrWhiteSpace(_text) ? _placeholder : _text;
         var color = string.IsNullOrWhiteSpace(_text) ? Color.BrightBlack : Color.Cyan;
         return NetclawTuiChrome.BuildPanel(_commit.Label, new TextNode($" {display}").WithForeground(color), Color.Gray)

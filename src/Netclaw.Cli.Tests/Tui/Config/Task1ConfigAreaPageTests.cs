@@ -223,7 +223,7 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     public async Task Skill_sources_remote_auth_second_enter_saves_anyway_without_persisting_incomplete_flow()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(false, "probe failed"));
 
         BeginRemoteUrlEntry(input, "https://skills.example.test");
         input.EnqueueKey(ConsoleKey.Enter);
@@ -234,6 +234,11 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         await app.RunAsync(cts.Token);
 
         Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        var screen = terminal.ToString();
+        Assert.True(screen.Contains("Review remote skill server source", StringComparison.Ordinal),
+            $"Expected remote source name confirmation screen. Screen:\n{terminal}");
+        Assert.True(screen.Contains("skills-example-test", StringComparison.Ordinal),
+            $"Expected suggested source name in terminal output. Screen:\n{terminal}");
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
@@ -278,6 +283,30 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         Assert.Equal("https://skills.example.test", feed.GetProperty("Url").GetString());
         Assert.True(feed.GetProperty("Enabled").GetBoolean());
         Assert.Equal(30, feed.GetProperty("TimeoutSeconds").GetInt32());
+        Assert.False(feed.TryGetProperty("ApiKey", out _));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_name_enter_after_save_anyway_persists_source_to_skill_feeds()
+    {
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://example.invalid");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+        Assert.Equal(ConfigStatusTone.Success, vm.Status.Value.Tone);
+        Assert.Contains("Added skill server", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var feeds = doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds");
+        var feed = Assert.Single(feeds.EnumerateArray());
+        Assert.Equal("https://example.invalid", feed.GetProperty("Url").GetString());
         Assert.False(feed.TryGetProperty("ApiKey", out _));
     }
 
