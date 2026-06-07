@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.9.0"
+  version: "2.10.0"
 ---
 
 # Netclaw Operations
@@ -711,6 +711,7 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 | `openrouter` | API key | `sk-or-...` |
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
 | `veniceai` | API key | OpenAI-compatible at `https://api.venice.ai/api/v1`. Suppresses Venice's prepended system prompt by default; opt in via `VendorOptions.IncludeVeniceSystemPrompt = true` |
+| `ds4` | Endpoint only | DwarfStar local DeepSeek V4 engine. `--endpoint http://127.0.0.1:8000`. Run `ds4-server` separately (Metal/CUDA host); model ids `deepseek-v4-flash` / `deepseek-v4-pro` |
 
 Provider-specific behavior toggles belong under
 `Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core
