@@ -133,23 +133,29 @@ explicit at the type level.
 Home: `Netclaw.Media` (already the media library; SkiaSharp is an external dep,
 so this does not violate its "no dependency on other Netclaw projects" rule).
 
-### D5: Format policy
+### D5: Format policy — resize only, never transcode (revised after review)
 
-Re-encode photos to JPEG (constant quality ~85); preserve PNG for images with
-alpha or where lossless matters (screenshots/diagrams), matching the Codex
-passthrough-when-supported approach. When passing through an already-bounded
-supported format, avoid a needless re-encode.
+The normalizer **only resizes**. An oversized image is downscaled to the long-edge
+cap and re-encoded **in its original container format** — PNG→PNG, JPEG→JPEG,
+WebP→WebP. We do **not** transcode (no PNG→JPEG), do **not** quality-reduce, and do
+**not** run an iterative byte-shrink loop. Rationale:
 
-**Implementation refinements (discovered while building, IMPLEMENTED):**
-- **Read alpha from the source codec, not the decoded bitmap.** A decoded
-  `SKBitmap` defaults to `Premul` regardless of whether the source had
-  transparency, so the JPEG-vs-PNG decision must use `codec.Info.AlphaType`
-  before decoding. (Opaque → JPEG, alpha → PNG.)
-- **Quality ladder before size shrink.** To hit a tight byte budget the encoder
-  tries the configured quality then a descending JPEG ladder (70/55/40) at each
-  size before reducing dimensions (×0.8, bounded steps). PNG is lossless so the
-  ladder collapses to a single pass and only size shrinks. This mirrors
-  OpenCode and converges far faster than size-only shrink.
+- Format conversion is not part of the OOM fix — resizing bounds the decoded
+  memory and payload regardless of format. Converting only affects output bytes,
+  a secondary concern.
+- Transcoding an opaque PNG to JPEG (the original draft) **degrades the common
+  case**: screenshots/diagrams/text get ringing artifacts *and* often grow
+  (flat content compresses worse as JPEG). Real-world PNGs are overwhelmingly
+  flat UI; photos are already JPEG. So "keep the source format" is both
+  higher-fidelity and simpler.
+
+The byte budget (~5MB) is therefore a **fail-loud drop gate**, not a shrink
+target: an image within the dimension cap but over budget, or a resized image
+still over budget, is **dropped** (no transcode/quality escape hatch). Formats
+Skia cannot re-encode (**GIF**) are passed through untouched when within budget
+(animation preserved) and dropped when over — never decoded-to-still or
+transcoded. (Earlier drafts used opacity to pick JPEG-vs-PNG and a JPEG quality
+ladder; both were removed by the code review — see the review findings.)
 
 ### D8: The memory bound is native and format-dependent (design correction)
 
@@ -167,8 +173,8 @@ Two facts surfaced during implementation that correct the original framing:
   PNG/GIF/BMP have no native scaled decode — the codec returns full dimensions.
   To keep a pathological huge PNG from OOMing, the normalizer enforces a
   **fail-loud decode ceiling** (`MaxDecodeBytes`, 256 MiB ≈ 8192² RGBA): if the
-  scaled decode dimensions would exceed it, the image is **Dropped** with
-  guidance ("re-save smaller or as JPEG") rather than decoded. So the worst case
+  scaled decode dimensions would exceed it, the image is **Dropped** rather than
+  decoded. So the worst case
   for any input is bounded: either scaled-down on decode, or refused.
 
 ### D6: Fail-loud drop
@@ -210,9 +216,9 @@ bytes-in/bytes-out. Coverage:
   `SKCodec`'s scaled-dimensions API to pick the sample-size from header
   dimensions *before* allocating the pixel buffer; the integration memory test
   guards this.
-- **Lossy re-encode degrades a text-heavy screenshot** → keep PNG for
-  lossless/alpha cases (D5); 1568px long edge keeps text legible (Anthropic's
-  own recommendation).
+- **Lossy re-encode degrades a text-heavy screenshot** → resolved by D5: we never
+  transcode, so a PNG screenshot stays a lossless PNG (only resized). 1568px long
+  edge keeps text legible (Anthropic's own recommendation).
 - **Behavior drift between the two writers** → both call the *same*
   `IImageNormalizer` with the same constant bounds. No second implementation,
   no per-path divergence.
@@ -241,15 +247,17 @@ native-asset add is additive.
 ## Measured impact
 
 One-off measurement through the implemented normalizer (default caps: 1568px /
-5MB / JPEG q85). The headline is the **native decoded-bitmap** memory — the OOM
-metric — which now scales with the target, not the source, and is paid **once at
-ingestion** instead of on every turn the image stays in the window:
+5MB). The headline is the **native decoded-bitmap** memory — the OOM metric —
+which now scales with the target, not the source, and is paid **once at
+ingestion** instead of on every turn the image stays in the window. The decoded
+column is independent of output format (resize is identical); the output keeps
+the **source container format** (resized) per D5:
 
-| Source | Decoded bitmap (full → shrink-on-decode) | Output payload |
+| Source | Decoded bitmap (full → shrink-on-decode) | Output (resized, source format) |
 |--------|------------------------------------------|----------------|
-| 8000×8000 (64MP) | **244 MB → 15 MB** (sample 1/4) | 1568×1568, 123 KB JPEG |
-| 6000×4000 (24MP) | **92 MB → 23 MB** (sample 1/2) | 1568×1045, 83 KB JPEG |
-| 3840×2160 (4K)   | **32 MB → 8 MB** (sample 1/2)  | 1568×882, 65 KB JPEG |
+| 8000×8000 (64MP) | **244 MB → 15 MB** (sample 1/4) | 1568×1568 |
+| 6000×4000 (24MP) | **92 MB → 23 MB** (sample 1/2) | 1568×1045 |
+| 3840×2160 (4K)   | **32 MB → 8 MB** (sample 1/2)  | 1568×882 |
 
 This is the *per-image* peak; pre-change a single message could admit 10 files
 and re-materialize all of them every turn. (BenchmarkDotNet was not used — its
@@ -258,8 +266,10 @@ tasks.md 5.2.)
 
 ## Open Questions
 
-- Exact default constants — confirm 1568px / 5MB / JPEG q85.
-- `CopyFile` returns a `SerializableMediaReference` built from the source file's
-  length/MIME; when we normalize, those must reflect the *normalized* artifact
-  (and the MIME may change PNG→JPEG). Confirm the reference is built from the
-  written bytes, not the source `FileInfo`.
+- Exact default constants — confirm 1568px / 5MB (JPEG quality only applies when a
+  JPEG source is resized; default 85).
+
+_Resolved during implementation:_ `CopyFile`/`WriteDataContent` build the
+`SerializableMediaReference` from the **written (resized) bytes' length and the
+normalizer's reported MIME**, not the source `FileInfo` — verified. The MIME stays
+the source container format (resize only, no transcode).

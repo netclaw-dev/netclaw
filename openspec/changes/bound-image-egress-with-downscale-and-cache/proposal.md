@@ -25,10 +25,13 @@ multimodal model input).
 ## What Changes
 
 - Introduce a shared, injectable **`ImageNormalizer`** (SkiaSharp-backed) that
-  downscales an image to a bounded payload: long-edge cap (~1568px, Anthropic's
-  documented sweet spot) **and** a base64 byte budget (~5MB, matching
-  Anthropic's hard API limit), re-encoding to JPEG for photos while preserving
-  PNG where it matters.
+  **only resizes**: an image whose longest edge exceeds the cap (~1568px,
+  Anthropic's documented sweet spot) is downscaled and re-encoded **in its
+  original container format** — a PNG stays a PNG, a JPEG stays a JPEG. No
+  transcoding (e.g. PNG→JPEG), no quality reduction. A base64 byte budget (~5MB,
+  Anthropic's hard API limit) acts as a fail-loud drop gate: anything that can't
+  be bounded by resize alone (or a format Skia can't re-encode, e.g. GIF, that is
+  over budget) is dropped, never silently degraded.
 - Use **shrink-on-decode** (`SKCodec` sample-size) so the full-resolution
   bitmap is never materialized — the memory ceiling is the *downscaled*
   bitmap, not the source. This is the actual #1296 fix, not just a smaller
