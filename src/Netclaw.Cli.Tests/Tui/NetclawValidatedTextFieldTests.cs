@@ -103,7 +103,7 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
             PersistAsync: persist ?? ((_, _) => ValueTask.CompletedTask),
             AfterCommit: _ => { });
 
-        return new NetclawValidatedTextField(commit, new NetclawUiCommitPipeline(), new TextInputNode());
+        return new NetclawValidatedTextField(commit, new NetclawUiCommitPipeline(), "Type here...");
     }
 
     private static ValueTask WriteFile(string file, string value)

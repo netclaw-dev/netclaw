@@ -17,6 +17,8 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 {
     private DynamicLayoutNode? _contentNode;
     private readonly TextInputNode _pasteBuffer = new();
+    private readonly NetclawUiCommitPipeline _commitPipeline = new();
+    private NetclawValidatedTextField? _addLocalPathField;
 
     protected override void OnBound()
     {
@@ -28,7 +30,13 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             .Subscribe(HandlePaste)
             .DisposeWith(Subscriptions);
 
-        ViewModel.Screen.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.Screen.Subscribe(screen =>
+        {
+            if (screen != SkillSourcesScreen.AddLocalPath)
+                _addLocalPathField = null;
+
+            _contentNode?.Invalidate();
+        }).DisposeWith(Subscriptions);
         ViewModel.SelectedRow.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
         ViewModel.Draft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
         ViewModel.Version.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
@@ -51,10 +59,9 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             SkillSourcesScreen.Inventory => BuildInventory(),
             SkillSourcesScreen.SourceDetail => BuildSourceDetail(),
-            SkillSourcesScreen.AddLocalPath => BuildTextDraft(
+            SkillSourcesScreen.AddLocalPath => BuildValidatedTextDraft(
                 "Add a local skill folder.",
-                "Folder path",
-                ViewModel.Draft.Value,
+                EnsureAddLocalPathField(),
                 "This must be an existing local directory."),
             SkillSourcesScreen.AddLocalSymlinks => BuildChoice(
                 "Allow symlinks inside this folder?",
@@ -194,6 +201,20 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         return layout;
     }
 
+    private ILayoutNode BuildValidatedTextDraft(string title, INetclawUiComponent field, string hint)
+        => Layouts.Vertical()
+            .WithChild(Header($"  {title}"))
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(field.Build())
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Hint($"  {hint}"));
+
+    private NetclawValidatedTextField EnsureAddLocalPathField()
+        => _addLocalPathField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.AddLocalPath(ViewModel),
+            _commitPipeline,
+            "Type here...");
+
     private static LayoutNode BuildDraftInput(string fieldLabel, string value)
     {
         var display = string.IsNullOrWhiteSpace(value) ? "Type here..." : value;
@@ -298,6 +319,12 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             return;
         }
 
+        if (ViewModel.Screen.Value == SkillSourcesScreen.AddLocalPath
+            && EnsureAddLocalPathField().HandleInput(keyInfo))
+        {
+            return;
+        }
+
         switch (keyInfo.Key)
         {
             case ConsoleKey.UpArrow:
@@ -332,6 +359,12 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
     private void HandlePaste(PasteEvent paste)
     {
+        if (ViewModel.Screen.Value == SkillSourcesScreen.AddLocalPath)
+        {
+            EnsureAddLocalPathField().HandlePaste(paste);
+            return;
+        }
+
         _pasteBuffer.Text = string.Empty;
         _pasteBuffer.HandlePaste(paste);
         ViewModel.AppendText(_pasteBuffer.Text);

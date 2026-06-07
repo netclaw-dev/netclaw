@@ -233,6 +233,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         MarkDirty();
     }
 
+    internal void ReplaceDraft(string value)
+    {
+        if (!IsTextEntryScreen(Screen.Value))
+            return;
+
+        Draft.Value = value;
+        MarkDirty();
+    }
+
     public void Backspace()
     {
         if (!IsTextEntryScreen(Screen.Value) || Draft.Value.Length == 0)
@@ -485,6 +494,25 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _pendingLocalPath = fullPath;
         _pendingLocalAllowSymlinks = false;
         ShowChoiceScreen(SkillSourcesScreen.AddLocalSymlinks, 0);
+    }
+
+    internal NetclawUiValidationResult ValidateAddLocalPathDraft(string value)
+        => TryNormalizeExternalDirectory(value.Trim(), out _, out var error)
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed(error);
+
+    internal void CommitAddLocalPathDraft(string value)
+    {
+        Draft.Value = value;
+        ContinueAddLocalPath();
+    }
+
+    internal void ApplyCommitResult(NetclawUiCommitResult result)
+    {
+        if (result.Success)
+            return;
+
+        SetStatus(result.Message, ToConfigTone(result.Tone));
     }
 
     private void ContinueAddLocalSymlinks()
@@ -1309,6 +1337,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             or SkillSourcesScreen.AddRemoteName
             or SkillSourcesScreen.RenameSource
             or SkillSourcesScreen.ChangeLocation;
+
+    private static ConfigStatusTone ToConfigTone(NetclawUiStatusTone tone)
+        => tone switch
+        {
+            NetclawUiStatusTone.Success => ConfigStatusTone.Success,
+            NetclawUiStatusTone.Warning => ConfigStatusTone.Warning,
+            NetclawUiStatusTone.Error => ConfigStatusTone.Error,
+            _ => ConfigStatusTone.Neutral,
+        };
 
     private static string FormatSourceLabel(SkillSourceDisplay source)
     {
