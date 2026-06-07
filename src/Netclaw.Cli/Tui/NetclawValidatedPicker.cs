@@ -37,6 +37,7 @@ internal sealed class NetclawValidatedPicker<TValue> : INetclawUiComponent
 
     public ILayoutNode Build()
     {
+        _selectedIndex = FindSelectedIndex(_commit.ReadDraft());
         var layout = Layouts.Vertical();
         for (var i = 0; i < _options.Count; i++)
         {

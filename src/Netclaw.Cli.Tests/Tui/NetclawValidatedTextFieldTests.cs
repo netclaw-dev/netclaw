@@ -62,6 +62,57 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
     }
 
     [Fact]
+    public void Enter_dynamic_failure_blocks_then_second_enter_saves_anyway()
+    {
+        var draft = string.Empty;
+        var file = SeedFile();
+        var component = CreateComponent(
+            readDraft: () => draft,
+            writeDraft: value => draft = value,
+            dynamicValidate: (_, _) => ValueTask.FromResult(NetclawUiValidationResult.Warning("probe failed")),
+            persist: (value, _) => WriteFile(file, value));
+
+        component.HandleInput(Key('a'));
+        component.HandleInput(Key(ConsoleKey.Enter));
+
+        Assert.Equal("before", File.ReadAllText(file));
+        Assert.False(component.LastCommitResult?.Success);
+        Assert.True(component.LastCommitResult?.CanSaveAnyway);
+
+        component.HandleInput(Key(ConsoleKey.Enter));
+
+        Assert.Equal("a", File.ReadAllText(file));
+        Assert.True(component.LastCommitResult?.Success);
+    }
+
+    [Fact]
+    public void Draft_change_after_dynamic_failure_requires_validation_again()
+    {
+        var draft = string.Empty;
+        var attempts = 0;
+        var file = SeedFile();
+        var component = CreateComponent(
+            readDraft: () => draft,
+            writeDraft: value => draft = value,
+            dynamicValidate: (_, _) =>
+            {
+                attempts++;
+                return ValueTask.FromResult(NetclawUiValidationResult.Warning("probe failed"));
+            },
+            persist: (value, _) => WriteFile(file, value));
+
+        component.HandleInput(Key('a'));
+        component.HandleInput(Key(ConsoleKey.Enter));
+        component.HandleInput(Key('b'));
+        component.HandleInput(Key(ConsoleKey.Enter));
+
+        Assert.Equal(2, attempts);
+        Assert.Equal("before", File.ReadAllText(file));
+        Assert.False(component.LastCommitResult?.Success);
+        Assert.True(component.LastCommitResult?.CanSaveAnyway);
+    }
+
+    [Fact]
     public void Backspace_updates_draft_without_committing()
     {
         var draft = string.Empty;
@@ -91,6 +142,7 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
         Func<string> readDraft,
         Action<string> writeDraft,
         Func<string, NetclawUiValidationResult>? validate = null,
+        Func<string, CancellationToken, ValueTask<NetclawUiValidationResult>>? dynamicValidate = null,
         Func<string, CancellationToken, ValueTask>? persist = null)
     {
         var commit = new NetclawUiCommit<string>(
@@ -99,7 +151,9 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
             ReadDraft: readDraft,
             WriteDraft: writeDraft,
             Validate: validate ?? (_ => NetclawUiValidationResult.Passed()),
-            DynamicCheck: NetclawUiDynamicCheck<string>.NotApplicable("Text field test has no runtime dependency."),
+            DynamicCheck: dynamicValidate is null
+                ? NetclawUiDynamicCheck<string>.NotApplicable("Text field test has no runtime dependency.")
+                : NetclawUiDynamicCheck<string>.Required(dynamicValidate, NetclawUiDynamicFailurePolicy.AllowSaveAnyway),
             PersistAsync: persist ?? ((_, _) => ValueTask.CompletedTask),
             AfterCommit: _ => { });
 

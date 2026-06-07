@@ -138,6 +138,34 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_local_name_enter_persists_source_to_external_skills()
+    {
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste(externalDir);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var root = doc.RootElement;
+        Assert.False(root.TryGetProperty("SkillFeeds", out _));
+        var source = Assert.Single(root.GetProperty("ExternalSkills").GetProperty("Sources").EnumerateArray());
+        Assert.Equal("team-skills", source.GetProperty("Name").GetString());
+        Assert.Equal(externalDir, source.GetProperty("Path").GetString());
+        Assert.True(source.GetProperty("Enabled").GetBoolean());
+        Assert.False(source.GetProperty("AllowSymlinks").GetBoolean());
+    }
+
+    [Fact]
     public async Task Skill_sources_remote_url_screen_explains_skill_server_project()
     {
         var app = CreateSkillSourcesApp(out var input, out _, out var terminal);
@@ -262,6 +290,52 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_remote_token_enter_blocks_unreachable_probe_before_persistence_then_second_enter_reviews_name()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("secret-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_bearer_name_enter_persists_encrypted_token_to_skill_feeds()
+    {
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("secret-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+        var contents = File.ReadAllText(_paths.NetclawConfigPath);
+        Assert.DoesNotContain("secret-token", contents, StringComparison.Ordinal);
+        using var doc = JsonDocument.Parse(contents);
+        var feed = Assert.Single(doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds").EnumerateArray());
+        Assert.Equal("https://skills.example.test", feed.GetProperty("Url").GetString());
+        Assert.StartsWith("ENC:", feed.GetProperty("ApiKey").GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Skill_sources_remote_name_enter_persists_no_auth_source_to_skill_feeds()
     {
         var app = CreateSkillSourcesApp(out var input, out var vm);
@@ -308,6 +382,31 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var feed = Assert.Single(feeds.EnumerateArray());
         Assert.Equal("https://example.invalid", feed.GetProperty("Url").GetString());
         Assert.False(feed.TryGetProperty("ApiKey", out _));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_change_url_second_enter_saves_anyway_to_skill_feeds()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"Enabled\":true,\"TimeoutSeconds\":30}]}}");
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        EnqueueBackspaces(input, "https://old.example.test".Length);
+        input.EnqueueString("https://new.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var feed = Assert.Single(doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds").EnumerateArray());
+        Assert.Equal("https://new.example.test", feed.GetProperty("Url").GetString());
     }
 
     [Fact]
@@ -455,5 +554,11 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString(url);
         input.EnqueueKey(ConsoleKey.Enter);
+    }
+
+    private static void EnqueueBackspaces(VirtualInputSource input, int count)
+    {
+        for (var i = 0; i < count; i++)
+            input.EnqueueKey(ConsoleKey.Backspace);
     }
 }

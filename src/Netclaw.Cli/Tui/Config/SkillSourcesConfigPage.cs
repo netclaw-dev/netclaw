@@ -16,12 +16,16 @@ namespace Netclaw.Cli.Tui.Config;
 internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigViewModel>
 {
     private DynamicLayoutNode? _contentNode;
-    private readonly TextInputNode _pasteBuffer = new();
     private readonly NetclawUiCommitPipeline _commitPipeline = new();
     private NetclawValidatedTextField? _addLocalPathField;
+    private NetclawValidatedPicker<bool>? _addLocalSymlinksPicker;
+    private NetclawValidatedTextField? _addLocalNameField;
     private NetclawValidatedTextField? _addRemoteUrlField;
     private NetclawValidatedTextField? _addRemoteNameField;
+    private NetclawValidatedTextField? _addRemoteTokenField;
     private NetclawValidatedPicker<SkillSourceAuthMode>? _addRemoteAuthPicker;
+    private NetclawValidatedTextField? _renameSourceField;
+    private NetclawValidatedTextField? _changeLocationField;
 
     protected override void OnBound()
     {
@@ -37,12 +41,22 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             if (screen != SkillSourcesScreen.AddLocalPath)
                 _addLocalPathField = null;
+            if (screen != SkillSourcesScreen.AddLocalSymlinks)
+                _addLocalSymlinksPicker = null;
+            if (screen != SkillSourcesScreen.AddLocalName)
+                _addLocalNameField = null;
             if (screen != SkillSourcesScreen.AddRemoteUrl)
                 _addRemoteUrlField = null;
             if (screen != SkillSourcesScreen.AddRemoteName)
                 _addRemoteNameField = null;
             if (screen != SkillSourcesScreen.AddRemoteAuth)
                 _addRemoteAuthPicker = null;
+            if (screen != SkillSourcesScreen.AddRemoteToken)
+                _addRemoteTokenField = null;
+            if (screen != SkillSourcesScreen.RenameSource)
+                _renameSourceField = null;
+            if (screen != SkillSourcesScreen.ChangeLocation)
+                _changeLocationField = null;
 
             _contentNode?.Invalidate();
         }).DisposeWith(Subscriptions);
@@ -72,14 +86,13 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 "Add a local skill folder.",
                 EnsureAddLocalPathField(),
                 "This must be an existing local directory."),
-            SkillSourcesScreen.AddLocalSymlinks => BuildChoice(
+            SkillSourcesScreen.AddLocalSymlinks => BuildValidatedChoice(
                 "Allow symlinks inside this folder?",
                 "Symlinks can make a source scan files outside the folder.",
-                ["No - stricter security", "Yes - this folder intentionally uses symlinks"]),
-            SkillSourcesScreen.AddLocalName => BuildTextDraft(
+                EnsureAddLocalSymlinksPicker()),
+            SkillSourcesScreen.AddLocalName => BuildValidatedTextDraft(
                 "Review local folder source.",
-                "Source name",
-                ViewModel.Draft.Value,
+                EnsureAddLocalNameField(),
                 "Enter adds the source and autosaves."),
             SkillSourcesScreen.AddRemoteUrl => BuildValidatedTextDraft(
                 "Add a remote skill server.",
@@ -95,24 +108,21 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 "How should Netclaw authenticate to this server?",
                 "Choose bearer token only when the server requires it.",
                 EnsureAddRemoteAuthPicker()),
-            SkillSourcesScreen.AddRemoteToken => BuildTextDraft(
+            SkillSourcesScreen.AddRemoteToken => BuildValidatedTextDraft(
                 "Enter the bearer token for this skill server.",
-                "Bearer token",
-                string.IsNullOrWhiteSpace(ViewModel.Draft.Value) ? "(empty)" : "(new token entered)",
+                EnsureAddRemoteTokenField(),
                 "Blank tokens are not saved. Existing tokens are removed only through Remove token."),
             SkillSourcesScreen.AddRemoteName => BuildValidatedTextDraft(
                 "Review remote skill server source.",
                 EnsureAddRemoteNameField(),
                 "Enter adds the source and autosaves."),
-            SkillSourcesScreen.RenameSource => BuildTextDraft(
+            SkillSourcesScreen.RenameSource => BuildValidatedTextDraft(
                 "Rename this skill source.",
-                "Source name",
-                ViewModel.Draft.Value,
+                EnsureRenameSourceField(),
                 "Enter validates and autosaves the new name."),
-            SkillSourcesScreen.ChangeLocation => BuildTextDraft(
+            SkillSourcesScreen.ChangeLocation => BuildValidatedTextDraft(
                 "Change this source location.",
-                "Location",
-                ViewModel.Draft.Value,
+                EnsureChangeLocationField(),
                 "Enter validates and autosaves the new path or URL."),
             SkillSourcesScreen.RemoveConfirm => BuildChoice(
                 "Remove this skill source from Netclaw config?",
@@ -185,29 +195,6 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         return layout;
     }
 
-    private ILayoutNode BuildTextDraft(
-        string title,
-        string fieldLabel,
-        string value,
-        string hint,
-        string? calloutTitle = null,
-        IReadOnlyList<string>? calloutLines = null)
-    {
-        var layout = Layouts.Vertical()
-            .WithChild(Header($"  {title}"))
-            .WithChild(Layouts.Empty().Height(1))
-            .WithChild(BuildDraftInput(fieldLabel, value))
-            .WithChild(Layouts.Empty().Height(1))
-            .WithChild(Hint($"  {hint}"));
-
-        if (calloutTitle is not null && calloutLines is { Count: > 0 })
-            layout = layout
-                .WithChild(Layouts.Empty().Height(1))
-                .WithChild(BuildCallout(calloutTitle, calloutLines));
-
-        return layout;
-    }
-
     private ILayoutNode BuildValidatedTextDraft(
         string title,
         INetclawUiComponent field,
@@ -236,6 +223,21 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             _commitPipeline,
             "Type here...");
 
+    private NetclawValidatedPicker<bool> EnsureAddLocalSymlinksPicker()
+        => _addLocalSymlinksPicker ??= new NetclawValidatedPicker<bool>(
+            SkillSourcesCommitFactory.AddLocalSymlinks(ViewModel),
+            _commitPipeline,
+            [
+                new NetclawPickerOption<bool>(false, "No - stricter security"),
+                new NetclawPickerOption<bool>(true, "Yes - this folder intentionally uses symlinks"),
+            ]);
+
+    private NetclawValidatedTextField EnsureAddLocalNameField()
+        => _addLocalNameField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.AddLocalName(ViewModel),
+            _commitPipeline,
+            "Type here...");
+
     private NetclawValidatedTextField EnsureAddRemoteUrlField()
         => _addRemoteUrlField ??= new NetclawValidatedTextField(
             SkillSourcesCommitFactory.AddRemoteUrl(ViewModel),
@@ -251,19 +253,30 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.BearerToken, "Bearer token"),
             ]);
 
+    private NetclawValidatedTextField EnsureAddRemoteTokenField()
+        => _addRemoteTokenField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.AddRemoteToken(ViewModel),
+            _commitPipeline,
+            "(empty)",
+            static _ => "(new token entered)");
+
     private NetclawValidatedTextField EnsureAddRemoteNameField()
         => _addRemoteNameField ??= new NetclawValidatedTextField(
             SkillSourcesCommitFactory.AddRemoteName(ViewModel),
             _commitPipeline,
             "Type here...");
 
-    private static LayoutNode BuildDraftInput(string fieldLabel, string value)
-    {
-        var display = string.IsNullOrWhiteSpace(value) ? "Type here..." : value;
-        var color = string.IsNullOrWhiteSpace(value) ? Color.BrightBlack : Color.Cyan;
-        return NetclawTuiChrome.BuildPanel(fieldLabel, Text($" {display}", color), Color.Gray)
-            .Height(3);
-    }
+    private NetclawValidatedTextField EnsureRenameSourceField()
+        => _renameSourceField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.RenameSource(ViewModel),
+            _commitPipeline,
+            "Type here...");
+
+    private NetclawValidatedTextField EnsureChangeLocationField()
+        => _changeLocationField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.ChangeLocation(ViewModel),
+            _commitPipeline,
+            "Type here...");
 
     private static ILayoutNode BuildCallout(string title, IReadOnlyList<string> lines)
     {
@@ -385,24 +398,14 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 ViewModel.ActivateSelected();
                 return;
             case ConsoleKey.Spacebar:
-                if (ViewModel.IsTextEntryActive)
-                {
-                    ViewModel.AppendText(" ");
-                    return;
-                }
-
                 ViewModel.ToggleSelected();
                 return;
             case ConsoleKey.Delete:
                 ViewModel.DeleteSelected();
                 return;
             case ConsoleKey.Backspace:
-                ViewModel.Backspace();
                 return;
         }
-
-        if (!char.IsControl(keyInfo.KeyChar))
-            ViewModel.AppendText(keyInfo.KeyChar.ToString());
     }
 
     private void HandlePaste(PasteEvent paste)
@@ -412,19 +415,20 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             field.HandlePaste(paste);
             return;
         }
-
-        _pasteBuffer.Text = string.Empty;
-        _pasteBuffer.HandlePaste(paste);
-        ViewModel.AppendText(_pasteBuffer.Text);
     }
 
     private INetclawUiComponent? CurrentValidatedComponent()
         => ViewModel.Screen.Value switch
         {
             SkillSourcesScreen.AddLocalPath => EnsureAddLocalPathField(),
+            SkillSourcesScreen.AddLocalSymlinks => EnsureAddLocalSymlinksPicker(),
+            SkillSourcesScreen.AddLocalName => EnsureAddLocalNameField(),
             SkillSourcesScreen.AddRemoteUrl => EnsureAddRemoteUrlField(),
             SkillSourcesScreen.AddRemoteAuth => EnsureAddRemoteAuthPicker(),
+            SkillSourcesScreen.AddRemoteToken => EnsureAddRemoteTokenField(),
             SkillSourcesScreen.AddRemoteName => EnsureAddRemoteNameField(),
+            SkillSourcesScreen.RenameSource => EnsureRenameSourceField(),
+            SkillSourcesScreen.ChangeLocation => EnsureChangeLocationField(),
             _ => null,
         };
 

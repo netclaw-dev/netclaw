@@ -522,6 +522,34 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowTextScreen(SkillSourcesScreen.AddLocalName, MakeUniqueName(suggestedName));
     }
 
+    internal bool ReadAddLocalSymlinksDraft()
+        => SelectedRow.Value == 1;
+
+    internal void ReplaceAddLocalSymlinksDraft(bool value)
+    {
+        if (Screen.Value != SkillSourcesScreen.AddLocalSymlinks)
+            return;
+
+        var row = value ? 1 : 0;
+        if (SelectedRow.Value == row)
+            return;
+
+        SelectedRow.Value = row;
+        MarkDirty();
+    }
+
+    internal NetclawUiValidationResult ValidateAddLocalSymlinksDraft(bool value)
+        => _pendingLocalPath is null
+            ? NetclawUiValidationResult.Failed("Local folder path is required before choosing symlink policy.")
+            : NetclawUiValidationResult.Passed();
+
+    internal void CommitAddLocalSymlinksDraft(bool value)
+    {
+        _pendingLocalAllowSymlinks = value;
+        var suggestedName = SuggestNameFromPath(_pendingLocalPath ?? "team-skills");
+        ShowTextScreen(SkillSourcesScreen.AddLocalName, MakeUniqueName(suggestedName));
+    }
+
     private void SaveNewLocalSource()
     {
         if (_pendingLocalPath is null)
@@ -552,6 +580,23 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _selectedKind = SkillSourceKind.LocalFolder;
         _selectedName = name;
         ShowDetail($"Added local skill folder '{name}'.");
+    }
+
+    internal NetclawUiValidationResult ValidateAddLocalNameDraft(string value)
+    {
+        if (_pendingLocalPath is null)
+            return NetclawUiValidationResult.Failed("Local folder path is required before adding a source.");
+
+        var name = NormalizeSourceName(value);
+        return ValidateNewSourceName(name, null, out var error)
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed(error);
+    }
+
+    internal void CommitAddLocalNameDraft(string value)
+    {
+        Draft.Value = value;
+        SaveNewLocalSource();
     }
 
     private void BeginAddRemoteServer()
@@ -679,6 +724,75 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         _pendingRemoteApiKey = token;
         ProbePendingRemoteThenReview();
+    }
+
+    internal NetclawUiValidationResult ValidateAddRemoteTokenDraft(string value)
+    {
+        if (_editingAction == SkillSourceDetailAction.RotateToken)
+        {
+            if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer })
+                return NetclawUiValidationResult.Failed("A remote skill server must be selected before rotating a token.");
+        }
+        else if (_pendingRemoteUrl is null)
+        {
+            return NetclawUiValidationResult.Failed("Skill server URL is required before adding a token.");
+        }
+
+        var token = value.Trim();
+        if (!TryValidateApiKeyDraft(token, out var error))
+            return NetclawUiValidationResult.Failed(error);
+
+        return string.IsNullOrWhiteSpace(token)
+            ? NetclawUiValidationResult.Failed(_editingAction == SkillSourceDetailAction.RotateToken
+                ? "New bearer token is required. Use Remove token to delete an existing token."
+                : "Bearer token is required when authentication is set to bearer token.")
+            : NetclawUiValidationResult.Passed();
+    }
+
+    internal ValueTask<NetclawUiValidationResult> ValidateAddRemoteTokenReachabilityAsync(
+        string value,
+        CancellationToken ct)
+    {
+        var token = value.Trim();
+        SkillFeedReachabilityResult result;
+        if (_editingAction == SkillSourceDetailAction.RotateToken)
+        {
+            if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer } source)
+                return ValueTask.FromResult(NetclawUiValidationResult.Failed("A remote skill server must be selected before rotating a token."));
+
+            var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+            var feed = FindRemoteSource(feeds, source.Name);
+            if (feed is null)
+                return ValueTask.FromResult(NetclawUiValidationResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
+
+            result = _probe.Probe(feed.Url, token, feed.TimeoutSeconds);
+        }
+        else
+        {
+            if (_pendingRemoteUrl is null)
+                return ValueTask.FromResult(NetclawUiValidationResult.Failed("Skill server URL is required before adding a token."));
+
+            result = _probe.Probe(_pendingRemoteUrl, token, _pendingRemoteTimeoutSeconds);
+        }
+
+        _pendingRemoteProbeMessage = result.Message;
+        return ValueTask.FromResult(result.Success
+            ? NetclawUiValidationResult.Passed(result.Message)
+            : NetclawUiValidationResult.Warning($"{result.Message} Press Enter again to save anyway."));
+    }
+
+    internal void CommitAddRemoteTokenDraft(string value)
+    {
+        Draft.Value = value;
+        if (_editingAction == SkillSourceDetailAction.RotateToken)
+        {
+            SaveRotatedRemoteToken(probeBeforeSave: false);
+            return;
+        }
+
+        _pendingRemoteApiKey = value.Trim();
+        var suggestedName = SuggestNameFromUrl(_pendingRemoteUrl ?? "skill-server");
+        ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(suggestedName));
     }
 
     private void ProbePendingRemoteThenReview()
@@ -927,6 +1041,23 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Renamed source to '{newName}'.");
     }
 
+    internal NetclawUiValidationResult ValidateRenameSourceDraft(string value)
+    {
+        if (SelectedSource is not { } source)
+            return NetclawUiValidationResult.Failed("A skill source must be selected before renaming.");
+
+        var newName = NormalizeSourceName(value);
+        return ValidateNewSourceName(newName, source.Name, out var error)
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed(error);
+    }
+
+    internal void CommitRenameSourceDraft(string value)
+    {
+        Draft.Value = value;
+        SaveRename();
+    }
+
     private void SaveLocationChange()
     {
         if (SelectedSource is not { } source)
@@ -942,6 +1073,73 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         SaveRemoteUrlChange(source);
+    }
+
+    internal NetclawUiValidationResult ValidateChangeLocationDraft(string value)
+    {
+        if (SelectedSource is not { } source)
+            return NetclawUiValidationResult.Failed("A skill source must be selected before changing location.");
+
+        if (source.Kind == SkillSourceKind.LocalFolder)
+        {
+            if (source.IsWellKnown)
+                return NetclawUiValidationResult.Failed("Well-known source paths are managed automatically.");
+
+            return TryNormalizeExternalDirectory(value.Trim(), out _, out var error)
+                ? NetclawUiValidationResult.Passed()
+                : NetclawUiValidationResult.Failed(error);
+        }
+
+        return TryNormalizeFeedUrl(value.Trim(), out _, out var urlError)
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed(urlError);
+    }
+
+    internal ValueTask<NetclawUiValidationResult> ValidateChangeLocationReachabilityAsync(
+        string value,
+        CancellationToken ct)
+    {
+        if (SelectedSource is not { } source)
+            return ValueTask.FromResult(NetclawUiValidationResult.Failed("A skill source must be selected before changing location."));
+
+        if (source.Kind == SkillSourceKind.LocalFolder)
+            return ValueTask.FromResult(NetclawUiValidationResult.Passed());
+
+        if (!TryNormalizeFeedUrl(value.Trim(), out var url, out var error))
+            return ValueTask.FromResult(NetclawUiValidationResult.Failed(error));
+
+        var normalizedUrl = url ?? throw new InvalidOperationException("Validated skill server URL was null.");
+        var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
+        var item = FindRemoteSource(feeds, source.Name);
+        if (item is null)
+            return ValueTask.FromResult(NetclawUiValidationResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
+
+        var apiKey = TryGetFeedApiKeyPlaintext(item, out var plaintext, out var decryptError) ? plaintext : null;
+        if (!string.IsNullOrWhiteSpace(decryptError))
+            return ValueTask.FromResult(NetclawUiValidationResult.Failed(decryptError));
+
+        var probeResult = _probe.Probe(normalizedUrl, apiKey, item.TimeoutSeconds);
+        return ValueTask.FromResult(probeResult.Success
+            ? NetclawUiValidationResult.Passed(probeResult.Message)
+            : NetclawUiValidationResult.Warning($"{probeResult.Message} Press Enter again to save anyway."));
+    }
+
+    internal void CommitChangeLocationDraft(string value)
+    {
+        Draft.Value = value;
+        if (SelectedSource is not { } source)
+        {
+            ShowInventory();
+            return;
+        }
+
+        if (source.Kind == SkillSourceKind.LocalFolder)
+        {
+            SaveLocalPathChange(source);
+            return;
+        }
+
+        SaveRemoteUrlChange(source, probeBeforeSave: false);
     }
 
     private void SaveLocalPathChange(SkillSourceDisplay source)
@@ -973,7 +1171,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Local skill folder '{source.Name}' path saved.");
     }
 
-    private void SaveRemoteUrlChange(SkillSourceDisplay source)
+    private void SaveRemoteUrlChange(SkillSourceDisplay source, bool probeBeforeSave = true)
     {
         if (!TryNormalizeFeedUrl(Draft.Value.Trim(), out var url, out var error))
         {
@@ -1000,7 +1198,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         var fingerprint = $"change-url|{source.Name}|{normalizedUrl}|{apiKey?.Length ?? 0}";
-        if (_saveAnywayFingerprint != fingerprint)
+        if (probeBeforeSave && _saveAnywayFingerprint != fingerprint)
         {
             var probeResult = _probe.Probe(normalizedUrl, apiKey, item.TimeoutSeconds);
             if (!probeResult.Success)
@@ -1018,7 +1216,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Skill server '{source.Name}' URL saved.");
     }
 
-    private void SaveRotatedRemoteToken()
+    private void SaveRotatedRemoteToken(bool probeBeforeSave = true)
     {
         if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer } source)
         {
@@ -1049,7 +1247,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         }
 
         var fingerprint = $"rotate-token|{source.Name}|{feed.Url}|{token.Length}";
-        if (_saveAnywayFingerprint != fingerprint)
+        if (probeBeforeSave && _saveAnywayFingerprint != fingerprint)
         {
             var probeResult = _probe.Probe(feed.Url, token, feed.TimeoutSeconds);
             if (!probeResult.Success)
