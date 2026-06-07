@@ -20,6 +20,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
     private readonly NetclawUiCommitPipeline _commitPipeline = new();
     private NetclawValidatedTextField? _addLocalPathField;
     private NetclawValidatedTextField? _addRemoteUrlField;
+    private NetclawValidatedTextField? _addRemoteNameField;
     private NetclawValidatedPicker<SkillSourceAuthMode>? _addRemoteAuthPicker;
 
     protected override void OnBound()
@@ -38,6 +39,8 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 _addLocalPathField = null;
             if (screen != SkillSourcesScreen.AddRemoteUrl)
                 _addRemoteUrlField = null;
+            if (screen != SkillSourcesScreen.AddRemoteName)
+                _addRemoteNameField = null;
             if (screen != SkillSourcesScreen.AddRemoteAuth)
                 _addRemoteAuthPicker = null;
 
@@ -97,10 +100,9 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 "Bearer token",
                 string.IsNullOrWhiteSpace(ViewModel.Draft.Value) ? "(empty)" : "(new token entered)",
                 "Blank tokens are not saved. Existing tokens are removed only through Remove token."),
-            SkillSourcesScreen.AddRemoteName => BuildTextDraft(
+            SkillSourcesScreen.AddRemoteName => BuildValidatedTextDraft(
                 "Review remote skill server source.",
-                "Source name",
-                ViewModel.Draft.Value,
+                EnsureAddRemoteNameField(),
                 "Enter adds the source and autosaves."),
             SkillSourcesScreen.RenameSource => BuildTextDraft(
                 "Rename this skill source.",
@@ -248,6 +250,12 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.None, "No auth required"),
                 new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.BearerToken, "Bearer token"),
             ]);
+
+    private NetclawValidatedTextField EnsureAddRemoteNameField()
+        => _addRemoteNameField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.AddRemoteName(ViewModel),
+            _commitPipeline,
+            "Type here...");
 
     private static LayoutNode BuildDraftInput(string fieldLabel, string value)
     {
@@ -416,6 +424,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             SkillSourcesScreen.AddLocalPath => EnsureAddLocalPathField(),
             SkillSourcesScreen.AddRemoteUrl => EnsureAddRemoteUrlField(),
             SkillSourcesScreen.AddRemoteAuth => EnsureAddRemoteAuthPicker(),
+            SkillSourcesScreen.AddRemoteName => EnsureAddRemoteNameField(),
             _ => null,
         };
 

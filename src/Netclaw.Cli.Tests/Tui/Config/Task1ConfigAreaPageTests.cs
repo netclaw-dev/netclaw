@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
@@ -253,6 +254,31 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
         Assert.NotEqual(ConfigStatusTone.Warning, vm.Status.Value.Tone);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_name_enter_persists_no_auth_source_to_skill_feeds()
+    {
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.SourceDetail, vm.Screen.Value);
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var root = doc.RootElement;
+        Assert.False(root.TryGetProperty("ExternalSkills", out _));
+        var feeds = root.GetProperty("SkillFeeds").GetProperty("Feeds");
+        var feed = Assert.Single(feeds.EnumerateArray());
+        Assert.Equal("https://skills.example.test", feed.GetProperty("Url").GetString());
+        Assert.True(feed.GetProperty("Enabled").GetBoolean());
+        Assert.Equal(30, feed.GetProperty("TimeoutSeconds").GetInt32());
+        Assert.False(feed.TryGetProperty("ApiKey", out _));
     }
 
     [Fact]

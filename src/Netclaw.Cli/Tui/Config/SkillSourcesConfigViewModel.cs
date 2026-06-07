@@ -742,6 +742,23 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Added skill server '{name}'.");
     }
 
+    internal NetclawUiValidationResult ValidateAddRemoteNameDraft(string value)
+    {
+        if (_pendingRemoteUrl is null)
+            return NetclawUiValidationResult.Failed("Skill server URL is required before adding a source.");
+
+        var name = NormalizeSourceName(value);
+        return ValidateNewSourceName(name, null, out var error)
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed(error);
+    }
+
+    internal void CommitAddRemoteNameDraft(string value)
+    {
+        Draft.Value = value;
+        SaveNewRemoteSource();
+    }
+
     private void ToggleEnabled(SkillSourceKind kind, string name)
     {
         if (kind == SkillSourceKind.LocalFolder)

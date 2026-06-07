@@ -67,4 +67,24 @@ internal static class SkillSourcesCommitFactory
             },
             AfterCommit: viewModel.ApplyCommitResult);
     }
+
+    public static NetclawUiCommit<string> AddRemoteName(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return new NetclawUiCommit<string>(
+            Id: "skill-sources.add-remote.name",
+            Label: "Source name",
+            ReadDraft: () => viewModel.Draft.Value,
+            WriteDraft: viewModel.ReplaceDraft,
+            Validate: viewModel.ValidateAddRemoteNameDraft,
+            DynamicCheck: NetclawUiDynamicCheck<string>.NotApplicable(
+                "Remote skill server reachability is validated before the source name confirmation step."),
+            PersistAsync: (draft, _) =>
+            {
+                viewModel.CommitAddRemoteNameDraft(draft);
+                return ValueTask.CompletedTask;
+            },
+            AfterCommit: viewModel.ApplyCommitResult);
+    }
 }
