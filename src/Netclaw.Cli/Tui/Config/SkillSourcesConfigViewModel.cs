@@ -582,6 +582,17 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, 0);
     }
 
+    internal NetclawUiValidationResult ValidateAddRemoteUrlDraft(string value)
+        => TryNormalizeFeedUrl(value.Trim(), out _, out var error)
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed(error);
+
+    internal void CommitAddRemoteUrlDraft(string value)
+    {
+        Draft.Value = value;
+        ContinueAddRemoteUrl();
+    }
+
     private void ContinueAddRemoteAuth()
     {
         _pendingRemoteAuthMode = SelectedRow.Value == 1 ? SkillSourceAuthMode.BearerToken : SkillSourceAuthMode.None;

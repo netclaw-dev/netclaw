@@ -19,6 +19,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
     private readonly TextInputNode _pasteBuffer = new();
     private readonly NetclawUiCommitPipeline _commitPipeline = new();
     private NetclawValidatedTextField? _addLocalPathField;
+    private NetclawValidatedTextField? _addRemoteUrlField;
 
     protected override void OnBound()
     {
@@ -34,6 +35,8 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             if (screen != SkillSourcesScreen.AddLocalPath)
                 _addLocalPathField = null;
+            if (screen != SkillSourcesScreen.AddRemoteUrl)
+                _addRemoteUrlField = null;
 
             _contentNode?.Invalidate();
         }).DisposeWith(Subscriptions);
@@ -72,10 +75,9 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 "Source name",
                 ViewModel.Draft.Value,
                 "Enter adds the source and autosaves."),
-            SkillSourcesScreen.AddRemoteUrl => BuildTextDraft(
+            SkillSourcesScreen.AddRemoteUrl => BuildValidatedTextDraft(
                 "Add a remote skill server.",
-                "Server URL",
-                ViewModel.Draft.Value,
+                EnsureAddRemoteUrlField(),
                 "Netclaw probes /.well-known/agent-skills/index.json before save.",
                 "What is a skill server?",
                 [
@@ -201,17 +203,37 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         return layout;
     }
 
-    private ILayoutNode BuildValidatedTextDraft(string title, INetclawUiComponent field, string hint)
-        => Layouts.Vertical()
+    private ILayoutNode BuildValidatedTextDraft(
+        string title,
+        INetclawUiComponent field,
+        string hint,
+        string? calloutTitle = null,
+        IReadOnlyList<string>? calloutLines = null)
+    {
+        var layout = Layouts.Vertical()
             .WithChild(Header($"  {title}"))
             .WithChild(Layouts.Empty().Height(1))
             .WithChild(field.Build())
             .WithChild(Layouts.Empty().Height(1))
             .WithChild(Hint($"  {hint}"));
 
+        if (calloutTitle is not null && calloutLines is { Count: > 0 })
+            layout = layout
+                .WithChild(Layouts.Empty().Height(1))
+                .WithChild(BuildCallout(calloutTitle, calloutLines));
+
+        return layout;
+    }
+
     private NetclawValidatedTextField EnsureAddLocalPathField()
         => _addLocalPathField ??= new NetclawValidatedTextField(
             SkillSourcesCommitFactory.AddLocalPath(ViewModel),
+            _commitPipeline,
+            "Type here...");
+
+    private NetclawValidatedTextField EnsureAddRemoteUrlField()
+        => _addRemoteUrlField ??= new NetclawValidatedTextField(
+            SkillSourcesCommitFactory.AddRemoteUrl(ViewModel),
             _commitPipeline,
             "Type here...");
 
@@ -319,8 +341,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             return;
         }
 
-        if (ViewModel.Screen.Value == SkillSourcesScreen.AddLocalPath
-            && EnsureAddLocalPathField().HandleInput(keyInfo))
+        if (CurrentValidatedTextField()?.HandleInput(keyInfo) == true)
         {
             return;
         }
@@ -359,9 +380,9 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
     private void HandlePaste(PasteEvent paste)
     {
-        if (ViewModel.Screen.Value == SkillSourcesScreen.AddLocalPath)
+        if (CurrentValidatedTextField() is { } field)
         {
-            EnsureAddLocalPathField().HandlePaste(paste);
+            field.HandlePaste(paste);
             return;
         }
 
@@ -369,6 +390,14 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         _pasteBuffer.HandlePaste(paste);
         ViewModel.AppendText(_pasteBuffer.Text);
     }
+
+    private NetclawValidatedTextField? CurrentValidatedTextField()
+        => ViewModel.Screen.Value switch
+        {
+            SkillSourcesScreen.AddLocalPath => EnsureAddLocalPathField(),
+            SkillSourcesScreen.AddRemoteUrl => EnsureAddRemoteUrlField(),
+            _ => null,
+        };
 
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.Gray);

@@ -158,6 +158,47 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_remote_url_enter_rejects_invalid_url_before_persistence()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("file:///tmp/skills");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Contains("HTTP or HTTPS", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_url_enter_accepts_valid_url_without_persisting_incomplete_flow()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("https://");
+        input.EnqueuePaste("skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
     public async Task Telemetry_alerting_page_accepts_typed_and_pasted_values()
     {
         var app = CreateTelemetryAlertingApp(out var input, out var vm);

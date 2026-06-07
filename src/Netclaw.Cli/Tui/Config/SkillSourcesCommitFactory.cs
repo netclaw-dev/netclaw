@@ -26,4 +26,24 @@ internal static class SkillSourcesCommitFactory
             },
             AfterCommit: viewModel.ApplyCommitResult);
     }
+
+    public static NetclawUiCommit<string> AddRemoteUrl(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return new NetclawUiCommit<string>(
+            Id: "skill-sources.add-remote.url",
+            Label: "Server URL",
+            ReadDraft: () => viewModel.Draft.Value,
+            WriteDraft: viewModel.ReplaceDraft,
+            Validate: viewModel.ValidateAddRemoteUrlDraft,
+            DynamicCheck: NetclawUiDynamicCheck<string>.NotApplicable(
+                "Skill server probing depends on the selected authentication mode, which is collected after URL entry."),
+            PersistAsync: (draft, _) =>
+            {
+                viewModel.CommitAddRemoteUrlDraft(draft);
+                return ValueTask.CompletedTask;
+            },
+            AfterCommit: viewModel.ApplyCommitResult);
+    }
 }
