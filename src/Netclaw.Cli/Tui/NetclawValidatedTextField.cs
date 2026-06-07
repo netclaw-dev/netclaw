@@ -12,11 +12,15 @@ namespace Netclaw.Cli.Tui;
 
 internal interface INetclawUiComponent
 {
+    NetclawUiCommitResult? LastCommitResult { get; }
+
     ILayoutNode Build();
 
     bool HandleInput(ConsoleKeyInfo keyInfo);
 
     void HandlePaste(PasteEvent paste);
+
+    NetclawUiCommitResult Commit(NetclawUiCommitTrigger trigger);
 }
 
 internal sealed class NetclawValidatedTextField : INetclawUiComponent
@@ -53,7 +57,7 @@ internal sealed class NetclawValidatedTextField : INetclawUiComponent
         _text = draft;
         var display = string.IsNullOrWhiteSpace(_text) ? _placeholder : _displayValue(_text);
         var color = string.IsNullOrWhiteSpace(_text) ? Color.BrightBlack : Color.Cyan;
-        return NetclawTuiChrome.BuildPanel(_commit.Label, new TextNode($" {display}").WithForeground(color), Color.Gray)
+        return NetclawTuiChrome.BuildPanel(_commit.Label, new TextNode($" {display}|").WithForeground(color), Color.Gray)
             .Height(3);
     }
 
@@ -61,12 +65,7 @@ internal sealed class NetclawValidatedTextField : INetclawUiComponent
     {
         if (keyInfo.Key == ConsoleKey.Enter)
         {
-            var trigger = LastCommitResult?.CanSaveAnyway == true
-                ? NetclawUiCommitTrigger.SaveAnyway
-                : NetclawUiCommitTrigger.Enter;
-            LastCommitResult = _pipeline.CommitAsync(_commit, trigger)
-                .GetAwaiter()
-                .GetResult();
+            Commit(NetclawUiCommitTrigger.Enter);
             return true;
         }
 
@@ -94,5 +93,13 @@ internal sealed class NetclawValidatedTextField : INetclawUiComponent
         _text += paste.Content;
         LastCommitResult = null;
         _commit.WriteDraft(_text);
+    }
+
+    public NetclawUiCommitResult Commit(NetclawUiCommitTrigger trigger)
+    {
+        LastCommitResult = _pipeline.CommitAsync(_commit, trigger)
+            .GetAwaiter()
+            .GetResult();
+        return LastCommitResult;
     }
 }

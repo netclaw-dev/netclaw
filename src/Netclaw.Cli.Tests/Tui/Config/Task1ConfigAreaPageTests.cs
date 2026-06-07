@@ -93,7 +93,7 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var screen = terminal.ToString();
         Assert.True(screen.Contains("Folder path", StringComparison.Ordinal),
             $"Expected folder path input label in terminal output. Screen:\n{terminal}");
-        Assert.True(screen.Contains("Type here...", StringComparison.Ordinal),
+        Assert.True(screen.Contains("Type here...|", StringComparison.Ordinal),
             $"Expected visible empty input placeholder in terminal output. Screen:\n{terminal}");
     }
 
@@ -180,7 +180,7 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var screen = terminal.ToString();
         Assert.True(screen.Contains("Server URL", StringComparison.Ordinal),
             $"Expected server URL input label in terminal output. Screen:\n{terminal}");
-        Assert.True(screen.Contains("Type here...", StringComparison.Ordinal),
+        Assert.True(screen.Contains("Type here...|", StringComparison.Ordinal),
             $"Expected visible empty input placeholder in terminal output. Screen:\n{terminal}");
         Assert.True(screen.Contains("https://github.com/netclaw-dev/skill-server", StringComparison.Ordinal),
             $"Expected skill-server project callout in terminal output. Screen:\n{terminal}");
@@ -231,7 +231,7 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     public async Task Skill_sources_remote_auth_enter_blocks_unreachable_probe_before_persistence()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(false, "probe failed"));
 
         BeginRemoteUrlEntry(input, "https://skills.example.test");
         input.EnqueueKey(ConsoleKey.Enter);
@@ -241,17 +241,22 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         await app.RunAsync(cts.Token);
 
         Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
-        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
-        Assert.Contains("probe failed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(vm.ActiveValidationDialog.Value);
+        Assert.Equal(string.Empty, vm.Status.Value.Text);
+        var screen = terminal.ToString();
+        Assert.True(screen.Contains("Skill Server Validation Warning", StringComparison.Ordinal),
+            $"Expected validation warning dialog. Screen:\n{terminal}");
+        Assert.True(screen.Contains("probe failed", StringComparison.OrdinalIgnoreCase),
+            $"Expected probe failure in dialog. Screen:\n{terminal}");
+        Assert.Equal(1, CountOccurrences(screen, "probe failed", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
-    public async Task Skill_sources_remote_auth_second_enter_saves_anyway_without_persisting_incomplete_flow()
+    public async Task Skill_sources_remote_auth_dialog_retry_keeps_source_unpersisted()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
 
         BeginRemoteUrlEntry(input, "https://skills.example.test");
         input.EnqueueKey(ConsoleKey.Enter);
@@ -261,7 +266,29 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
+        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
+        Assert.NotNull(vm.ActiveValidationDialog.Value);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_auth_dialog_save_anyway_reviews_name_without_persisting_incomplete_flow()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
         Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        Assert.Null(vm.ActiveValidationDialog.Value);
         var screen = terminal.ToString();
         Assert.True(screen.Contains("Review remote skill server source", StringComparison.Ordinal),
             $"Expected remote source name confirmation screen. Screen:\n{terminal}");
@@ -300,6 +327,8 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("secret-token");
         input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -320,6 +349,8 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("secret-token");
         input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -367,6 +398,8 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
 
         BeginRemoteUrlEntry(input, "https://example.invalid");
         input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
@@ -397,6 +430,8 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         EnqueueBackspaces(input, "https://old.example.test".Length);
         input.EnqueueString("https://new.example.test");
         input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -664,5 +699,18 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     {
         for (var i = 0; i < count; i++)
             input.EnqueueKey(ConsoleKey.Backspace);
+    }
+
+    private static int CountOccurrences(string value, string pattern, StringComparison comparison)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = value.IndexOf(pattern, index, comparison)) >= 0)
+        {
+            count++;
+            index += pattern.Length;
+        }
+
+        return count;
     }
 }

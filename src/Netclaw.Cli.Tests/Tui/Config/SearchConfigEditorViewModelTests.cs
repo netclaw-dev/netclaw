@@ -138,7 +138,8 @@ public sealed class SearchConfigEditorViewModelTests : IDisposable
 
         Assert.Equal(SearchConfigEditorDialog.ProbeWarning, vm.ActiveDialog.Value);
         Assert.Equal(SearchConfigEditorScreen.Entry, vm.CurrentScreen.Value);
-        Assert.Contains("authentication failed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(string.Empty, vm.Status.Value.Text);
+        Assert.Contains("authentication failed", vm.LastProbeResult?.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
         Assert.Equal(secretsExistedBefore, File.Exists(_paths.SecretsPath));
     }

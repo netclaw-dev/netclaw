@@ -155,17 +155,7 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
 
     private ILayoutNode BuildProbeWarningDialog()
     {
-        var options = new List<string>
-        {
-            "Retry validation",
-            "Back to edit",
-            "Save anyway",
-        };
-
-        _dialogList = Layouts.SelectionList(options)
-            .WithMode(SelectionMode.Single)
-            .WithHighlightColors(Color.Black, Color.Yellow);
-        _dialogList.OnFocused();
+        _dialogList = NetclawValidationDialogViews.BuildActionList();
 
         _dialogList.SelectionConfirmed
             .Subscribe(async selected =>
@@ -173,12 +163,12 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
                 if (selected.Count == 0)
                     return;
 
-                switch (selected[0])
+                switch (NetclawValidationDialogViews.ParseAction(selected[0]))
                 {
-                    case "Save anyway":
+                    case NetclawValidationDialogAction.SaveAnyway:
                         ViewModel.SaveWithoutProbeOverride();
                         break;
-                    case "Retry validation":
+                    case NetclawValidationDialogAction.RetryValidation:
                         ViewModel.DismissDialog();
                         await ViewModel.SubmitCurrentConfigurationAsync();
                         break;
@@ -190,15 +180,12 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             .DisposeWith(_contentSubscriptions);
 
         var message = ViewModel.LastProbeResult?.Message ?? "Search validation failed.";
-        return NetclawTuiChrome.BuildPanel(
-            "Search Validation Warning",
-            Layouts.Vertical()
-                .WithSpacing(1)
-                .WithChild(new TextNode("  Netclaw could not complete a live search using this configuration.")
-                    .WithForeground(Color.White))
-                .WithChild(new TextNode($"  {message}").WithForeground(Color.Yellow))
-                .WithChild(_dialogList),
-            Color.Yellow);
+        return NetclawValidationDialogViews.BuildWarningPanel(
+            new NetclawValidationDialogModel(
+                "Search Validation Warning",
+                "Netclaw could not complete a live search using this configuration.",
+                message),
+            _dialogList);
     }
 
     private LayoutNode BuildStatusBar()
@@ -210,20 +197,26 @@ internal sealed class SearchConfigEditorPage : ReactivePage<SearchConfigEditorVi
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-    {
-        var text = ViewModel.ActiveDialog.Value == SearchConfigEditorDialog.ProbeWarning
-            ? " [↑/↓] Navigate  [Enter] Select  [Esc] Back to edit  [Ctrl+Q] Quit"
-            : ViewModel.CurrentScreen.Value switch
-            {
-                SearchConfigEditorScreen.ProviderSelection => " [↑/↓] Navigate  [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
-                SearchConfigEditorScreen.Entry => " [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
-                SearchConfigEditorScreen.Validating => " [Ctrl+Q] Quit",
-                SearchConfigEditorScreen.Saved => " [Enter] Settings Areas  [Esc] Review backends  [Ctrl+Q] Quit",
-                _ => " [Ctrl+Q] Quit",
-            };
+        => Observable.CombineLatest(
+                ViewModel.CurrentScreen,
+                ViewModel.ActiveDialog,
+                (screen, dialog) =>
+                {
+                    var text = dialog == SearchConfigEditorDialog.ProbeWarning
+                        ? " [↑/↓] Navigate  [Enter] Select  [Esc] Back to edit  [Ctrl+Q] Quit"
+                        : screen switch
+                        {
+                            SearchConfigEditorScreen.ProviderSelection => " [↑/↓] Navigate  [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
+                            SearchConfigEditorScreen.Entry => " [Enter] Continue  [Esc] Back  [Ctrl+Q] Quit",
+                            SearchConfigEditorScreen.Validating => " [Ctrl+Q] Quit",
+                            SearchConfigEditorScreen.Saved => " [Enter] Settings Areas  [Esc] Review backends  [Ctrl+Q] Quit",
+                            _ => " [Ctrl+Q] Quit",
+                        };
 
-        return NetclawTuiChrome.BuildKeyHintLine(text);
-    }
+                    return (ILayoutNode)NetclawTuiChrome.BuildKeyHintLine(text);
+                })
+            .AsLayout()
+            .Height(1);
 
     public override bool HandlePageInput(ConsoleKeyInfo keyInfo)
     {

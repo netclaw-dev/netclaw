@@ -62,7 +62,7 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
     }
 
     [Fact]
-    public void Enter_dynamic_failure_blocks_then_second_enter_saves_anyway()
+    public void Enter_dynamic_failure_blocks_until_explicit_save_anyway()
     {
         var draft = string.Empty;
         var file = SeedFile();
@@ -80,6 +80,12 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
         Assert.True(component.LastCommitResult?.CanSaveAnyway);
 
         component.HandleInput(Key(ConsoleKey.Enter));
+
+        Assert.Equal("before", File.ReadAllText(file));
+        Assert.False(component.LastCommitResult?.Success);
+        Assert.True(component.LastCommitResult?.CanSaveAnyway);
+
+        component.Commit(NetclawUiCommitTrigger.SaveAnyway);
 
         Assert.Equal("a", File.ReadAllText(file));
         Assert.True(component.LastCommitResult?.Success);

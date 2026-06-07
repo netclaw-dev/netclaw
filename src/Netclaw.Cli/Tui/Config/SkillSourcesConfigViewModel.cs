@@ -169,6 +169,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         Draft = new ReactiveProperty<string>(string.Empty);
         Version = new ReactiveProperty<int>(0);
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
+        ActiveValidationDialog = new ReactiveProperty<NetclawValidationDialogModel?>(null);
         IsSaved = new ReactiveProperty<bool>(false);
         ReloadSources();
     }
@@ -181,6 +182,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     public ReactiveProperty<string> Draft { get; }
     public ReactiveProperty<int> Version { get; }
     public ReactiveProperty<ConfigStatusMessage> Status { get; }
+    public ReactiveProperty<NetclawValidationDialogModel?> ActiveValidationDialog { get; }
     public ReactiveProperty<bool> IsSaved { get; }
 
     public IReadOnlyList<SkillSourceDisplay> Sources => _sources;
@@ -497,6 +499,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         Draft.Dispose();
         Version.Dispose();
         Status.Dispose();
+        ActiveValidationDialog.Dispose();
         IsSaved.Dispose();
         base.Dispose();
     }
@@ -623,7 +626,25 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         if (result.Success)
             return;
 
+        if (result.Stage == NetclawUiCommitStage.DynamicValidation && result.CanSaveAnyway)
+        {
+            ActiveValidationDialog.Value = new NetclawValidationDialogModel(
+                "Skill Server Validation Warning",
+                "Netclaw could not complete skill server discovery using this configuration.",
+                result.Message);
+            Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
+            RequestRedraw();
+            return;
+        }
+
         SetStatus(result.Message, ToConfigTone(result.Tone));
+    }
+
+    internal void DismissValidationDialog()
+    {
+        ActiveValidationDialog.Value = null;
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
+        RequestRedraw();
     }
 
     private void ContinueAddLocalSymlinks()
@@ -796,7 +817,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _pendingRemoteProbeMessage = result.Message;
         return ValueTask.FromResult(result.Success
             ? NetclawUiValidationResult.Passed(result.Message)
-            : NetclawUiValidationResult.Warning($"{result.Message} Press Enter again to save anyway."));
+            : NetclawUiValidationResult.Warning(result.Message));
     }
 
     internal void CommitAddRemoteAuthDraft(SkillSourceAuthMode value)
@@ -889,7 +910,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _pendingRemoteProbeMessage = result.Message;
         return ValueTask.FromResult(result.Success
             ? NetclawUiValidationResult.Passed(result.Message)
-            : NetclawUiValidationResult.Warning($"{result.Message} Press Enter again to save anyway."));
+            : NetclawUiValidationResult.Warning(result.Message));
     }
 
     internal void CommitAddRemoteTokenDraft(string value)
@@ -1232,7 +1253,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         var probeResult = _probe.Probe(normalizedUrl, apiKey, item.TimeoutSeconds);
         return ValueTask.FromResult(probeResult.Success
             ? NetclawUiValidationResult.Passed(probeResult.Message)
-            : NetclawUiValidationResult.Warning($"{probeResult.Message} Press Enter again to save anyway."));
+            : NetclawUiValidationResult.Warning(probeResult.Message));
     }
 
     internal void CommitChangeLocationDraft(string value)
@@ -1626,6 +1647,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     {
         IsSaved.Value = false;
         _saveAnywayFingerprint = null;
+        ActiveValidationDialog.Value = null;
         ClearStatus();
         RequestRedraw();
     }
@@ -1654,6 +1676,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _pendingRemoteTimeoutSeconds = DefaultFeedTimeoutSeconds;
         _saveAnywayFingerprint = null;
         _editingAction = null;
+        ActiveValidationDialog.Value = null;
         Draft.Value = string.Empty;
     }
 

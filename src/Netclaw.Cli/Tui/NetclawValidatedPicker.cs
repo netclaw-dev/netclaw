@@ -61,7 +61,7 @@ internal sealed class NetclawValidatedPicker<TValue> : INetclawUiComponent
                 return true;
             case ConsoleKey.Enter:
             case ConsoleKey.Spacebar:
-                CommitSelected();
+                Commit(NetclawUiCommitTrigger.PickerSelection);
                 return true;
             default:
                 return true;
@@ -84,14 +84,12 @@ internal sealed class NetclawValidatedPicker<TValue> : INetclawUiComponent
         _commit.WriteDraft(CurrentValue);
     }
 
-    private void CommitSelected()
+    public NetclawUiCommitResult Commit(NetclawUiCommitTrigger trigger)
     {
-        var trigger = LastCommitResult?.CanSaveAnyway == true
-            ? NetclawUiCommitTrigger.SaveAnyway
-            : NetclawUiCommitTrigger.PickerSelection;
         LastCommitResult = _pipeline.CommitAsync(_commit, trigger)
             .GetAwaiter()
             .GetResult();
+        return LastCommitResult;
     }
 
     private TValue CurrentValue => _options[_selectedIndex].Value;

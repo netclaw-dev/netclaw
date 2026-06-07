@@ -16,6 +16,8 @@ namespace Netclaw.Cli.Tui.Config;
 internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigViewModel>
 {
     private DynamicLayoutNode? _contentNode;
+    private SelectionListNode<string>? _validationDialogList;
+    private readonly CompositeDisposable _contentSubscriptions = [];
     private readonly NetclawUiCommitPipeline _commitPipeline = new();
     private NetclawValidatedTextField? _addLocalPathField;
     private NetclawValidatedPicker<bool>? _addLocalSymlinksPicker;
@@ -63,6 +65,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         ViewModel.SelectedRow.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
         ViewModel.Draft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
         ViewModel.Version.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.ActiveValidationDialog.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
     }
 
     public override ILayoutNode BuildLayout()
@@ -78,60 +81,83 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
     private LayoutNode BuildContent()
     {
-        _contentNode = new DynamicLayoutNode(() => ViewModel.Screen.Value switch
+        _contentNode = new DynamicLayoutNode(() =>
         {
-            SkillSourcesScreen.Inventory => BuildInventory(),
-            SkillSourcesScreen.SourceDetail => BuildSourceDetail(),
-            SkillSourcesScreen.AddLocalPath => BuildValidatedTextDraft(
-                "Add a local skill folder.",
-                EnsureAddLocalPathField(),
-                "This must be an existing local directory."),
-            SkillSourcesScreen.AddLocalSymlinks => BuildValidatedChoice(
-                "Allow symlinks inside this folder?",
-                "Symlinks can make a source scan files outside the folder.",
-                EnsureAddLocalSymlinksPicker()),
-            SkillSourcesScreen.AddLocalName => BuildValidatedTextDraft(
-                "Review local folder source.",
-                EnsureAddLocalNameField(),
-                "Enter adds the source and autosaves."),
-            SkillSourcesScreen.AddRemoteUrl => BuildValidatedTextDraft(
-                "Add a remote skill server.",
-                EnsureAddRemoteUrlField(),
-                "Netclaw probes /.well-known/agent-skills/index.json before save.",
-                "What is a skill server?",
-                [
-                    "A skill server is a Netclaw skill-server instance that publishes",
-                    "agent skills over HTTP for a team or organization.",
-                    "Project: https://github.com/netclaw-dev/skill-server"
-                ]),
-            SkillSourcesScreen.AddRemoteAuth => BuildValidatedChoice(
-                "How should Netclaw authenticate to this server?",
-                "Choose bearer token only when the server requires it.",
-                EnsureAddRemoteAuthPicker()),
-            SkillSourcesScreen.AddRemoteToken => BuildValidatedTextDraft(
-                "Enter the bearer token for this skill server.",
-                EnsureAddRemoteTokenField(),
-                "Blank tokens are not saved. Existing tokens are removed only through Remove token."),
-            SkillSourcesScreen.AddRemoteName => BuildValidatedTextDraft(
-                "Review remote skill server source.",
-                EnsureAddRemoteNameField(),
-                "Enter adds the source and autosaves."),
-            SkillSourcesScreen.RenameSource => BuildValidatedTextDraft(
-                "Rename this skill source.",
-                EnsureRenameSourceField(),
-                "Enter validates and autosaves the new name."),
-            SkillSourcesScreen.ChangeLocation => BuildValidatedTextDraft(
-                "Change this source location.",
-                EnsureChangeLocationField(),
-                "Enter validates and autosaves the new path or URL."),
-            SkillSourcesScreen.RemoveConfirm => BuildChoice(
-                "Remove this skill source from Netclaw config?",
-                "This does not delete remote skills or local files.",
-                ["Cancel", "Remove source"]),
-            _ => Layouts.Empty(),
+            _contentSubscriptions.Clear();
+            _validationDialogList = null;
+
+            if (ViewModel.ActiveValidationDialog.Value is { } dialog)
+                return BuildValidationDialog(dialog);
+
+            return ViewModel.Screen.Value switch
+            {
+                SkillSourcesScreen.Inventory => BuildInventory(),
+                SkillSourcesScreen.SourceDetail => BuildSourceDetail(),
+                SkillSourcesScreen.AddLocalPath => BuildValidatedTextDraft(
+                    "Add a local skill folder.",
+                    EnsureAddLocalPathField(),
+                    "This must be an existing local directory."),
+                SkillSourcesScreen.AddLocalSymlinks => BuildValidatedChoice(
+                    "Allow symlinks inside this folder?",
+                    "Symlinks can make a source scan files outside the folder.",
+                    EnsureAddLocalSymlinksPicker()),
+                SkillSourcesScreen.AddLocalName => BuildValidatedTextDraft(
+                    "Review local folder source.",
+                    EnsureAddLocalNameField(),
+                    "Enter adds the source and autosaves."),
+                SkillSourcesScreen.AddRemoteUrl => BuildValidatedTextDraft(
+                    "Add a remote skill server.",
+                    EnsureAddRemoteUrlField(),
+                    "Netclaw probes /.well-known/agent-skills/index.json before save.",
+                    "What is a skill server?",
+                    [
+                        "A skill server is a Netclaw skill-server instance that publishes",
+                        "agent skills over HTTP for a team or organization.",
+                        "Project: https://github.com/netclaw-dev/skill-server"
+                    ]),
+                SkillSourcesScreen.AddRemoteAuth => BuildValidatedChoice(
+                    "How should Netclaw authenticate to this server?",
+                    "Choose bearer token only when the server requires it.",
+                    EnsureAddRemoteAuthPicker()),
+                SkillSourcesScreen.AddRemoteToken => BuildValidatedTextDraft(
+                    "Enter the bearer token for this skill server.",
+                    EnsureAddRemoteTokenField(),
+                    "Blank tokens are not saved. Existing tokens are removed only through Remove token."),
+                SkillSourcesScreen.AddRemoteName => BuildValidatedTextDraft(
+                    "Review remote skill server source.",
+                    EnsureAddRemoteNameField(),
+                    "Enter adds the source and autosaves."),
+                SkillSourcesScreen.RenameSource => BuildValidatedTextDraft(
+                    "Rename this skill source.",
+                    EnsureRenameSourceField(),
+                    "Enter validates and autosaves the new name."),
+                SkillSourcesScreen.ChangeLocation => BuildValidatedTextDraft(
+                    "Change this source location.",
+                    EnsureChangeLocationField(),
+                    "Enter validates and autosaves the new path or URL."),
+                SkillSourcesScreen.RemoveConfirm => BuildChoice(
+                    "Remove this skill source from Netclaw config?",
+                    "This does not delete remote skills or local files.",
+                    ["Cancel", "Remove source"]),
+                _ => Layouts.Empty(),
+            };
         });
 
         return _contentNode;
+    }
+
+    private ILayoutNode BuildValidationDialog(NetclawValidationDialogModel dialog)
+    {
+        _validationDialogList = NetclawValidationDialogViews.BuildActionList();
+        _validationDialogList.SelectionConfirmed
+            .Subscribe(selected =>
+            {
+                if (selected.Count > 0)
+                    HandleValidationDialogAction(NetclawValidationDialogViews.ParseAction(selected[0]));
+            })
+            .DisposeWith(_contentSubscriptions);
+
+        return NetclawValidationDialogViews.BuildWarningPanel(dialog, _validationDialogList);
     }
 
     private ILayoutNode BuildInventory()
@@ -351,8 +377,13 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => ViewModel.Screen
-            .Select(screen => (ILayoutNode)NetclawTuiChrome.BuildKeyHintLine(KeyHints(screen)))
+        => Observable.CombineLatest(
+                ViewModel.Screen,
+                ViewModel.ActiveValidationDialog,
+                (screen, dialog) => (ILayoutNode)NetclawTuiChrome.BuildKeyHintLine(
+                    dialog is not null
+                        ? " [↑/↓] Navigate  [Enter] Select  [Esc] Back to edit  [Ctrl+Q] Quit"
+                        : KeyHints(screen)))
             .AsLayout()
             .Height(1);
 
@@ -377,7 +408,19 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {
+            if (ViewModel.ActiveValidationDialog.Value is not null)
+            {
+                ViewModel.DismissValidationDialog();
+                return;
+            }
+
             ViewModel.GoBack();
+            return;
+        }
+
+        if (ViewModel.ActiveValidationDialog.Value is not null)
+        {
+            _validationDialogList?.HandleInput(keyInfo);
             return;
         }
 
@@ -471,6 +514,25 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             return InvokeAction(SkillSourcesCommitFactory.RemoveSource(ViewModel), NetclawUiCommitTrigger.Delete);
 
         return false;
+    }
+
+    private void HandleValidationDialogAction(NetclawValidationDialogAction action)
+    {
+        var component = CurrentValidatedComponent();
+        switch (action)
+        {
+            case NetclawValidationDialogAction.RetryValidation:
+                ViewModel.DismissValidationDialog();
+                component?.Commit(NetclawUiCommitTrigger.Enter);
+                break;
+            case NetclawValidationDialogAction.BackToEdit:
+                ViewModel.DismissValidationDialog();
+                break;
+            case NetclawValidationDialogAction.SaveAnyway:
+                ViewModel.DismissValidationDialog();
+                component?.Commit(NetclawUiCommitTrigger.SaveAnyway);
+                break;
+        }
     }
 
     private bool InvokeToggle<TDraft>(NetclawUiCommit<TDraft> commit)

@@ -444,7 +444,7 @@ internal sealed class SearchConfigEditorViewModel : ReactiveViewModel
         if (!_lastProbeResult.Success)
         {
             CurrentScreen.Value = SearchConfigEditorScreen.Entry;
-            Status.Value = new ConfigStatusMessage(_lastProbeResult.Message, ConfigStatusTone.Warning);
+            Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
             ActiveDialog.Value = SearchConfigEditorDialog.ProbeWarning;
             RequestRedraw();
             return false;
