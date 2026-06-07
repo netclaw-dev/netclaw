@@ -341,6 +341,37 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Migrated_skill_sources_page_does_not_bypass_validated_components()
+    {
+        var source = ReadRepoFile("src/Netclaw.Cli/Tui/Config/SkillSourcesConfigPage.cs");
+
+        Assert.DoesNotContain("TextInputNode", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ViewModel.AppendText", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ViewModel.Backspace", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ViewModel.Save", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveExternalConfig", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveSkillFeedsConfig", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ConfigFileHelper.WriteConfigFile", source, StringComparison.Ordinal);
+        Assert.Contains("CurrentValidatedComponent()?.HandleInput", source, StringComparison.Ordinal);
+        Assert.Contains("TryCommitCurrentAction(ConsoleKey.Enter)", source, StringComparison.Ordinal);
+        Assert.Contains("TryCommitCurrentAction(ConsoleKey.Spacebar)", source, StringComparison.Ordinal);
+        Assert.Contains("SkillSourcesCommitFactory.RemoveSource", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Migrated_skill_sources_commit_factory_declares_dynamic_validation_policy_for_every_commit()
+    {
+        var source = ReadRepoFile("src/Netclaw.Cli/Tui/Config/SkillSourcesCommitFactory.cs");
+        var commitCount = CountOccurrences(source, "PersistAsync:", StringComparison.Ordinal);
+        var dynamicPolicyCount = CountOccurrences(source, "DynamicCheck:", StringComparison.Ordinal);
+
+        Assert.True(commitCount > 0, "Skill Sources commit factory must declare validated UI commits.");
+        Assert.Equal(commitCount, dynamicPolicyCount);
+        Assert.DoesNotContain("NotApplicable(\"\")", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("NotApplicable(string.Empty)", source, StringComparison.Ordinal);
+    }
+
     private string[] DiscoverVisibleConfigLeafEditorIds()
     {
         using var dashboard = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
@@ -398,6 +429,25 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
         }
 
         throw new InvalidOperationException("Could not locate repository root from test output directory.");
+    }
+
+    private static string ReadRepoFile(string repoRelativePath)
+    {
+        var repoRoot = FindRepoRoot();
+        return File.ReadAllText(Path.Combine(repoRoot, repoRelativePath.Replace('/', Path.DirectorySeparatorChar)));
+    }
+
+    private static int CountOccurrences(string value, string pattern, StringComparison comparison)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = value.IndexOf(pattern, index, comparison)) >= 0)
+        {
+            count++;
+            index += pattern.Length;
+        }
+
+        return count;
     }
 
     private sealed record ConfigEditorCoverage(
