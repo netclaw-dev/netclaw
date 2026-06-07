@@ -289,6 +289,51 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_remote_auth_dialog_back_to_edit_returns_to_url_entry()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
+        Assert.Null(vm.ActiveValidationDialog.Value);
+        Assert.Equal("https://skills.example.test", vm.Draft.Value);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_token_dialog_back_to_edit_returns_to_token_entry()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("secret-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
+        Assert.Null(vm.ActiveValidationDialog.Value);
+        Assert.Equal("secret-token", vm.Draft.Value);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
     public async Task Skill_sources_remote_auth_dialog_save_anyway_reviews_name_without_persisting_incomplete_flow()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);

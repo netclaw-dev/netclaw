@@ -419,7 +419,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             if (ViewModel.ActiveValidationDialog.Value is not null)
             {
-                ViewModel.DismissValidationDialog();
+                ViewModel.ReturnToValidationEdit();
                 return;
             }
 
@@ -535,7 +535,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 component?.Commit(NetclawUiCommitTrigger.Enter);
                 break;
             case NetclawValidationDialogAction.BackToEdit:
-                ViewModel.DismissValidationDialog();
+                ViewModel.ReturnToValidationEdit();
                 break;
             case NetclawValidationDialogAction.SaveAnyway:
                 ViewModel.DismissValidationDialog();

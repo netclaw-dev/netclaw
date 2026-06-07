@@ -159,6 +159,8 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     private string? _pendingRemoteProbeMessage;
     private int _pendingRemoteTimeoutSeconds = DefaultFeedTimeoutSeconds;
     private SkillSourceDetailAction? _editingAction;
+    private SkillSourcesScreen? _validationEditScreen;
+    private string? _validationEditDraft;
 
     public SkillSourcesConfigViewModel(NetclawPaths paths, ISkillFeedReachabilityProbe? probe = null)
     {
@@ -628,6 +630,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         if (result.Stage == NetclawUiCommitStage.DynamicValidation && result.CanSaveAnyway)
         {
+            CaptureValidationEditTarget();
             ActiveValidationDialog.Value = new NetclawValidationDialogModel(
                 "Skill Server Validation Warning",
                 "Netclaw could not complete skill server discovery using this configuration.",
@@ -643,8 +646,53 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     internal void DismissValidationDialog()
     {
         ActiveValidationDialog.Value = null;
+        _validationEditScreen = null;
+        _validationEditDraft = null;
         Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
         RequestRedraw();
+    }
+
+    internal void ReturnToValidationEdit()
+    {
+        var editScreen = _validationEditScreen;
+        var editDraft = _validationEditDraft;
+        ActiveValidationDialog.Value = null;
+        _validationEditScreen = null;
+        _validationEditDraft = null;
+        Status.Value = new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral);
+
+        switch (editScreen)
+        {
+            case SkillSourcesScreen.AddRemoteUrl:
+            case SkillSourcesScreen.AddRemoteToken:
+            case SkillSourcesScreen.ChangeLocation:
+                ShowTextScreen(editScreen.Value, editDraft ?? string.Empty);
+                break;
+            case SkillSourcesScreen.AddRemoteAuth:
+                ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, _pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken ? 1 : 0);
+                break;
+            default:
+                RequestRedraw();
+                break;
+        }
+    }
+
+    private void CaptureValidationEditTarget()
+    {
+        _validationEditScreen = Screen.Value switch
+        {
+            SkillSourcesScreen.AddRemoteAuth => SkillSourcesScreen.AddRemoteUrl,
+            SkillSourcesScreen.AddRemoteToken => SkillSourcesScreen.AddRemoteToken,
+            SkillSourcesScreen.ChangeLocation => SkillSourcesScreen.ChangeLocation,
+            _ => Screen.Value,
+        };
+        _validationEditDraft = _validationEditScreen switch
+        {
+            SkillSourcesScreen.AddRemoteUrl => _pendingRemoteUrl ?? Draft.Value,
+            SkillSourcesScreen.AddRemoteToken => Draft.Value,
+            SkillSourcesScreen.ChangeLocation => Draft.Value,
+            _ => Draft.Value,
+        };
     }
 
     private void ContinueAddLocalSymlinks()
