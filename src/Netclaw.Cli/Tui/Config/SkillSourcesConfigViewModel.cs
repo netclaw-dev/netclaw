@@ -136,6 +136,8 @@ internal sealed record SkillSourceDetailRow(
     string Detail,
     ConfigStatusTone Tone);
 
+internal sealed record SkillSourceActionTarget(SkillSourceKind Kind, string Name);
+
 internal sealed record LocalSkillScanDisplay(int Count, string? Warning);
 
 internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
@@ -192,6 +194,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     public IReadOnlyList<SkillSourceDetailRow> DetailRows => SelectedSource is { } source
         ? BuildDetailRows(source)
         : [];
+
+    internal SkillSourcesInventoryRow? CurrentInventoryRow => GetInventoryRowOrNull();
+
+    internal SkillSourceDetailRow? CurrentDetailRow => GetDetailRowOrNull();
 
     public bool IsTextEntryActive => IsTextEntryScreen(Screen.Value);
 
@@ -310,6 +316,111 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             if (row?.Action is SkillSourceDetailAction.ToggleEnabled or SkillSourceDetailAction.ToggleSymlinks)
                 ActivateDetailRow();
         }
+    }
+
+    internal SkillSourceActionTarget? ReadCurrentSourceActionTarget()
+    {
+        if (Screen.Value == SkillSourcesScreen.Inventory)
+        {
+            var row = GetInventoryRowOrNull();
+            return row?.Action == SkillSourcesInventoryAction.OpenSource && row.SourceKind is { } kind && row.SourceName is { } name
+                ? new SkillSourceActionTarget(kind, name)
+                : null;
+        }
+
+        if (SelectedSource is { } source)
+            return new SkillSourceActionTarget(source.Kind, source.Name);
+
+        return _selectedKind is { } selectedKind && _selectedName is { Length: > 0 } selectedName
+            ? new SkillSourceActionTarget(selectedKind, selectedName)
+            : null;
+    }
+
+    internal NetclawUiValidationResult ValidateSourceActionTarget(SkillSourceActionTarget? target)
+    {
+        if (target is null)
+            return NetclawUiValidationResult.Failed("A skill source must be selected before changing it.");
+
+        return _sources.Any(source => source.Kind == target.Kind && _nameComparer.Equals(source.Name, target.Name))
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed($"Skill source '{target.Name}' no longer exists in config.");
+    }
+
+    internal NetclawUiValidationResult ValidateLocalSourceActionTarget(SkillSourceActionTarget? target)
+    {
+        var validation = ValidateSourceActionTarget(target);
+        if (!validation.Success)
+            return validation;
+
+        return target!.Kind == SkillSourceKind.LocalFolder
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed("A local skill folder must be selected before changing symlink policy.");
+    }
+
+    internal NetclawUiValidationResult ValidateRemoteSourceActionTarget(SkillSourceActionTarget? target)
+    {
+        var validation = ValidateSourceActionTarget(target);
+        if (!validation.Success)
+            return validation;
+
+        return target!.Kind == SkillSourceKind.RemoteSkillServer
+            ? NetclawUiValidationResult.Passed()
+            : NetclawUiValidationResult.Failed("A remote skill server must be selected before changing remote settings.");
+    }
+
+    internal void CommitToggleEnabled(SkillSourceActionTarget? target)
+    {
+        if (target is null)
+        {
+            SetStatus("A skill source must be selected before changing it.", ConfigStatusTone.Error);
+            return;
+        }
+
+        ToggleEnabled(target.Kind, target.Name);
+    }
+
+    internal void CommitToggleLocalSymlinks(SkillSourceActionTarget? target)
+    {
+        if (target is null)
+        {
+            SetStatus("A local skill folder must be selected before changing symlink policy.", ConfigStatusTone.Error);
+            return;
+        }
+
+        ToggleLocalSymlinks(target.Name);
+    }
+
+    internal void CommitCycleRemoteSyncInterval(SkillSourceActionTarget? target)
+    {
+        if (target is null)
+        {
+            SetStatus("A remote skill server must be selected before changing timeout.", ConfigStatusTone.Error);
+            return;
+        }
+
+        CycleRemoteSyncInterval(target.Name);
+    }
+
+    internal void CommitRemoveRemoteToken(SkillSourceActionTarget? target)
+    {
+        if (target is null)
+        {
+            SetStatus("A remote skill server must be selected before removing a token.", ConfigStatusTone.Error);
+            return;
+        }
+
+        RemoveRemoteToken(target.Name);
+    }
+
+    internal void CommitRemoveSource(SkillSourceActionTarget? target)
+    {
+        if (target is null)
+        {
+            SetStatus("A skill source must be selected before removing it.", ConfigStatusTone.Error);
+            return;
+        }
+
+        RemoveSource(target.Kind, target.Name);
     }
 
     public void DeleteSelected()
@@ -1310,6 +1421,11 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
+        RemoveSource(kind, name);
+    }
+
+    private void RemoveSource(SkillSourceKind kind, string name)
+    {
         if (kind == SkillSourceKind.LocalFolder)
         {
             var external = LoadExternalConfig();

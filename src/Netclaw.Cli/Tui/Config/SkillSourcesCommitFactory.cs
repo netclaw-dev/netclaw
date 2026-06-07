@@ -189,4 +189,90 @@ internal static class SkillSourcesCommitFactory
             },
             AfterCommit: viewModel.ApplyCommitResult);
     }
+
+    public static NetclawUiCommit<SkillSourceActionTarget?> ToggleEnabled(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return SourceActionCommit(
+            viewModel,
+            "skill-sources.source.toggle-enabled",
+            "Source enabled state",
+            viewModel.ValidateSourceActionTarget,
+            viewModel.CommitToggleEnabled,
+            "Enabled-state toggles only flip an existing persisted source flag; runtime scanners/feed sync consume the saved source shape unchanged.");
+    }
+
+    public static NetclawUiCommit<SkillSourceActionTarget?> ToggleLocalSymlinks(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return SourceActionCommit(
+            viewModel,
+            "skill-sources.local.toggle-symlinks",
+            "Local folder symlink policy",
+            viewModel.ValidateLocalSourceActionTarget,
+            viewModel.CommitToggleLocalSymlinks,
+            "Symlink toggles only flip the existing local source scan policy; runtime scanner validates file traversal on scan.");
+    }
+
+    public static NetclawUiCommit<SkillSourceActionTarget?> CycleRemoteSyncInterval(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return SourceActionCommit(
+            viewModel,
+            "skill-sources.remote.cycle-timeout",
+            "Skill server HTTP timeout",
+            viewModel.ValidateRemoteSourceActionTarget,
+            viewModel.CommitCycleRemoteSyncInterval,
+            "Timeout cycling chooses from fixed valid runtime timeout values, so no external probe is required.");
+    }
+
+    public static NetclawUiCommit<SkillSourceActionTarget?> RemoveRemoteToken(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return SourceActionCommit(
+            viewModel,
+            "skill-sources.remote.remove-token",
+            "Skill server token",
+            viewModel.ValidateRemoteSourceActionTarget,
+            viewModel.CommitRemoveRemoteToken,
+            "Token removal deletes an existing secret reference and does not depend on remote server reachability.");
+    }
+
+    public static NetclawUiCommit<SkillSourceActionTarget?> RemoveSource(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return SourceActionCommit(
+            viewModel,
+            "skill-sources.source.remove",
+            "Skill source",
+            viewModel.ValidateSourceActionTarget,
+            viewModel.CommitRemoveSource,
+            "Source removal deletes the selected config entry after explicit user confirmation; no runtime probe is required.");
+    }
+
+    private static NetclawUiCommit<SkillSourceActionTarget?> SourceActionCommit(
+        SkillSourcesConfigViewModel viewModel,
+        string id,
+        string label,
+        Func<SkillSourceActionTarget?, NetclawUiValidationResult> validate,
+        Action<SkillSourceActionTarget?> persist,
+        string dynamicJustification)
+        => new(
+            Id: id,
+            Label: label,
+            ReadDraft: viewModel.ReadCurrentSourceActionTarget,
+            WriteDraft: _ => { },
+            Validate: validate,
+            DynamicCheck: NetclawUiDynamicCheck<SkillSourceActionTarget?>.NotApplicable(dynamicJustification),
+            PersistAsync: (draft, _) =>
+            {
+                persist(draft);
+                return ValueTask.CompletedTask;
+            },
+            AfterCommit: viewModel.ApplyCommitResult);
 }

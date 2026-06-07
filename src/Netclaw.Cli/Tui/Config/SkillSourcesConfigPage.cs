@@ -395,9 +395,15 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 ViewModel.MoveSelection(1);
                 return;
             case ConsoleKey.Enter:
+                if (TryCommitCurrentAction(ConsoleKey.Enter))
+                    return;
+
                 ViewModel.ActivateSelected();
                 return;
             case ConsoleKey.Spacebar:
+                if (TryCommitCurrentAction(ConsoleKey.Spacebar))
+                    return;
+
                 ViewModel.ToggleSelected();
                 return;
             case ConsoleKey.Delete:
@@ -431,6 +437,53 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             SkillSourcesScreen.ChangeLocation => EnsureChangeLocationField(),
             _ => null,
         };
+
+    private bool TryCommitCurrentAction(ConsoleKey key)
+    {
+        if (ViewModel.Screen.Value == SkillSourcesScreen.Inventory && key == ConsoleKey.Spacebar)
+        {
+            var row = ViewModel.CurrentInventoryRow;
+            if (row?.Action == SkillSourcesInventoryAction.OpenSource)
+                return InvokeToggle(SkillSourcesCommitFactory.ToggleEnabled(ViewModel));
+        }
+
+        if (ViewModel.Screen.Value == SkillSourcesScreen.SourceDetail)
+        {
+            var row = ViewModel.CurrentDetailRow;
+            if (row is null)
+                return false;
+
+            return row.Action switch
+            {
+                SkillSourceDetailAction.ToggleEnabled when key is ConsoleKey.Enter or ConsoleKey.Spacebar =>
+                    InvokeToggle(SkillSourcesCommitFactory.ToggleEnabled(ViewModel)),
+                SkillSourceDetailAction.ToggleSymlinks when key is ConsoleKey.Enter or ConsoleKey.Spacebar =>
+                    InvokeToggle(SkillSourcesCommitFactory.ToggleLocalSymlinks(ViewModel)),
+                SkillSourceDetailAction.SyncInterval when key == ConsoleKey.Enter =>
+                    InvokeAction(SkillSourcesCommitFactory.CycleRemoteSyncInterval(ViewModel), NetclawUiCommitTrigger.AutoSave),
+                SkillSourceDetailAction.RemoveToken when key == ConsoleKey.Enter =>
+                    InvokeAction(SkillSourcesCommitFactory.RemoveRemoteToken(ViewModel), NetclawUiCommitTrigger.Delete),
+                _ => false,
+            };
+        }
+
+        if (ViewModel.Screen.Value == SkillSourcesScreen.RemoveConfirm && key == ConsoleKey.Enter && ViewModel.SelectedRow.Value == 1)
+            return InvokeAction(SkillSourcesCommitFactory.RemoveSource(ViewModel), NetclawUiCommitTrigger.Delete);
+
+        return false;
+    }
+
+    private bool InvokeToggle<TDraft>(NetclawUiCommit<TDraft> commit)
+    {
+        _ = new NetclawValidatedToggle<TDraft>(commit, _commitPipeline).Invoke();
+        return true;
+    }
+
+    private bool InvokeAction<TDraft>(NetclawUiCommit<TDraft> commit, NetclawUiCommitTrigger trigger)
+    {
+        _ = new NetclawValidatedAction<TDraft>(commit, _commitPipeline, trigger).Invoke();
+        return true;
+    }
 
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.Gray);

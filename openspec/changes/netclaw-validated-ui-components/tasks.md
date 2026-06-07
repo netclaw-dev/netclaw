@@ -19,8 +19,8 @@
 
 - [x] 3.1 Add `INetclawUiComponent` or equivalent component contract for build, input handling, paste handling, and commit ownership.
 - [x] 3.2 Add `NetclawValidatedTextField` using the existing boxed `TextInputNode` presentation, but requiring `NetclawUiCommit<string>` for acceptance.
-- [ ] 3.3 Add `NetclawValidatedAction<TDraft>` for completed actions such as add/remove, reset, token rotation, and save-anyway.
-- [ ] 3.4 Add `NetclawValidatedToggle` and `NetclawValidatedPicker<TValue>` for immediate completed actions.
+- [x] 3.3 Add `NetclawValidatedAction<TDraft>` for completed actions such as add/remove, reset, token rotation, and save-anyway.
+- [x] 3.4 Add `NetclawValidatedToggle` and `NetclawValidatedPicker<TValue>` for immediate completed actions.
 - [ ] 3.5 Add `NetclawUiInputRouter` or `NetclawValidatedPage<TViewModel>` so pages delegate typed input, paste, backspace, `Enter`, `Space`, picker selection, and autosave triggers to validated components.
 - [ ] 3.6 Prove the components still use standard Netclaw TUI chrome and do not introduce a parallel visual system.
 
@@ -44,11 +44,11 @@
 
 ## 6. Skill Sources migration first
 
-- [ ] 6.1 Create `SkillSourcesCommitFactory` or equivalent adapters that produce commits for local path, local name, symlink toggle, remote URL, auth/token, remote name, rename, location change, enable toggle, token removal, token rotation, and source removal.
+- [x] 6.1 Create `SkillSourcesCommitFactory` or equivalent adapters that produce commits for local path, local name, symlink toggle, remote URL, auth/token, remote name, rename, location change, enable toggle, token removal, token rotation, and source removal.
 - [x] 6.2 Wire Skill Sources text entry screens through `NetclawValidatedTextField`; remove page-specific text draft rendering only after the standard component renders the same necessary field labels, placeholders, hints, and skill-server callout.
-- [ ] 6.3 Wire Skill Sources toggles/actions through `NetclawValidatedAction<TDraft>`, `NetclawValidatedToggle`, or `NetclawValidatedPicker<TValue>`.
+- [x] 6.3 Wire Skill Sources toggles/actions through `NetclawValidatedAction<TDraft>`, `NetclawValidatedToggle`, or `NetclawValidatedPicker<TValue>`.
 - [ ] 6.4 Add headless Termina tests for Skill Sources local path: typed input, paste input, `Enter`, missing-directory static failure, unchanged config, success persistence, and `Esc` cancellation.
-- [ ] 6.5 Add headless Termina tests for Skill Sources remote URL: typed input, `Enter`, invalid URL static failure, fake probe dynamic failure, unchanged config, save-anyway path, successful canonical `SkillFeeds.Feeds` persistence, and token preserve/delete behavior.
+- [x] 6.5 Add headless Termina tests for Skill Sources remote URL: typed input, `Enter`, invalid URL static failure, fake probe dynamic failure, unchanged config, save-anyway path, successful canonical `SkillFeeds.Feeds` persistence, and token preserve/delete behavior.
 - [x] 6.6 Add runtime consumer proof that local sources persist to `ExternalSkills.Sources` and remote skill servers persist to `SkillFeeds.Feeds` in the exact shapes consumed by runtime skill loading.
 - [ ] 6.7 Delete old Skill Sources tests/components only if replacement tests cover their behavior through public user actions and no unique assertion is lost.
 

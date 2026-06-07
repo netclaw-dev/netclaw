@@ -410,6 +410,110 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_inventory_space_toggles_source_enabled()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"Enabled\":true,\"TimeoutSeconds\":30}]}}");
+        var app = CreateSkillSourcesApp(out var input, out _);
+
+        input.EnqueueKey(ConsoleKey.Spacebar);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var feed = Assert.Single(doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds").EnumerateArray());
+        Assert.False(feed.GetProperty("Enabled").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Skill_sources_local_detail_space_toggles_symlink_policy()
+    {
+        var externalDir = Path.Combine(_dir.Path, "team-skills");
+        Directory.CreateDirectory(externalDir);
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"ExternalSkills\":{{\"Sources\":[{{\"Name\":\"team-skills\",\"Path\":\"{externalDir.Replace("\\", "\\\\", StringComparison.Ordinal)}\",\"Enabled\":true,\"AllowSymlinks\":false}}]}}}}");
+        var app = CreateSkillSourcesApp(out var input, out _);
+
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Spacebar);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var source = Assert.Single(doc.RootElement.GetProperty("ExternalSkills").GetProperty("Sources").EnumerateArray());
+        Assert.True(source.GetProperty("AllowSymlinks").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_detail_enter_cycles_timeout()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"Enabled\":true,\"TimeoutSeconds\":30}]}}");
+        var app = CreateSkillSourcesApp(out var input, out _);
+
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var feed = Assert.Single(doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds").EnumerateArray());
+        Assert.Equal(60, feed.GetProperty("TimeoutSeconds").GetInt32());
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_detail_enter_removes_token()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"ApiKey\":\"plain-token\",\"Enabled\":true,\"TimeoutSeconds\":30}]}}");
+        var app = CreateSkillSourcesApp(out var input, out _);
+
+        input.EnqueueKey(ConsoleKey.Enter);
+        for (var i = 0; i < 8; i++)
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var feed = Assert.Single(doc.RootElement.GetProperty("SkillFeeds").GetProperty("Feeds").EnumerateArray());
+        Assert.False(feed.TryGetProperty("ApiKey", out _));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remove_confirm_enter_removes_source()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"Enabled\":true,\"TimeoutSeconds\":30}]}}");
+        var app = CreateSkillSourcesApp(out var input, out var vm);
+
+        input.EnqueueKey(ConsoleKey.Delete);
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.Inventory, vm.Screen.Value);
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.False(doc.RootElement.TryGetProperty("SkillFeeds", out _));
+    }
+
+    [Fact]
     public async Task Telemetry_alerting_page_accepts_typed_and_pasted_values()
     {
         var app = CreateTelemetryAlertingApp(out var input, out var vm);
