@@ -20,6 +20,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
     private readonly NetclawUiCommitPipeline _commitPipeline = new();
     private NetclawValidatedTextField? _addLocalPathField;
     private NetclawValidatedTextField? _addRemoteUrlField;
+    private NetclawValidatedPicker<SkillSourceAuthMode>? _addRemoteAuthPicker;
 
     protected override void OnBound()
     {
@@ -37,6 +38,8 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                 _addLocalPathField = null;
             if (screen != SkillSourcesScreen.AddRemoteUrl)
                 _addRemoteUrlField = null;
+            if (screen != SkillSourcesScreen.AddRemoteAuth)
+                _addRemoteAuthPicker = null;
 
             _contentNode?.Invalidate();
         }).DisposeWith(Subscriptions);
@@ -85,10 +88,10 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                     "agent skills over HTTP for a team or organization.",
                     "Project: https://github.com/netclaw-dev/skill-server"
                 ]),
-            SkillSourcesScreen.AddRemoteAuth => BuildChoice(
+            SkillSourcesScreen.AddRemoteAuth => BuildValidatedChoice(
                 "How should Netclaw authenticate to this server?",
                 "Choose bearer token only when the server requires it.",
-                ["No auth required", "Bearer token"]),
+                EnsureAddRemoteAuthPicker()),
             SkillSourcesScreen.AddRemoteToken => BuildTextDraft(
                 "Enter the bearer token for this skill server.",
                 "Bearer token",
@@ -237,6 +240,15 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             _commitPipeline,
             "Type here...");
 
+    private NetclawValidatedPicker<SkillSourceAuthMode> EnsureAddRemoteAuthPicker()
+        => _addRemoteAuthPicker ??= new NetclawValidatedPicker<SkillSourceAuthMode>(
+            SkillSourcesCommitFactory.AddRemoteAuth(ViewModel),
+            _commitPipeline,
+            [
+                new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.None, "No auth required"),
+                new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.BearerToken, "Bearer token"),
+            ]);
+
     private static LayoutNode BuildDraftInput(string fieldLabel, string value)
     {
         var display = string.IsNullOrWhiteSpace(value) ? "Type here..." : value;
@@ -270,6 +282,13 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
         return layout;
     }
+
+    private static ILayoutNode BuildValidatedChoice(string title, string hint, INetclawUiComponent picker)
+        => Layouts.Vertical()
+            .WithChild(Header($"  {title}"))
+            .WithChild(Hint($"  {hint}"))
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(picker.Build());
 
     private ILayoutNode InventoryRow(SkillSourcesInventoryRow row)
     {
@@ -341,7 +360,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             return;
         }
 
-        if (CurrentValidatedTextField()?.HandleInput(keyInfo) == true)
+        if (CurrentValidatedComponent()?.HandleInput(keyInfo) == true)
         {
             return;
         }
@@ -380,7 +399,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
     private void HandlePaste(PasteEvent paste)
     {
-        if (CurrentValidatedTextField() is { } field)
+        if (CurrentValidatedComponent() is { } field)
         {
             field.HandlePaste(paste);
             return;
@@ -391,11 +410,12 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         ViewModel.AppendText(_pasteBuffer.Text);
     }
 
-    private NetclawValidatedTextField? CurrentValidatedTextField()
+    private INetclawUiComponent? CurrentValidatedComponent()
         => ViewModel.Screen.Value switch
         {
             SkillSourcesScreen.AddLocalPath => EnsureAddLocalPathField(),
             SkillSourcesScreen.AddRemoteUrl => EnsureAddRemoteUrlField(),
+            SkillSourcesScreen.AddRemoteAuth => EnsureAddRemoteAuthPicker(),
             _ => null,
         };
 

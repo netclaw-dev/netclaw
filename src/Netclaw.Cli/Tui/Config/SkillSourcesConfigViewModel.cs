@@ -605,6 +605,57 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ProbePendingRemoteThenReview();
     }
 
+    internal SkillSourceAuthMode ReadAddRemoteAuthDraft()
+        => SelectedRow.Value == 1 ? SkillSourceAuthMode.BearerToken : SkillSourceAuthMode.None;
+
+    internal void ReplaceAddRemoteAuthDraft(SkillSourceAuthMode value)
+    {
+        if (Screen.Value != SkillSourcesScreen.AddRemoteAuth)
+            return;
+
+        var row = value == SkillSourceAuthMode.BearerToken ? 1 : 0;
+        if (SelectedRow.Value == row)
+            return;
+
+        SelectedRow.Value = row;
+        MarkDirty();
+    }
+
+    internal NetclawUiValidationResult ValidateAddRemoteAuthDraft(SkillSourceAuthMode value)
+        => _pendingRemoteUrl is null
+            ? NetclawUiValidationResult.Failed("Skill server URL is required before testing a source.")
+            : NetclawUiValidationResult.Passed();
+
+    internal ValueTask<NetclawUiValidationResult> ValidateAddRemoteAuthReachabilityAsync(
+        SkillSourceAuthMode value,
+        CancellationToken ct)
+    {
+        if (value == SkillSourceAuthMode.BearerToken)
+            return ValueTask.FromResult(NetclawUiValidationResult.Passed());
+
+        if (_pendingRemoteUrl is null)
+            return ValueTask.FromResult(NetclawUiValidationResult.Failed("Skill server URL is required before testing a source."));
+
+        var result = _probe.Probe(_pendingRemoteUrl, null, _pendingRemoteTimeoutSeconds);
+        _pendingRemoteProbeMessage = result.Message;
+        return ValueTask.FromResult(result.Success
+            ? NetclawUiValidationResult.Passed(result.Message)
+            : NetclawUiValidationResult.Warning($"{result.Message} Press Enter again to save anyway."));
+    }
+
+    internal void CommitAddRemoteAuthDraft(SkillSourceAuthMode value)
+    {
+        _pendingRemoteAuthMode = value;
+        if (_pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken)
+        {
+            ShowTextScreen(SkillSourcesScreen.AddRemoteToken, string.Empty);
+            return;
+        }
+
+        var suggestedName = SuggestNameFromUrl(_pendingRemoteUrl ?? "skill-server");
+        ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(suggestedName));
+    }
+
     private void ContinueAddRemoteToken()
     {
         if (_editingAction == SkillSourceDetailAction.RotateToken)

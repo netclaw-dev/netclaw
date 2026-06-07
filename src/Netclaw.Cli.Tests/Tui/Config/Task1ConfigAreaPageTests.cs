@@ -199,6 +199,63 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
+    public async Task Skill_sources_remote_auth_enter_blocks_unreachable_probe_before_persistence()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("probe failed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_auth_second_enter_saves_anyway_without_persisting_incomplete_flow()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_auth_bearer_token_selection_advances_to_token_entry_without_probe()
+    {
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+
+        BeginRemoteUrlEntry(input, "https://skills.example.test");
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
+        Assert.NotEqual(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
     public async Task Telemetry_alerting_page_accepts_typed_and_pasted_values()
     {
         var app = CreateTelemetryAlertingApp(out var input, out var vm);
@@ -266,12 +323,22 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     private TerminaApplication CreateSkillSourcesApp(out VirtualInputSource input, out SkillSourcesConfigViewModel vm)
         => CreateSkillSourcesApp(out input, out vm, out _);
 
-    private TerminaApplication CreateSkillSourcesApp(out VirtualInputSource input, out SkillSourcesConfigViewModel vm, out VirtualTerminal terminal)
+    private TerminaApplication CreateSkillSourcesApp(
+        out VirtualInputSource input,
+        out SkillSourcesConfigViewModel vm,
+        ISkillFeedReachabilityProbe probe)
+        => CreateSkillSourcesApp(out input, out vm, out _, probe);
+
+    private TerminaApplication CreateSkillSourcesApp(
+        out VirtualInputSource input,
+        out SkillSourcesConfigViewModel vm,
+        out VirtualTerminal terminal,
+        ISkillFeedReachabilityProbe? probe = null)
     {
         terminal = new VirtualTerminal(120, 40);
         var virtualInput = new VirtualInputSource();
         input = virtualInput;
-        var capturedVm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe());
+        var capturedVm = new SkillSourcesConfigViewModel(_paths, probe ?? new FakeSkillFeedProbe());
 
         var services = new ServiceCollection();
         services.AddSingleton<IAnsiTerminal>(terminal);
@@ -314,7 +381,24 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
 
     private sealed class FakeSkillFeedProbe : ISkillFeedReachabilityProbe
     {
+        private readonly bool _success;
+        private readonly string _message;
+
+        public FakeSkillFeedProbe(bool success = true, string message = "reachable")
+        {
+            _success = success;
+            _message = message;
+        }
+
         public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
-            => new(true, "reachable");
+            => new(_success, _message);
+    }
+
+    private static void BeginRemoteUrlEntry(VirtualInputSource input, string url)
+    {
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString(url);
+        input.EnqueueKey(ConsoleKey.Enter);
     }
 }

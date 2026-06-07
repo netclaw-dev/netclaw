@@ -46,4 +46,25 @@ internal static class SkillSourcesCommitFactory
             },
             AfterCommit: viewModel.ApplyCommitResult);
     }
+
+    public static NetclawUiCommit<SkillSourceAuthMode> AddRemoteAuth(SkillSourcesConfigViewModel viewModel)
+    {
+        ArgumentNullException.ThrowIfNull(viewModel);
+
+        return new NetclawUiCommit<SkillSourceAuthMode>(
+            Id: "skill-sources.add-remote.auth",
+            Label: "Skill server authentication",
+            ReadDraft: viewModel.ReadAddRemoteAuthDraft,
+            WriteDraft: viewModel.ReplaceAddRemoteAuthDraft,
+            Validate: viewModel.ValidateAddRemoteAuthDraft,
+            DynamicCheck: NetclawUiDynamicCheck<SkillSourceAuthMode>.Required(
+                viewModel.ValidateAddRemoteAuthReachabilityAsync,
+                NetclawUiDynamicFailurePolicy.AllowSaveAnyway),
+            PersistAsync: (draft, _) =>
+            {
+                viewModel.CommitAddRemoteAuthDraft(draft);
+                return ValueTask.CompletedTask;
+            },
+            AfterCommit: viewModel.ApplyCommitResult);
+    }
 }
