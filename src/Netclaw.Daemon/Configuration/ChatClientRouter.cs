@@ -12,8 +12,9 @@ namespace Netclaw.Daemon.Configuration;
 /// Selects which composed chat-client pipeline(s) to invoke for a given routing
 /// context. Returns candidates in priority order; <see cref="RoutingChatClient"/>
 /// walks them, so failover is "the candidate list has more than one entry" rather
-/// than a bespoke decorator. The router is the seam where future per-session /
-/// per-provider routing slots in as a different policy.
+/// than a bespoke decorator. The router is the seam where the future per-role /
+/// per-agent / per-provider routing tracked in netclaw-dev/netclaw#648 slots in as
+/// a different policy.
 /// </summary>
 public interface IChatClientRouter
 {

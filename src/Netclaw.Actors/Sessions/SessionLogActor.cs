@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Security;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -107,7 +108,7 @@ public sealed class SessionLogActor : ReceiveActor
             {
                 TextOutput text => $"Assistant: {TextTruncation.EllipsisAppend(text.Text, 1000)}",
                 ToolCallOutput toolCall => FormatToolCall(toolCall),
-                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {TextTruncation.EllipsisAppend(toolResult.Result, 1000)}",
+                ToolResultOutput toolResult => $"Tool result: {toolResult.ToolName} (call={toolResult.CallId}) → {TextTruncation.EllipsisAppend(SecretOutputRedactor.Redact(toolResult.Result), 1000)}",
                 ThinkingOutput thinking => $"Thinking: {TextTruncation.EllipsisAppend(thinking.Text, 1000)}",
                 ThinkingDeltaOutput thinkingDelta => $"Thinking delta: {TextTruncation.EllipsisAppend(thinkingDelta.Delta, 1000)}",
                 UsageOutput usage => $"Usage: in={usage.InputTokens} out={usage.OutputTokens} cached={usage.CachedInputTokens} reasoning={usage.ReasoningTokens} context={usage.UsagePercent:P0}",

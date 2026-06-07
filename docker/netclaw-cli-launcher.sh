@@ -26,7 +26,6 @@ set -eu
 REAL=/opt/netclaw/cli/netclaw
 
 if [ "$(id -u)" = 0 ]; then
-    echo "[netclaw] invoked as root; dropping to the 'netclaw' user (ADR-004)." >&2
     export HOME=/home/netclaw
     exec gosu netclaw "$REAL" "$@"
 fi

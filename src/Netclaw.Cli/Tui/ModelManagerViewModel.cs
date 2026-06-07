@@ -305,6 +305,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
 
+        ManualModelEntry = false;
+        SelectedModelId = null;
         IsProbing.Value = true;
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;

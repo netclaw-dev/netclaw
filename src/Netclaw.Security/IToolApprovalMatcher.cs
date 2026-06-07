@@ -362,7 +362,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// Rebuilds one clause's user-facing text from its parsed parts: verb
     /// chain, positional/flag args, and redirects. Synthetic cd-attribution
     /// args are dropped — they carry an inherited cwd, not a token the user
-    /// typed. The result is fed back through
+    /// typed. Bare integer arguments (issue #1331) are also excluded since
+    /// they represent call-specific values (ticket IDs, port numbers,
+    /// timeouts) that vary between invocations of the same verb chain.
+    /// Once a bare integer is encountered, the greedy walk terminates —
+    /// subsequent args (wrapped subcommands like <c>curl</c> after
+    /// <c>timeout 30</c>) are outside the approval intent.
+    /// The result is fed back through
     /// <see cref="ShellTokenizer.NormalizeApprovalUnit"/> for path
     /// normalization, so this only needs to emit a clean token sequence.
     /// </summary>
@@ -374,6 +380,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             if (arg.IsCwdAttribution || string.IsNullOrEmpty(arg.Raw))
                 continue;
+
+            // Issue #1331: bare integer args are a termination condition.
+            // Once we hit an integer, subsequent args (wrapped subcommands
+            // like `curl` after `timeout 30`) are outside the approval intent.
+            if (IsBareIntegerToken(arg.Raw))
+                break;
 
             if (sb.Length > 0)
                 sb.Append(' ');
@@ -396,6 +408,33 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// True when <paramref name="token"/> is a bare integer (sequence of
+    /// digits with an optional leading minus for negative numbers). Excludes
+    /// flag-form tokens (those starting with <c>-</c>) — e.g. <c>-c</c>,
+    /// <c>--version</c> are never treated as integers. Negative flags like
+    /// <c>-3</c> start with <c>-</c> so the flag check short-circuits first.
+    /// </summary>
+    private static bool IsBareIntegerToken(string token)
+    {
+        // Negative flags like `-3` start with `-` — not a bare integer.
+        if (token.Length == 0 || token[0] == '-')
+            return false;
+
+        var length = token.Length;
+        // Must be at least one digit.
+        if (!char.IsDigit(token[0]))
+            return false;
+
+        for (var i = 1; i < length; i++)
+        {
+            if (!char.IsDigit(token[i]))
+                return false;
+        }
+
+        return true;
     }
 
     private static string RedirectToken(ShellSyntaxTree.RedirectDirection direction) => direction switch

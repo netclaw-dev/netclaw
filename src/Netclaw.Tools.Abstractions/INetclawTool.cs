@@ -54,6 +54,15 @@ public interface INetclawTool
     /// </summary>
     int InlineOutputBudgetChars => 0;
 
+    /// <summary>
+    /// When <c>true</c>, the dispatcher skips <see cref="Netclaw.Security.SecretOutputRedactor"/>
+    /// on the result returned to the model. The spill file (if any) is still redacted.
+    /// Set this on tools whose output the model may need to write back verbatim
+    /// (e.g. file_read) — redacting their output corrupts the content on a
+    /// read-modify-write cycle.
+    /// </summary>
+    bool SuppressOutputRedaction => false;
+
     /// <summary>JSON Schema describing the tool's parameters.</summary>
     JsonElement ParameterSchema { get; }
 

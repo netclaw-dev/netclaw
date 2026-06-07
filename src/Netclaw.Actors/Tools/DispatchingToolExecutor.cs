@@ -67,14 +67,21 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 ? await tool.ExecuteAsync(toolCall.Arguments, context, ct)
                 : await tool.ExecuteAsync(toolCall.Arguments, ct);
 
-            result = SecretOutputRedactor.Redact(result);
+            var redacted = SecretOutputRedactor.Redact(result);
+
+            // Tools that suppress output redaction (e.g. file_read) return the
+            // raw result to the model so read-modify-write cycles don't corrupt
+            // secret values with ***REDACTED*** placeholders. The spill file
+            // (persisted to disk) always uses the redacted version.
+            var modelFacing = tool.SuppressOutputRedaction ? result : redacted;
+
             // Single, uniform bounding+spill point for every tool (main session and
             // sub-agents both funnel through here): cap the inline result to the
             // tool's budget and, when it overflows, spill the full redacted result
             // to a session file and steer the model to read a slice. Tools only
             // bound their own capture for memory safety; they do not window or spill.
             result = await ToolOutputSpill.BoundAndSpillAsync(
-                result, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
+                modelFacing, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
 
             sw.Stop();
             _logger.LogInformation(
@@ -133,12 +140,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor
                 case ToolCompletedUpdate completed:
                     sw.Stop();
                     var redacted = SecretOutputRedactor.Redact(completed.Result);
-                    redacted = await ToolOutputSpill.BoundAndSpillAsync(
-                        redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
+                    var modelResult = tool.SuppressOutputRedaction ? completed.Result : redacted;
+                    modelResult = await ToolOutputSpill.BoundAndSpillAsync(
+                        modelResult, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context, ct);
                     _logger.LogInformation(
                         "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
-                        toolCall.Name, sw.ElapsedMilliseconds, redacted.Length);
-                    yield return new ToolCompletedUpdate(redacted);
+                        toolCall.Name, sw.ElapsedMilliseconds, modelResult.Length);
+                    yield return new ToolCompletedUpdate(modelResult);
                     break;
                 case ToolActivityUpdate { OutputChunk: not null } activity:
                     yield return activity with { OutputChunk = SecretOutputRedactor.Redact(activity.OutputChunk) };

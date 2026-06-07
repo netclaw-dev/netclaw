@@ -280,6 +280,84 @@ public sealed class ModelManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public async Task StartDiscovery_ClearsStaleManualEntryBeforeRenderingProbeResults()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.ManualModelEntry = true;
+        vm.SelectedModelId = "manual-model";
+        vm.DiscoveredModels.Add(new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("stale-model") });
+
+        vm.StartDiscovery("my-openai");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(vm.ManualModelEntry);
+        Assert.Null(vm.SelectedModelId);
+        Assert.Equal(2, vm.DiscoveredModels.Count);
+    }
+
+    [Fact]
+    public async Task ManualEntry_DoesNotPersistAfterReturningToProviderSelection()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["big-gpu"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://localhost:8000"
+                },
+                ["openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-a") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-b") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-c") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-d") }
+        ]);
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.StartAssignment("Main");
+        vm.SelectProvider("openai");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        vm.ManualModelEntry = true;
+        vm.GoBack();
+        Assert.Equal(ModelManagerState.SelectProvider, vm.CurrentState.Value);
+
+        vm.SelectProvider("openai");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(vm.ManualModelEntry);
+        Assert.Equal(4, vm.DiscoveredModels.Count);
+    }
+
+    [Fact]
     public void ClearRole_Main_IsRejected()
     {
         using var vm = CreateViewModel();

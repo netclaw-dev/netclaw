@@ -129,6 +129,9 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     /// </summary>
     public virtual int InlineOutputBudgetChars => 0;
 
+    /// <inheritdoc />
+    public virtual bool SuppressOutputRedaction => false;
+
     /// <summary>
     /// Deserialize raw LLM arguments into the typed params record.
     /// Implemented by the source generator to handle JsonElement and native CLR types.

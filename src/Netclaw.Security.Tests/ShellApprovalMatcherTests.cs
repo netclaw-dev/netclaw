@@ -25,6 +25,17 @@ public sealed class ShellApprovalMatcherTests
     private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
     private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
+    /// <summary>
+    /// xunit.v3 <c>SkipUnless</c> hook for POSIX-only tests. The v2
+    /// matcher falls through to the legacy <c>ShellTokenizer</c> path
+    /// on Windows (ShellSyntaxTree is bash-only), so tests that pin
+    /// BashParser cwd attribution / <c>arg.Resolved</c> canonicalization
+    /// don't apply. Marking them <c>[Fact(SkipUnless = nameof(IsPosix))]</c>
+    /// produces a proper "Skipped" entry in the test log on Windows
+    /// runners instead of hiding the gap behind an early-return.
+    /// </summary>
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     [Fact]
     public void ExtractPatterns_simple_command()
     {
@@ -203,6 +214,82 @@ public sealed class ShellApprovalMatcherTests
             Args("for x in 1 2 3; do echo $x; done"),
             approved,
             cwd: null));
+    }
+
+    // ---------------------------------------------------------------- integer positional arguments
+    // Issue #1331: bare integers (ticket IDs, port numbers, timeouts) must NOT
+    // be baked into the approval verb chain. Every unique integer previously
+    // created a distinct approval entry, forcing users to approve each one
+    // separately. The AST correctly strips integers from VerbChain (IsVerbLikeToken
+    // requires [a-z] start), but the display/pattern extraction path uses raw
+    // whitespace tokenization — which MUST also exclude bare integers.
+
+    [Fact]
+    public void ExtractPatterns_strips_bare_integer_positional_arguments()
+    {
+        // BashParser is bash-only, so on Windows the matcher falls through to
+        // the legacy ShellTokenizer path. This test exercises the POSIX path.
+        // Windows skips with a pass to keep the test active (no Slopwatch SW001).
+        if (OperatingSystem.IsWindows()) return;
+
+        // The approval pattern for `freshdesk ticket get 123` should be
+        // `freshdesk ticket get` — NOT `freshdesk ticket get 123`.
+        var patterns = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("freshdesk ticket get 123"));
+
+        Assert.Single(patterns);
+        Assert.Equal("freshdesk ticket get", patterns[0]);
+    }
+
+    [Fact]
+    public void ExtractPatterns_tolerates_different_integer_values()
+    {
+        // Two invocations with different integers should produce the same
+        // pattern — approval granted for one integer-valued command should
+        // cover all integer values of the same verb chain.
+        if (OperatingSystem.IsWindows()) return;
+
+        var patterns1 = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("nc host 8080"));
+        var patterns2 = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("nc host 9090"));
+
+        Assert.Single(patterns1);
+        Assert.Single(patterns2);
+        Assert.Equal(patterns1[0], patterns2[0]);
+        Assert.Equal("nc host", patterns1[0]);
+    }
+
+    [Fact]
+    public void ExtractPatterns_strips_timeout_integer()
+    {
+        // `timeout 30 curl` — the 30 is a timeout value, not a verb component.
+        if (OperatingSystem.IsWindows()) return;
+
+        var patterns = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("timeout 30 curl http://example.com"));
+
+        Assert.Single(patterns);
+        Assert.Equal("timeout", patterns[0]);
+    }
+
+    [Fact]
+    public void ExtractCandidateVerbs_strips_bare_integer_positional_arguments()
+    {
+        // Candidate verbs must NOT include bare integer arguments.
+        if (OperatingSystem.IsWindows()) return;
+
+        var verbs = _matcher.ExtractCandidateVerbs(
+            new ToolName("shell_execute"),
+            Args("freshdesk ticket get 123"));
+
+        Assert.Single(verbs);
+        Assert.Equal("freshdesk ticket get", verbs[0]);
+        Assert.DoesNotContain("123", verbs);
     }
 }
 

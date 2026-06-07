@@ -8,8 +8,8 @@ namespace Netclaw.Configuration;
 /// <summary>
 /// The inputs a chat-client router uses to select which composed pipeline to invoke
 /// for a call. Minimal today — only <see cref="Role"/> is consulted — but shaped so
-/// per-session / per-provider routing slots in later as a new router policy without
-/// changing this type's shape or any caller.
+/// the per-role / per-agent / per-provider routing tracked in netclaw-dev/netclaw#648
+/// slots in later as a new router policy without changing this type's shape or any caller.
 /// </summary>
 public sealed record ChatRoutingContext
 {

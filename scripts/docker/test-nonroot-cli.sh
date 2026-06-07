@@ -15,9 +15,8 @@
 # breakage path — a root `docker exec -- netclaw <cmd>` — and asserts:
 #
 #   Phase A — a root-context CLI invocation succeeds and drops to netclaw:
-#     `docker exec` (default user = root) running `netclaw --version` must exit 0,
-#     print a version (NOT the EACCES bundle-extraction error), and emit the
-#     launcher's drop breadcrumb on stderr (proving it re-execed as netclaw).
+#     `docker exec` (default user = root) running `netclaw --version` must exit 0
+#     and print a version (NOT the EACCES bundle-extraction error).
 #
 #   Phase B — it leaves NOTHING root-owned under the netclaw home:
 #     After root-context CLI runs (incl. the offline `doctor`, which touches
@@ -87,13 +86,8 @@ echo "    stdout: $out (rc=$rc)"
 [[ "$rc" -eq 0 ]]            || fail "root 'netclaw --version' exited $rc (the bundle-extraction EACCES regression?)"
 echo "$out" | grep -qi 'netclaw' || fail "root 'netclaw --version' did not print a version: $out"
 
-# stderr must carry the launcher's drop breadcrumb -> proves it re-execed as netclaw.
-err="$(docker exec "$CONTAINER" netclaw --version 2>&1 1>/dev/null)" || true
-echo "    stderr: $err"
-echo "$err" | grep -qi "dropping to the 'netclaw' user" \
-    || fail "launcher did not report dropping to the netclaw user — is /usr/local/bin/netclaw still the self-dropping launcher?"
-
 # Belt-and-suspenders: the failure mode's signature must never appear.
+err="$(docker exec "$CONTAINER" netclaw --version 2>&1 1>/dev/null)" || true
 if echo "$out $err" | grep -qiE 'Failed to create directory|Error code: 13|Failure processing application bundle'; then
     fail "bundle-extraction failure signature present — root CLI was not dropped"
 fi
@@ -113,9 +107,6 @@ echo "==> Phase C: 'docker exec -u netclaw -- netclaw --version' (no double drop
 rc=0
 cout="$(docker exec -u netclaw "$CONTAINER" netclaw --version 2>/dev/null)" || rc=$?
 [[ "$rc" -eq 0 ]] || fail "'netclaw --version' as the netclaw user exited $rc"
-cerr="$(docker exec -u netclaw "$CONTAINER" netclaw --version 2>&1 1>/dev/null)" || true
-echo "$cerr" | grep -qi "dropping to the 'netclaw' user" \
-    && fail "launcher dropped privileges even though it was already the netclaw user (should exec directly)"
 assert_no_root_owned "Phase C"
 
 # ── Phase D: daemon still healthy after all the exec traffic ─────────────────
