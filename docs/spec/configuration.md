@@ -514,6 +514,10 @@ export NETCLAW_Session__MaxToolIterationsPerTurn="60"
     "openrouter": {
       "Type": "openrouter",
       "Endpoint": "https://openrouter.ai/api/v1"
+    },
+    "ds4": {
+      "Type": "ds4",
+      "Endpoint": "http://127.0.0.1:8000"
     }
   },
   "Models": {

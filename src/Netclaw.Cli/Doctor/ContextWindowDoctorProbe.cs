@@ -6,6 +6,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
+using Netclaw.Providers.Ds4;
 using Netclaw.Providers.SelfHosted;
 
 namespace Netclaw.Cli.Doctor;
@@ -32,6 +33,11 @@ internal static class ContextWindowDoctorProbe
             "openai-compatible" => new OpenAiCompatibleCapabilityResolver(
                 httpClient,
                 NullLogger<OpenAiCompatibleCapabilityResolver>.Instance,
+                entry.Endpoint,
+                entry.ApiKey?.Value),
+            "ds4" => new Ds4CapabilityResolver(
+                httpClient,
+                NullLogger<Ds4CapabilityResolver>.Instance,
                 entry.Endpoint,
                 entry.ApiKey?.Value),
             _ => null
