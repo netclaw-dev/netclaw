@@ -80,7 +80,7 @@ internal static class SessionMediaStore
         if (!TryGetMediaModality(mimeType, out var modality))
             return MediaWriteResult.Skipped;
 
-        var (dropped, reason) = NormalizeImage(ref bytes, ref mimeType, modality);
+        var (dropped, reason) = NormalizeImage(ref bytes, ref mimeType);
         if (dropped)
             return MediaWriteResult.Drop(reason); // caller surfaces the omission note
 
@@ -127,7 +127,7 @@ internal static class SessionMediaStore
         // file_read drops surface via the model-input handoff warning (the
         // RequestedCount > MediaReferences.Count gap), so the per-image reason
         // is not needed here.
-        if (NormalizeImage(ref bytes, ref mimeType, modality).Dropped)
+        if (NormalizeImage(ref bytes, ref mimeType).Dropped)
             return null;
 
         var fileName = CreateMediaFileName(mimeType);
@@ -136,15 +136,16 @@ internal static class SessionMediaStore
     }
 
     /// <summary>
-    /// Bounds an image in place before it is persisted. Non-image media is left
-    /// untouched. On a normalized result the bytes and MIME are replaced with the
-    /// bounded artifact (PNG may become JPEG). On a drop, returns the reason so the
-    /// caller can surface a visible omission note instead of silently discarding.
+    /// Resizes an oversized image in place before it is persisted. Only model-input
+    /// images (the ones base64-inlined into a request, hence the #1296 OOM surface) are
+    /// bounded — non-model-input media (audio/video, and bmp/tiff that the model can't
+    /// ingest) is left byte-for-byte. On a resize the bytes are replaced and the MIME is
+    /// updated only if the normalizer reports one (the rollback/bypass path leaves the
+    /// declared MIME intact). On a drop, returns the reason for the omission note.
     /// </summary>
-    private static (bool Dropped, string? Reason) NormalizeImage(
-        ref byte[] bytes, ref MimeType mimeType, MediaModality modality)
+    private static (bool Dropped, string? Reason) NormalizeImage(ref byte[] bytes, ref MimeType mimeType)
     {
-        if (modality != MediaModality.Image)
+        if (!MimeTypeCatalog.IsModelInputSupported(mimeType))
             return (false, null);
 
         var result = ImageNormalizer.Normalize(bytes, ImageOptions);
@@ -152,7 +153,8 @@ internal static class SessionMediaStore
             return (true, result.Reason);
 
         bytes = result.Bytes!;
-        mimeType = new MimeType(result.MediaType!);
+        if (result.MediaType is not null)
+            mimeType = new MimeType(result.MediaType);
         return (false, null);
     }
 

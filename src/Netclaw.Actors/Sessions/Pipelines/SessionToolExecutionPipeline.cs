@@ -899,6 +899,15 @@ internal static class SessionToolExecutionPipeline
                     continue;
                 }
 
+                // The budget reserved the SOURCE size; the persisted image was resized
+                // smaller, so release the headroom back to the batch — otherwise a batch
+                // of large-but-downscalable images would be rejected on source size even
+                // though the bounded artifacts easily fit.
+                var overReserved = reservedBytes - mediaRef.FileSizeBytes;
+                if (overReserved > 0)
+                    batchBudget.Release(overReserved);
+                reservedBytes = 0;
+
                 refs.Add(mediaRef);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

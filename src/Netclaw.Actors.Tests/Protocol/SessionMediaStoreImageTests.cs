@@ -29,8 +29,25 @@ public sealed class SessionMediaStoreImageTests
         Assert.NotNull(reference);
         var (w, h) = StoredDims(dir.Path, reference!);
         Assert.True(Math.Max(w, h) <= 1568, $"long edge {Math.Max(w, h)} exceeds cap");
-        Assert.Equal("image/jpeg", reference.MimeType.Value); // opaque → JPEG
+        Assert.Equal("image/png", reference.MimeType.Value); // source format preserved (no transcode)
         Assert.Equal(StoredBytes(dir.Path, reference).Length, reference.FileSizeBytes);
+    }
+
+    [Fact]
+    public void WriteDataContent_does_not_normalize_non_model_input_image()
+    {
+        using var dir = new TempDir();
+        // BMP/TIFF are MediaKind.Image but NOT model-input-eligible, so they're never
+        // inlined to a model — and must be stored byte-for-byte, not transcoded. (Real
+        // BMP bytes aren't needed: the gate keys on MIME, so PNG bytes labeled image/bmp
+        // prove the gate skips normalization.)
+        var src = GenerateImage(4000, 3000, SKEncodedImageFormat.Png);
+
+        var reference = SessionMediaStore.WriteDataContent(new DataContent(src, "image/bmp"), dir.Path).Reference;
+
+        Assert.NotNull(reference);
+        Assert.Equal("image/bmp", reference!.MimeType.Value); // unchanged
+        Assert.Equal(src, StoredBytes(dir.Path, reference)); // byte-for-byte, not resized
     }
 
     [Fact]

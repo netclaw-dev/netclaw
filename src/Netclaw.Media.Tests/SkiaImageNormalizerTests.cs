@@ -27,21 +27,21 @@ public sealed class SkiaImageNormalizerTests
         var (w, h) = Dims(result.Bytes!);
         Assert.True(Math.Max(w, h) <= 1568, $"long edge {Math.Max(w, h)} exceeds cap");
         Assert.True(Math.Abs((double)w / h - 4000.0 / 3000.0) < 0.02, $"aspect drifted: {w}x{h}");
-        Assert.Equal(MimeTypeCatalog.ImageJpeg, result.MediaType); // opaque → JPEG
+        Assert.Equal(MimeTypeCatalog.ImagePng, result.MediaType); // source format preserved (no transcode)
     }
 
     [Fact]
-    public void Oversized_by_bytes_is_shrunk_under_the_budget()
+    public void Within_dimension_cap_but_over_budget_is_dropped()
     {
+        // 1400px is within the long-edge cap, so there's nothing to resize. We won't
+        // transcode or quality-shrink to force a fit — so an over-budget image is dropped.
         var src = GenerateImage(1400, 1400, SKEncodedImageFormat.Png);
         var options = new ImageNormalizationOptions { MaxBase64Bytes = 40_000 };
 
         var result = _normalizer.Normalize(src, options);
 
-        Assert.Equal(ImageNormalizationOutcome.Normalized, result.Outcome);
-        Assert.True(
-            ImageDecodeMath.Base64Length(result.EncodedByteLength) <= options.MaxBase64Bytes,
-            $"encoded base64 {ImageDecodeMath.Base64Length(result.EncodedByteLength)} exceeds budget");
+        Assert.Equal(ImageNormalizationOutcome.Dropped, result.Outcome);
+        Assert.Null(result.Bytes);
     }
 
     [Fact]
@@ -90,9 +90,10 @@ public sealed class SkiaImageNormalizerTests
     }
 
     [Fact]
-    public void Unshrinkable_image_is_dropped_not_shipped_raw()
+    public void Image_that_exceeds_budget_after_resize_is_dropped_not_shipped_raw()
     {
-        // A budget no real JPEG can meet forces the shrink loop to exhaust and drop.
+        // Oversized in dimension AND a tiny budget: it resizes to the cap but the PNG
+        // still can't fit 500 bytes, and we won't transcode/quality-shrink — so it drops.
         var src = GenerateImage(2000, 2000, SKEncodedImageFormat.Png);
         var options = new ImageNormalizationOptions { MaxBase64Bytes = 500 };
 
@@ -114,11 +115,11 @@ public sealed class SkiaImageNormalizerTests
     }
 
     [Fact]
-    public void Large_jpeg_source_is_bounded_via_scaled_decode()
+    public void Large_jpeg_source_is_bounded_via_scaled_decode_and_stays_jpeg()
     {
         // 8000px long edge exercises the sample-size=4 scaled-decode path. Kept wide
         // (not square) so the test fixture itself stays modest while still proving the
-        // oversized source is reduced to a bounded output.
+        // oversized source is reduced to a bounded output — and stays JPEG (no transcode).
         var src = GenerateImage(8000, 2000, SKEncodedImageFormat.Jpeg, quality: 92);
 
         var result = _normalizer.Normalize(src, new ImageNormalizationOptions());
@@ -126,7 +127,39 @@ public sealed class SkiaImageNormalizerTests
         Assert.Equal(ImageNormalizationOutcome.Normalized, result.Outcome);
         var (w, h) = Dims(result.Bytes!);
         Assert.True(Math.Max(w, h) <= 1568, $"long edge {Math.Max(w, h)} exceeds cap");
+        Assert.Equal(MimeTypeCatalog.ImageJpeg, result.MediaType); // source format preserved
     }
+
+    [Fact]
+    public void Gif_is_passed_through_untouched_when_within_budget()
+    {
+        // Skia cannot re-encode GIF, so a within-budget GIF is passed through byte-for-byte
+        // (animation preserved), never decoded-to-still or transcoded to JPEG/PNG.
+        var result = _normalizer.Normalize(MinimalGif, new ImageNormalizationOptions());
+
+        Assert.Equal(ImageNormalizationOutcome.PassedThrough, result.Outcome);
+        Assert.Equal(MinimalGif, result.Bytes);
+        Assert.Equal(MimeTypeCatalog.ImageGif, result.MediaType);
+    }
+
+    [Fact]
+    public void Gif_over_budget_is_dropped_not_transcoded()
+    {
+        var options = new ImageNormalizationOptions { MaxBase64Bytes = 8 }; // smaller than any GIF
+
+        var result = _normalizer.Normalize(MinimalGif, options);
+
+        Assert.Equal(ImageNormalizationOutcome.Dropped, result.Outcome);
+        Assert.Null(result.Bytes);
+    }
+
+    // A valid 1x1 GIF89a (so SKCodec reports EncodedFormat == Gif without needing a real fixture file).
+    private static readonly byte[] MinimalGif =
+    [
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B
+    ];
 
     private static (int W, int H) Dims(byte[] bytes)
     {
