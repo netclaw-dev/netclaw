@@ -25,10 +25,7 @@ internal class NetclawValidatedAction<TDraft>
 
     public NetclawUiCommitResult Invoke()
     {
-        var trigger = LastCommitResult?.CanSaveAnyway == true
-            ? NetclawUiCommitTrigger.SaveAnyway
-            : _trigger;
-        LastCommitResult = _pipeline.CommitAsync(_commit, trigger)
+        LastCommitResult = _pipeline.CommitAsync(_commit, _trigger)
             .GetAwaiter()
             .GetResult();
         return LastCommitResult;

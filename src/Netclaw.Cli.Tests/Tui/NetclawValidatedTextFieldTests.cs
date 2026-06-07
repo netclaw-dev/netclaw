@@ -62,6 +62,29 @@ public sealed class NetclawValidatedTextFieldTests : IDisposable
     }
 
     [Fact]
+    public void Arrow_keys_edit_middle_of_text_before_commit()
+    {
+        var draft = string.Empty;
+        var file = SeedFile();
+        var component = CreateComponent(
+            readDraft: () => draft,
+            writeDraft: value => draft = value,
+            persist: (value, _) => WriteFile(file, value));
+
+        component.HandleInput(Key('a'));
+        component.HandleInput(Key('b'));
+        component.HandleInput(Key('c'));
+        component.HandleInput(Key(ConsoleKey.LeftArrow));
+        component.HandleInput(Key(ConsoleKey.LeftArrow));
+        component.HandleInput(Key('X'));
+        component.HandleInput(Key(ConsoleKey.Enter));
+
+        Assert.Equal("aXbc", draft);
+        Assert.Equal("aXbc", File.ReadAllText(file));
+        Assert.True(component.LastCommitResult?.Success);
+    }
+
+    [Fact]
     public void Enter_dynamic_failure_blocks_until_explicit_save_anyway()
     {
         var draft = string.Empty;

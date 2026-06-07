@@ -58,9 +58,15 @@ status line should be empty while the dialog is visible.
 
 ## Input Fields
 
-Validated text fields must show an obvious focused input affordance. At minimum,
-render a cursor marker in the field so operators can tell which input owns typed
-keys. Prefer the native text input cursor where the component can use it safely.
+Validated text fields must show an obvious focused input affordance using the
+native text input cursor. A fake rendered cursor marker is not acceptable when a
+native input control is available.
+
+Validated text fields must wrap the native Termina text input control for text
+editing. Do not reimplement text editing with a rendered text node. The native
+input owns cursor movement, Home/End, paste behavior, placeholder rendering,
+password masking, and the blinking cursor; the validated layer only stages draft
+values and intercepts commit triggers such as Enter.
 
 ## Validation Result Shape
 

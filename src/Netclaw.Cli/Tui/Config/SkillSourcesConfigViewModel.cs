@@ -1484,7 +1484,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
                 source.Kind,
                 source.Name,
                 FormatSourceLabel(source),
-                source.StatusText,
+                FormatSourceDetail(source),
                 source.StatusTone));
         }
 
@@ -1765,9 +1765,39 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
     private static string FormatSourceLabel(SkillSourceDisplay source)
     {
-        var kind = source.Kind == SkillSourceKind.LocalFolder ? "local" : "server";
         var enabled = source.Enabled ? "x" : " ";
-        return $"[{enabled}] {source.Name,-18} {kind,-6} {TruncateMiddle(source.Location, 38)}";
+        return $"[{enabled}] {FormatDisplayName(source.Name)}";
+    }
+
+    private static string FormatSourceDetail(SkillSourceDisplay source)
+    {
+        if (source.Kind == SkillSourceKind.LocalFolder)
+            return $"{TruncateMiddle(source.Location, 58)}  |  {source.StatusText}";
+
+        var auth = source.HasApiKey ? "Token configured" : "No auth";
+        return $"{TruncateMiddle(HostOrLocation(source.Location), 42)}  |  {auth}";
+    }
+
+    private static string FormatDisplayName(string value)
+    {
+        var parts = value
+            .Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(static part => !IsTopLevelDomainToken(part))
+            .Select(static part => char.ToUpperInvariant(part[0]) + part[1..])
+            .ToArray();
+
+        return parts.Length == 0 ? value : string.Join(' ', parts);
+    }
+
+    private static bool IsTopLevelDomainToken(string value)
+        => value is "com" or "net" or "org" or "io" or "dev";
+
+    private static string HostOrLocation(string value)
+    {
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && !string.IsNullOrWhiteSpace(uri.Host))
+            return uri.Host;
+
+        return value;
     }
 
     private static string ResolveLocalDisplayPath(ExternalSkillSource source)

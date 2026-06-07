@@ -284,7 +284,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             SkillSourcesCommitFactory.AddRemoteToken(ViewModel),
             _commitPipeline,
             "(empty)",
-            static _ => "(new token entered)");
+            isPassword: true);
 
     private NetclawValidatedTextField EnsureAddRemoteNameField()
         => _addRemoteNameField ??= new NetclawValidatedTextField(
@@ -343,8 +343,17 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         var index = IndexOf(rows, row);
         var focused = index == ViewModel.SelectedRow.Value;
         var prefix = focused ? "> " : "  ";
-        var color = focused ? Color.Cyan : ToColor(row.Tone);
-        return Text($"  {prefix}{row.Label,-68} {row.Detail}", color);
+        if (row.SourceKind is not null)
+        {
+            var primaryColor = focused ? Color.Cyan : Color.White;
+            var detailColor = row.Tone == ConfigStatusTone.Warning ? Color.Yellow : Color.Gray;
+            return Layouts.Vertical()
+                .WithChild(Text($"  {prefix}{row.Label}", primaryColor))
+                .WithChild(Text($"      {row.Detail}", detailColor));
+        }
+
+        var color = focused ? Color.Cyan : Color.White;
+        return Text($"  {prefix}{row.Label,-28} {row.Detail}", color);
     }
 
     private ILayoutNode DetailRow(SkillSourceDetailRow row)

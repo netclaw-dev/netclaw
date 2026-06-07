@@ -70,6 +70,7 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("/tmp/netclaw smoke-");
         input.EnqueuePaste("skills");
+        input.EnqueueKey(ConsoleKey.LeftArrow);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -93,8 +94,7 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var screen = terminal.ToString();
         Assert.True(screen.Contains("Folder path", StringComparison.Ordinal),
             $"Expected folder path input label in terminal output. Screen:\n{terminal}");
-        Assert.True(screen.Contains("Type here...|", StringComparison.Ordinal),
-            $"Expected visible empty input placeholder in terminal output. Screen:\n{terminal}");
+        Assert.DoesNotContain("Type here...|", screen, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -180,10 +180,27 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         var screen = terminal.ToString();
         Assert.True(screen.Contains("Server URL", StringComparison.Ordinal),
             $"Expected server URL input label in terminal output. Screen:\n{terminal}");
-        Assert.True(screen.Contains("Type here...|", StringComparison.Ordinal),
-            $"Expected visible empty input placeholder in terminal output. Screen:\n{terminal}");
+        Assert.DoesNotContain("Type here...|", screen, StringComparison.Ordinal);
         Assert.True(screen.Contains("https://github.com/netclaw-dev/skill-server", StringComparison.Ordinal),
             $"Expected skill-server project callout in terminal output. Screen:\n{terminal}");
+    }
+
+    [Fact]
+    public async Task Skill_sources_remote_inventory_row_uses_readable_metadata_lines()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"SkillFeeds\":{\"Feeds\":[{\"Name\":\"skillserver-testlab-petabridge-net\",\"Url\":\"https://skillserver.testlab.petabridge.net\",\"Enabled\":true,\"TimeoutSeconds\":30}]}} ");
+        var app = CreateSkillSourcesApp(out var input, out _, out var terminal);
+
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+        Assert.Contains("Skillserver Testlab Petabridge", screen, StringComparison.Ordinal);
+        Assert.Contains("skillserver.testlab.petabridge.net  |  No auth", screen, StringComparison.Ordinal);
+        Assert.DoesNotContain("server https://skillserver", screen, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
