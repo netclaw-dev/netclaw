@@ -513,13 +513,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (entry.Transport is not "stdio" && updateStatusOnAuthFailure && entry.Url is not null)
         {
             var hasTokens = _oauthService.GetTokenSet(name) is not null;
-            var hasStaticHeaders = entry.Headers?.Any(h =>
-                h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) == true;
+            var hasStaticHeaders = entry.Headers is { Count: > 0 };
 
-            // Skip OAuth discovery if the user has already configured static auth headers.
-            // Without this check, servers that return 401 + WWW-Authenticate with
-            // resource_metadata= block connections that should succeed with the
-            // configured bearer token. See #1350.
+            // Skip OAuth discovery when the user has configured any static headers.
+            // The probe doesn't send user-configured headers, so its 401 response
+            // is misleading — the real connection (with headers) may succeed. Covers
+            // Authorization, X-API-Key, and any other auth mechanism. See #1350.
             if (!hasTokens && !hasStaticHeaders)
             {
                 var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);

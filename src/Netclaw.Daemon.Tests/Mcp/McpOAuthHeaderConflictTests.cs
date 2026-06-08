@@ -20,10 +20,10 @@ using Xunit;
 namespace Netclaw.Daemon.Tests.Mcp;
 
 /// <summary>
-/// Regression tests for GitHub issue #1350: when an operator configures a static
-/// <c>Authorization</c> header on an HTTP MCP server, the daemon must NOT block
-/// the connection with "Awaiting Auth" even if the server's OAuth discovery probe
-/// returns metadata.
+/// Regression tests for GitHub issue #1350: when an operator configures static
+/// headers on an HTTP MCP server, the daemon must NOT block the connection with
+/// "Awaiting Auth" even if the server's OAuth discovery probe returns metadata.
+/// The probe doesn't send user-configured headers, so its 401 is misleading.
 /// </summary>
 public sealed class McpOAuthHeaderConflictTests : IDisposable
 {
@@ -61,6 +61,43 @@ public sealed class McpOAuthHeaderConflictTests : IDisposable
             Assert.NotEqual(McpConnectionState.AwaitingAuth, status.State);
             Assert.DoesNotContain("OAuth", status.ErrorMessage, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("authorization", status.ErrorMessage, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            await manager.StopAsync(ct);
+        }
+    }
+
+    /// <summary>
+    /// Non-Authorization headers (e.g. X-API-Key) are equally valid auth mechanisms.
+    /// The OAuth probe doesn't send them, so its 401 is unreliable — skip discovery.
+    /// </summary>
+    [Fact]
+    public async Task NonAuthorizationHeader_WhenServerReturnsOAuthMetadata_StillConnects()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var ct = cts.Token;
+
+        var entry = new McpServerEntry
+        {
+            Transport = "http",
+            Url = "https://mcp.example.com",
+            Enabled = true,
+            Headers = new Dictionary<string, SensitiveString>
+            {
+                ["X-API-Key"] = new SensitiveString("sk-my-api-key"),
+            },
+        };
+
+        using var manager = CreateManager("mcp-apikey", entry, CreateDiscoveryClientThatReturnsOAuthHints());
+        try
+        {
+            await manager.StartAsync(ct);
+
+            var status = manager.GetServerStatuses()[new McpServerName("mcp-apikey")];
+
+            Assert.NotEqual(McpConnectionState.AwaitingAuth, status.State);
+            Assert.DoesNotContain("OAuth", status.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
