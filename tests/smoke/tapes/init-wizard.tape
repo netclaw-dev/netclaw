@@ -130,6 +130,9 @@ Enter
 Wait+Screen@240s /Ready  \|  qwen2:0.5b/
 Ctrl+Q
 
+# VHS's screen scraper needs a beat to pick up the restored main buffer
+# after the TUI tears down the alternate screen (CSI ?1049l).
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 # Sanity: re-check at the prompt that init reported success.
