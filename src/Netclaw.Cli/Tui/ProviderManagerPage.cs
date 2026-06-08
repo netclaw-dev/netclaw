@@ -253,7 +253,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode($"  {"",2}{"Provider",-36} {"Auth",-12} Endpoint")
                 .WithForeground(Color.White).Bold())
-            .WithChild(_providerList);
+            .WithChild(_providerList.WithFillHeight());
     }
 
     private ILayoutNode BuildAddSelectTypeView()

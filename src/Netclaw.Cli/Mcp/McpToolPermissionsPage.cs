@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpToolPermissionsPage.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -20,6 +20,8 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     private SelectionListNode<string>? _serverList;
     private DynamicLayoutNode? _contentNode;
     private DynamicLayoutNode? _footerNode;
+    private DynamicLayoutNode? _toolRowsNode;
+    private ScrollableContainerNode? _toolScrollNode;
     private readonly CompositeDisposable _stepSubs = [];
     private int _gridCursor;
     private bool _confirmingSave;
@@ -62,6 +64,8 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         _contentNode = new DynamicLayoutNode(() =>
         {
             _serverList = null;
+            _toolScrollNode = null;
+            _toolRowsNode = null;
             _stepSubs.Clear();
 
             return ViewModel.CurrentState.Value switch
@@ -78,7 +82,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             .Subscribe(_ => _contentNode.Invalidate())
             .DisposeWith(Subscriptions);
 
-        return _contentNode;
+        return _contentNode.Fill();
     }
 
     private ILayoutNode BuildLoading()
@@ -117,7 +121,7 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("Select a server:").WithForeground(Color.White))
-            .WithChild(_serverList);
+            .WithChild(_serverList.WithFillHeight());
     }
 
     private ILayoutNode BuildToolGrid()
@@ -126,7 +130,6 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
         var audienceLabel = ViewModel.SelectedAudience.ToWireValue();
         var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
         var serverDefault = ViewModel.GetServerDefault();
-        var tools = ViewModel.DiscoveredTools;
 
         var maxRow = TotalRows - 1;
         if (_gridCursor > maxRow) _gridCursor = maxRow;
@@ -167,8 +170,24 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
 
         layout = layout.WithSpacing(1);
 
-        // Tool rows
+        // Tool rows live in a separate DynamicLayoutNode so cursor navigation
+        // can invalidate just the rows without resetting the scroll container.
+        _toolRowsNode = new DynamicLayoutNode(BuildToolRows);
+        _toolScrollNode = new ScrollableContainerNode()
+            .WithAutoScroll(AutoScrollPolicy.None)
+            .WithContent(_toolRowsNode);
+        _toolScrollNode.Fill();
+        layout = layout.WithChild(_toolScrollNode);
+
+        return layout;
+    }
+
+    private ILayoutNode BuildToolRows()
+    {
+        var tools = ViewModel.DiscoveredTools;
+        var serverAllowed = ViewModel.IsServerAllowedForSelectedAudience();
         var maxToolNameLen = tools.Count > 0 ? tools.Max(t => t.Length) : 0;
+        var rows = Layouts.Vertical();
 
         for (var i = 0; i < tools.Count; i++)
         {
@@ -194,10 +213,26 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
                 node = node.WithForeground(Color.White);
             else
                 node = node.WithForeground(Color.BrightBlack);
-            layout = layout.WithChild(node);
+            rows = rows.WithChild(node);
         }
 
-        return layout;
+        return rows;
+    }
+
+    // Adjusts the scroll container so the cursor row stays in the visible window.
+    // Called after each Up/Down keypress; uses ContentHeight/MaxScroll from the
+    // previous render (valid as long as the tool list hasn't changed size).
+    private void EnsureToolCursorVisible()
+    {
+        if (_toolScrollNode is null || _gridCursor < FirstToolRow) return;
+        var toolIdx = _gridCursor - FirstToolRow;
+        if (_toolScrollNode.MaxScroll == 0) return;
+        var viewportH = _toolScrollNode.ContentHeight - _toolScrollNode.MaxScroll;
+        if (viewportH <= 0) return;
+        if (toolIdx < _toolScrollNode.ScrollOffset)
+            _toolScrollNode.ScrollTo(toolIdx);
+        else if (toolIdx >= _toolScrollNode.ScrollOffset + viewportH)
+            _toolScrollNode.ScrollTo(toolIdx - viewportH + 1);
     }
 
     private static Color ColorForMode(ToolApprovalMode mode) => mode switch
@@ -299,12 +334,14 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
             {
                 case ConsoleKey.UpArrow:
                     if (_gridCursor > 0) _gridCursor--;
-                    InvalidateAndRedraw();
+                    EnsureToolCursorVisible();
+                    InvalidateCursorAndRedraw();
                     return;
 
                 case ConsoleKey.DownArrow:
                     if (_gridCursor < TotalRows - 1) _gridCursor++;
-                    InvalidateAndRedraw();
+                    EnsureToolCursorVisible();
+                    InvalidateCursorAndRedraw();
                     return;
 
                 case ConsoleKey.RightArrow:
@@ -447,6 +484,13 @@ public sealed class McpToolPermissionsPage : ReactivePage<McpToolPermissionsView
     private void InvalidateAndRedraw()
     {
         _contentNode?.Invalidate();
+        _footerNode?.Invalidate();
+        ViewModel.RequestRedraw();
+    }
+
+    private void InvalidateCursorAndRedraw()
+    {
+        _toolRowsNode?.Invalidate();
         _footerNode?.Invalidate();
         ViewModel.RequestRedraw();
     }

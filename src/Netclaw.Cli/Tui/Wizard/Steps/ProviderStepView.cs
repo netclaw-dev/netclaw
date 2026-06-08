@@ -24,8 +24,6 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ProviderStepView : IWizardStepView
 {
-    private const int MaxDisplayedModels = 30;
-
     private readonly IClipboardService? _clipboardService;
 
     private SelectionListNode<string>? _providerList;
@@ -103,7 +101,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Choose your LLM provider:").WithForeground(Color.White))
-            .WithChild(_providerList);
+            .WithChild(_providerList.WithFillHeight());
     }
 
     private ILayoutNode BuildAuthMethodSelection(ProviderStepViewModel vm, StepViewCallbacks callbacks)
@@ -248,15 +246,7 @@ public sealed class ProviderStepView : IWizardStepView
             return BuildManualModelInput(vm, callbacks);
 
         var models = vm.DiscoveredModels;
-        var items = new List<string>();
-
-        var displayCount = Math.Min(models.Count, MaxDisplayedModels);
-        for (var i = 0; i < displayCount; i++)
-            items.Add(models[i].ModelId.Value);
-
-        if (models.Count > MaxDisplayedModels)
-            items.Add($"... and {models.Count - MaxDisplayedModels} more (enter manually)");
-
+        var items = models.Select(m => m.ModelId.Value).ToList();
         items.Add("Enter model ID manually...");
 
         _modelList = Layouts.SelectionList(items)
@@ -272,7 +262,7 @@ public sealed class ProviderStepView : IWizardStepView
                 if (selected.Count > 0)
                 {
                     var choice = selected[0];
-                    if (choice == "Enter model ID manually..." || choice.StartsWith("... and ", StringComparison.Ordinal))
+                    if (choice == "Enter model ID manually...")
                     {
                         _manualModelEntry = true;
                         callbacks.InvalidateContent();
@@ -293,7 +283,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode(header).WithForeground(Color.White))
-            .WithChild(_modelList);
+            .WithChild(_modelList.WithFillHeight());
     }
 
     private ILayoutNode BuildManualModelInput(ProviderStepViewModel vm, StepViewCallbacks callbacks)

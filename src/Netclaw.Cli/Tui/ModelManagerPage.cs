@@ -201,7 +201,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode($"  Select provider for {ViewModel.SelectedRole ?? "role"}:")
                 .WithForeground(Color.White))
-            .WithChild(_providerList);
+            .WithChild(_providerList.WithFillHeight());
     }
 
     private ILayoutNode BuildDiscoverModels()
@@ -312,7 +312,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
         return Layouts.Vertical()
             .WithChild(new TextNode(title).WithForeground(Color.White))
-            .WithChild(_modelList);
+            .WithChild(_modelList.WithFillHeight());
     }
 
     private ILayoutNode BuildConfirmAssignment()
