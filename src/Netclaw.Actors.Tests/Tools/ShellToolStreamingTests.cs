@@ -99,7 +99,7 @@ public class ShellToolStreamingTests
         var (_, completion) = await CollectStreamAsync(_tool, args, ct: cts.Token);
 
         Assert.NotNull(completion);
-        Assert.Contains("timed out", completion.Result);
+        Assert.Contains("timed out after", completion.Result);
     }
 
     [Fact]

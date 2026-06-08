@@ -377,6 +377,10 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
+            var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
+                ? context.RequestedTimeoutSeconds.Value
+                : _config.ShellTimeoutSeconds;
+
             var activityChannel = Channel.CreateUnbounded<ToolActivityUpdate>(
                 new UnboundedChannelOptions { SingleReader = true });
             var stdoutAcc = new BoundedOutputAccumulator(_config.MaxOutputChars);
@@ -405,9 +409,17 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 }
                 catch (OperationCanceledException)
                 {
-                    await KillAndDrainAsync(process, drainStdout, drainStderr);
-                    output.TryWrite(new ToolCompletedUpdate("Error: Command timed out."));
-                    return;
+                    // If the process already exited (pipes closed, output fully
+                    // accumulated) but ct fired in the narrow gap before
+                    // WaitForExitAsync returned, fall through to assemble the
+                    // valid accumulated output instead of discarding it.
+                    if (!process.HasExited)
+                    {
+                        await KillAndDrainAsync(process, drainStdout, drainStderr);
+                        output.TryWrite(new ToolCompletedUpdate(
+                            $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."));
+                        return;
+                    }
                 }
 
                 try { await Task.WhenAll(drainStdout, drainStderr); }
@@ -433,6 +445,14 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 output.TryWrite(new ToolCompletedUpdate(
                     $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}"));
             }
+        }
+        catch (Exception ex)
+        {
+            // Catch-all so an unexpected exception (e.g. from Window() or
+            // StringBuilder) surfaces as a tool-result error rather than
+            // silently faulting the fire-and-forget task and leaving the
+            // stream without a completion item.
+            output.TryWrite(new ToolCompletedUpdate($"Error: {ex.Message}"));
         }
         finally
         {
