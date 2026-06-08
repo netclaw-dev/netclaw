@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpClientManager.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -513,7 +513,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (entry.Transport is not "stdio" && updateStatusOnAuthFailure && entry.Url is not null)
         {
             var hasTokens = _oauthService.GetTokenSet(name) is not null;
-            if (!hasTokens)
+            var hasStaticHeaders = entry.Headers?.Any(h =>
+                h.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase)) == true;
+
+            // Skip OAuth discovery if the user has already configured static auth headers.
+            // Without this check, servers that return 401 + WWW-Authenticate with
+            // resource_metadata= block connections that should succeed with the
+            // configured bearer token. See #1350.
+            if (!hasTokens && !hasStaticHeaders)
             {
                 var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);
                 if (metadata is not null)
