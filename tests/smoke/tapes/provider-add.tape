@@ -66,9 +66,10 @@ Sleep 300ms
 Enter
 
 # ─── Back at provider list ───────────────────────────────────────────
-# StatusMessage on the list view: "Added provider 'smoke-add-ollama'.
-# Restart daemon for changes to take effect."
-Wait+Screen@10s /Added provider 'smoke-add-ollama'/
+# The persisted provider row is the durable post-add proof. Avoid anchoring
+# on the status footer: fill-height list changes can legitimately move or
+# truncate footer text on small/OS-specific VHS viewports.
+Wait+Screen@10s /smoke-add-ollama/
 Sleep 300ms
 
 # ─── Exit TUI ────────────────────────────────────────────────────────

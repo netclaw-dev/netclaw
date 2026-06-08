@@ -69,8 +69,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
     {
         return Layouts.Vertical()
             .WithSpacing(1)
-            .WithChild(BuildContent())
-            .WithChild(Layouts.Empty().Fill())
+            .WithChild(BuildContent().Fill())
             .WithChild(BuildStatusBar())
             .WithChild(BuildKeyBindings());
     }
