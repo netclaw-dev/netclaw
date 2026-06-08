@@ -1055,7 +1055,6 @@ static void ConfigureNativeSelection(TerminaBuilder termina)
     {
         options.PreferRawInput = true;
         options.ScrollInputMode = ScrollInputMode.AlternateScroll;
-        options.KittyKeyboardMode = KittyKeyboardMode.ReportAllKeysPlusDisambiguate;
         options.CtrlCHandlingMode = CtrlCHandlingMode.DoublePressWhenRawInput;
     });
 }
