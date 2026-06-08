@@ -38,77 +38,25 @@ internal static class BoundedOutputReader
     {
         if (budget <= 0)
         {
-            // Explicit opt-out: a non-positive budget disables truncation and
-            // reads the whole stream. Callers that bound via config never pass
-            // this; it exists for deliberate full-capture callers.
             var all = await reader.ReadToEndAsync(ct);
             return (all, false);
         }
 
-        // Split the budget: first half for the head, second half for the tail.
-        // Odd budget gives the extra char to the head. Computed without (budget +
-        // 1) so a near-int.MaxValue budget can't overflow to a negative headCap.
-        var headCap = budget / 2 + budget % 2;
-        var tailCap = budget / 2;
+        var acc = new BoundedOutputAccumulator(budget);
 
-        var head = new StringBuilder(Math.Min(headCap, 4096));
-
-        // Tail ring buffer, allocated lazily on first overflow past the head. The
-        // common case — output under the cap — never fills the head, so it never
-        // pays for the tail window at all.
-        char[]? tailBuf = null;
-        var tailStart = 0;  // index of the oldest retained char in the ring
-        var tailLen = 0;    // chars currently retained (<= tailCap)
-
-        long totalChars = 0; // total chars seen across all reads; long so a multi-GB
-                             // flood can't overflow the truncation check to a false negative
-
-        // Transient scratch buffer for the read loop: pooled so a long drain
-        // doesn't allocate it per call and it never lands on the LOH.
         var buf = ArrayPool<char>.Shared.Rent(4096);
         try
         {
             int read;
-            // ReadAsync(Memory<char>) returns a non-allocating ValueTask when the
-            // read completes synchronously (data already buffered) — unlike the
-            // Task<int> char[] overload, which allocates once per chunk.
             while ((read = await reader.ReadAsync(buf.AsMemory(), ct)) > 0)
-            {
-                totalChars += read;
-                var span = buf.AsSpan(0, read);
-
-                if (head.Length < headCap)
-                {
-                    var headChunk = Math.Min(headCap - head.Length, span.Length);
-                    head.Append(span[..headChunk]);
-                    span = span[headChunk..];
-                }
-
-                if (span.IsEmpty || tailCap == 0)
-                    continue;
-
-                tailBuf ??= new char[tailCap];
-                AppendToTailRing(tailBuf, span, ref tailStart, ref tailLen);
-            }
+                acc.Append(buf.AsSpan(0, read));
         }
         finally
         {
-            // clearArray: the scratch buffer held raw output (possibly secrets);
-            // wipe it before returning to the shared pool.
             ArrayPool<char>.Shared.Return(buf, clearArray: true);
         }
 
-        // Truncation only when total chars exceeded the full budget (head+tail),
-        // meaning some middle chars were discarded.
-        var truncated = totalChars > budget;
-
-        // Reconstruct in place on `head`: when truncated, the discarded middle is
-        // marked with a separator; otherwise head + tail is the full output.
-        if (truncated)
-            head.Append(Separator);
-        if (tailBuf is not null && tailLen > 0)
-            AppendRing(head, tailBuf, tailStart, tailLen);
-        return (head.ToString(), truncated);
+        return acc.Finish();
     }
 
     /// <summary>
@@ -133,10 +81,7 @@ internal static class BoundedOutputReader
         return string.Concat(text.AsSpan(0, headCap), Separator, text.AsSpan(text.Length - tailCap));
     }
 
-    // Separator marking the discarded middle of a truncated head+tail window.
-    // Uses the platform newline so it matches the line endings the rest of the
-    // captured output is assembled with (e.g. StringBuilder.AppendLine).
-    private static readonly string Separator = $"{Environment.NewLine}...{Environment.NewLine}";
+    internal static readonly string Separator = $"{Environment.NewLine}...{Environment.NewLine}";
 
     /// <summary>
     /// Writes <paramref name="span"/> into a ring buffer that retains only the
@@ -144,7 +89,7 @@ internal static class BoundedOutputReader
     /// call) rather than a per-char loop, so draining a very chatty child stays
     /// cheap regardless of how much it prints.
     /// </summary>
-    private static void AppendToTailRing(char[] ring, ReadOnlySpan<char> span, ref int start, ref int len)
+    internal static void AppendToTailRing(char[] ring, ReadOnlySpan<char> span, ref int start, ref int len)
     {
         var cap = ring.Length;
 
@@ -177,12 +122,66 @@ internal static class BoundedOutputReader
         }
     }
 
-    /// <summary>Appends a ring buffer's retained chars, oldest-first, to <paramref name="sb"/>.</summary>
-    private static void AppendRing(StringBuilder sb, char[] ring, int start, int len)
+    internal static void AppendRing(StringBuilder sb, char[] ring, int start, int len)
     {
         var first = Math.Min(len, ring.Length - start);
         sb.Append(ring, start, first);
         if (first < len)
             sb.Append(ring, 0, len - first);
+    }
+}
+
+/// <summary>
+/// Stateful head+tail accumulator that accepts incremental <c>Append</c> calls
+/// and produces the same bounded window as <see cref="BoundedOutputReader.DrainToWindowAsync"/>.
+/// Used by the streaming <c>ShellTool</c> path where pipe chunks must be fed to
+/// both the activity channel and the bounded capture simultaneously.
+/// </summary>
+internal sealed class BoundedOutputAccumulator
+{
+    private readonly int _budget;
+    private readonly int _headCap;
+    private readonly int _tailCap;
+    private readonly StringBuilder _head;
+    private char[]? _tailBuf;
+    private int _tailStart;
+    private int _tailLen;
+    private long _totalChars;
+
+    public BoundedOutputAccumulator(int budget)
+    {
+        _budget = budget;
+        _headCap = budget / 2 + budget % 2;
+        _tailCap = budget / 2;
+        _head = new StringBuilder(Math.Min(_headCap, 4096));
+    }
+
+    public void Append(ReadOnlySpan<char> chunk)
+    {
+        _totalChars += chunk.Length;
+        var span = chunk;
+
+        if (_head.Length < _headCap)
+        {
+            var headChunk = Math.Min(_headCap - _head.Length, span.Length);
+            _head.Append(span[..headChunk]);
+            span = span[headChunk..];
+        }
+
+        if (span.IsEmpty || _tailCap == 0)
+            return;
+
+        _tailBuf ??= new char[_tailCap];
+        BoundedOutputReader.AppendToTailRing(_tailBuf, span, ref _tailStart, ref _tailLen);
+    }
+
+    public (string Text, bool Truncated) Finish()
+    {
+        var truncated = _totalChars > _budget;
+        if (truncated)
+            _head.Append(BoundedOutputReader.Separator);
+        if (_tailBuf is not null && _tailLen > 0)
+            BoundedOutputReader.AppendRing(_head, _tailBuf, _tailStart, _tailLen);
+        return (_head.ToString(), truncated);
     }
 }

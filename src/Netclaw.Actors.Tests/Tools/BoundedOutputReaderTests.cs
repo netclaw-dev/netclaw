@@ -111,6 +111,66 @@ public class BoundedOutputReaderTests
         Assert.DoesNotContain("M", result);
     }
 
+    // ── BoundedOutputAccumulator ──
+
+    [Fact]
+    public void Accumulator_short_input_returned_verbatim()
+    {
+        var acc = new BoundedOutputAccumulator(100);
+        acc.Append("hello world".AsSpan());
+        var (text, truncated) = acc.Finish();
+        Assert.Equal("hello world", text);
+        Assert.False(truncated);
+    }
+
+    [Fact]
+    public void Accumulator_long_input_truncates_with_head_and_tail()
+    {
+        var acc = new BoundedOutputAccumulator(200);
+        acc.Append(new string('H', 100).AsSpan());
+        acc.Append(new string('M', 5000).AsSpan());
+        acc.Append(new string('T', 100).AsSpan());
+        var (text, truncated) = acc.Finish();
+
+        Assert.True(truncated);
+        Assert.StartsWith(new string('H', 100), text);
+        Assert.EndsWith(new string('T', 100), text);
+        Assert.Contains("...", text);
+        Assert.DoesNotContain("M", text);
+    }
+
+    [Fact]
+    public void Accumulator_many_small_chunks_wraps_tail_ring()
+    {
+        var acc = new BoundedOutputAccumulator(10);
+        acc.Append("ABC".AsSpan());
+        acc.Append("DEF".AsSpan());
+        acc.Append("GHI".AsSpan());
+        acc.Append("JKL".AsSpan());
+        acc.Append("MNO".AsSpan());
+        var (text, truncated) = acc.Finish();
+
+        Assert.True(truncated);
+        Assert.Equal($"ABCDE{Environment.NewLine}...{Environment.NewLine}KLMNO", text);
+    }
+
+    [Fact]
+    public async Task Accumulator_matches_drain_output()
+    {
+        var input = new string('H', 100) + new string('M', 5000) + new string('T', 100);
+        const int budget = 200;
+
+        var (drainText, drainTruncated) = await BoundedOutputReader.DrainToWindowAsync(
+            new StringReader(input), budget, CancellationToken.None);
+
+        var acc = new BoundedOutputAccumulator(budget);
+        acc.Append(input.AsSpan());
+        var (accText, accTruncated) = acc.Finish();
+
+        Assert.Equal(drainText, accText);
+        Assert.Equal(drainTruncated, accTruncated);
+    }
+
     // Hands out at most chunkSize chars per read so tests can exercise the tail
     // ring's incremental wrap path — real pipe reads arrive in arbitrary slices,
     // not the single 4KB gulp a StringReader gives.
