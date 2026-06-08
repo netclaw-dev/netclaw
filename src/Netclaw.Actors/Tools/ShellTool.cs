@@ -381,6 +381,16 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 ? context.RequestedTimeoutSeconds.Value
                 : _config.ShellTimeoutSeconds;
 
+            // Wall-clock ceiling: the watchdog's inactivity budget resets on
+            // each activity item (keeping chatty commands alive), but a command
+            // that trickles output can run indefinitely without a hard cap.
+            // This CTS enforces the same absolute wall-clock limit that the
+            // non-streaming path uses via its own CancelAfter — whichever
+            // fires first (inactivity watchdog or wall-clock) wins.
+            using var wallClockCts = new CancellationTokenSource();
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, wallClockCts.Token);
+            wallClockCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
+
             var activityChannel = Channel.CreateUnbounded<ToolActivityUpdate>(
                 new UnboundedChannelOptions { SingleReader = true });
             var stdoutAcc = new BoundedOutputAccumulator(_config.MaxOutputChars);
@@ -402,15 +412,15 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
                 try
                 {
-                    await foreach (var activity in activityChannel.Reader.ReadAllAsync(ct))
+                    await foreach (var activity in activityChannel.Reader.ReadAllAsync(linkedCts.Token))
                         output.TryWrite(activity);
 
-                    await process.WaitForExitAsync(ct);
+                    await process.WaitForExitAsync(linkedCts.Token);
                 }
                 catch (OperationCanceledException)
                 {
                     // If the process already exited (pipes closed, output fully
-                    // accumulated) but ct fired in the narrow gap before
+                    // accumulated) but a token fired in the narrow gap before
                     // WaitForExitAsync returned, fall through to assemble the
                     // valid accumulated output instead of discarding it.
                     if (!process.HasExited)
