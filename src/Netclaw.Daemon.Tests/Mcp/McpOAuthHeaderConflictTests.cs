@@ -23,7 +23,8 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// Regression tests for GitHub issue #1350: when an operator configures static
 /// headers on an HTTP MCP server, the daemon must NOT block the connection with
 /// "Awaiting Auth" even if the server's OAuth discovery probe returns metadata.
-/// The probe doesn't send user-configured headers, so its 401 is misleading.
+/// The probe still runs (caching metadata for fallback), but the blocking gate
+/// is skipped so the real connection attempt — with the user's headers — decides.
 /// </summary>
 public sealed class McpOAuthHeaderConflictTests : IDisposable
 {
@@ -59,8 +60,6 @@ public sealed class McpOAuthHeaderConflictTests : IDisposable
             var status = manager.GetServerStatuses()[new McpServerName("mcp-static")];
 
             Assert.NotEqual(McpConnectionState.AwaitingAuth, status.State);
-            Assert.DoesNotContain("OAuth", status.ErrorMessage, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("authorization", status.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -69,8 +68,8 @@ public sealed class McpOAuthHeaderConflictTests : IDisposable
     }
 
     /// <summary>
-    /// Non-Authorization headers (e.g. X-API-Key) are equally valid auth mechanisms.
-    /// The OAuth probe doesn't send them, so its 401 is unreliable — skip discovery.
+    /// Non-Authorization headers (e.g. X-API-Key) also suppress the pre-flight block.
+    /// The probe still caches metadata, but the real connection attempt decides.
     /// </summary>
     [Fact]
     public async Task NonAuthorizationHeader_WhenServerReturnsOAuthMetadata_StillConnects()
@@ -97,7 +96,6 @@ public sealed class McpOAuthHeaderConflictTests : IDisposable
             var status = manager.GetServerStatuses()[new McpServerName("mcp-apikey")];
 
             Assert.NotEqual(McpConnectionState.AwaitingAuth, status.State);
-            Assert.DoesNotContain("OAuth", status.ErrorMessage, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

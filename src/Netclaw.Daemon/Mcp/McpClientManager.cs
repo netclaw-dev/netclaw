@@ -513,16 +513,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (entry.Transport is not "stdio" && updateStatusOnAuthFailure && entry.Url is not null)
         {
             var hasTokens = _oauthService.GetTokenSet(name) is not null;
-            var hasStaticHeaders = entry.Headers is { Count: > 0 };
-
-            // Skip OAuth discovery when the user has configured any static headers.
-            // The probe doesn't send user-configured headers, so its 401 response
-            // is misleading — the real connection (with headers) may succeed. Covers
-            // Authorization, X-API-Key, and any other auth mechanism. See #1350.
-            if (!hasTokens && !hasStaticHeaders)
+            if (!hasTokens)
             {
+                // Always probe so metadata is cached for the runtime fallback
+                // in BuildConnectionFailureStatus. Only block the connection
+                // when no static headers are configured — if the user supplied
+                // headers, let the real connection attempt decide. See #1350.
                 var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);
-                if (metadata is not null)
+                if (metadata is not null && entry.Headers is not { Count: > 0 })
                 {
                     _statuses[name] = CreateAwaitingAuthStatus(name);
                     _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name.Value);
