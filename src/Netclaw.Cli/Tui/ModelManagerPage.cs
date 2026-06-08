@@ -361,6 +361,12 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         var keyInfo = key.KeyInfo;
         var state = ViewModel.CurrentState.Value;
 
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.RequestQuit();
+            return;
+        }
+
         if (keyInfo.Key == ConsoleKey.Escape)
         {
             ViewModel.GoBack();
