@@ -500,7 +500,10 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private static async Task KillAndDrainAsync(Process process, Task drainStdout, Task drainStderr)
     {
         try { process.Kill(entireProcessTree: true); }
-        catch (InvalidOperationException) { }
+        catch (InvalidOperationException ex)
+        {
+            Debug.WriteLine($"shell_execute: process kill skipped — {ex.Message}");
+        }
         catch (Win32Exception)
         {
             process.StandardOutput.Dispose();
