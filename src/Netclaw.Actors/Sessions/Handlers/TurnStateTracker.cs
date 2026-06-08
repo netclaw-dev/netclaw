@@ -12,8 +12,8 @@ namespace Netclaw.Actors.Sessions.Handlers;
 /// </summary>
 internal sealed class TurnStateTracker
 {
-    private const int MaxPreToolEmptyRetries = 2;
-    private const int MaxPostToolEmptyRetries = 3;
+    private const int MaxPreToolEmptyRetries = 5;
+    private const int MaxPostToolEmptyRetries = 8;
     private const int DuplicateToolThreshold = 3;
     private const double BudgetNudgeRatio = 0.75;
 
@@ -22,6 +22,22 @@ internal sealed class TurnStateTracker
     private const string ThinkingOnlyNudge =
         "Your last response contained only reasoning and no reply to the user. "
         + "Stop thinking and write your answer now as a normal assistant message.";
+
+    // A length-truncated response was cut off mid-output by the provider's token
+    // ceiling — it did not refuse to answer, so the "stop thinking" scold is
+    // counterproductive. Ask for brevity so the next attempt fits the budget.
+    private const string TruncatedResponseNudge =
+        "Your previous response was cut off before you finished — it reached the output length limit. "
+        + "Give your final answer directly now and keep any reasoning brief.";
+
+    private const string PreToolEmptyNudge =
+        "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
+        + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
+        + "MCP tools are not directly callable until loaded via search_tools.";
+
+    private const string PostToolEmptyNudge =
+        "You received tool results but did not respond. "
+        + "Continue working or produce your final response.";
 
     private const string EmptyResponseFailureMessage =
         "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
@@ -161,13 +177,26 @@ internal sealed class TurnStateTracker
     /// The LLM produced no reply text and no tool calls. Determine what the
     /// actor should do. Expects <paramref name="kind"/> to be
     /// <see cref="LlmResponseKind.ThinkingOnly"/> or
-    /// <see cref="LlmResponseKind.Empty"/>; a thinking-only response gets a
-    /// nudge telling the model to surface its answer.
+    /// <see cref="LlmResponseKind.Empty"/>.
+    /// <para>
+    /// Consecutive counters track empty responses in the pre-tool and post-tool
+    /// phases independently. They are cleared by
+    /// <see cref="ResetEmptyResponseGuards"/> when the model initiates a tool
+    /// batch — legitimate thinking-only responses interleaved with tool work do
+    /// not accumulate toward the failure threshold, so reasoning models are not
+    /// penalised for their normal workflow.
+    /// </para>
+    /// <para>
+    /// <paramref name="truncated"/> is true when the provider reported a
+    /// length/token-limit finish reason. Such a response was cut off mid-output,
+    /// not refused, so it gets a brevity nudge rather than the "stop thinking"
+    /// scold.
+    /// </para>
     /// </summary>
-    public EmptyResponseAction EvaluateEmptyResponse(LlmResponseKind kind)
+    public EmptyResponseAction EvaluateEmptyResponse(
+        LlmResponseKind kind,
+        bool truncated)
     {
-        var hasThinking = kind == LlmResponseKind.ThinkingOnly;
-
         // Pre-tool: LLM hasn't done any tool work yet
         if (ToolIterationCount == 0)
         {
@@ -177,11 +206,7 @@ internal sealed class TurnStateTracker
                     EmptyResponseFailureMessage,
                     new InvalidOperationException("LLM produced repeated empty responses before any tool execution."));
 
-            return new EmptyResponseAction.Retry(hasThinking
-                ? ThinkingOnlyNudge
-                : "Your previous response was empty. If you need MCP capabilities, call search_tools(\"servers\") to pick a server "
-                  + "(for example browser, memory, or email), then call search_tools(\"<intent>\", server: \"<server_name>\") to load tools. "
-                  + "MCP tools are not directly callable until loaded via search_tools.");
+            return new EmptyResponseAction.Retry(SelectNudge(kind, truncated, preTool: true));
         }
 
         // Post-tool: nudge the model to produce its final reply
@@ -191,10 +216,16 @@ internal sealed class TurnStateTracker
                 EmptyResponseFailureMessage,
                 new InvalidOperationException("LLM produced repeated empty responses after tool execution."));
 
-        return new EmptyResponseAction.Retry(hasThinking
-            ? ThinkingOnlyNudge
-            : "You received tool results but did not respond. "
-              + "Continue working or produce your final response.");
+        return new EmptyResponseAction.Retry(SelectNudge(kind, truncated, preTool: false));
+    }
+
+    private static string SelectNudge(LlmResponseKind kind, bool truncated, bool preTool)
+    {
+        if (truncated)
+            return TruncatedResponseNudge;
+        if (kind == LlmResponseKind.ThinkingOnly)
+            return ThinkingOnlyNudge;
+        return preTool ? PreToolEmptyNudge : PostToolEmptyNudge;
     }
 }
 

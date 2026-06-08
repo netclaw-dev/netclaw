@@ -36,6 +36,7 @@ namespace Netclaw.Actors.SubAgents;
 public sealed class SubAgentActor : ReceiveActor, IWithTimers
 {
     internal const int DefaultMaxToolIterations = 30;
+
     private const string EmptyResponseMarker = "(no response)";
     private const string MalformedFinalOutputMessage = "Subagent produced malformed final output: it emitted unexecuted tool calls as text. This was not a timeout.";
     private const string MalformedFinalOutputNudge =
@@ -315,14 +316,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
             if (analysis.Kind is LlmResponseKind.ThinkingOnly or LlmResponseKind.Empty)
             {
-                switch (_turnState.EvaluateEmptyResponse(analysis.Kind))
+                var truncated = response.FinishReason == ChatFinishReason.Length;
+                switch (_turnState.EvaluateEmptyResponse(analysis.Kind, truncated))
                 {
                     case EmptyResponseAction.Retry retry:
                         _log.Warning(
-                            "SubAgent [{AgentName}] produced {Kind} response ({ThinkingChars} reasoning chars) — retrying with nudge",
+                            "SubAgent [{AgentName}] produced {Kind} response ({ThinkingChars} reasoning chars, truncated={Truncated}) — retrying with nudge",
                             _definition.Name,
                             analysis.Kind,
-                            analysis.ThinkingChars);
+                            analysis.ThinkingChars,
+                            truncated);
                         AddSystemNudge(retry.NudgeText);
                         FireLlmCall();
                         return;

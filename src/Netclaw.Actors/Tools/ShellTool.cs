@@ -3,9 +3,12 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading.Channels;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -237,6 +240,290 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
             var captured = BoundedOutputReader.Window(combined.ToString(), _config.MaxOutputChars);
             return $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}";
+        }
+    }
+
+    /// <summary>
+    /// Streams stdout/stderr as <see cref="ToolActivityUpdate"/> items while the
+    /// process runs, keeping the per-call inactivity watchdog alive. The terminal
+    /// <see cref="ToolCompletedUpdate"/> carries the same bounded head+tail result
+    /// as the non-streaming path.
+    /// </summary>
+    public override async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        [EnumeratorCancellation] CancellationToken ct = default)
+    {
+        // All items (activities + completion) are produced by the non-iterator
+        // helper and written into a channel. The iterator just relays them.
+        // This avoids the C# restriction against yield inside try/catch.
+        // The channel read does NOT pass ct: the core method handles cancellation
+        // internally and writes the error completion before completing the channel.
+        var channel = Channel.CreateUnbounded<ToolCallUpdate>(
+            new UnboundedChannelOptions { SingleReader = true });
+        _ = ExecuteStreamCoreAsync(arguments, context, channel.Writer, ct);
+
+        await foreach (var update in channel.Reader.ReadAllAsync(CancellationToken.None))
+            yield return update;
+    }
+
+    private async Task ExecuteStreamCoreAsync(
+        IDictionary<string, object?>? arguments,
+        ToolExecutionContext context,
+        ChannelWriter<ToolCallUpdate> output,
+        CancellationToken ct)
+    {
+        try
+        {
+            if (!TryParse(arguments, out var error, out var args))
+            {
+                output.TryWrite(new ToolCompletedUpdate(error));
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(args.Command))
+            {
+                output.TryWrite(new ToolCompletedUpdate("Error: 'command' parameter is required."));
+                return;
+            }
+
+            if (_commandPolicy is not null)
+            {
+                var commandDecision = _commandPolicy.Evaluate(args.Command);
+                if (!commandDecision.Allowed)
+                {
+                    output.TryWrite(new ToolCompletedUpdate(
+                        $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}"));
+                    return;
+                }
+            }
+
+            if (_pathPolicy?.CommandReferencesDeniedPath(args.Command, args.WorkingDirectory) == true)
+            {
+                output.TryWrite(new ToolCompletedUpdate(
+                    "Error: Command references a protected file path. Access denied by security policy."));
+                return;
+            }
+
+            var isWindows = OperatingSystem.IsWindows();
+            var psi = new ProcessStartInfo
+            {
+                FileName = isWindows ? "cmd.exe" : "/bin/bash",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                RedirectStandardInput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            if (isWindows)
+            {
+                psi.ArgumentList.Add("/c");
+                psi.ArgumentList.Add(args.Command);
+            }
+            else
+            {
+                psi.ArgumentList.Add("-c");
+                psi.ArgumentList.Add(args.Command);
+            }
+
+            var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
+            if (!string.IsNullOrWhiteSpace(resolvedCwd))
+            {
+                if (IsResolvedSessionDirectory(resolvedCwd, context.SessionDirectory))
+                {
+                    try
+                    {
+                        Directory.CreateDirectory(resolvedCwd);
+                    }
+                    catch (Exception ex) when (ex is ArgumentException
+                                                   or IOException
+                                                   or NotSupportedException
+                                                   or UnauthorizedAccessException
+                                                   or System.Security.SecurityException)
+                    {
+                        output.TryWrite(new ToolCompletedUpdate(
+                            $"Error preparing session working directory: {ex.Message}"));
+                        return;
+                    }
+                }
+                else if (!Directory.Exists(resolvedCwd))
+                {
+                    if (File.Exists(resolvedCwd))
+                    {
+                        output.TryWrite(new ToolCompletedUpdate(
+                            $"Error: Working directory '{resolvedCwd}' is a file, not a directory."));
+                        return;
+                    }
+
+                    var mkdirHint = isWindows ? $"mkdir \"{resolvedCwd}\"" : $"mkdir -p \"{resolvedCwd}\"";
+                    output.TryWrite(new ToolCompletedUpdate(
+                        $"Error: Working directory '{resolvedCwd}' does not exist. "
+                        + $"Create it first, e.g.: {mkdirHint}"));
+                    return;
+                }
+
+                psi.WorkingDirectory = resolvedCwd;
+            }
+
+            Process process;
+            try
+            {
+                process = Process.Start(psi)!;
+            }
+            catch (Exception ex)
+            {
+                output.TryWrite(new ToolCompletedUpdate($"Error starting process: {ex.Message}"));
+                return;
+            }
+
+            var effectiveTimeoutSeconds = context.RequestedTimeoutSeconds is > 0
+                ? context.RequestedTimeoutSeconds.Value
+                : _config.ShellTimeoutSeconds;
+
+            // Wall-clock ceiling: the watchdog's inactivity budget resets on
+            // each activity item (keeping chatty commands alive), but a command
+            // that trickles output can run indefinitely without a hard cap.
+            // This CTS enforces the same absolute wall-clock limit that the
+            // non-streaming path uses via its own CancelAfter — whichever
+            // fires first (inactivity watchdog or wall-clock) wins.
+            using var wallClockCts = new CancellationTokenSource();
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, wallClockCts.Token);
+            wallClockCts.CancelAfter(TimeSpan.FromSeconds(effectiveTimeoutSeconds));
+
+            var activityChannel = Channel.CreateUnbounded<ToolActivityUpdate>(
+                new UnboundedChannelOptions { SingleReader = true });
+            var stdoutAcc = new BoundedOutputAccumulator(_config.MaxOutputChars);
+            var stderrAcc = new BoundedOutputAccumulator(_config.MaxOutputChars);
+
+            using (process)
+            {
+                process.StandardInput.Close();
+
+                var drainStdout = DrainPipeToChannelAsync(
+                    process.StandardOutput, stdoutAcc, activityChannel.Writer, "stdout");
+                var drainStderr = DrainPipeToChannelAsync(
+                    process.StandardError, stderrAcc, activityChannel.Writer, "stderr");
+
+                _ = Task.WhenAll(drainStdout, drainStderr)
+                    .ContinueWith(
+                        _ => activityChannel.Writer.TryComplete(),
+                        TaskContinuationOptions.ExecuteSynchronously);
+
+                try
+                {
+                    await foreach (var activity in activityChannel.Reader.ReadAllAsync(linkedCts.Token))
+                        output.TryWrite(activity);
+
+                    await process.WaitForExitAsync(linkedCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    // If the process already exited (pipes closed, output fully
+                    // accumulated) but a token fired in the narrow gap before
+                    // WaitForExitAsync returned, fall through to assemble the
+                    // valid accumulated output instead of discarding it.
+                    if (!process.HasExited)
+                    {
+                        await KillAndDrainAsync(process, drainStdout, drainStderr);
+                        output.TryWrite(new ToolCompletedUpdate(
+                            $"Error: Command timed out after {effectiveTimeoutSeconds} seconds."));
+                        return;
+                    }
+                }
+
+                try { await Task.WhenAll(drainStdout, drainStderr); }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                {
+                    Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
+                }
+
+                var (stdoutText, _) = stdoutAcc.Finish();
+                var (stderrText, _) = stderrAcc.Finish();
+
+                var combined = new StringBuilder();
+                if (stdoutText.Length > 0)
+                    combined.Append(stdoutText);
+                if (stderrText.Length > 0)
+                {
+                    if (combined.Length > 0)
+                        combined.AppendLine();
+                    combined.Append(stderrText);
+                }
+
+                var captured = BoundedOutputReader.Window(combined.ToString(), _config.MaxOutputChars);
+                output.TryWrite(new ToolCompletedUpdate(
+                    $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}"));
+            }
+        }
+        catch (Exception ex)
+        {
+            // Catch-all so an unexpected exception (e.g. from Window() or
+            // StringBuilder) surfaces as a tool-result error rather than
+            // silently faulting the fire-and-forget task and leaving the
+            // stream without a completion item.
+            output.TryWrite(new ToolCompletedUpdate($"Error: {ex.Message}"));
+        }
+        finally
+        {
+            output.TryComplete();
+        }
+    }
+
+    private static readonly TimeSpan CoalesceInterval = TimeSpan.FromMilliseconds(500);
+
+    private static async Task DrainPipeToChannelAsync(
+        TextReader pipe,
+        BoundedOutputAccumulator accumulator,
+        ChannelWriter<ToolActivityUpdate> channel,
+        string phase)
+    {
+        var buf = ArrayPool<char>.Shared.Rent(4096);
+        var coalesced = new StringBuilder(4096);
+        var lastFlush = Stopwatch.GetTimestamp();
+        try
+        {
+            int read;
+            while ((read = await pipe.ReadAsync(buf.AsMemory(), CancellationToken.None)) > 0)
+            {
+                var span = buf.AsSpan(0, read);
+                accumulator.Append(span);
+                coalesced.Append(span);
+
+                if (Stopwatch.GetElapsedTime(lastFlush) >= CoalesceInterval)
+                {
+                    channel.TryWrite(new ToolActivityUpdate(phase, coalesced.ToString()));
+                    coalesced.Clear();
+                    lastFlush = Stopwatch.GetTimestamp();
+                }
+            }
+
+            if (coalesced.Length > 0)
+                channel.TryWrite(new ToolActivityUpdate(phase, coalesced.ToString()));
+        }
+        finally
+        {
+            ArrayPool<char>.Shared.Return(buf, clearArray: true);
+        }
+    }
+
+    private static async Task KillAndDrainAsync(Process process, Task drainStdout, Task drainStderr)
+    {
+        try { process.Kill(entireProcessTree: true); }
+        catch (InvalidOperationException ex)
+        {
+            Debug.WriteLine($"shell_execute: process kill skipped — {ex.Message}");
+        }
+        catch (Win32Exception)
+        {
+            process.StandardOutput.Dispose();
+            process.StandardError.Dispose();
+        }
+
+        try { await Task.WhenAll(drainStdout, drainStderr); }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+            Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
         }
     }
 

@@ -234,9 +234,9 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Repeated_pre_tool_empty_responses_fail_turn_and_allow_followup_prompt()
     {
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
+        // MaxPreToolEmptyRetries is 5, so 6 empty responses: 5 nudged retries + fail.
+        for (var i = 0; i < 6; i++)
+            _fakeChatClient.PlannedResponses.Enqueue([]);
 
         var sessionId = new SessionId("test-channel/pre-tool-empty");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -270,7 +270,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[fake] Response #7", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -282,12 +282,10 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             new FunctionCallContent("call-1", "web_search",
                 new Dictionary<string, object?> { ["query"] = "test" })
         ];
-        // Four post-tool empty responses: the first three are nudged and
-        // retried (MaxPostToolEmptyRetries), the fourth fails the turn.
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
+        // MaxPostToolEmptyRetries is 8, so 9 empty responses: 8 nudged
+        // retries + fail.
+        for (var i = 0; i < 9; i++)
+            _fakeChatClient.PlannedResponses.Enqueue([]);
 
         var sessionId = new SessionId("test-channel/post-tool-empty");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -321,7 +319,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("[fake] Response #6", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[fake] Response #11", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
