@@ -1,3 +1,37 @@
+#### 0.24.0-beta.1 2026-06-08 ####
+
+Netclaw v0.24.0-beta.1 — Shell streaming, media improvements, bug fixes, and dependency updates
+
+**Features**
+
+* **Shell streaming support** — `shell_execute` output now streams incrementally instead of waiting for full completion, fixing the hard 90s timeout for long-running commands. ([#1360](https://github.com/netclaw-dev/netclaw/pull/1360))
+
+**Bug Fixes**
+
+* **Bound per-turn empty/thinking-only response loops** — prevents agents from getting stuck in infinite loops of empty or thinking-only responses within a single turn. ([#1358](https://github.com/netclaw-dev/netclaw/pull/1358))
+
+* **MCP static Authorization header no longer triggers OAuth discovery** — when a static `Authorization` header is configured for MCP servers, Netclaw skips the OAuth discovery step, fixing conflicts with header-based auth. ([#1357](https://github.com/netclaw-dev/netclaw/pull/1357))
+
+* **Media resize at ingest only** — images are now resized once during ingestion instead of being re-inlined on every turn, improving performance and reducing redundant processing. ([#1296](https://github.com/netclaw-dev/netclaw/pull/1345))
+
+* **Secret placeholder writeback prevented** — file read/write tools no longer write back secret placeholders, fixing a data integrity issue. ([#1343](https://github.com/netclaw-dev/netclaw/pull/1343))
+
+* **TUI approval detail toggle remapped** — the approval detail toggle key is now `Ctrl+O` (was `Ctrl+V`), freeing up `Ctrl+V` for its expected use. ([#1362](https://github.com/netclaw-dev/netclaw/pull/1362))
+
+* **Model manager manual entry state reset** — fixed a bug where the model manager retained stale manual entry state, causing confusion during model selection. ([#1344](https://github.com/netclaw-dev/netclaw/pull/1344))
+
+* **Docker root-drop log cleanup** — removed noisy log output from the CLI launcher when running as root in Docker. ([#1342](https://github.com/netclaw-dev/netclaw/pull/1342))
+
+**Dependencies**
+
+* **Anthropic bumped to 12.27.0** — pulls in latest Anthropic SDK improvements. ([#1352](https://github.com/netclaw-dev/netclaw/pull/1352))
+
+* **Discord.Net bumped to 3.20.1** — updates Discord integration library. ([#1353](https://github.com/netclaw-dev/netclaw/pull/1353))
+
+* **Termina bumped to 0.11.0** — updates the terminal/session management library. ([#1354](https://github.com/netclaw-dev/netclaw/pull/1354))
+
+---
+
 #### 0.23.0 2026-06-06 ####
 
 Netclaw v0.23.0 — Beta channel, streaming-native chat, Docker improvements, and shell reliability fixes
