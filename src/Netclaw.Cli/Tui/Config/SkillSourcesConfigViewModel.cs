@@ -140,6 +140,24 @@ internal sealed record SkillSourceActionTarget(SkillSourceKind Kind, string Name
 
 internal sealed record LocalSkillScanDisplay(int Count, string? Warning);
 
+/// <summary>
+/// Lightweight result of a Skill Sources field commit attempt. Mirrors the inline
+/// validation pattern used by the Search config editor: structural failures carry an
+/// error tone, reachability-probe failures carry a warning tone that the page surfaces
+/// as a "save anyway" override dialog.
+/// </summary>
+internal sealed record SkillSourceCommitResult(bool Success, string Message, ConfigStatusTone Tone)
+{
+    public static SkillSourceCommitResult Ok(string message = "")
+        => new(true, message, ConfigStatusTone.Success);
+
+    public static SkillSourceCommitResult Failed(string message)
+        => new(false, message, ConfigStatusTone.Error);
+
+    public static SkillSourceCommitResult Warning(string message)
+        => new(false, message, ConfigStatusTone.Warning);
+}
+
 internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 {
     private const int DefaultFeedTimeoutSeconds = 30;
@@ -340,36 +358,36 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             : null;
     }
 
-    internal NetclawUiValidationResult ValidateSourceActionTarget(SkillSourceActionTarget? target)
+    internal SkillSourceCommitResult ValidateSourceActionTarget(SkillSourceActionTarget? target)
     {
         if (target is null)
-            return NetclawUiValidationResult.Failed("A skill source must be selected before changing it.");
+            return SkillSourceCommitResult.Failed("A skill source must be selected before changing it.");
 
         return _sources.Any(source => source.Kind == target.Kind && _nameComparer.Equals(source.Name, target.Name))
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed($"Skill source '{target.Name}' no longer exists in config.");
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed($"Skill source '{target.Name}' no longer exists in config.");
     }
 
-    internal NetclawUiValidationResult ValidateLocalSourceActionTarget(SkillSourceActionTarget? target)
+    internal SkillSourceCommitResult ValidateLocalSourceActionTarget(SkillSourceActionTarget? target)
     {
         var validation = ValidateSourceActionTarget(target);
         if (!validation.Success)
             return validation;
 
         return target!.Kind == SkillSourceKind.LocalFolder
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed("A local skill folder must be selected before changing symlink policy.");
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed("A local skill folder must be selected before changing symlink policy.");
     }
 
-    internal NetclawUiValidationResult ValidateRemoteSourceActionTarget(SkillSourceActionTarget? target)
+    internal SkillSourceCommitResult ValidateRemoteSourceActionTarget(SkillSourceActionTarget? target)
     {
         var validation = ValidateSourceActionTarget(target);
         if (!validation.Success)
             return validation;
 
         return target!.Kind == SkillSourceKind.RemoteSkillServer
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed("A remote skill server must be selected before changing remote settings.");
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed("A remote skill server must be selected before changing remote settings.");
     }
 
     internal void CommitToggleEnabled(SkillSourceActionTarget? target)
@@ -612,10 +630,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowChoiceScreen(SkillSourcesScreen.AddLocalSymlinks, 0);
     }
 
-    internal NetclawUiValidationResult ValidateAddLocalPathDraft(string value)
+    internal SkillSourceCommitResult ValidateAddLocalPathDraft(string value)
         => TryNormalizeExternalDirectory(value.Trim(), out _, out var error)
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed(error);
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed(error);
 
     internal void CommitAddLocalPathDraft(string value)
     {
@@ -623,12 +641,17 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ContinueAddLocalPath();
     }
 
-    internal void ApplyCommitResult(NetclawUiCommitResult result)
+    /// <summary>
+    /// Applies a commit result coming from a page-driven field commit. Structural errors
+    /// surface as a status line; a reachability-probe warning raises the "save anyway"
+    /// override dialog, mirroring the prior validated-commit pipeline behavior.
+    /// </summary>
+    internal void ApplyCommitResult(SkillSourceCommitResult result)
     {
         if (result.Success)
             return;
 
-        if (result.Stage == NetclawUiCommitStage.DynamicValidation && result.CanSaveAnyway)
+        if (result.Tone == ConfigStatusTone.Warning)
         {
             CaptureValidationEditTarget();
             ActiveValidationDialog.Value = new NetclawValidationDialogModel(
@@ -640,7 +663,177 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             return;
         }
 
-        SetStatus(result.Message, ToConfigTone(result.Tone));
+        SetStatus(result.Message, result.Tone);
+    }
+
+    // ---------------------------------------------------------------------
+    // Page-driven field commits.
+    //
+    // Each method below replaces a former validated-UI commit: read the staged
+    // draft, run structural validation, optionally run the reachability probe,
+    // then persist. Structural failures and probe warnings flow through
+    // ApplyCommitResult (status line / override dialog). These are the entry
+    // points the page calls on Enter / Space / Delete for each screen.
+    // ---------------------------------------------------------------------
+
+    internal void CommitAddLocalPath(string draft)
+        => CommitStructural(draft, ValidateAddLocalPathDraft, CommitAddLocalPathDraft);
+
+    internal void CommitAddLocalSymlinks(bool allowSymlinks)
+    {
+        var result = ValidateAddLocalSymlinksDraft(allowSymlinks);
+        if (!result.Success)
+        {
+            ApplyCommitResult(result);
+            return;
+        }
+
+        CommitAddLocalSymlinksDraft(allowSymlinks);
+    }
+
+    internal void CommitAddLocalName(string draft)
+        => CommitStructural(draft, ValidateAddLocalNameDraft, CommitAddLocalNameDraft);
+
+    internal void CommitAddRemoteUrl(string draft)
+        => CommitStructural(draft, ValidateAddRemoteUrlDraft, CommitAddRemoteUrlDraft);
+
+    internal void CommitAddRemoteAuth(SkillSourceAuthMode authMode)
+    {
+        var structural = ValidateAddRemoteAuthDraft(authMode);
+        if (!structural.Success)
+        {
+            ApplyCommitResult(structural);
+            return;
+        }
+
+        ReplaceAddRemoteAuthDraft(authMode);
+        var probe = ValidateAddRemoteAuthReachabilityAsync(authMode, CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        if (!probe.Success)
+        {
+            ApplyCommitResult(probe);
+            return;
+        }
+
+        CommitAddRemoteAuthDraft(authMode);
+    }
+
+    internal void CommitAddRemoteToken(string draft)
+    {
+        var structural = ValidateAddRemoteTokenDraft(draft);
+        if (!structural.Success)
+        {
+            ApplyCommitResult(structural);
+            return;
+        }
+
+        ReplaceDraft(draft);
+        var probe = ValidateAddRemoteTokenReachabilityAsync(draft, CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        if (!probe.Success)
+        {
+            ApplyCommitResult(probe);
+            return;
+        }
+
+        CommitAddRemoteTokenDraft(draft);
+    }
+
+    internal void CommitAddRemoteName(string draft)
+        => CommitStructural(draft, ValidateAddRemoteNameDraft, CommitAddRemoteNameDraft);
+
+    internal void CommitRenameSource(string draft)
+        => CommitStructural(draft, ValidateRenameSourceDraft, CommitRenameSourceDraft);
+
+    internal void CommitChangeLocation(string draft)
+    {
+        var structural = ValidateChangeLocationDraft(draft);
+        if (!structural.Success)
+        {
+            ApplyCommitResult(structural);
+            return;
+        }
+
+        ReplaceDraft(draft);
+        var probe = ValidateChangeLocationReachabilityAsync(draft, CancellationToken.None)
+            .AsTask().GetAwaiter().GetResult();
+        if (!probe.Success)
+        {
+            ApplyCommitResult(probe);
+            return;
+        }
+
+        CommitChangeLocationDraft(draft);
+    }
+
+    internal void CommitToggleEnabledAction()
+        => CommitSourceAction(ValidateSourceActionTarget, CommitToggleEnabled);
+
+    internal void CommitToggleLocalSymlinksAction()
+        => CommitSourceAction(ValidateLocalSourceActionTarget, CommitToggleLocalSymlinks);
+
+    internal void CommitCycleRemoteSyncIntervalAction()
+        => CommitSourceAction(ValidateRemoteSourceActionTarget, CommitCycleRemoteSyncInterval);
+
+    internal void CommitRemoveRemoteTokenAction()
+        => CommitSourceAction(ValidateRemoteSourceActionTarget, CommitRemoveRemoteToken);
+
+    internal void CommitRemoveSourceAction()
+        => CommitSourceAction(ValidateSourceActionTarget, CommitRemoveSource);
+
+    private void CommitStructural(
+        string draft,
+        Func<string, SkillSourceCommitResult> validate,
+        Action<string> persist)
+    {
+        var result = validate(draft);
+        if (!result.Success)
+        {
+            ApplyCommitResult(result);
+            return;
+        }
+
+        persist(draft);
+    }
+
+    private void CommitSourceAction(
+        Func<SkillSourceActionTarget?, SkillSourceCommitResult> validate,
+        Action<SkillSourceActionTarget?> persist)
+    {
+        var target = ReadCurrentSourceActionTarget();
+        var result = validate(target);
+        if (!result.Success)
+        {
+            ApplyCommitResult(result);
+            return;
+        }
+
+        persist(target);
+    }
+
+    /// <summary>
+    /// Persists the current draft without re-running the reachability probe. Invoked when
+    /// the user chooses "Save anyway" from the probe-warning override dialog. Dispatches by
+    /// the screen the dialog was raised over so the correct section writer runs.
+    /// </summary>
+    internal void SaveCurrentDraftAnyway()
+    {
+        ActiveValidationDialog.Value = null;
+        switch (Screen.Value)
+        {
+            case SkillSourcesScreen.AddRemoteAuth:
+                CommitAddRemoteAuthDraft(ReadAddRemoteAuthDraft());
+                break;
+            case SkillSourcesScreen.AddRemoteToken:
+                CommitAddRemoteTokenDraft(Draft.Value);
+                break;
+            case SkillSourcesScreen.ChangeLocation:
+                CommitChangeLocationDraft(Draft.Value);
+                break;
+            default:
+                RequestRedraw();
+                break;
+        }
     }
 
     internal void DismissValidationDialog()
@@ -718,10 +911,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         MarkDirty();
     }
 
-    internal NetclawUiValidationResult ValidateAddLocalSymlinksDraft(bool value)
+    internal SkillSourceCommitResult ValidateAddLocalSymlinksDraft(bool value)
         => _pendingLocalPath is null
-            ? NetclawUiValidationResult.Failed("Local folder path is required before choosing symlink policy.")
-            : NetclawUiValidationResult.Passed();
+            ? SkillSourceCommitResult.Failed("Local folder path is required before choosing symlink policy.")
+            : SkillSourceCommitResult.Ok();
 
     internal void CommitAddLocalSymlinksDraft(bool value)
     {
@@ -762,15 +955,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Added local skill folder '{name}'.");
     }
 
-    internal NetclawUiValidationResult ValidateAddLocalNameDraft(string value)
+    internal SkillSourceCommitResult ValidateAddLocalNameDraft(string value)
     {
         if (_pendingLocalPath is null)
-            return NetclawUiValidationResult.Failed("Local folder path is required before adding a source.");
+            return SkillSourceCommitResult.Failed("Local folder path is required before adding a source.");
 
         var name = NormalizeSourceName(value);
         return ValidateNewSourceName(name, null, out var error)
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed(error);
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed(error);
     }
 
     internal void CommitAddLocalNameDraft(string value)
@@ -807,10 +1000,10 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, 0);
     }
 
-    internal NetclawUiValidationResult ValidateAddRemoteUrlDraft(string value)
+    internal SkillSourceCommitResult ValidateAddRemoteUrlDraft(string value)
         => TryNormalizeFeedUrl(value.Trim(), out _, out var error)
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed(error);
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed(error);
 
     internal void CommitAddRemoteUrlDraft(string value)
     {
@@ -846,26 +1039,26 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         MarkDirty();
     }
 
-    internal NetclawUiValidationResult ValidateAddRemoteAuthDraft(SkillSourceAuthMode value)
+    internal SkillSourceCommitResult ValidateAddRemoteAuthDraft(SkillSourceAuthMode value)
         => _pendingRemoteUrl is null
-            ? NetclawUiValidationResult.Failed("Skill server URL is required before testing a source.")
-            : NetclawUiValidationResult.Passed();
+            ? SkillSourceCommitResult.Failed("Skill server URL is required before testing a source.")
+            : SkillSourceCommitResult.Ok();
 
-    internal ValueTask<NetclawUiValidationResult> ValidateAddRemoteAuthReachabilityAsync(
+    internal ValueTask<SkillSourceCommitResult> ValidateAddRemoteAuthReachabilityAsync(
         SkillSourceAuthMode value,
         CancellationToken ct)
     {
         if (value == SkillSourceAuthMode.BearerToken)
-            return ValueTask.FromResult(NetclawUiValidationResult.Passed());
+            return ValueTask.FromResult(SkillSourceCommitResult.Ok());
 
         if (_pendingRemoteUrl is null)
-            return ValueTask.FromResult(NetclawUiValidationResult.Failed("Skill server URL is required before testing a source."));
+            return ValueTask.FromResult(SkillSourceCommitResult.Failed("Skill server URL is required before testing a source."));
 
         var result = _probe.Probe(_pendingRemoteUrl, null, _pendingRemoteTimeoutSeconds);
         _pendingRemoteProbeMessage = result.Message;
         return ValueTask.FromResult(result.Success
-            ? NetclawUiValidationResult.Passed(result.Message)
-            : NetclawUiValidationResult.Warning(result.Message));
+            ? SkillSourceCommitResult.Ok(result.Message)
+            : SkillSourceCommitResult.Warning(result.Message));
     }
 
     internal void CommitAddRemoteAuthDraft(SkillSourceAuthMode value)
@@ -906,30 +1099,30 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ProbePendingRemoteThenReview();
     }
 
-    internal NetclawUiValidationResult ValidateAddRemoteTokenDraft(string value)
+    internal SkillSourceCommitResult ValidateAddRemoteTokenDraft(string value)
     {
         if (_editingAction == SkillSourceDetailAction.RotateToken)
         {
             if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer })
-                return NetclawUiValidationResult.Failed("A remote skill server must be selected before rotating a token.");
+                return SkillSourceCommitResult.Failed("A remote skill server must be selected before rotating a token.");
         }
         else if (_pendingRemoteUrl is null)
         {
-            return NetclawUiValidationResult.Failed("Skill server URL is required before adding a token.");
+            return SkillSourceCommitResult.Failed("Skill server URL is required before adding a token.");
         }
 
         var token = value.Trim();
         if (!TryValidateApiKeyDraft(token, out var error))
-            return NetclawUiValidationResult.Failed(error);
+            return SkillSourceCommitResult.Failed(error);
 
         return string.IsNullOrWhiteSpace(token)
-            ? NetclawUiValidationResult.Failed(_editingAction == SkillSourceDetailAction.RotateToken
+            ? SkillSourceCommitResult.Failed(_editingAction == SkillSourceDetailAction.RotateToken
                 ? "New bearer token is required. Use Remove token to delete an existing token."
                 : "Bearer token is required when authentication is set to bearer token.")
-            : NetclawUiValidationResult.Passed();
+            : SkillSourceCommitResult.Ok();
     }
 
-    internal ValueTask<NetclawUiValidationResult> ValidateAddRemoteTokenReachabilityAsync(
+    internal ValueTask<SkillSourceCommitResult> ValidateAddRemoteTokenReachabilityAsync(
         string value,
         CancellationToken ct)
     {
@@ -938,27 +1131,27 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         if (_editingAction == SkillSourceDetailAction.RotateToken)
         {
             if (SelectedSource is not { Kind: SkillSourceKind.RemoteSkillServer } source)
-                return ValueTask.FromResult(NetclawUiValidationResult.Failed("A remote skill server must be selected before rotating a token."));
+                return ValueTask.FromResult(SkillSourceCommitResult.Failed("A remote skill server must be selected before rotating a token."));
 
             var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
             var feed = FindRemoteSource(feeds, source.Name);
             if (feed is null)
-                return ValueTask.FromResult(NetclawUiValidationResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
+                return ValueTask.FromResult(SkillSourceCommitResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
 
             result = _probe.Probe(feed.Url, token, feed.TimeoutSeconds);
         }
         else
         {
             if (_pendingRemoteUrl is null)
-                return ValueTask.FromResult(NetclawUiValidationResult.Failed("Skill server URL is required before adding a token."));
+                return ValueTask.FromResult(SkillSourceCommitResult.Failed("Skill server URL is required before adding a token."));
 
             result = _probe.Probe(_pendingRemoteUrl, token, _pendingRemoteTimeoutSeconds);
         }
 
         _pendingRemoteProbeMessage = result.Message;
         return ValueTask.FromResult(result.Success
-            ? NetclawUiValidationResult.Passed(result.Message)
-            : NetclawUiValidationResult.Warning(result.Message));
+            ? SkillSourceCommitResult.Ok(result.Message)
+            : SkillSourceCommitResult.Warning(result.Message));
     }
 
     internal void CommitAddRemoteTokenDraft(string value)
@@ -1036,15 +1229,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Added skill server '{name}'.");
     }
 
-    internal NetclawUiValidationResult ValidateAddRemoteNameDraft(string value)
+    internal SkillSourceCommitResult ValidateAddRemoteNameDraft(string value)
     {
         if (_pendingRemoteUrl is null)
-            return NetclawUiValidationResult.Failed("Skill server URL is required before adding a source.");
+            return SkillSourceCommitResult.Failed("Skill server URL is required before adding a source.");
 
         var name = NormalizeSourceName(value);
         return ValidateNewSourceName(name, null, out var error)
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed(error);
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed(error);
     }
 
     internal void CommitAddRemoteNameDraft(string value)
@@ -1221,15 +1414,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ShowDetail($"Renamed source to '{newName}'.");
     }
 
-    internal NetclawUiValidationResult ValidateRenameSourceDraft(string value)
+    internal SkillSourceCommitResult ValidateRenameSourceDraft(string value)
     {
         if (SelectedSource is not { } source)
-            return NetclawUiValidationResult.Failed("A skill source must be selected before renaming.");
+            return SkillSourceCommitResult.Failed("A skill source must be selected before renaming.");
 
         var newName = NormalizeSourceName(value);
         return ValidateNewSourceName(newName, source.Name, out var error)
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed(error);
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed(error);
     }
 
     internal void CommitRenameSourceDraft(string value)
@@ -1255,53 +1448,53 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         SaveRemoteUrlChange(source);
     }
 
-    internal NetclawUiValidationResult ValidateChangeLocationDraft(string value)
+    internal SkillSourceCommitResult ValidateChangeLocationDraft(string value)
     {
         if (SelectedSource is not { } source)
-            return NetclawUiValidationResult.Failed("A skill source must be selected before changing location.");
+            return SkillSourceCommitResult.Failed("A skill source must be selected before changing location.");
 
         if (source.Kind == SkillSourceKind.LocalFolder)
         {
             if (source.IsWellKnown)
-                return NetclawUiValidationResult.Failed("Well-known source paths are managed automatically.");
+                return SkillSourceCommitResult.Failed("Well-known source paths are managed automatically.");
 
             return TryNormalizeExternalDirectory(value.Trim(), out _, out var error)
-                ? NetclawUiValidationResult.Passed()
-                : NetclawUiValidationResult.Failed(error);
+                ? SkillSourceCommitResult.Ok()
+                : SkillSourceCommitResult.Failed(error);
         }
 
         return TryNormalizeFeedUrl(value.Trim(), out _, out var urlError)
-            ? NetclawUiValidationResult.Passed()
-            : NetclawUiValidationResult.Failed(urlError);
+            ? SkillSourceCommitResult.Ok()
+            : SkillSourceCommitResult.Failed(urlError);
     }
 
-    internal ValueTask<NetclawUiValidationResult> ValidateChangeLocationReachabilityAsync(
+    internal ValueTask<SkillSourceCommitResult> ValidateChangeLocationReachabilityAsync(
         string value,
         CancellationToken ct)
     {
         if (SelectedSource is not { } source)
-            return ValueTask.FromResult(NetclawUiValidationResult.Failed("A skill source must be selected before changing location."));
+            return ValueTask.FromResult(SkillSourceCommitResult.Failed("A skill source must be selected before changing location."));
 
         if (source.Kind == SkillSourceKind.LocalFolder)
-            return ValueTask.FromResult(NetclawUiValidationResult.Passed());
+            return ValueTask.FromResult(SkillSourceCommitResult.Ok());
 
         if (!TryNormalizeFeedUrl(value.Trim(), out var url, out var error))
-            return ValueTask.FromResult(NetclawUiValidationResult.Failed(error));
+            return ValueTask.FromResult(SkillSourceCommitResult.Failed(error));
 
         var normalizedUrl = url ?? throw new InvalidOperationException("Validated skill server URL was null.");
         var feeds = LoadSkillFeedsSection(ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath));
         var item = FindRemoteSource(feeds, source.Name);
         if (item is null)
-            return ValueTask.FromResult(NetclawUiValidationResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
+            return ValueTask.FromResult(SkillSourceCommitResult.Failed($"Skill server '{source.Name}' no longer exists in config."));
 
         var apiKey = TryGetFeedApiKeyPlaintext(item, out var plaintext, out var decryptError) ? plaintext : null;
         if (!string.IsNullOrWhiteSpace(decryptError))
-            return ValueTask.FromResult(NetclawUiValidationResult.Failed(decryptError));
+            return ValueTask.FromResult(SkillSourceCommitResult.Failed(decryptError));
 
         var probeResult = _probe.Probe(normalizedUrl, apiKey, item.TimeoutSeconds);
         return ValueTask.FromResult(probeResult.Success
-            ? NetclawUiValidationResult.Passed(probeResult.Message)
-            : NetclawUiValidationResult.Warning(probeResult.Message));
+            ? SkillSourceCommitResult.Ok(probeResult.Message)
+            : SkillSourceCommitResult.Warning(probeResult.Message));
     }
 
     internal void CommitChangeLocationDraft(string value)
@@ -1801,15 +1994,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             or SkillSourcesScreen.AddRemoteName
             or SkillSourcesScreen.RenameSource
             or SkillSourcesScreen.ChangeLocation;
-
-    private static ConfigStatusTone ToConfigTone(NetclawUiStatusTone tone)
-        => tone switch
-        {
-            NetclawUiStatusTone.Success => ConfigStatusTone.Success,
-            NetclawUiStatusTone.Warning => ConfigStatusTone.Warning,
-            NetclawUiStatusTone.Error => ConfigStatusTone.Error,
-            _ => ConfigStatusTone.Neutral,
-        };
 
     private static string FormatSourceLabel(SkillSourceDisplay source)
     {

@@ -18,16 +18,8 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
     private DynamicLayoutNode? _contentNode;
     private SelectionListNode<string>? _validationDialogList;
     private readonly CompositeDisposable _contentSubscriptions = [];
-    private readonly NetclawUiCommitPipeline _commitPipeline = new();
-    private NetclawValidatedTextField? _addLocalPathField;
-    private NetclawValidatedPicker<bool>? _addLocalSymlinksPicker;
-    private NetclawValidatedTextField? _addLocalNameField;
-    private NetclawValidatedTextField? _addRemoteUrlField;
-    private NetclawValidatedTextField? _addRemoteNameField;
-    private NetclawValidatedTextField? _addRemoteTokenField;
-    private NetclawValidatedPicker<SkillSourceAuthMode>? _addRemoteAuthPicker;
-    private NetclawValidatedTextField? _renameSourceField;
-    private NetclawValidatedTextField? _changeLocationField;
+    private TextInputNode? _textInput;
+    private SkillSourcesScreen? _textInputScreen;
 
     protected override void OnBound()
     {
@@ -41,24 +33,10 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
         ViewModel.Screen.Subscribe(screen =>
         {
-            if (screen != SkillSourcesScreen.AddLocalPath)
-                _addLocalPathField = null;
-            if (screen != SkillSourcesScreen.AddLocalSymlinks)
-                _addLocalSymlinksPicker = null;
-            if (screen != SkillSourcesScreen.AddLocalName)
-                _addLocalNameField = null;
-            if (screen != SkillSourcesScreen.AddRemoteUrl)
-                _addRemoteUrlField = null;
-            if (screen != SkillSourcesScreen.AddRemoteName)
-                _addRemoteNameField = null;
-            if (screen != SkillSourcesScreen.AddRemoteAuth)
-                _addRemoteAuthPicker = null;
-            if (screen != SkillSourcesScreen.AddRemoteToken)
-                _addRemoteTokenField = null;
-            if (screen != SkillSourcesScreen.RenameSource)
-                _renameSourceField = null;
-            if (screen != SkillSourcesScreen.ChangeLocation)
-                _changeLocationField = null;
+            // Drop the active text input whenever we leave the screen that owns it so the
+            // next text screen re-seeds from the view model draft.
+            if (_textInputScreen is { } owner && owner != screen)
+                ResetTextInput();
 
             _contentNode?.Invalidate();
         }).DisposeWith(Subscriptions);
@@ -93,21 +71,21 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             {
                 SkillSourcesScreen.Inventory => BuildInventory(),
                 SkillSourcesScreen.SourceDetail => BuildSourceDetail(),
-                SkillSourcesScreen.AddLocalPath => BuildValidatedTextDraft(
+                SkillSourcesScreen.AddLocalPath => BuildTextDraft(
                     "Add a local skill folder.",
-                    EnsureAddLocalPathField(),
+                    "Folder path",
                     "This must be an existing local directory."),
-                SkillSourcesScreen.AddLocalSymlinks => BuildValidatedChoice(
+                SkillSourcesScreen.AddLocalSymlinks => BuildChoice(
                     "Allow symlinks inside this folder?",
                     "Symlinks can make a source scan files outside the folder.",
-                    EnsureAddLocalSymlinksPicker()),
-                SkillSourcesScreen.AddLocalName => BuildValidatedTextDraft(
+                    ["No - stricter security", "Yes - this folder intentionally uses symlinks"]),
+                SkillSourcesScreen.AddLocalName => BuildTextDraft(
                     "Review local folder source.",
-                    EnsureAddLocalNameField(),
+                    "Source name",
                     "Enter adds the source and autosaves."),
-                SkillSourcesScreen.AddRemoteUrl => BuildValidatedTextDraft(
+                SkillSourcesScreen.AddRemoteUrl => BuildTextDraft(
                     "Add a remote skill server.",
-                    EnsureAddRemoteUrlField(),
+                    "Server URL",
                     "Netclaw probes /.well-known/agent-skills/index.json before save.",
                     "What is a skill server?",
                     [
@@ -115,25 +93,26 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                         "agent skills over HTTP for a team or organization.",
                         "Project: https://github.com/netclaw-dev/skill-server"
                     ]),
-                SkillSourcesScreen.AddRemoteAuth => BuildValidatedChoice(
+                SkillSourcesScreen.AddRemoteAuth => BuildChoice(
                     "How should Netclaw authenticate to this server?",
                     "Choose bearer token only when the server requires it.",
-                    EnsureAddRemoteAuthPicker()),
-                SkillSourcesScreen.AddRemoteToken => BuildValidatedTextDraft(
+                    ["No auth required", "Bearer token"]),
+                SkillSourcesScreen.AddRemoteToken => BuildTextDraft(
                     "Enter the bearer token for this skill server.",
-                    EnsureAddRemoteTokenField(),
-                    "Blank tokens are not saved. Existing tokens are removed only through Remove token."),
-                SkillSourcesScreen.AddRemoteName => BuildValidatedTextDraft(
+                    "Bearer token",
+                    "Blank tokens are not saved. Existing tokens are removed only through Remove token.",
+                    isPassword: true),
+                SkillSourcesScreen.AddRemoteName => BuildTextDraft(
                     "Review remote skill server source.",
-                    EnsureAddRemoteNameField(),
+                    "Source name",
                     "Enter adds the source and autosaves."),
-                SkillSourcesScreen.RenameSource => BuildValidatedTextDraft(
+                SkillSourcesScreen.RenameSource => BuildTextDraft(
                     "Rename this skill source.",
-                    EnsureRenameSourceField(),
+                    "Source name",
                     "Enter validates and autosaves the new name."),
-                SkillSourcesScreen.ChangeLocation => BuildValidatedTextDraft(
+                SkillSourcesScreen.ChangeLocation => BuildTextDraft(
                     "Change this source location.",
-                    EnsureChangeLocationField(),
+                    "Location",
                     "Enter validates and autosaves the new path or URL."),
                 SkillSourcesScreen.RemoveConfirm => BuildChoice(
                     "Remove this skill source from Netclaw config?",
@@ -221,17 +200,21 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         return layout;
     }
 
-    private ILayoutNode BuildValidatedTextDraft(
+    private ILayoutNode BuildTextDraft(
         string title,
-        INetclawUiComponent field,
+        string fieldLabel,
         string hint,
         string? calloutTitle = null,
-        IReadOnlyList<string>? calloutLines = null)
+        IReadOnlyList<string>? calloutLines = null,
+        bool isPassword = false)
     {
+        var input = EnsureTextInput(isPassword);
+        input.OnFocused();
+
         var layout = Layouts.Vertical()
             .WithChild(Header($"  {title}"))
             .WithChild(Layouts.Empty().Height(1))
-            .WithChild(field.Build())
+            .WithChild(NetclawTuiChrome.BuildTextInputPanel(input, fieldLabel))
             .WithChild(Layouts.Empty().Height(1))
             .WithChild(Hint($"  {hint}"));
 
@@ -242,67 +225,6 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
         return layout;
     }
-
-    private NetclawValidatedTextField EnsureAddLocalPathField()
-        => _addLocalPathField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.AddLocalPath(ViewModel),
-            _commitPipeline,
-            "Type here...");
-
-    private NetclawValidatedPicker<bool> EnsureAddLocalSymlinksPicker()
-        => _addLocalSymlinksPicker ??= new NetclawValidatedPicker<bool>(
-            SkillSourcesCommitFactory.AddLocalSymlinks(ViewModel),
-            _commitPipeline,
-            [
-                new NetclawPickerOption<bool>(false, "No - stricter security"),
-                new NetclawPickerOption<bool>(true, "Yes - this folder intentionally uses symlinks"),
-            ]);
-
-    private NetclawValidatedTextField EnsureAddLocalNameField()
-        => _addLocalNameField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.AddLocalName(ViewModel),
-            _commitPipeline,
-            "Type here...");
-
-    private NetclawValidatedTextField EnsureAddRemoteUrlField()
-        => _addRemoteUrlField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.AddRemoteUrl(ViewModel),
-            _commitPipeline,
-            "Type here...");
-
-    private NetclawValidatedPicker<SkillSourceAuthMode> EnsureAddRemoteAuthPicker()
-        => _addRemoteAuthPicker ??= new NetclawValidatedPicker<SkillSourceAuthMode>(
-            SkillSourcesCommitFactory.AddRemoteAuth(ViewModel),
-            _commitPipeline,
-            [
-                new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.None, "No auth required"),
-                new NetclawPickerOption<SkillSourceAuthMode>(SkillSourceAuthMode.BearerToken, "Bearer token"),
-            ]);
-
-    private NetclawValidatedTextField EnsureAddRemoteTokenField()
-        => _addRemoteTokenField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.AddRemoteToken(ViewModel),
-            _commitPipeline,
-            "(empty)",
-            isPassword: true);
-
-    private NetclawValidatedTextField EnsureAddRemoteNameField()
-        => _addRemoteNameField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.AddRemoteName(ViewModel),
-            _commitPipeline,
-            "Type here...");
-
-    private NetclawValidatedTextField EnsureRenameSourceField()
-        => _renameSourceField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.RenameSource(ViewModel),
-            _commitPipeline,
-            "Type here...");
-
-    private NetclawValidatedTextField EnsureChangeLocationField()
-        => _changeLocationField ??= new NetclawValidatedTextField(
-            SkillSourcesCommitFactory.ChangeLocation(ViewModel),
-            _commitPipeline,
-            "Type here...");
 
     private static ILayoutNode BuildCallout(string title, IReadOnlyList<string> lines)
     {
@@ -329,13 +251,6 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
         return layout;
     }
-
-    private static ILayoutNode BuildValidatedChoice(string title, string hint, INetclawUiComponent picker)
-        => Layouts.Vertical()
-            .WithChild(Header($"  {title}"))
-            .WithChild(Hint($"  {hint}"))
-            .WithChild(Layouts.Empty().Height(1))
-            .WithChild(picker.Build());
 
     private ILayoutNode InventoryRow(SkillSourcesInventoryRow row)
     {
@@ -433,10 +348,8 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             return;
         }
 
-        if (CurrentValidatedComponent()?.HandleInput(keyInfo) == true)
-        {
+        if (TryHandleTextInput(keyInfo))
             return;
-        }
 
         switch (keyInfo.Key)
         {
@@ -468,35 +381,94 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
 
     private void HandlePaste(PasteEvent paste)
     {
-        if (CurrentValidatedComponent() is { } field)
-        {
-            field.HandlePaste(paste);
+        if (!ViewModel.IsTextEntryActive || _textInput is null)
             return;
+
+        _textInput.HandlePaste(paste);
+        ViewModel.ReplaceDraft(_textInput.Text);
+        ViewModel.RequestRedraw();
+    }
+
+    private bool TryHandleTextInput(ConsoleKeyInfo keyInfo)
+    {
+        if (!ViewModel.IsTextEntryActive)
+            return false;
+
+        if (keyInfo.Key == ConsoleKey.Enter)
+        {
+            CommitCurrentTextScreen();
+            return true;
+        }
+
+        var input = EnsureTextInputForCurrentScreen();
+        input.HandleInput(keyInfo);
+        ViewModel.ReplaceDraft(input.Text);
+        ViewModel.RequestRedraw();
+        return true;
+    }
+
+    private void CommitCurrentTextScreen()
+    {
+        // Bracketed paste is auto-routed to the focused input by Termina, which bypasses
+        // the per-keystroke draft sync. Stage the live input text before committing so a
+        // paste immediately followed by Enter commits the full value, not a stale draft.
+        if (_textInput is not null && _textInputScreen == ViewModel.Screen.Value)
+            ViewModel.ReplaceDraft(_textInput.Text);
+
+        var draft = ViewModel.Draft.Value;
+        switch (ViewModel.Screen.Value)
+        {
+            case SkillSourcesScreen.AddLocalPath:
+                ViewModel.CommitAddLocalPath(draft);
+                break;
+            case SkillSourcesScreen.AddLocalName:
+                ViewModel.CommitAddLocalName(draft);
+                break;
+            case SkillSourcesScreen.AddRemoteUrl:
+                ViewModel.CommitAddRemoteUrl(draft);
+                break;
+            case SkillSourcesScreen.AddRemoteToken:
+                ViewModel.CommitAddRemoteToken(draft);
+                break;
+            case SkillSourcesScreen.AddRemoteName:
+                ViewModel.CommitAddRemoteName(draft);
+                break;
+            case SkillSourcesScreen.RenameSource:
+                ViewModel.CommitRenameSource(draft);
+                break;
+            case SkillSourcesScreen.ChangeLocation:
+                ViewModel.CommitChangeLocation(draft);
+                break;
         }
     }
 
-    private INetclawUiComponent? CurrentValidatedComponent()
-        => ViewModel.Screen.Value switch
-        {
-            SkillSourcesScreen.AddLocalPath => EnsureAddLocalPathField(),
-            SkillSourcesScreen.AddLocalSymlinks => EnsureAddLocalSymlinksPicker(),
-            SkillSourcesScreen.AddLocalName => EnsureAddLocalNameField(),
-            SkillSourcesScreen.AddRemoteUrl => EnsureAddRemoteUrlField(),
-            SkillSourcesScreen.AddRemoteAuth => EnsureAddRemoteAuthPicker(),
-            SkillSourcesScreen.AddRemoteToken => EnsureAddRemoteTokenField(),
-            SkillSourcesScreen.AddRemoteName => EnsureAddRemoteNameField(),
-            SkillSourcesScreen.RenameSource => EnsureRenameSourceField(),
-            SkillSourcesScreen.ChangeLocation => EnsureChangeLocationField(),
-            _ => null,
-        };
-
     private bool TryCommitCurrentAction(ConsoleKey key)
     {
+        // Choice/picker screens commit on Enter through the view model's structural-then-probe
+        // commit methods so a failing probe raises the override dialog (the former picker path).
+        if (key == ConsoleKey.Enter)
+        {
+            switch (ViewModel.Screen.Value)
+            {
+                case SkillSourcesScreen.AddLocalSymlinks:
+                    ViewModel.CommitAddLocalSymlinks(ViewModel.SelectedRow.Value == 1);
+                    return true;
+                case SkillSourcesScreen.AddRemoteAuth:
+                    ViewModel.CommitAddRemoteAuth(ViewModel.SelectedRow.Value == 1
+                        ? SkillSourceAuthMode.BearerToken
+                        : SkillSourceAuthMode.None);
+                    return true;
+            }
+        }
+
         if (ViewModel.Screen.Value == SkillSourcesScreen.Inventory && key == ConsoleKey.Spacebar)
         {
             var row = ViewModel.CurrentInventoryRow;
             if (row?.Action == SkillSourcesInventoryAction.OpenSource)
-                return InvokeToggle(SkillSourcesCommitFactory.ToggleEnabled(ViewModel));
+            {
+                ViewModel.CommitToggleEnabledAction();
+                return true;
+            }
         }
 
         if (ViewModel.Screen.Value == SkillSourcesScreen.SourceDetail)
@@ -505,55 +477,93 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             if (row is null)
                 return false;
 
-            return row.Action switch
+            switch (row.Action)
             {
-                SkillSourceDetailAction.ToggleEnabled when key is ConsoleKey.Enter or ConsoleKey.Spacebar =>
-                    InvokeToggle(SkillSourcesCommitFactory.ToggleEnabled(ViewModel)),
-                SkillSourceDetailAction.ToggleSymlinks when key is ConsoleKey.Enter or ConsoleKey.Spacebar =>
-                    InvokeToggle(SkillSourcesCommitFactory.ToggleLocalSymlinks(ViewModel)),
-                SkillSourceDetailAction.SyncInterval when key == ConsoleKey.Enter =>
-                    InvokeAction(SkillSourcesCommitFactory.CycleRemoteSyncInterval(ViewModel), NetclawUiCommitTrigger.AutoSave),
-                SkillSourceDetailAction.RemoveToken when key == ConsoleKey.Enter =>
-                    InvokeAction(SkillSourcesCommitFactory.RemoveRemoteToken(ViewModel), NetclawUiCommitTrigger.Delete),
-                _ => false,
-            };
+                case SkillSourceDetailAction.ToggleEnabled when key is ConsoleKey.Enter or ConsoleKey.Spacebar:
+                    ViewModel.CommitToggleEnabledAction();
+                    return true;
+                case SkillSourceDetailAction.ToggleSymlinks when key is ConsoleKey.Enter or ConsoleKey.Spacebar:
+                    ViewModel.CommitToggleLocalSymlinksAction();
+                    return true;
+                case SkillSourceDetailAction.SyncInterval when key == ConsoleKey.Enter:
+                    ViewModel.CommitCycleRemoteSyncIntervalAction();
+                    return true;
+                case SkillSourceDetailAction.RemoveToken when key == ConsoleKey.Enter:
+                    ViewModel.CommitRemoveRemoteTokenAction();
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         if (ViewModel.Screen.Value == SkillSourcesScreen.RemoveConfirm && key == ConsoleKey.Enter && ViewModel.SelectedRow.Value == 1)
-            return InvokeAction(SkillSourcesCommitFactory.RemoveSource(ViewModel), NetclawUiCommitTrigger.Delete);
+        {
+            ViewModel.CommitRemoveSourceAction();
+            return true;
+        }
 
         return false;
     }
 
     private void HandleValidationDialogAction(NetclawValidationDialogAction action)
     {
-        var component = CurrentValidatedComponent();
         switch (action)
         {
             case NetclawValidationDialogAction.RetryValidation:
                 ViewModel.DismissValidationDialog();
-                component?.Commit(NetclawUiCommitTrigger.Enter);
+                RetryCurrentCommit();
                 break;
             case NetclawValidationDialogAction.BackToEdit:
                 ViewModel.ReturnToValidationEdit();
                 break;
             case NetclawValidationDialogAction.SaveAnyway:
-                ViewModel.DismissValidationDialog();
-                component?.Commit(NetclawUiCommitTrigger.SaveAnyway);
+                ViewModel.SaveCurrentDraftAnyway();
                 break;
         }
     }
 
-    private bool InvokeToggle<TDraft>(NetclawUiCommit<TDraft> commit)
+    private void RetryCurrentCommit()
     {
-        _ = new NetclawValidatedToggle<TDraft>(commit, _commitPipeline).Invoke();
-        return true;
+        // Re-run the same commit that raised the override dialog so the probe fires again.
+        switch (ViewModel.Screen.Value)
+        {
+            case SkillSourcesScreen.AddRemoteAuth:
+                ViewModel.CommitAddRemoteAuth(ViewModel.SelectedRow.Value == 1
+                    ? SkillSourceAuthMode.BearerToken
+                    : SkillSourceAuthMode.None);
+                break;
+            default:
+                CommitCurrentTextScreen();
+                break;
+        }
     }
 
-    private bool InvokeAction<TDraft>(NetclawUiCommit<TDraft> commit, NetclawUiCommitTrigger trigger)
+    private TextInputNode EnsureTextInputForCurrentScreen()
+        => EnsureTextInput(ViewModel.Screen.Value == SkillSourcesScreen.AddRemoteToken);
+
+    private TextInputNode EnsureTextInput(bool isPassword)
     {
-        _ = new NetclawValidatedAction<TDraft>(commit, _commitPipeline, trigger).Invoke();
-        return true;
+        var screen = ViewModel.Screen.Value;
+        if (_textInput is not null && _textInputScreen == screen)
+            return _textInput;
+
+        var input = new TextInputNode().WithPlaceholder(isPassword ? "(empty)" : "Type here...");
+        if (isPassword)
+            input.AsPassword();
+
+        input.Text = ViewModel.Draft.Value;
+        if (!string.IsNullOrEmpty(input.Text))
+            input.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
+
+        _textInput = input;
+        _textInputScreen = screen;
+        return _textInput;
+    }
+
+    private void ResetTextInput()
+    {
+        _textInput = null;
+        _textInputScreen = null;
     }
 
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();

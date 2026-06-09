@@ -97,6 +97,24 @@ pages on top of it. **Revise the change artifacts first** (`/opsx-continue` to a
 
 **Net:** ~50 lines deleted, ~200 reworked, factory (~278) retired, ~44 unbuilt tasks cancelled.
 
+**Scope discovery (read 2026-06-09 — concrete code map):**
+- The union to delete is `NetclawUiCommit.cs` **L75–116** (`NetclawUiDynamicCheck<TDraft>` +
+  `RequiredCheck`/`NotApplicableCheck`). The consuming branch is the pipeline at **L176–190**
+  (`is …RequiredCheck required`) → becomes a nullable-validator check. `NetclawUiCommit<TDraft>`
+  (L118–160) drops its non-null `DynamicCheck` ctor guard.
+- **`SkillSourcesCommitFactory.cs` is 278 lines / ~14 factory methods**; the page has **54**
+  factory/validated-component call-sites; the VM is **2125 lines** with **15+ direct-write
+  `Save*` methods** (each `ConfigFileHelper.LoadJsonDict` → mutate → `WriteConfigFile`).
+  The target (`ChannelsConfigViewModel`) uses `ConfigEditorSession` + `SectionContribution`
+  + a `_mapper.BuildContribution`. **Full normalization is far larger than the "~200 lines"
+  estimate** — it is a real VM refactor, not a lightening-in-place.
+- **Recommended phasing for Step 2** (keeps it shippable): (1) delete the union + make the
+  dynamic check nullable + typed probe result + cancel §4/§7 in the artifacts — the
+  high-value, bounded "lighter contract" core; (2) retire the factory by inlining its builders
+  at the call sites (removes the indirection); (3) treat the full `ConfigEditorSession`
+  normalization of the 2125-line VM as a **separate, optional consistency pass** — flag for the
+  user before committing to it, since it is internal-only (no UX change) and high-churn.
+
 **Apply** the deletions/rework → **gates** (slopwatch, headers, `config-skills` tape) →
 `/opsx-verify` → `/opsx-sync` → `/opsx-archive`.
 

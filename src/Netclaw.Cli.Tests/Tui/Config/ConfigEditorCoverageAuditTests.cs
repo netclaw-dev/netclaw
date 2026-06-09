@@ -342,34 +342,26 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
     }
 
     [Fact]
-    public void Migrated_skill_sources_page_does_not_bypass_validated_components()
+    public void Skill_sources_page_routes_persistence_through_the_view_model()
     {
         var source = ReadRepoFile("src/Netclaw.Cli/Tui/Config/SkillSourcesConfigPage.cs");
 
-        Assert.DoesNotContain("TextInputNode", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ViewModel.AppendText", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ViewModel.Backspace", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ViewModel.Save", source, StringComparison.Ordinal);
+        // The page is presentational: it must never write config directly. Section-preserving
+        // persistence and validation live entirely on the view model, mirroring the Search editor.
         Assert.DoesNotContain("SaveExternalConfig", source, StringComparison.Ordinal);
         Assert.DoesNotContain("SaveSkillFeedsConfig", source, StringComparison.Ordinal);
         Assert.DoesNotContain("ConfigFileHelper.WriteConfigFile", source, StringComparison.Ordinal);
-        Assert.Contains("CurrentValidatedComponent()?.HandleInput", source, StringComparison.Ordinal);
+
+        // The validated-UI commit framework is gone; the page drives plain Termina inputs and the
+        // view model's inline commit methods, mirroring the Search editor.
+        Assert.Contains("TextInputNode", source, StringComparison.Ordinal);
         Assert.Contains("TryCommitCurrentAction(ConsoleKey.Enter)", source, StringComparison.Ordinal);
         Assert.Contains("TryCommitCurrentAction(ConsoleKey.Spacebar)", source, StringComparison.Ordinal);
-        Assert.Contains("SkillSourcesCommitFactory.RemoveSource", source, StringComparison.Ordinal);
-    }
+        Assert.Contains("ViewModel.CommitRemoveSourceAction", source, StringComparison.Ordinal);
+        Assert.Contains("ViewModel.CommitAddRemoteAuth", source, StringComparison.Ordinal);
 
-    [Fact]
-    public void Migrated_skill_sources_commit_factory_declares_dynamic_validation_policy_for_every_commit()
-    {
-        var source = ReadRepoFile("src/Netclaw.Cli/Tui/Config/SkillSourcesCommitFactory.cs");
-        var commitCount = CountOccurrences(source, "PersistAsync:", StringComparison.Ordinal);
-        var dynamicPolicyCount = CountOccurrences(source, "DynamicCheck:", StringComparison.Ordinal);
-
-        Assert.True(commitCount > 0, "Skill Sources commit factory must declare validated UI commits.");
-        Assert.Equal(commitCount, dynamicPolicyCount);
-        Assert.DoesNotContain("NotApplicable(\"\")", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("NotApplicable(string.Empty)", source, StringComparison.Ordinal);
+        // The probe-warning override dialog is still rendered via the shared dialog views.
+        Assert.Contains("NetclawValidationDialogViews", source, StringComparison.Ordinal);
     }
 
     private string[] DiscoverVisibleConfigLeafEditorIds()
@@ -435,19 +427,6 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
     {
         var repoRoot = FindRepoRoot();
         return File.ReadAllText(Path.Combine(repoRoot, repoRelativePath.Replace('/', Path.DirectorySeparatorChar)));
-    }
-
-    private static int CountOccurrences(string value, string pattern, StringComparison comparison)
-    {
-        var count = 0;
-        var index = 0;
-        while ((index = value.IndexOf(pattern, index, comparison)) >= 0)
-        {
-            count++;
-            index += pattern.Length;
-        }
-
-        return count;
     }
 
     private sealed record ConfigEditorCoverage(
