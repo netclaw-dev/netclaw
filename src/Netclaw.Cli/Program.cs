@@ -202,6 +202,7 @@ static async Task RunAsync(string[] args)
 
             builder.Services.AddTermina("/init", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
@@ -434,6 +435,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton(new StatsNavigationState { Days = statsDays ?? 7 });
             builder.Services.AddTermina("/stats", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<StatsPage, StatsViewModel>("/stats");
             });
 
@@ -645,7 +647,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/mcp-tools", t =>
-                t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -703,7 +708,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/provider", t =>
-                t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -732,7 +740,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/model", t =>
-                t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -761,7 +772,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/approvals", t =>
-                t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -785,7 +799,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/reminder", t =>
-                t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -996,6 +1013,7 @@ static async Task RunAsync(string[] args)
         case "chat":
             webBuilder.Services.AddTermina("/chat", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
             break;
@@ -1003,6 +1021,7 @@ static async Task RunAsync(string[] args)
         case "sessions":
             webBuilder.Services.AddTermina("/sessions", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<SessionsPage, SessionsViewModel>("/sessions");
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
@@ -1028,6 +1047,16 @@ static async Task RunAsync(string[] args)
 
     var app = webBuilder.Build();
     await RunTerminaHostAsync(app);
+}
+
+static void ConfigureNativeSelection(TerminaBuilder termina)
+{
+    termina.ConfigureRuntime(options =>
+    {
+        options.PreferRawInput = true;
+        options.ScrollInputMode = ScrollInputMode.AlternateScroll;
+        options.CtrlCHandlingMode = CtrlCHandlingMode.DoublePressWhenRawInput;
+    });
 }
 
 static void WriteCrashLog(Exception ex)
