@@ -390,15 +390,13 @@ public sealed class SecurityAccessPage : ReactivePage<SecurityAccessViewModel>
     private static TextNode Section(string text) => new TextNode(text).WithForeground(Color.White).Bold();
     private static TextNode Legend(string text) => new TextNode(text).WithForeground(Color.White);
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.BrightBlack);
-    private static string FocusPrefix(bool focused) => focused ? " ▶ " : "   ";
+
+    // Constant indent so non-selected rows keep the same content column the
+    // focused full-width bar uses (the bar replaces the old ▶ marker).
+    private static string FocusPrefix(bool focused) => "   ";
     private static string Check(bool enabled) => enabled ? "✓" : " ";
     private static string CycleValue(string value) => $"[◀ {value,-17} ▶]";
 
-    private static TextNode Row(string line, bool focused, bool enabled = true)
-    {
-        var node = new TextNode(line);
-        if (focused)
-            return node.WithForeground(Color.Cyan).Bold();
-        return node.WithForeground(enabled ? Color.White : Color.BrightBlack);
-    }
+    private static ILayoutNode Row(string line, bool focused, bool enabled = true)
+        => ConfigSelectionRow.Create(line, focused, enabled ? Color.White : Color.BrightBlack);
 }

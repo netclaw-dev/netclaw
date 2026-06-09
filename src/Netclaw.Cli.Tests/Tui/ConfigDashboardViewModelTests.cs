@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Tui;
+using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui;
@@ -111,4 +113,106 @@ public sealed class ConfigDashboardViewModelTests
         Assert.True(vm.ShutdownRequestedForTest);
     }
 
+    [Fact]
+    public void Status_summary_is_empty_without_a_config_reader()
+    {
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());
+
+        foreach (var item in vm.Items)
+            Assert.Equal(string.Empty, vm.StatusFor(item));
+    }
+
+    [Fact]
+    public void Terminal_rows_never_carry_a_status_summary()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal(string.Empty, vm.StatusFor(vm.Items.Single(i => i.Label == "Run Full Doctor")));
+        Assert.Equal(string.Empty, vm.StatusFor(vm.Items.Single(i => i.Label == "Quit")));
+    }
+
+    [Fact]
+    public void Status_summaries_reflect_an_empty_default_config()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath, "{ \"configVersion\": 1 }");
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("0 configured", Summary(vm, "Inference Providers"));
+        Assert.Equal("– not set", Summary(vm, "Models"));
+        Assert.Equal("– none configured", Summary(vm, "Channels"));
+        Assert.Equal("– disabled", Summary(vm, "Inbound Webhooks"));
+        Assert.Equal("0 dirs · 0 feeds", Summary(vm, "Skill Sources"));
+        Assert.Equal("– not set", Summary(vm, "Search"));
+        Assert.Equal("– disabled", Summary(vm, "Browser Automation"));
+        Assert.Equal("OTLP off · 0 webhooks", Summary(vm, "Telemetry & Alerting"));
+        // Features default to enabled when absent, so a bare config reports 6/6.
+        Assert.Equal("Personal · 6/6 enabled", Summary(vm, "Security & Access"));
+        Assert.Equal(paths.WorkspacesDirectory, Summary(vm, "Workspaces Directory"));
+    }
+
+    [Fact]
+    public void Status_summaries_reflect_a_populated_config()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Providers": { "anthropic": { "Type": "anthropic" }, "openai": { "Type": "openai" } },
+              "Models": { "Main": { "Provider": "anthropic", "ModelId": "claude-opus-4" } },
+              "Slack": { "Enabled": true, "AllowedChannelIds": ["C01", "C02"] },
+              "Discord": { "Enabled": true, "AllowedChannelIds": ["123"] },
+              "Webhooks": { "Enabled": true },
+              "ExternalSkills": { "Sources": [ { "Name": "claude-code" } ] },
+              "SkillFeeds": { "Feeds": [ { "Name": "corp", "Url": "https://skills.corp.com" } ] },
+              "Search": { "Backend": "brave" },
+              "Browser": { "Enabled": true },
+              "Telemetry": { "Enabled": true },
+              "Notifications": { "Webhooks": [ { "Url": "https://hooks.slack.com/x" } ] },
+              "Security": { "DeploymentPosture": "Team", "Memory": { "Enabled": false } },
+              "Memory": { "Enabled": false }
+            }
+            """);
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("2 configured", Summary(vm, "Inference Providers"));
+        Assert.Equal("claude-opus-4", Summary(vm, "Models"));
+        Assert.Equal("Slack · Discord · 3 channels", Summary(vm, "Channels"));
+        Assert.Equal("enabled", Summary(vm, "Inbound Webhooks"));
+        Assert.Equal("1 dir · 1 feed", Summary(vm, "Skill Sources"));
+        Assert.Equal("✓ Brave", Summary(vm, "Search"));
+        Assert.Equal("enabled", Summary(vm, "Browser Automation"));
+        Assert.Equal("OTLP on · 1 webhook", Summary(vm, "Telemetry & Alerting"));
+        // Memory.Enabled=false drops the count to 5/6.
+        Assert.Equal("Team · 5/6 enabled", Summary(vm, "Security & Access"));
+    }
+
+    [Fact]
+    public void Status_summaries_are_recomputed_on_each_read_for_autosave_reentrancy()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath, "{ \"configVersion\": 1, \"Search\": { \"Backend\": \"duckduckgo\" } }");
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("✓ DuckDuckGo", Summary(vm, "Search"));
+
+        // Simulate a sub-editor autosave changing the backend, then returning.
+        File.WriteAllText(paths.NetclawConfigPath, "{ \"configVersion\": 1, \"Search\": { \"Backend\": \"brave\" } }");
+
+        Assert.Equal("✓ Brave", Summary(vm, "Search"));
+    }
+
+    private static string Summary(ConfigDashboardViewModel vm, string label)
+        => vm.StatusFor(vm.Items.Single(item => item.Label == label));
 }

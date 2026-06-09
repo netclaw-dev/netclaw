@@ -245,8 +245,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         for (var i = 0; i < choices.Count; i++)
         {
             var focused = i == ViewModel.SelectedRow.Value;
-            var prefix = focused ? "> " : "  ";
-            layout = layout.WithChild(Text($"  {prefix}{choices[i]}", focused ? Color.Cyan : Color.White));
+            layout = layout.WithChild(ConfigSelectionRow.Create($"    {choices[i]}", focused));
         }
 
         return layout;
@@ -257,18 +256,17 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         var rows = ViewModel.InventoryRows;
         var index = IndexOf(rows, row);
         var focused = index == ViewModel.SelectedRow.Value;
-        var prefix = focused ? "> " : "  ";
         if (row.SourceKind is not null)
         {
-            var primaryColor = focused ? Color.Cyan : Color.White;
+            // Selected highlight covers the primary label line; the indented
+            // detail line keeps its tone color (warning vs. neutral).
             var detailColor = row.Tone == ConfigStatusTone.Warning ? Color.Yellow : Color.Gray;
             return Layouts.Vertical()
-                .WithChild(Text($"  {prefix}{row.Label}", primaryColor))
+                .WithChild(ConfigSelectionRow.Create($"    {row.Label}", focused))
                 .WithChild(Text($"      {row.Detail}", detailColor));
         }
 
-        var color = focused ? Color.Cyan : Color.White;
-        return Text($"  {prefix}{row.Label,-28} {row.Detail}", color);
+        return ConfigSelectionRow.Create($"    {row.Label,-28} {row.Detail}", focused);
     }
 
     private ILayoutNode DetailRow(SkillSourceDetailRow row)
@@ -276,9 +274,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         var rows = ViewModel.DetailRows;
         var index = IndexOf(rows, row);
         var focused = index == ViewModel.SelectedRow.Value;
-        var prefix = focused ? "> " : "  ";
-        var color = focused ? Color.Cyan : ToColor(row.Tone);
-        return Text($"  {prefix}{row.Label,-44} {row.Detail}", color);
+        return ConfigSelectionRow.Create($"    {row.Label,-44} {row.Detail}", focused, ToColor(row.Tone));
     }
 
     private static int IndexOf<T>(IReadOnlyList<T> rows, T row)

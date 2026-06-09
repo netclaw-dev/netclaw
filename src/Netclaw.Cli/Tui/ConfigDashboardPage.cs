@@ -30,11 +30,14 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
         return NetclawTuiChrome.BuildPageFrame("Netclaw Config", BuildInnerLayout());
     }
 
+    private DynamicLayoutNode? _helpLineNode;
+
     private ILayoutNode BuildInnerLayout()
     {
         return Layouts.Vertical()
             .WithSpacing(1)
             .WithChild(BuildList())
+            .WithChild(BuildHelpLine())
             .WithChild(Layouts.Empty().Fill())
             .WithChild(BuildStatusBar())
             .WithChild(BuildKeyBindings());
@@ -42,8 +45,16 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
 
     private ILayoutNode BuildList()
     {
+        // Status-summary column: "Label   <live status>". Terminal rows (Doctor /
+        // Quit) carry no status and render as the bare label.
         var rows = ViewModel.Items
-            .Select(item => $"{item.Label,-22} {item.Description}")
+            .Select(item =>
+            {
+                var status = ViewModel.StatusFor(item);
+                return string.IsNullOrEmpty(status)
+                    ? item.Label
+                    : $"{item.Label,-22}  {status}";
+            })
             .ToList();
 
         _entryList = Layouts.SelectionList(rows)
@@ -66,9 +77,36 @@ public sealed class ConfigDashboardPage : ReactivePage<ConfigDashboardViewModel>
             })
             .DisposeWith(Subscriptions);
 
+        _entryList.Invalidated
+            .Subscribe(_ =>
+            {
+                var highlighted = _entryList.HighlightedItem;
+                if (highlighted is not null)
+                {
+                    var index = rows.IndexOf(highlighted.Value);
+                    if (index >= 0)
+                        ViewModel.SelectedIndex.Value = index;
+                }
+
+                _helpLineNode?.Invalidate();
+            })
+            .DisposeWith(Subscriptions);
+
         return Layouts.Vertical()
             .WithChild(new TextNode("  Settings Areas").WithForeground(Color.White).Bold())
             .WithChild(_entryList);
+    }
+
+    // The focused item's description rendered as a dim help line below the list.
+    private LayoutNode BuildHelpLine()
+    {
+        _helpLineNode = new DynamicLayoutNode(() =>
+        {
+            var index = Math.Clamp(ViewModel.SelectedIndex.Value, 0, ViewModel.Items.Count - 1);
+            return (ILayoutNode)new TextNode($"  {ViewModel.Items[index].Description}").WithForeground(Color.BrightBlack);
+        });
+
+        return _helpLineNode.Height(1);
     }
 
     private LayoutNode BuildStatusBar()

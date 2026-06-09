@@ -185,7 +185,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
         Assert.Contains(channelsVm.GetChannelRows(), row => row.Id == "C09" && !row.IsAddAction);
-        Assert.Equal("Added C09 and saved.", channelsVm.Status.Value.Text);
+        Assert.Equal("Added C09 at the Team default and saved.", channelsVm.Status.Value.Text);
     }
 
     [Fact]

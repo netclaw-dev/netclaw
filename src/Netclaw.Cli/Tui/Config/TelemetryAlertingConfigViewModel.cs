@@ -12,13 +12,38 @@ using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui.Config;
 
+/// <summary>
+/// Which sub-screen the Telemetry &amp; Alerting editor is showing.
+/// </summary>
+internal enum TelemetryConfigScreen
+{
+    /// <summary>OTLP toggle/endpoint rows plus the outbound-webhook list.</summary>
+    List,
+
+    /// <summary>The add/edit form for a single outbound webhook.</summary>
+    WebhookForm
+}
+
+/// <summary>
+/// A read-model row for one configured outbound webhook in the list editor.
+/// </summary>
+internal sealed record TelemetryWebhookRow(string Name, string Url, WebhookFormat Format, bool HasAuthHeader);
+
+/// <summary>
+/// Telemetry &amp; Alerting editor. Keeps the OTLP enable/endpoint rows and exposes
+/// <see cref="NotificationsConfig.Webhooks"/> as a multi-entry list editor (the
+/// earlier revision surfaced only a single webhook). Each webhook carries a name,
+/// URL, and one optional Authorization-style header (masked); the payload format
+/// is auto-detected from the URL and shown read-only. Delivery policy
+/// (dedup/retries/timeout) is intentionally out of scope and preserved untouched.
+/// </summary>
 internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 {
     private const string DefaultOtlpEndpoint = "http://127.0.0.1:4317";
-    private const string DefaultWebhookName = "ops-alerts";
 
     private readonly NetclawPaths _paths;
     private string _acceptedOtlpEndpoint;
+    private int? _editingWebhookIndex;
 
     public TelemetryAlertingConfigViewModel(NetclawPaths paths)
     {
@@ -27,11 +52,14 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         TelemetryEnabled = new ReactiveProperty<bool>(state.TelemetryEnabled);
         OtlpEndpointDraft = new ReactiveProperty<string>(state.OtlpEndpoint);
         _acceptedOtlpEndpoint = state.OtlpEndpoint;
-        OutboundWebhookCount = new ReactiveProperty<int>(state.OutboundWebhookCount);
-        OutboundWebhookUrlDraft = new ReactiveProperty<string>(string.Empty);
-        OutboundWebhookAuthHeaderDraft = new ReactiveProperty<string>(string.Empty);
-        HasPersistedWebhookAuthHeader = new ReactiveProperty<bool>(state.HasPersistedWebhookAuthHeader);
+        Webhooks = new ReactiveProperty<IReadOnlyList<TelemetryWebhookRow>>(state.Webhooks);
+        Screen = new ReactiveProperty<TelemetryConfigScreen>(TelemetryConfigScreen.List);
         SelectedRow = new ReactiveProperty<int>(0);
+        FormFieldIndex = new ReactiveProperty<int>(0);
+        WebhookNameDraft = new ReactiveProperty<string>(string.Empty);
+        WebhookUrlDraft = new ReactiveProperty<string>(string.Empty);
+        WebhookAuthHeaderDraft = new ReactiveProperty<string>(string.Empty);
+        EditingHasPersistedAuthHeader = new ReactiveProperty<bool>(false);
         Status = new ReactiveProperty<ConfigStatusMessage>(new ConfigStatusMessage(string.Empty, ConfigStatusTone.Neutral));
         IsSaved = new ReactiveProperty<bool>(false);
     }
@@ -41,29 +69,42 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
     public ReactiveProperty<bool> TelemetryEnabled { get; }
     public ReactiveProperty<string> OtlpEndpointDraft { get; }
-    public ReactiveProperty<int> OutboundWebhookCount { get; }
-    public ReactiveProperty<string> OutboundWebhookUrlDraft { get; }
-    public ReactiveProperty<string> OutboundWebhookAuthHeaderDraft { get; }
-    public ReactiveProperty<bool> HasPersistedWebhookAuthHeader { get; }
+    public ReactiveProperty<IReadOnlyList<TelemetryWebhookRow>> Webhooks { get; }
+    public ReactiveProperty<TelemetryConfigScreen> Screen { get; }
     public ReactiveProperty<int> SelectedRow { get; }
+    public ReactiveProperty<int> FormFieldIndex { get; }
+    public ReactiveProperty<string> WebhookNameDraft { get; }
+    public ReactiveProperty<string> WebhookUrlDraft { get; }
+    public ReactiveProperty<string> WebhookAuthHeaderDraft { get; }
+    public ReactiveProperty<bool> EditingHasPersistedAuthHeader { get; }
     public ReactiveProperty<ConfigStatusMessage> Status { get; }
     public ReactiveProperty<bool> IsSaved { get; }
 
-    public IReadOnlyList<string> Rows { get; } =
-    [
-        "Telemetry enabled",
-        "OTLP endpoint",
-        "Outbound webhook URL",
-        "Outbound webhook auth header"
-    ];
+    // List layout: 2 OTLP rows + one row per webhook + an "Add webhook" row.
+    public const int OtlpRowCount = 2;
+    public int WebhookCount => Webhooks.Value.Count;
+    public int AddRowIndex => OtlpRowCount + WebhookCount;
+    public int ListRowCount => AddRowIndex + 1;
+
+    public bool IsWebhookRow(int index) => index >= OtlpRowCount && index < AddRowIndex;
+    public int WebhookIndexFor(int row) => row - OtlpRowCount;
+
+    public static readonly IReadOnlyList<string> FormFields = ["Name", "URL", "Auth header"];
 
     public void MoveSelection(int delta)
     {
-        var next = Math.Clamp(SelectedRow.Value + delta, 0, Rows.Count - 1);
+        if (Screen.Value == TelemetryConfigScreen.WebhookForm)
+        {
+            FormFieldIndex.Value = (FormFieldIndex.Value + delta + FormFields.Count) % FormFields.Count;
+            return;
+        }
+
+        var next = Math.Clamp(SelectedRow.Value + delta, 0, ListRowCount - 1);
         if (next != SelectedRow.Value)
             SelectedRow.Value = next;
     }
 
+    /// <summary>Toggles telemetry from the OTLP-enabled row and autosaves.</summary>
     public bool ToggleTelemetry()
     {
         var previous = TelemetryEnabled.Value;
@@ -79,51 +120,190 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
     public void AppendText(string text)
     {
-        switch (SelectedRow.Value)
+        if (Screen.Value == TelemetryConfigScreen.WebhookForm)
         {
-            case 1:
-                if (OtlpEndpointDraft.Value == _acceptedOtlpEndpoint)
-                    OtlpEndpointDraft.Value = string.Empty;
-
-                OtlpEndpointDraft.Value += text;
-                break;
-            case 2:
-                OutboundWebhookUrlDraft.Value += text;
-                break;
-            case 3:
-                OutboundWebhookAuthHeaderDraft.Value += text;
-                break;
-            default:
-                return;
+            FormFieldDraft.Value += text;
+            MarkDirty();
+            return;
         }
 
-        MarkDirty();
+        if (SelectedRow.Value == 1)
+        {
+            if (OtlpEndpointDraft.Value == _acceptedOtlpEndpoint)
+                OtlpEndpointDraft.Value = string.Empty;
+
+            OtlpEndpointDraft.Value += text;
+            MarkDirty();
+        }
     }
 
     public void Backspace()
     {
-        var target = SelectedRow.Value switch
+        if (Screen.Value == TelemetryConfigScreen.WebhookForm)
         {
-            1 => OtlpEndpointDraft,
-            2 => OutboundWebhookUrlDraft,
-            3 => OutboundWebhookAuthHeaderDraft,
-            _ => null
-        };
+            var draft = FormFieldDraft;
+            if (draft.Value.Length > 0)
+            {
+                draft.Value = draft.Value[..^1];
+                MarkDirty();
+            }
 
-        if (target is null || target.Value.Length == 0)
             return;
+        }
 
-        target.Value = target.Value[..^1];
-        MarkDirty();
+        if (SelectedRow.Value == 1 && OtlpEndpointDraft.Value.Length > 0)
+        {
+            OtlpEndpointDraft.Value = OtlpEndpointDraft.Value[..^1];
+            MarkDirty();
+        }
     }
+
+    private ReactiveProperty<string> FormFieldDraft => FormFieldIndex.Value switch
+    {
+        0 => WebhookNameDraft,
+        1 => WebhookUrlDraft,
+        _ => WebhookAuthHeaderDraft
+    };
+
+    /// <summary>Format auto-detected from the in-progress URL draft (read-only).</summary>
+    public WebhookFormat DraftFormat => WebhookFormatDetection.InferFromUrl(WebhookUrlDraft.Value);
 
     public void ActivateSelected()
     {
+        if (Screen.Value == TelemetryConfigScreen.WebhookForm)
+        {
+            SaveWebhookForm();
+            return;
+        }
+
         switch (SelectedRow.Value)
         {
             case 0:
                 ToggleTelemetry();
                 break;
+            case 1:
+                Save();
+                break;
+            default:
+                if (SelectedRow.Value == AddRowIndex)
+                    BeginAddWebhook();
+                else if (IsWebhookRow(SelectedRow.Value))
+                    BeginEditWebhook(WebhookIndexFor(SelectedRow.Value));
+                break;
+        }
+    }
+
+    public void BeginAddWebhook()
+    {
+        _editingWebhookIndex = null;
+        WebhookNameDraft.Value = string.Empty;
+        WebhookUrlDraft.Value = string.Empty;
+        WebhookAuthHeaderDraft.Value = string.Empty;
+        EditingHasPersistedAuthHeader.Value = false;
+        FormFieldIndex.Value = 0;
+        ClearStatus();
+        Screen.Value = TelemetryConfigScreen.WebhookForm;
+        RequestRedraw();
+    }
+
+    public void BeginEditWebhook(int index)
+    {
+        var rows = Webhooks.Value;
+        if (index < 0 || index >= rows.Count)
+            return;
+
+        var row = rows[index];
+        _editingWebhookIndex = index;
+        WebhookNameDraft.Value = row.Name;
+        WebhookUrlDraft.Value = row.Url;
+        WebhookAuthHeaderDraft.Value = string.Empty;
+        EditingHasPersistedAuthHeader.Value = row.HasAuthHeader;
+        FormFieldIndex.Value = 0;
+        ClearStatus();
+        Screen.Value = TelemetryConfigScreen.WebhookForm;
+        RequestRedraw();
+    }
+
+    public void RemoveSelectedWebhook()
+    {
+        if (!IsWebhookRow(SelectedRow.Value))
+            return;
+
+        var index = WebhookIndexFor(SelectedRow.Value);
+        var removedName = Webhooks.Value[index].Name;
+        if (PersistWebhooks(webhooks => webhooks.RemoveAt(index), $"Removed {removedName}. Saved."))
+            SelectedRow.Value = Math.Clamp(SelectedRow.Value, 0, ListRowCount - 1);
+    }
+
+    public void CancelWebhookForm()
+    {
+        Screen.Value = TelemetryConfigScreen.List;
+        ClearStatus();
+        RequestRedraw();
+    }
+
+    private void SaveWebhookForm()
+    {
+        var url = WebhookUrlDraft.Value.Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Status.Value = new ConfigStatusMessage("Outbound webhook URL is required.", ConfigStatusTone.Error);
+            RequestRedraw();
+            return;
+        }
+
+        if (!TryValidateHttpUri(url, "Outbound webhook URL", out var normalizedUrl, out var urlError))
+        {
+            Status.Value = new ConfigStatusMessage(urlError, ConfigStatusTone.Error);
+            RequestRedraw();
+            return;
+        }
+
+        var authDraft = WebhookAuthHeaderDraft.Value.Trim();
+        string? headerName = null;
+        string? headerValue = null;
+        if (!string.IsNullOrWhiteSpace(authDraft)
+            && !TryParseHeader(authDraft, out headerName, out headerValue, out var headerError))
+        {
+            Status.Value = new ConfigStatusMessage(headerError, ConfigStatusTone.Error);
+            RequestRedraw();
+            return;
+        }
+
+        var name = string.IsNullOrWhiteSpace(WebhookNameDraft.Value)
+            ? $"{WebhookFormatDetection.InferFromUrl(normalizedUrl!).ToString().ToLowerInvariant()}-webhook"
+            : WebhookNameDraft.Value.Trim();
+
+        var editing = _editingWebhookIndex;
+        var newAuth = !string.IsNullOrWhiteSpace(authDraft);
+        var verb = editing is null ? "added" : "updated";
+        var saved = PersistWebhooks(webhooks =>
+        {
+            var target = editing is { } index && index < webhooks.Count
+                ? webhooks[index]
+                : new WebhookTarget();
+
+            target.Name = name;
+            target.Url = normalizedUrl!;
+            target.Format = WebhookFormatDetection.InferFromUrl(normalizedUrl!);
+            if (newAuth)
+            {
+                target.Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [headerName!] = headerValue!
+                };
+            }
+
+            if (editing is null)
+                webhooks.Add(target);
+        }, $"Webhook {name} {verb}. Saved.");
+
+        if (saved)
+        {
+            Screen.Value = TelemetryConfigScreen.List;
+            SelectedRow.Value = editing is { } idx
+                ? OtlpRowCount + idx
+                : OtlpRowCount + Math.Max(0, WebhookCount - 1);
         }
     }
 
@@ -142,27 +322,6 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             return false;
         }
 
-        var webhookUrlDraft = OutboundWebhookUrlDraft.Value.Trim();
-        string? normalizedWebhookUrl = null;
-        if (!string.IsNullOrWhiteSpace(webhookUrlDraft)
-            && !TryValidateHttpUri(webhookUrlDraft, "Outbound webhook URL", out normalizedWebhookUrl, out var webhookError))
-        {
-            Status.Value = new ConfigStatusMessage(webhookError, ConfigStatusTone.Error);
-            RequestRedraw();
-            return false;
-        }
-
-        var authHeaderDraft = OutboundWebhookAuthHeaderDraft.Value.Trim();
-        string? headerName = null;
-        string? headerValue = null;
-        if (!string.IsNullOrWhiteSpace(authHeaderDraft)
-            && !TryParseHeader(authHeaderDraft, out headerName, out headerValue, out var headerError))
-        {
-            Status.Value = new ConfigStatusMessage(headerError, ConfigStatusTone.Error);
-            RequestRedraw();
-            return false;
-        }
-
         var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
         root["Telemetry"] = new Dictionary<string, object>
@@ -174,49 +333,49 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
             }
         };
 
-        var notifications = LoadSection<NotificationsConfig>(root, "Notifications");
-        if (normalizedWebhookUrl is not null || !string.IsNullOrWhiteSpace(authHeaderDraft))
-        {
-            var target = notifications.Webhooks.FirstOrDefault(static w => string.Equals(w.Name, DefaultWebhookName, StringComparison.OrdinalIgnoreCase))
-                ?? notifications.Webhooks.FirstOrDefault()
-                ?? new WebhookTarget { Name = DefaultWebhookName };
-
-            notifications.Webhooks.Remove(target);
-            target.Name ??= DefaultWebhookName;
-            if (normalizedWebhookUrl is not null)
-            {
-                target.Url = normalizedWebhookUrl;
-                target.Format = WebhookFormatDetection.InferFromUrl(normalizedWebhookUrl);
-            }
-
-            if (!string.IsNullOrWhiteSpace(authHeaderDraft))
-            {
-                target.Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    [headerName!] = headerValue!
-                };
-            }
-
-            notifications.Webhooks.Add(target);
-        }
-
-        if (notifications.Webhooks.Count > 0)
-            root["Notifications"] = BuildNotificationsSection(notifications);
-
         ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+        ReloadState(successMessage);
+        return true;
+    }
 
+    /// <summary>
+    /// Mutates the persisted <see cref="NotificationsConfig.Webhooks"/> list through
+    /// the same section-preserving writer the rest of the editor uses, leaving the
+    /// delivery policy and unrelated sections untouched.
+    /// </summary>
+    private bool PersistWebhooks(Action<List<WebhookTarget>> mutate, string successMessage)
+        => ConfigAutosave.Run(
+            () =>
+            {
+                var root = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+                root["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
+                var notifications = LoadSection<NotificationsConfig>(root, "Notifications");
+                mutate(notifications.Webhooks);
+
+                if (notifications.Webhooks.Count > 0
+                    || root.ContainsKey("Notifications"))
+                {
+                    root["Notifications"] = BuildNotificationsSection(notifications);
+                }
+
+                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, root);
+                ReloadState(successMessage);
+                return true;
+            },
+            Status,
+            "Telemetry & Alerting autosave failed",
+            RequestRedraw);
+
+    private void ReloadState(string successMessage)
+    {
         var state = LoadState(_paths);
         TelemetryEnabled.Value = state.TelemetryEnabled;
         OtlpEndpointDraft.Value = state.OtlpEndpoint;
         _acceptedOtlpEndpoint = state.OtlpEndpoint;
-        OutboundWebhookCount.Value = state.OutboundWebhookCount;
-        HasPersistedWebhookAuthHeader.Value = state.HasPersistedWebhookAuthHeader;
-        OutboundWebhookUrlDraft.Value = string.Empty;
-        OutboundWebhookAuthHeaderDraft.Value = string.Empty;
+        Webhooks.Value = state.Webhooks;
         IsSaved.Value = true;
         Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         RequestRedraw();
-        return true;
     }
 
     private bool AutosaveCompletedAction(string successMessage)
@@ -228,6 +387,12 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
 
     public void GoBack()
     {
+        if (Screen.Value == TelemetryConfigScreen.WebhookForm)
+        {
+            CancelWebhookForm();
+            return;
+        }
+
         RouteRequested?.Invoke("/config");
         Navigate?.Invoke("/config");
     }
@@ -242,11 +407,14 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
     {
         TelemetryEnabled.Dispose();
         OtlpEndpointDraft.Dispose();
-        OutboundWebhookCount.Dispose();
-        OutboundWebhookUrlDraft.Dispose();
-        OutboundWebhookAuthHeaderDraft.Dispose();
-        HasPersistedWebhookAuthHeader.Dispose();
+        Webhooks.Dispose();
+        Screen.Dispose();
         SelectedRow.Dispose();
+        FormFieldIndex.Dispose();
+        WebhookNameDraft.Dispose();
+        WebhookUrlDraft.Dispose();
+        WebhookAuthHeaderDraft.Dispose();
+        EditingHasPersistedAuthHeader.Dispose();
         Status.Dispose();
         IsSaved.Dispose();
         base.Dispose();
@@ -309,7 +477,7 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
         return true;
     }
 
-    private static (bool TelemetryEnabled, string OtlpEndpoint, int OutboundWebhookCount, bool HasPersistedWebhookAuthHeader) LoadState(NetclawPaths paths)
+    private static (bool TelemetryEnabled, string OtlpEndpoint, IReadOnlyList<TelemetryWebhookRow> Webhooks) LoadState(NetclawPaths paths)
     {
         var root = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
         var telemetry = LoadRawSection(root, "Telemetry");
@@ -323,7 +491,15 @@ internal sealed class TelemetryAlertingConfigViewModel : ReactiveViewModel
                 : DefaultOtlpEndpoint;
 
         var notifications = LoadSection<NotificationsConfig>(root, "Notifications");
-        return (enabled, endpoint, notifications.Webhooks.Count, notifications.Webhooks.Any(static w => w.Headers is { Count: > 0 }));
+        var rows = notifications.Webhooks
+            .Select(static webhook => new TelemetryWebhookRow(
+                string.IsNullOrWhiteSpace(webhook.Name) ? "(unnamed)" : webhook.Name,
+                webhook.Url,
+                webhook.Format,
+                webhook.Headers is { Count: > 0 }))
+            .ToArray();
+
+        return (enabled, endpoint, rows);
     }
 
     private static Dictionary<string, object> LoadRawSection(Dictionary<string, object> root, string sectionName)

@@ -187,24 +187,16 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         var input = EnsureSingleInput(ChannelsConfigScreen.AddChannel, "channel", ViewModel.AddChannelInput, "channel ID or #name");
         input.OnFocused();
 
-        var layout = Layouts.Vertical()
+        // Resolve-before-add: no audience picker here. The channel is resolved
+        // against the adapter, added at the deployment-posture default audience,
+        // and tuned afterward with ←/→ on the channel list.
+        return Layouts.Vertical()
             .WithChild(Header($"  {ViewModel.ActiveAdapterName} > Add Channel"))
             .WithChild(new TextNode("  Channel name or ID:").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(input, "Channel"))
             .WithChild(Layouts.Empty().Height(1))
-            .WithChild(new TextNode("  Audience:").WithForeground(Color.White));
-
-        for (var i = 0; i < ChannelsConfigViewModel.AudienceOptions.Count; i++)
-        {
-            var audience = ChannelsConfigViewModel.AudienceOptions[i];
-            var focused = i == ViewModel.AudienceSelectionIndex;
-            layout = layout.WithChild(Row(
-                $"{FocusPrefix(focused)}{AudienceLabel(audience),-10} {AudienceDescription(audience)}",
-                focused));
-        }
-
-        return layout.WithChild(Layouts.Empty().Height(1))
-            .WithChild(Hint("  IDs are saved as entered. Names are normalized by removing a leading #."));
+            .WithChild(Hint($"  Netclaw resolves the channel on {ViewModel.ActiveAdapterName} and adds it at the default audience."))
+            .WithChild(Hint("  Change its audience afterward with ←/→ on the channel list."));
     }
 
     private ILayoutNode BuildAllowedUsers()
@@ -328,7 +320,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                     ChannelsConfigScreen.AdapterMenu => " [↑/↓] Navigate  [Enter] Select  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit/Done  [a] Add  [Del] Remove  [Esc] Menu",
                     ChannelsConfigScreen.EditAudience => " [↑/↓] Navigate  [Enter] Apply  [Esc] Channels  [Ctrl+Q] Quit",
-                    ChannelsConfigScreen.AddChannel => " [↑/↓] Audience  [Enter] Add  [Esc] Channels  [Ctrl+Q] Quit",
+                    ChannelsConfigScreen.AddChannel => " [Type] Channel  [Enter] Resolve & add  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AllowedUsers => " [Enter] Apply  [Esc] Menu  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.DirectMessages => " [↑/↓] Navigate  [Space] Toggle  [←/→] Audience  [Enter] Apply  [Esc] Menu",
                     ChannelsConfigScreen.RotateCredentials => " [Tab] Field  [Enter] Apply  [Esc] Menu  [Ctrl+Q] Quit",
@@ -534,18 +526,11 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
 
     private void HandleAddChannelKey(ConsoleKeyInfo keyInfo)
     {
-        switch (keyInfo.Key)
+        if (keyInfo.Key == ConsoleKey.Enter)
         {
-            case ConsoleKey.UpArrow:
-                ViewModel.MoveAddChannelAudience(-1);
-                return;
-            case ConsoleKey.DownArrow:
-                ViewModel.MoveAddChannelAudience(1);
-                return;
-            case ConsoleKey.Enter:
-                StageSingleInput();
-                ViewModel.ApplyAddChannel();
-                return;
+            StageSingleInput();
+            ViewModel.ApplyAddChannel();
+            return;
         }
 
         _singleInput?.HandleInput(keyInfo);
@@ -715,16 +700,14 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
 
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.BrightBlack);
-    private static string FocusPrefix(bool focused) => focused ? " ▶ " : "   ";
+
+    // Constant indent so non-selected rows keep the same content column the
+    // focused full-width bar uses (the bar replaces the old ▶ marker).
+    private static string FocusPrefix(bool focused) => "   ";
     private static string Check(bool enabled) => enabled ? "✓" : " ";
 
-    private static TextNode Row(string line, bool focused, bool enabled = true)
-    {
-        var node = new TextNode(line);
-        if (focused)
-            return node.WithForeground(Color.Cyan).Bold();
-        return node.WithForeground(enabled ? Color.White : Color.BrightBlack);
-    }
+    private static ILayoutNode Row(string line, bool focused, bool enabled = true)
+        => ConfigSelectionRow.Create(line, focused, enabled ? Color.White : Color.BrightBlack);
 
     private static string AudienceLabel(TrustAudience audience) => audience switch
     {

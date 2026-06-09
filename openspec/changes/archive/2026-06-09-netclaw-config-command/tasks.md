@@ -31,8 +31,8 @@
 
 ## 5. Channels area
 
-- [ ] 5.1 Add `Channels` sub-page containing Slack, Discord, Mattermost.
-- [ ] 5.2 Keep each channel editor as a leaf with substantive validation
+- [x] 5.1 Add `Channels` sub-page containing Slack, Discord, Mattermost.
+- [x] 5.2 Keep each channel editor as a leaf with substantive validation
   and round-trip coverage.
 
 ## 6. Skill Sources area
@@ -116,14 +116,14 @@
 
 ## 14. Coverage
 
-- [ ] 14.1 Add shared autosave contract tests for every inline config leaf:
+- [x] 14.1 Add shared autosave contract tests for every inline config leaf:
   completed actions persist, `Esc` does not save incomplete drafts, and
   invalid completed actions write nothing.
-- [ ] 14.2 Add substantive round-trip tests for leaf editors.
-- [ ] 14.3 Add substantive smoke tapes for leaf editors.
-- [ ] 14.4 Use semantic preservation assertions, not byte-identical file
+- [x] 14.2 Add substantive round-trip tests for leaf editors.
+- [x] 14.3 Add substantive smoke tapes for leaf editors.
+- [x] 14.4 Use semantic preservation assertions, not byte-identical file
   assertions.
-- [ ] 14.5 Add shallow routing coverage for routed handoffs only.
+- [x] 14.5 Add shallow routing coverage for routed handoffs only.
 
 ## 16. Shared autosave config interaction
 

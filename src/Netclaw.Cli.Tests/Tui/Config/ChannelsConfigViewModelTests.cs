@@ -386,29 +386,90 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Add_channel_preserves_credentials_and_writes_channel_audience()
+    public void Add_channel_preserves_credentials_and_adds_at_system_default_audience()
     {
         WriteChannelConfig();
         WriteChannelSecrets();
         using var vm = CreateViewModel();
         vm.OpenAdapterManagement(ChannelType.Slack);
         vm.BeginAddChannel();
+        // Resolve-before-add adds an entered ID directly at the deployment-posture
+        // default audience (no audience picker during add).
         vm.AddChannelInput = "C09";
-        vm.MoveAddChannelAudience(-1); // Team default -> Personal.
 
         vm.ApplyAddChannel();
         vm.Save();
 
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
         Assert.Equal(["C01", "C02", "C03", "C09"], ToStringArray(channelsRaw));
         Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var audiencesRaw));
         var audiences = ToStringDictionary(audiencesRaw);
-        Assert.Equal("personal", audiences["C09"]);
+        // Personal deployment posture -> Team channel default.
+        Assert.Equal("team", audiences["C09"]);
 
         var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
         Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var botToken));
         Assert.Equal("xoxb-test", ConfigFileHelper.DecryptIfEncrypted(_paths, botToken?.ToString()));
+    }
+
+    [Fact]
+    public void Add_channel_resolves_name_to_id_before_adding_and_focuses_the_new_row()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("netclaw-support", "C09")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "netclaw-support";
+
+        vm.ApplyAddChannel();
+
+        // The resolve ran with the bot token, the resolved ID was added, and we
+        // advanced to the channel list with the new row focused.
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(["netclaw-support"], slackProbe.LastResolvedNames);
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+        Assert.True(vm.IsSaved.Value);
+        var focusedRow = vm.GetChannelRows()[vm.ChannelRowIndex];
+        Assert.Equal("C09", focusedRow.Id);
+    }
+
+    [Fact]
+    public void Add_channel_that_does_not_resolve_is_not_added_and_keeps_the_add_screen()
+    {
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(false, null, [], ["ghost"])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.BeginAddChannel();
+        vm.AddChannelInput = "ghost";
+
+        vm.ApplyAddChannel();
+
+        Assert.Equal(1, slackProbe.ResolveCallCount);
+        Assert.Equal(ChannelsConfigScreen.AddChannel, vm.Screen.Value);
+        Assert.Equal("Slack channel not found: #ghost", vm.Status.Value.Text);
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        // The channel was never added to the in-memory list nor persisted.
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
+        Assert.Equal(["C01", "C02", "C03"], ToStringArray(channelsRaw));
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using R3;
 using Termina.Extensions;
 using Termina.Input;
@@ -16,6 +17,7 @@ namespace Netclaw.Cli.Tui.Config;
 internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlertingConfigViewModel>
 {
     private DynamicLayoutNode? _contentNode;
+    private DynamicLayoutNode? _keyBindingsNode;
     private readonly TextInputNode _pasteBuffer = new();
 
     protected override void OnBound()
@@ -28,13 +30,15 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
             .Subscribe(HandlePaste)
             .DisposeWith(Subscriptions);
 
-        ViewModel.TelemetryEnabled.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.TelemetryEnabled.Subscribe(_ => InvalidateAll()).DisposeWith(Subscriptions);
         ViewModel.OtlpEndpointDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.OutboundWebhookCount.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.OutboundWebhookUrlDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.OutboundWebhookAuthHeaderDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
-        ViewModel.HasPersistedWebhookAuthHeader.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.Webhooks.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.Screen.Subscribe(_ => InvalidateAll()).DisposeWith(Subscriptions);
         ViewModel.SelectedRow.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.FormFieldIndex.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.WebhookNameDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.WebhookUrlDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
+        ViewModel.WebhookAuthHeaderDraft.Subscribe(_ => _contentNode?.Invalidate()).DisposeWith(Subscriptions);
     }
 
     public override ILayoutNode BuildLayout()
@@ -50,34 +54,66 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
 
     private LayoutNode BuildContent()
     {
-        _contentNode = new DynamicLayoutNode(() =>
-        {
-            var authState = ViewModel.HasPersistedWebhookAuthHeader.Value && string.IsNullOrWhiteSpace(ViewModel.OutboundWebhookAuthHeaderDraft.Value)
-                ? "(stored header preserved)"
-                : string.IsNullOrWhiteSpace(ViewModel.OutboundWebhookAuthHeaderDraft.Value) ? "(optional)" : "(new header entered)";
-
-            return Layouts.Vertical()
-                .WithChild(Header("  Telemetry & Alerting"))
-                .WithChild(Hint("  Configure OpenTelemetry export and operational outbound webhooks."))
-                .WithChild(Hint("  Delivery-policy tuning is intentionally parked for a later pass."))
-                .WithChild(Layouts.Empty().Height(1))
-                .WithChild(Hint($"  Current: telemetry={(ViewModel.TelemetryEnabled.Value ? "enabled" : "disabled")}, outbound webhooks={ViewModel.OutboundWebhookCount.Value}"))
-                .WithChild(Layouts.Empty().Height(1))
-                .WithChild(Row(0,
-                    $"Telemetry enabled          [{Check(ViewModel.TelemetryEnabled.Value)}]",
-                    "Toggle daemon OTLP logs and metrics export."))
-                .WithChild(Row(1,
-                    $"OTLP endpoint              {ViewModel.OtlpEndpointDraft.Value}",
-                    "gRPC OTLP collector endpoint, usually port 4317."))
-                .WithChild(Row(2,
-                    $"Outbound webhook URL       {DisplayDraft(ViewModel.OutboundWebhookUrlDraft.Value)}",
-                    "Operational alert target; Slack URLs get Slack format automatically."))
-                .WithChild(Row(3,
-                    $"Outbound auth header       {authState}",
-                    "Optional 'Header-Name: value'; leave blank to preserve stored headers."));
-        });
+        _contentNode = new DynamicLayoutNode(() => ViewModel.Screen.Value == TelemetryConfigScreen.WebhookForm
+            ? BuildWebhookForm()
+            : BuildList());
 
         return _contentNode;
+    }
+
+    private ILayoutNode BuildList()
+    {
+        var webhooks = ViewModel.Webhooks.Value;
+        var layout = Layouts.Vertical()
+            .WithChild(Header("  Telemetry & Alerting"))
+            .WithChild(Hint("  Configure OpenTelemetry export and outbound alert webhooks."))
+            .WithChild(Hint("  Slack URLs use Slack format automatically. Delivery-policy tuning is parked."))
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Row(0, $"Telemetry enabled          [{Check(ViewModel.TelemetryEnabled.Value)}]"))
+            .WithChild(Row(1, $"OTLP endpoint              {ViewModel.OtlpEndpointDraft.Value}"))
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(new TextNode("  Outbound Webhooks").WithForeground(Color.White).Bold());
+
+        if (webhooks.Count == 0)
+            layout = layout.WithChild(Hint("  No outbound webhooks configured yet."));
+
+        for (var i = 0; i < webhooks.Count; i++)
+        {
+            var row = webhooks[i];
+            var rowIndex = TelemetryAlertingConfigViewModel.OtlpRowCount + i;
+            var auth = row.HasAuthHeader ? "auth" : "—";
+            layout = layout.WithChild(Row(
+                rowIndex,
+                $"{row.Name,-16} {Truncate(row.Url, 40),-40} {row.Format,-8} {auth}"));
+        }
+
+        layout = layout.WithChild(Row(ViewModel.AddRowIndex, "+ Add webhook"));
+
+        return layout
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Hint($"  {FocusedHelp()}"));
+    }
+
+    private ILayoutNode BuildWebhookForm()
+    {
+        var format = ViewModel.DraftFormat;
+        var authState = ViewModel.EditingHasPersistedAuthHeader.Value && string.IsNullOrWhiteSpace(ViewModel.WebhookAuthHeaderDraft.Value)
+            ? "(stored header preserved)"
+            : string.IsNullOrWhiteSpace(ViewModel.WebhookAuthHeaderDraft.Value) ? "(optional)" : "(new header entered)";
+
+        var title = ViewModel.EditingHasPersistedAuthHeader.Value || !string.IsNullOrWhiteSpace(ViewModel.WebhookNameDraft.Value)
+            ? $"  Edit webhook: {DisplayName()}"
+            : "  Add outbound webhook";
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode(title).WithForeground(Color.White).Bold())
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(FormRow(0, "Name        ", DisplayField(ViewModel.WebhookNameDraft.Value, "(optional)", masked: false)))
+            .WithChild(FormRow(1, "URL         ", DisplayField(ViewModel.WebhookUrlDraft.Value, "https://hooks.slack.com/services/…", masked: false)))
+            .WithChild(FormRow(2, "Auth header ", DisplayField(ViewModel.WebhookAuthHeaderDraft.Value, authState, masked: true)))
+            .WithChild(Layouts.Empty().Height(1))
+            .WithChild(Hint($"  Format:  {format} (auto-detected from URL)"))
+            .WithChild(Hint("  URL is required. Auth header is optional and stored masked."));
     }
 
     private LayoutNode BuildStatusBar()
@@ -89,7 +125,14 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
             .Height(1);
 
     private LayoutNode BuildKeyBindings()
-        => NetclawTuiChrome.BuildKeyHintLine(" [↑/↓] Navigate  [Space] Toggle/Save  [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Settings Areas  [Ctrl+Q] Quit");
+    {
+        _keyBindingsNode = new DynamicLayoutNode(() => NetclawTuiChrome.BuildKeyHintLine(
+            ViewModel.Screen.Value == TelemetryConfigScreen.WebhookForm
+                ? " [↑/↓ or Tab] Fields  [Type/Paste] Edit  [Enter] Save  [Esc] Back  [Ctrl+Q] Quit"
+                : " [↑/↓] Navigate  [Space] Toggle  [Enter] Edit/Add/Save  [Delete] Remove  [Type/Paste] Edit  [Esc] Settings Areas  [Ctrl+Q] Quit"));
+
+        return _keyBindingsNode.Height(1);
+    }
 
     private void HandleKeyPress(KeyPressed key)
     {
@@ -106,6 +149,17 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
             return;
         }
 
+        if (ViewModel.Screen.Value == TelemetryConfigScreen.WebhookForm)
+        {
+            HandleFormKey(keyInfo);
+            return;
+        }
+
+        HandleListKey(keyInfo);
+    }
+
+    private void HandleListKey(ConsoleKeyInfo keyInfo)
+    {
         switch (keyInfo.Key)
         {
             case ConsoleKey.UpArrow:
@@ -118,10 +172,33 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
                 ViewModel.ToggleTelemetry();
                 return;
             case ConsoleKey.Enter:
-                if (ViewModel.SelectedRow.Value == 0)
-                    ViewModel.ActivateSelected();
-                else
-                    ViewModel.Save();
+                ViewModel.ActivateSelected();
+                return;
+            case ConsoleKey.Delete:
+                ViewModel.RemoveSelectedWebhook();
+                return;
+            case ConsoleKey.Backspace:
+                ViewModel.Backspace();
+                return;
+        }
+
+        if (!char.IsControl(keyInfo.KeyChar))
+            ViewModel.AppendText(keyInfo.KeyChar.ToString());
+    }
+
+    private void HandleFormKey(ConsoleKeyInfo keyInfo)
+    {
+        switch (keyInfo.Key)
+        {
+            case ConsoleKey.UpArrow:
+                ViewModel.MoveSelection(-1);
+                return;
+            case ConsoleKey.DownArrow:
+            case ConsoleKey.Tab:
+                ViewModel.MoveSelection(1);
+                return;
+            case ConsoleKey.Enter:
+                ViewModel.ActivateSelected();
                 return;
             case ConsoleKey.Backspace:
                 ViewModel.Backspace();
@@ -139,19 +216,52 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
         ViewModel.AppendText(_pasteBuffer.Text);
     }
 
-    private ILayoutNode Row(int index, string label, string description)
+    private ILayoutNode Row(int index, string label)
+        => ConfigSelectionRow.Create($"  {label}", index == ViewModel.SelectedRow.Value);
+
+    private ILayoutNode FormRow(int index, string label, string value)
+        => ConfigSelectionRow.Create($"  {label} {value}", index == ViewModel.FormFieldIndex.Value);
+
+    private string FocusedHelp()
     {
-        var focused = index == ViewModel.SelectedRow.Value;
-        var prefix = focused ? "> " : "  ";
-        var color = focused ? Color.Cyan : Color.White;
-        return Text($"  {prefix}{label,-58} {description}", color);
+        var row = ViewModel.SelectedRow.Value;
+        if (row == 0)
+            return "Toggle daemon OTLP logs and metrics export.";
+        if (row == 1)
+            return "gRPC OTLP collector endpoint, usually port 4317.";
+        if (row == ViewModel.AddRowIndex)
+            return "Add a new outbound alert target.";
+        if (ViewModel.IsWebhookRow(row))
+        {
+            var webhook = ViewModel.Webhooks.Value[ViewModel.WebhookIndexFor(row)];
+            return $"{webhook.Format} format · {(webhook.HasAuthHeader ? "auth header set" : "no auth header")} · Enter to edit, Delete to remove.";
+        }
+
+        return string.Empty;
     }
 
+    private string DisplayName()
+        => string.IsNullOrWhiteSpace(ViewModel.WebhookNameDraft.Value) ? "(unnamed)" : ViewModel.WebhookNameDraft.Value;
+
+    private static string DisplayField(string value, string placeholder, bool masked)
+    {
+        if (string.IsNullOrEmpty(value))
+            return placeholder;
+        return masked ? new string('•', Math.Min(value.Length, 24)) : value;
+    }
+
+    private static string Truncate(string value, int width)
+        => value.Length <= width ? value : string.Concat(value.AsSpan(0, Math.Max(0, width - 1)), "…");
+
     private static string Check(bool value) => value ? "x" : " ";
-    private static string DisplayDraft(string value) => string.IsNullOrWhiteSpace(value) ? "(leave unchanged)" : value;
     private static TextNode Header(string text) => new TextNode(text).WithForeground(Color.White).Bold();
     private static TextNode Hint(string text) => new TextNode(text).WithForeground(Color.Gray);
-    private static TextNode Text(string text, Color color) => new TextNode(text).WithForeground(color);
+
+    private void InvalidateAll()
+    {
+        _contentNode?.Invalidate();
+        _keyBindingsNode?.Invalidate();
+    }
 
     private static Color ToColor(ConfigStatusTone tone)
         => tone switch

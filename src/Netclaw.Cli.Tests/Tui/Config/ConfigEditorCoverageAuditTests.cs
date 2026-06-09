@@ -170,16 +170,16 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                 nameof(TelemetryAlertingConfigViewModelTests),
                 StructuralValidationCoverage.Required(
                     new ValidationConceptTest("uri", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Save_rejects_invalid_telemetry_endpoint_before_persistence)),
-                    new ValidationConceptTest("webhook-uri", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Save_rejects_invalid_outbound_webhook_url_before_persistence)),
-                    new ValidationConceptTest("auth", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Save_rejects_invalid_outbound_auth_header_before_persistence))),
+                    new ValidationConceptTest("webhook-uri", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Saving_a_webhook_with_a_non_http_url_is_rejected_before_persistence)),
+                    new ValidationConceptTest("auth", nameof(TelemetryAlertingConfigViewModelTests), nameof(TelemetryAlertingConfigViewModelTests.Saving_a_webhook_with_a_malformed_auth_header_is_rejected_before_persistence))),
                 DynamicValidationCoverage.NotApplicable("Telemetry & Alerting validates local URI/header structure; remote delivery health is reported by doctor/runtime, not probed during this parked delivery-policy pass."),
                 SecretCoverage.NoExplicitDeleteFlow(
                     nameof(TelemetryAlertingConfigViewModelTests),
-                    nameof(TelemetryAlertingConfigViewModelTests.Save_preserves_webhook_headers_delivery_policy_and_unrelated_secrets),
+                    nameof(TelemetryAlertingConfigViewModelTests.Editing_a_webhook_updates_url_and_preserves_stored_header_when_blank),
                     nameof(TelemetryAlertingConfigViewModelTests),
-                    nameof(TelemetryAlertingConfigViewModelTests.Save_updates_outbound_auth_header_when_nonblank_header_is_entered),
+                    nameof(TelemetryAlertingConfigViewModelTests.Editing_a_webhook_replaces_the_auth_header_when_a_nonblank_header_is_entered),
                     nameof(TelemetryAlertingConfigViewModelTests),
-                    nameof(TelemetryAlertingConfigViewModelTests.Save_preserves_webhook_headers_delivery_policy_and_unrelated_secrets),
+                    nameof(TelemetryAlertingConfigViewModelTests.Editing_a_webhook_updates_url_and_preserves_stored_header_when_blank),
                     "Outbound webhook auth headers preserve blank existing values and replace nonblank values; explicit delete is not in this config pass."),
                 new RuntimeConsumerCoverage(
                     "Daemon OpenTelemetry registration and operational notification delivery consume Telemetry and Notifications.Webhooks.",

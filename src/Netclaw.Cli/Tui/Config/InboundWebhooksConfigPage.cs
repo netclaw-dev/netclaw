@@ -141,9 +141,7 @@ internal sealed class InboundWebhooksConfigPage : ReactivePage<InboundWebhooksCo
     private ILayoutNode Row(int index, string label, string description)
     {
         var focused = index == ViewModel.SelectedRow.Value;
-        var prefix = focused ? "> " : "  ";
-        var color = focused ? Color.Cyan : Color.White;
-        return Text($"  {prefix}{label,-40} {description}", color);
+        return ConfigSelectionRow.Create($"  {label,-40} {description}", focused);
     }
 
     private static string Check(bool value) => value ? "x" : " ";

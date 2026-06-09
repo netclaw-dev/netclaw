@@ -493,16 +493,22 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NotifyContentChanged();
     }
 
-    internal void MoveAddChannelAudience(int delta)
-    {
-        _audienceSelectionIndex = Wrap(_audienceSelectionIndex + delta, AudienceOptions.Count);
-        NotifyContentChanged();
-    }
-
     internal void ApplyAddChannel()
+        => ApplyAddChannelAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Resolves the typed channel against the active adapter (does it exist? can
+    /// the bot see it?) BEFORE adding it. On a resolve failure the channel is NOT
+    /// added and the operator stays on the add screen with an error. On success
+    /// the resolved channel ID is added at the system-default audience, its row is
+    /// focused, and the change is autosaved. The operator tunes the audience
+    /// afterward with ←/→ on the channel list — there is no audience picker during
+    /// add (matches the design prototype's resolve-before-add flow).
+    /// </summary>
+    internal async Task ApplyAddChannelAsync(CancellationToken ct = default)
     {
-        var channelId = NormalizeChannelId(AddChannelInput);
-        if (string.IsNullOrWhiteSpace(channelId))
+        var rawInput = NormalizeChannelId(AddChannelInput);
+        if (string.IsNullOrWhiteSpace(rawInput))
         {
             Status.Value = new ConfigStatusMessage("Channel ID is required.", ConfigStatusTone.Error);
             NotifyContentChanged();
@@ -510,6 +516,30 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         var existing = GetChannelIds(_activeAdapterType);
+
+        Status.Value = new ConfigStatusMessage($"Resolving {rawInput} on {ActiveAdapterName}...", ConfigStatusTone.Neutral);
+        RequestRedraw();
+
+        ChannelResolveOutcome resolved;
+        try
+        {
+            resolved = await ResolveSingleChannelAsync(_activeAdapterType, rawInput, ct);
+        }
+        catch (Exception ex)
+        {
+            Status.Value = new ConfigStatusMessage($"{ActiveAdapterName} channel lookup failed: {ex.Message}", ConfigStatusTone.Error);
+            NotifyContentChanged();
+            return;
+        }
+
+        if (!resolved.Success)
+        {
+            Status.Value = new ConfigStatusMessage(resolved.ErrorMessage!, ConfigStatusTone.Error);
+            NotifyContentChanged();
+            return;
+        }
+
+        var channelId = resolved.ChannelId!;
         if (existing.Contains(channelId, StringComparer.Ordinal))
         {
             Status.Value = new ConfigStatusMessage($"{channelId} is already configured.", ConfigStatusTone.Error);
@@ -518,15 +548,94 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         SetChannelIds(_activeAdapterType, [.. existing, channelId]);
-        SetChannelAudience(_activeAdapterType, channelId, AudienceOptions[_audienceSelectionIndex]);
+        SetChannelAudience(_activeAdapterType, channelId, DefaultChannelAudience());
         UpdateAdapterPickerSummary(_activeAdapterType);
         _channelRowIndex = GetChannelRows()
             .Select((row, index) => (row, index))
             .Single(entry => string.Equals(entry.row.Id, channelId, StringComparison.Ordinal))
             .index;
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        AutosaveCompletedAction($"Added {channelId} and saved.");
+        AutosaveCompletedAction($"Added {channelId} at the {DefaultChannelAudience()} default and saved.");
         NotifyContentChanged();
+    }
+
+    /// <summary>
+    /// Resolves a single typed channel name/ID against the live adapter. Slack
+    /// channel IDs and Discord/Mattermost IDs are still probed for existence so a
+    /// non-resolving channel errors instead of being saved.
+    /// </summary>
+    private async Task<ChannelResolveOutcome> ResolveSingleChannelAsync(ChannelType type, string input, CancellationToken ct)
+    {
+        switch (type)
+        {
+            case ChannelType.Slack:
+            {
+                // An entered Slack channel ID needs no name lookup — add it directly.
+                if (IsSlackChannelId(input))
+                    return ChannelResolveOutcome.Ok(input);
+
+                var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+                var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
+                if (string.IsNullOrWhiteSpace(botToken))
+                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.SlackBotTokenRequired);
+
+                var result = await _slackProbe.ResolveChannelNamesAsync(botToken, [input], ct);
+                slack.LastChannelResolution = result; // feeds the channel-row display label.
+                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+                    return ChannelResolveOutcome.Fail($"Slack channel lookup failed: {result.ErrorMessage}");
+                if (result.Unresolved.Count > 0 || !result.Success)
+                    return ChannelResolveOutcome.Fail($"Slack channel not found: #{input}");
+
+                // Name resolved to an ID, or the probe accepted it without enriching.
+                return ChannelResolveOutcome.Ok(result.Resolved.Count > 0 ? result.Resolved[0].Id : input);
+            }
+
+            case ChannelType.Discord:
+            {
+                var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+                var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
+                if (string.IsNullOrWhiteSpace(botToken))
+                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.DiscordBotTokenRequired);
+
+                var result = await _discordProbe.ResolveChannelIdsAsync(botToken, [input], ct);
+                discord.LastChannelResolution = result; // feeds the channel-row display label.
+                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+                    return ChannelResolveOutcome.Fail($"Discord channel lookup failed: {result.ErrorMessage}");
+                if (result.Unresolved.Count > 0 || !result.Success)
+                    return ChannelResolveOutcome.Fail($"Discord channel ID not found: {input}");
+
+                return ChannelResolveOutcome.Ok(result.Resolved.Count > 0 ? result.Resolved[0].ChannelId : input);
+            }
+
+            case ChannelType.Mattermost:
+            {
+                var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+                var serverUrl = Normalize(mattermost.ServerUrl);
+                if (string.IsNullOrWhiteSpace(serverUrl))
+                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.MattermostServerUrlRequired);
+
+                var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
+                if (string.IsNullOrWhiteSpace(botToken))
+                    return ChannelResolveOutcome.Fail(ChannelsEditorValidationMessages.MattermostBotTokenRequired);
+
+                var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, [input], ct);
+                if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+                    return ChannelResolveOutcome.Fail($"Mattermost channel lookup failed: {result.ErrorMessage}");
+                if (result.Unresolved.Count > 0 || !result.Success)
+                    return ChannelResolveOutcome.Fail($"Mattermost channel ID not found: {input}");
+
+                return ChannelResolveOutcome.Ok(result.Resolved.Count > 0 ? result.Resolved[0].ChannelId : input);
+            }
+
+            default:
+                return ChannelResolveOutcome.Fail("Unsupported adapter.");
+        }
+    }
+
+    private readonly record struct ChannelResolveOutcome(bool Success, string? ChannelId, string? ErrorMessage)
+    {
+        internal static ChannelResolveOutcome Ok(string channelId) => new(true, channelId, null);
+        internal static ChannelResolveOutcome Fail(string error) => new(false, null, error);
     }
 
     internal void FinishChannelPermissions()

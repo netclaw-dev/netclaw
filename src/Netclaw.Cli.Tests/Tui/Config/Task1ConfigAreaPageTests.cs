@@ -615,18 +615,27 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     {
         var app = CreateTelemetryAlertingApp(out var input, out var vm);
 
+        // Edit and save the OTLP endpoint on row 1, then open the "+ Add webhook"
+        // row, type a URL into the form, and save it.
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueString("http://");
         input.EnqueuePaste("127.0.0.1:4318");
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueuePaste("https://alerts.example.test/hook");
+        input.EnqueueKey(ConsoleKey.Enter);     // save OTLP endpoint.
+        input.EnqueueKey(ConsoleKey.DownArrow); // -> + Add webhook row (no webhooks yet).
+        input.EnqueueKey(ConsoleKey.Enter);     // open the add form.
+        input.EnqueueKey(ConsoleKey.DownArrow); // Name -> URL field.
+        input.EnqueueString("https://");
+        input.EnqueuePaste("alerts.example.test/hook");
+        input.EnqueueKey(ConsoleKey.Enter);     // save webhook.
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
         Assert.Equal("http://127.0.0.1:4318", vm.OtlpEndpointDraft.Value);
-        Assert.Equal("https://alerts.example.test/hook", vm.OutboundWebhookUrlDraft.Value);
+        Assert.Equal(TelemetryConfigScreen.List, vm.Screen.Value);
+        var webhook = Assert.Single(vm.Webhooks.Value);
+        Assert.Equal("https://alerts.example.test/hook", webhook.Url);
     }
 
     private TerminaApplication CreateWorkspacesApp(out VirtualInputSource input, out WorkspacesConfigViewModel vm)

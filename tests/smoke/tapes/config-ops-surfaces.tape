@@ -42,7 +42,8 @@ Type "SKILL_DIR=/tmp/netclaw-smoke-config-ops-skills jq -e '.ExternalSkills.Sour
 Enter
 Wait+Screen@5s /true/
 
-# Telemetry & Alerting: enable OTLP and configure an outbound Slack webhook.
+# Telemetry & Alerting: enable OTLP, set the endpoint, then add an outbound
+# Slack webhook through the multi-webhook list editor.
 Type "netclaw config"
 Enter
 Wait+Screen@10s /Settings Areas/
@@ -50,13 +51,28 @@ Down 7
 Enter
 Wait+Screen@10s /Telemetry & Alerting/
 Wait+Screen@5s /Delivery-policy tuning/
+
+# Row 0: toggle telemetry on (autosaves).
 Space
+Wait+Screen@10s /Telemetry enabled state saved/
+
+# Row 1: edit and save the OTLP endpoint.
 Down
 Type "http://127.0.0.1:4318"
-Down
-Type "https://hooks.slack.com/services/T000/B000/SECRET"
 Enter
 Wait+Screen@10s /Telemetry & Alerting settings saved/
+
+# Row 2 ("+ Add webhook"): open the add form, enter a Slack URL, and save.
+Down
+Wait+Screen@5s /Add webhook/
+Enter
+Wait+Screen@10s /Add outbound webhook/
+Down
+Type "https://hooks.slack.com/services/T000/B000/SECRET"
+Wait+Screen@5s /Slack \(auto-detected/
+Enter
+Wait+Screen@10s /Saved/
+Wait+Screen@5s /Outbound Webhooks/
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/
 
