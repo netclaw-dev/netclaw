@@ -262,8 +262,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         .WithSummary("Get the daemon's runtime status, including connector health.")
         .WithTags("Health")
         .RequireAuthorization();
-    app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
-        TypedResults.Ok(catalog.ListRecent(limit: 50)))
+    app.MapGet("/api/sessions", (SessionCatalogService catalog, int? limit, int? offset) =>
+        TypedResults.Ok(catalog.ListRecent(limit ?? 50, offset ?? 0)))
         .WithName("ListSessions")
         .WithSummary("List the most recent sessions.")
         .WithTags("Sessions")

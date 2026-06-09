@@ -88,11 +88,28 @@ public sealed class DaemonApi
 
     // ── Sessions ──────────────────────────────────────────────────────
 
-    public async Task<List<SessionCatalogEntryDto>> ListSessionsAsync(CancellationToken ct = default)
+    public async Task<List<SessionCatalogEntryDto>> ListSessionsAsync(
+        int? limit = null,
+        int? offset = null,
+        CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = CreateHttpClient();
-        using var response = await client.GetAsync($"{_endpoint}/api/sessions", cts.Token);
+        var url = $"{_endpoint}/api/sessions";
+        if (limit.HasValue || offset.HasValue)
+        {
+            var separator = "?";
+            if (limit.HasValue)
+            {
+                url += $"{separator}limit={limit.Value}";
+                separator = "&";
+            }
+
+            if (offset.HasValue)
+                url += $"{separator}offset={offset.Value}";
+        }
+
+        using var response = await client.GetAsync(url, cts.Token);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(cts.Token);
         return await JsonSerializer.DeserializeAsync<List<SessionCatalogEntryDto>>(stream, JsonDefaults.Api, cts.Token) ?? [];

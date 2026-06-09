@@ -17,9 +17,13 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class SessionsViewModel : ReactiveViewModel
 {
+    private const int PageSize = 50;
+
     private readonly DaemonApi _daemonApi;
     private readonly ChatNavigationState _navigationState;
     private readonly TimeProvider _timeProvider;
+    private int _pageOffset;
+    private bool _hasNextPage;
 
     public ReactiveProperty<string> StatusMessage { get; } = new("Loading sessions...");
     public ReactiveProperty<bool> IsLoading { get; } = new(true);
@@ -44,28 +48,38 @@ public sealed class SessionsViewModel : ReactiveViewModel
             .Subscribe(HandleKeyPress)
             .DisposeWith(Subscriptions);
 
-        _ = LoadSessionsAsync();
+        _ = LoadSessionsAsync(offset: 0);
     }
 
-    private async Task LoadSessionsAsync()
+    private async Task LoadSessionsAsync(int offset)
     {
+        IsLoading.Value = true;
+        RequestRedraw();
+
         try
         {
-            var sessions = await _daemonApi.ListSessionsAsync();
+            var sessions = await _daemonApi.ListSessionsAsync(PageSize + 1, offset);
+            _pageOffset = offset;
+            _hasNextPage = sessions.Count > PageSize;
+
             Sessions.Clear();
-            Sessions.AddRange(sessions);
+            Sessions.AddRange(sessions.Take(PageSize));
+            SelectedIndex.Value = 0;
 
             if (Sessions.Count == 0)
             {
-                StatusMessage.Value = "No sessions found. Press Enter to start a new chat.";
+                StatusMessage.Value = _pageOffset == 0
+                    ? "No sessions found. Press Enter to start a new chat."
+                    : "No older sessions found. [PgUp] Newer sessions  [N] New chat  [Ctrl+Q] Quit";
             }
             else
             {
-                StatusMessage.Value = $"{Sessions.Count} session(s). [Enter] Resume  [N] New chat  [Ctrl+Q] Quit";
+                StatusMessage.Value = BuildStatusMessage();
             }
         }
         catch
         {
+            _hasNextPage = false;
             StatusMessage.Value = "Failed to connect to daemon. Is it running?";
         }
 
@@ -112,6 +126,16 @@ public sealed class SessionsViewModel : ReactiveViewModel
 
         switch (keyInfo.Key)
         {
+            case ConsoleKey.PageUp:
+                if (_pageOffset > 0)
+                    _ = LoadSessionsAsync(Math.Max(0, _pageOffset - PageSize));
+                break;
+
+            case ConsoleKey.PageDown:
+                if (_hasNextPage)
+                    _ = LoadSessionsAsync(_pageOffset + PageSize);
+                break;
+
             case ConsoleKey.UpArrow or ConsoleKey.K:
                 if (SelectedIndex.Value > 0)
                 {
@@ -134,6 +158,21 @@ public sealed class SessionsViewModel : ReactiveViewModel
                 Navigate?.Invoke("/chat");
                 break;
         }
+    }
+
+    private string BuildStatusMessage()
+    {
+        var start = _pageOffset + 1;
+        var end = _pageOffset + Sessions.Count;
+        var pagingHint = (_pageOffset > 0, _hasNextPage) switch
+        {
+            (true, true) => "  [PgUp] Newer  [PgDn] Older",
+            (true, false) => "  [PgUp] Newer",
+            (false, true) => "  [PgDn] Older",
+            _ => ""
+        };
+
+        return $"Showing sessions {start}-{end}. [Enter] Resume  [N] New chat{pagingHint}  [Ctrl+Q] Quit";
     }
 
     /// <summary>
