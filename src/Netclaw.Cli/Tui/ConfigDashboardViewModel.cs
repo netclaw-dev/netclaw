@@ -180,7 +180,7 @@ internal sealed class ConfigDashboardStatusReader
             "Inbound Webhooks" => OnOff(BoolAt(config, "Webhooks.Enabled")),
             "Skill Sources" => SkillSourcesSummary(config),
             "Search" => SearchSummary(config),
-            "Browser Automation" => OnOff(BoolAt(config, "Browser.Enabled")),
+            "Browser Automation" => OnOff(BrowserEnabled(config)),
             "Telemetry & Alerting" => TelemetrySummary(config),
             "Security & Access" => SecuritySummary(config),
             "Workspaces Directory" => WorkspacesSummary(config),
@@ -292,6 +292,13 @@ internal sealed class ConfigDashboardStatusReader
 
     private static bool BoolAt(Dictionary<string, object> config, string path)
         => ConfigFileHelper.TryGetPathValue(config, path, out var value) && value is bool flag && flag;
+
+    // Browser Automation has no `Browser.Enabled` flag; the editor persists enablement as
+    // the presence of the canonical browser MCP server entries, so the dashboard reads it
+    // back the same way BrowserAutomationConfigViewModel does.
+    private static bool BrowserEnabled(Dictionary<string, object> config)
+        => ConfigFileHelper.TryGetPathValue(config, "McpServers.browser_playwright", out _)
+            || ConfigFileHelper.TryGetPathValue(config, "McpServers.browser_chrome_devtools", out _);
 
     private static string OnOff(bool value) => value ? "enabled" : "– disabled";
 

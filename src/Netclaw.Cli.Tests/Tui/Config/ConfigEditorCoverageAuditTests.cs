@@ -364,6 +364,43 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
         Assert.Contains("NetclawValidationDialogViews", source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Config_editor_pages_never_write_config_or_secrets_directly()
+    {
+        // Generalizes the Skill Sources guard to every registered config page: pages are
+        // presentational and must route all persistence through their view models. A page
+        // that calls a persistence primitive directly bypasses the view models' section-
+        // preserving merge and validation, so guard every leaf editor — not just one.
+        var pageSources = DiscoverConfigPageSourceFiles();
+
+        // If the glob ever stops finding pages (renamed directory, moved files), the guard
+        // would pass vacuously — fail loudly instead so the audit keeps real teeth.
+        Assert.True(pageSources.Count >= CoverageByEditorId.Count - 3,
+            $"Expected to discover config editor page sources but found {pageSources.Count}.");
+
+        foreach (var (relativePath, source) in pageSources)
+        {
+            Assert.DoesNotContain("ConfigFileHelper.WriteConfigFile", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("WriteSecretsFile", source, StringComparison.Ordinal);
+
+            // The page must not invoke the view models' own persistence writers either.
+            Assert.DoesNotContain("SaveExternalConfig", source, StringComparison.Ordinal);
+            Assert.DoesNotContain("SaveSkillFeedsConfig", source, StringComparison.Ordinal);
+
+            Assert.False(string.IsNullOrWhiteSpace(relativePath));
+        }
+    }
+
+    private static IReadOnlyList<(string RelativePath, string Source)> DiscoverConfigPageSourceFiles()
+    {
+        var repoRoot = FindRepoRoot();
+        var configDir = Path.Combine(repoRoot, "src", "Netclaw.Cli", "Tui", "Config");
+        return Directory.EnumerateFiles(configDir, "*Page.cs", SearchOption.TopDirectoryOnly)
+            .OrderBy(static path => path, StringComparer.Ordinal)
+            .Select(path => (Path.GetFileName(path), File.ReadAllText(path)))
+            .ToArray();
+    }
+
     private string[] DiscoverVisibleConfigLeafEditorIds()
     {
         using var dashboard = new ConfigDashboardViewModel(new ConfigDashboardNavigationState());

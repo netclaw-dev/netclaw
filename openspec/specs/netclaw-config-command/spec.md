@@ -271,6 +271,71 @@ reset/confirm action and SHALL be scoped to the confirmed target.
 - **THEN** only that provider's config and secrets are removed
 - **AND** other providers remain unchanged
 
+### Requirement: Root dashboard summarizes each area's live state
+
+The root dashboard SHALL display, for each domain entry, a short live status
+summary read fresh from the current configuration (for example the configured
+search backend, the deployment posture with enabled-feature count, the count of
+configured channels, or the count of outbound webhooks). Status summaries SHALL
+NOT render secret values. The focused entry's description SHALL be shown as a
+help line.
+
+#### Scenario: Dashboard summarizes configured state without secrets
+
+- **GIVEN** a configured install with a search backend and channels set
+- **WHEN** the operator opens `netclaw config`
+- **THEN** each area row shows its current state summary
+- **AND** no secret value (API key, bearer token, channel token) appears in any
+  summary
+
+### Requirement: Channels resolve a target before adding it
+
+When the operator adds a channel to a configured adapter, `netclaw config` SHALL
+resolve the channel against that adapter (confirming it exists / is visible to
+the bot) BEFORE persisting it. A channel that does not resolve SHALL NOT be
+added. A resolved channel SHALL be added at the deployment posture's default
+audience and SHALL remain editable afterward.
+
+#### Scenario: Non-resolving channel is rejected
+
+- **GIVEN** the operator types a channel the adapter cannot resolve
+- **WHEN** they confirm the add
+- **THEN** an error is shown
+- **AND** the channel is not written to config
+
+#### Scenario: Resolved channel is added at the default audience
+
+- **GIVEN** the operator types a channel the adapter resolves
+- **WHEN** they confirm the add
+- **THEN** the resolved channel is added at the deployment posture's default
+  audience
+
+### Requirement: Telemetry exposes multiple outbound webhooks
+
+The Telemetry & Alerting area SHALL edit the full list of outbound webhooks
+(`Notifications.Webhooks`) — add, edit, and remove — rather than a single
+webhook. Each entry SHALL carry a name, URL, and an optional authorization
+header (masked on display), with the webhook format auto-detected from the URL
+and shown read-only.
+
+#### Scenario: Multiple webhooks round-trip
+
+- **GIVEN** the operator adds two outbound webhooks
+- **WHEN** the editor saves and is reopened
+- **THEN** both webhooks are present with their names, URLs, and detected
+  formats
+
+### Requirement: Config selection uses a uniform highlight bar
+
+The config dashboard and its sub-editor lists SHALL indicate the focused row
+with one uniform full-width highlight bar style, applied consistently across
+areas rather than a mix of marker glyphs.
+
+#### Scenario: Focused row is highlighted consistently
+
+- **WHEN** the operator navigates any config list
+- **THEN** the focused row is shown with the uniform highlight bar
+
 ### Requirement: Coverage follows leaf ownership
 
 Leaf editors SHALL receive substantive round-trip and smoke coverage.

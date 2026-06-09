@@ -99,7 +99,15 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
     [Fact]
     public void SetupOnlyReset_DeletesConfigButKeepsMemoryAndSessions()
     {
+        // Setup-only reset removes everything the bootstrap wizard writes
+        // (config + secrets + identity + soul) while leaving operator data
+        // (memory db, sessions) intact. Seed both sides of that boundary.
         File.WriteAllText(_paths.NetclawConfigPath, "{}");
+        File.WriteAllText(_paths.SecretsPath, "{}");
+        Directory.CreateDirectory(_paths.IdentityDirectory);
+        File.WriteAllText(_paths.SoulPath, "soul");
+        Directory.CreateDirectory(_paths.SoulDirectory);
+        File.WriteAllText(Path.Combine(_paths.SoulDirectory, "fragment.md"), "detail");
         File.WriteAllText(_paths.SqliteDbPath, "db");
         Directory.CreateDirectory(_paths.SessionsDirectory);
 
@@ -109,7 +117,13 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         Select(vm, 1); // Yes → confirm 2
         Select(vm, 1); // Yes → perform
 
+        // Removed: config (incl. secrets, which lives under ConfigDirectory) + identity + soul.
         Assert.False(Directory.Exists(_paths.ConfigDirectory), "Config should be removed.");
+        Assert.False(File.Exists(_paths.SecretsPath), "Secrets should be removed.");
+        Assert.False(Directory.Exists(_paths.IdentityDirectory), "Identity files should be removed.");
+        Assert.False(Directory.Exists(_paths.SoulDirectory), "Soul fragments should be removed.");
+
+        // Preserved: operator data.
         Assert.True(File.Exists(_paths.SqliteDbPath), "Memory db should be preserved.");
         Assert.True(Directory.Exists(_paths.SessionsDirectory), "Sessions should be preserved.");
     }

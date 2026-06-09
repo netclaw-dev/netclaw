@@ -240,7 +240,7 @@ static async Task RunAsync(string[] args)
             // "Open configuration editor" from the existing-install menu hands off to the
             // config editor once the init host has exited.
             if (initNav.PendingAction == InitFollowUpAction.OpenConfigEditor)
-                await RunConfigEditorAsync(args, initPaths);
+                await RunConfigEditorAsync(args);
             return;
         }
 
@@ -906,7 +906,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        await RunConfigEditorAsync(args, configPaths);
+        await RunConfigEditorAsync(args);
         return;
     }
 
@@ -1122,11 +1122,12 @@ static void WriteCrashLog(Exception ex)
 // Boots the interactive `netclaw config` editor host. Shared by the `config` command
 // and the existing-install menu's "Open configuration editor" handoff so both reach an
 // identical editor (simplify-netclaw-init).
-static async Task RunConfigEditorAsync(string[] args, NetclawPaths configPaths)
+static async Task RunConfigEditorAsync(string[] args)
 {
     var builder = Host.CreateApplicationBuilder(args);
+    // ConfigureConfigServices registers NetclawPaths (same paths the caller already
+    // ensured on disk), so no separate paths registration is needed here.
     ConfigureConfigServices(builder.Services, builder.Configuration);
-    builder.Services.AddSingleton(configPaths);
     builder.Services.AddSingleton(new ConfigDashboardNavigationState());
     builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
     builder.Services.AddSingleton<IBrowserAutomationPrerequisiteProbe, BrowserAutomationPrerequisiteProbe>();
@@ -1158,6 +1159,10 @@ static async Task RunConfigEditorAsync(string[] args, NetclawPaths configPaths)
 
     builder.Services.AddTermina("/config", t =>
     {
+        // NOTE: the /config host intentionally does NOT call ConfigureNativeSelection.
+        // Raw input here breaks the vhs `config-*` smoke tapes (authored for the
+        // cooked-input config host, unlike the init/provider/model tapes). The
+        // provider/model/mcp pages still get native selection via their own commands.
         t.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>("/config");
         t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
         t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");

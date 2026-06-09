@@ -175,7 +175,7 @@ public sealed class ConfigDashboardViewModelTests
               "ExternalSkills": { "Sources": [ { "Name": "claude-code" } ] },
               "SkillFeeds": { "Feeds": [ { "Name": "corp", "Url": "https://skills.corp.com" } ] },
               "Search": { "Backend": "brave" },
-              "Browser": { "Enabled": true },
+              "McpServers": { "browser_playwright": { "Command": "npx", "Args": ["@playwright/mcp@latest"] } },
               "Telemetry": { "Enabled": true },
               "Notifications": { "Webhooks": [ { "Url": "https://hooks.slack.com/x" } ] },
               "Security": { "DeploymentPosture": "Team", "Memory": { "Enabled": false } },

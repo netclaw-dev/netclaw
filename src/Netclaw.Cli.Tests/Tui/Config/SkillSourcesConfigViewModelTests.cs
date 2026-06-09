@@ -256,6 +256,85 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.Contains("token removed", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Rotate_token_persists_new_encrypted_token_and_invalidates_old()
+    {
+        var protector = SecretsProtection.CreateProtector(_paths);
+        var oldEncrypted = protector.Protect("old-token");
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"SkillFeeds\":{{\"Feeds\":[{{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"ApiKey\":\"{oldEncrypted}\",\"Enabled\":true}}]}}}}");
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        BeginRotateToken(vm, "custom-feed");
+        ReplaceDraft(vm, "new-token");
+        vm.ActivateSelected();
+
+        var rotated = SingleFeedSection()["ApiKey"];
+        Assert.NotNull(rotated);
+        Assert.StartsWith("ENC:", rotated!, StringComparison.Ordinal);
+        Assert.NotEqual(oldEncrypted, rotated);
+        Assert.Equal("new-token", protector.Unprotect(rotated!));
+        Assert.NotEqual("old-token", protector.Unprotect(rotated!));
+        Assert.DoesNotContain("new-token", File.ReadAllText(_paths.NetclawConfigPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Rotate_token_rejects_blank_and_leaves_existing_token_untouched()
+    {
+        var protector = SecretsProtection.CreateProtector(_paths);
+        var oldEncrypted = protector.Protect("old-token");
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"SkillFeeds\":{{\"Feeds\":[{{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"ApiKey\":\"{oldEncrypted}\",\"Enabled\":true}}]}}}}");
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        BeginRotateToken(vm, "custom-feed");
+        ReplaceDraft(vm, "   ");
+        vm.ActivateSelected();
+
+        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
+        Assert.Contains("New bearer token is required", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(oldEncrypted, SingleFeedSection()["ApiKey"]);
+    }
+
+    [Fact]
+    public void Rotate_token_blocks_unreachable_feed_until_second_save_anyway()
+    {
+        var protector = SecretsProtection.CreateProtector(_paths);
+        var oldEncrypted = protector.Protect("old-token");
+        File.WriteAllText(_paths.NetclawConfigPath,
+            $"{{\"configVersion\":1,\"SkillFeeds\":{{\"Feeds\":[{{\"Name\":\"custom-feed\",\"Url\":\"https://old.example.test\",\"ApiKey\":\"{oldEncrypted}\",\"Enabled\":true}}]}}}}");
+        var before = File.ReadAllText(_paths.NetclawConfigPath);
+        var probe = new CountingSkillFeedProbe(success: false);
+        using var vm = new SkillSourcesConfigViewModel(_paths, probe);
+
+        BeginRotateToken(vm, "custom-feed");
+        ReplaceDraft(vm, "new-token");
+        vm.ActivateSelected();
+
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, probe.ProbeCount);
+        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(oldEncrypted, SingleFeedSection()["ApiKey"]);
+
+        vm.ActivateSelected();
+
+        var rotated = SingleFeedSection()["ApiKey"];
+        Assert.NotNull(rotated);
+        Assert.Equal("new-token", protector.Unprotect(rotated!));
+        Assert.Equal(1, probe.ProbeCount);
+    }
+
+    private static void BeginRotateToken(SkillSourcesConfigViewModel vm, string name)
+    {
+        OpenRemoteDetail(vm, name);
+        MoveToDetailAction(vm, SkillSourceDetailAction.RotateToken);
+        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
+    }
+
     private static void BeginAddLocalFolder(SkillSourcesConfigViewModel vm)
     {
         EnsureInventory(vm);
@@ -378,5 +457,18 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
             => success
                 ? new SkillFeedReachabilityResult(true, "reachable")
                 : new SkillFeedReachabilityResult(false, "unreachable");
+    }
+
+    private sealed class CountingSkillFeedProbe(bool success) : ISkillFeedReachabilityProbe
+    {
+        public int ProbeCount { get; private set; }
+
+        public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
+        {
+            ProbeCount++;
+            return success
+                ? new SkillFeedReachabilityResult(true, "reachable")
+                : new SkillFeedReachabilityResult(false, "unreachable");
+        }
     }
 }
