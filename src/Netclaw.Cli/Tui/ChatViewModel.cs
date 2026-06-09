@@ -21,7 +21,7 @@ namespace Netclaw.Cli.Tui;
 public partial class ChatViewModel : ReactiveViewModel
 {
     /// <summary>
-    /// Cap on the approval body shown in the expanded (Ctrl+V) view.
+    /// Cap on the approval body shown in the expanded (Ctrl+O) view.
     /// Without it, a multi-KB command handed verbatim to a TextNode can
     /// break the terminal renderer.
     /// </summary>
@@ -295,7 +295,7 @@ public partial class ChatViewModel : ReactiveViewModel
     /// approved, plus any explicit patterns). When
     /// <see cref="IsApprovalDetailVisible"/> is <c>false</c>, the body is
     /// returned as a single line truncated to <paramref name="maxLineWidth"/>
-    /// with an ellipsis and a Ctrl+V hint. When <c>true</c>, the full
+    /// with an ellipsis and a Ctrl+O hint. When <c>true</c>, the full
     /// untruncated body is returned and the caller is expected to wrap it
     /// inside a height-bounded layout node.
     /// </summary>
@@ -317,7 +317,7 @@ public partial class ChatViewModel : ReactiveViewModel
         // selection list past the panel cap, not just length.
         var singleLine = fullBody.ReplaceLineEndings(" ");
 
-        const string hint = " [Ctrl+V to view full]";
+        const string hint = " [Ctrl+O to view full]";
         var budget = Math.Max(8, maxLineWidth - hint.Length);
         if (singleLine.Length <= budget)
             return singleLine + (singleLine.Length == fullBody.Length ? string.Empty : hint);
@@ -335,7 +335,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
     /// <summary>
     /// Flips <see cref="IsApprovalDetailVisible"/> and forces a re-render.
-    /// Invoked by <c>ChatPage</c> on Ctrl+V when an approval is pending.
+    /// Invoked by <c>ChatPage</c> on Ctrl+O when an approval is pending.
     /// </summary>
     public void ToggleApprovalDetail()
     {
