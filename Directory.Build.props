@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.24.0</VersionPrefix>
-    <VersionSuffix>beta.1</VersionSuffix>
+    <VersionSuffix>beta.2</VersionSuffix>
     <PackageReleaseNotes>Netclaw v0.23.0 — Beta channel, streaming-native chat, Docker improvements, and shell reliability fixes
 
 **Features**

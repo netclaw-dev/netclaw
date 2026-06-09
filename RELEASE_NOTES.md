@@ -1,3 +1,27 @@
+#### 0.24.0-beta.2 2026-06-09 ####
+
+Netclaw v0.24.0-beta.2 — Channel delivery descriptor registry, TUI improvements, and dependency updates
+
+**Features**
+
+* **Channel delivery descriptor registry** — new registration-based system for channel delivery descriptors, improving extensibility of channel integrations. ([#1326](https://github.com/netclaw-dev/netclaw/pull/1326))
+
+* **Native text selection in TUI** — text selection in the terminal UI is now handled natively via Termina 0.11.0, enabling proper copy/paste behavior. ([#1359](https://github.com/netclaw-dev/netclaw/pull/1359))
+
+**Bug Fixes**
+
+* **TUI list views are now scrollable** — fixed unresponsive scrolling in all TUI list views. ([#1363](https://github.com/netclaw-dev/netclaw/pull/1363))
+
+* **DaemonApi threaded into init wizard's provider step** — fixed the init wizard's provider step to properly use the DaemonApi. ([#1369](https://github.com/netclaw-dev/netclaw/pull/1369))
+
+**Dependencies**
+
+* **Verify.XunitV3 bumped to 31.19.1** — test framework update. ([#1367](https://github.com/netclaw-dev/netclaw/pull/1367))
+
+* **Aspire.Hosting.Testing bumped to 13.4.3** — .NET Aspire test hosting update. ([#1366](https://github.com/netclaw-dev/netclaw/pull/1366))
+
+---
+
 #### 0.24.0-beta.1 2026-06-08 ####
 
 Netclaw v0.24.0-beta.1 — Shell streaming, media improvements, bug fixes, and dependency updates
