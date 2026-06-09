@@ -98,32 +98,22 @@ public partial class InitWizardViewModel : ReactiveViewModel
             ExistingConfig = LoadExistingConfig(paths)
         };
 
-        // Create step VMs in the canonical order:
-        // provider -> security-posture -> feature-selection -> channel-picker -> channels -> search -> browser-automation -> identity -> external-skills -> exposure-mode -> health-check
+        // Create step VMs in the canonical bootstrap order (simplify-netclaw-init):
+        // provider -> identity -> security-posture -> feature-selection -> health-check.
+        // Channels, Search, Browser Automation, and Skill Sources are no longer part of
+        // first-run bootstrap; they moved to `netclaw config` (the post-install surface).
         ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory, daemonApi);
+        var identityStep = new IdentityStepViewModel();
         var securityPostureStep = new SecurityPostureStepViewModel();
         var featureSelectionStep = new FeatureSelectionStepViewModel();
-        var channelPickerStep = new ChannelPickerStepViewModel(slackProbe, discordProbe);
-        var channelsStep = new ChannelsStepViewModel();
-        var searchStep = new SearchStepViewModel();
-        var browserStep = new BrowserAutomationStepViewModel();
-        var identityStep = new IdentityStepViewModel();
-        var externalSkillsStep = new ExternalSkillsStepViewModel();
-        var skillFeedsStep = new SkillFeedsStepViewModel();
         _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState, timeProvider);
 
         var steps = new List<IWizardStepViewModel>
         {
             ProviderStep,
+            identityStep,
             securityPostureStep,
             featureSelectionStep,
-            channelPickerStep,
-            channelsStep,
-            searchStep,
-            browserStep,
-            identityStep,
-            externalSkillsStep,
-            skillFeedsStep,
             _healthCheckStep
         };
 
@@ -139,19 +129,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
         // Create orchestrator
         _orchestrator = new WizardOrchestrator(steps, _context);
 
-        // Create step views
+        // Create step views (bootstrap steps only).
         _stepViews = new Dictionary<string, IWizardStepView>
         {
             [WizardStepIds.Provider] = new ProviderStepView(clipboardService),
+            [WizardStepIds.Identity] = new IdentityStepView(),
             [WizardStepIds.SecurityPosture] = new SecurityPostureStepView(),
             [WizardStepIds.FeatureSelection] = new FeatureSelectionStepView(),
-            [WizardStepIds.ChannelPicker] = new ChannelPickerStepView(),
-            [WizardStepIds.Channels] = new ChannelsStepView(),
-            [WizardStepIds.Search] = new SearchStepView(),
-            [WizardStepIds.BrowserAutomation] = new BrowserAutomationStepView(),
-            [WizardStepIds.Identity] = new IdentityStepView(),
-            [WizardStepIds.ExternalSkills] = new ExternalSkillsStepView(),
-            [WizardStepIds.SkillFeeds] = new SkillFeedsStepView(),
             [WizardStepIds.HealthCheck] = new HealthCheckStepView()
         };
     }

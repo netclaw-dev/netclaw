@@ -215,15 +215,32 @@ static async Task RunAsync(string[] args)
                 };
             });
 
-            builder.Services.AddTermina("/init", termina =>
+            builder.Services.AddSingleton<InitNavigationState>();
+
+            // On an existing install, `netclaw init` opens an explicit action menu instead
+            // of silently re-walking setup (simplify-netclaw-init). First run starts the
+            // bootstrap wizard directly.
+            var initStartRoute = File.Exists(initPaths.NetclawConfigPath)
+                ? InitExistingInstallViewModel.MenuRoute
+                : "/init";
+
+            builder.Services.AddTermina(initStartRoute, termina =>
             {
                 ConfigureNativeSelection(termina);
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
+                termina.RegisterRoute<InitExistingInstallPage, InitExistingInstallViewModel>(InitExistingInstallViewModel.MenuRoute);
+                termina.RegisterRoute<IdentityRedoPage, IdentityRedoViewModel>(InitExistingInstallViewModel.IdentityRoute);
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
 
             using var initApp = builder.Build();
+            var initNav = initApp.Services.GetRequiredService<InitNavigationState>();
             await RunTerminaHostAsync(initApp);
+
+            // "Open configuration editor" from the existing-install menu hands off to the
+            // config editor once the init host has exited.
+            if (initNav.PendingAction == InitFollowUpAction.OpenConfigEditor)
+                await RunConfigEditorAsync(args, initPaths);
             return;
         }
 
@@ -889,79 +906,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-        builder.Services.AddSingleton(configPaths);
-        builder.Services.AddSingleton(new ConfigDashboardNavigationState());
-        builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
-        builder.Services.AddSingleton<IBrowserAutomationPrerequisiteProbe, BrowserAutomationPrerequisiteProbe>();
-        builder.Services.AddSingleton<ISkillFeedReachabilityProbe, SkillFeedReachabilityProbe>();
-        builder.Services.AddSingleton<TuiNavigation>();
-        builder.Services.AddProviderDescriptors();
-        builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
-        builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
-        builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
-        builder.Services.AddHttpClient("OAuthDeviceFlow");
-        builder.Services.AddSingleton(sp =>
-            new OAuthDeviceFlowService(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                sp.GetService<TimeProvider>()));
-        builder.Services.AddSingleton(sp =>
-            new OpenAiDeviceFlowService(
-                sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
-                sp.GetService<TimeProvider>()));
-        builder.Services.AddSingleton<DeviceFlowServiceFactory>();
-        builder.Services
-            .AddSectionEditor<SecurityPostureStepViewModel>()
-            .AddSectionEditor<FeatureSelectionStepViewModel>()
-            .AddSectionEditor<ExposureModeStepViewModel>();
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-        var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
-        builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
-
-        builder.Services.AddTermina("/config", t =>
-        {
-            t.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>("/config");
-            t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
-            t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
-            t.RegisterRoute<ChannelsConfigPage, ChannelsConfigViewModel>("/channels");
-            t.RegisterRoute<InboundWebhooksConfigPage, InboundWebhooksConfigViewModel>("/inbound-webhooks");
-            t.RegisterRoute<SkillSourcesConfigPage, SkillSourcesConfigViewModel>("/skill-sources");
-            t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
-            t.RegisterRoute<BrowserAutomationConfigPage, BrowserAutomationConfigViewModel>("/browser-automation");
-            t.RegisterRoute<TelemetryAlertingConfigPage, TelemetryAlertingConfigViewModel>("/telemetry-alerting");
-            t.RegisterRoute<WorkspacesConfigPage, WorkspacesConfigViewModel>("/workspaces");
-            t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
-            t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
-            t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
-        });
-
-        using var host = builder.Build();
-        var navigationState = host.Services.GetRequiredService<ConfigDashboardNavigationState>();
-        await RunTerminaHostAsync(host);
-
-        if (navigationState.PendingAction == ConfigDashboardAction.RunDoctor)
-        {
-            var doctorArgs = new[] { "doctor" };
-            var doctorBuilder = Host.CreateApplicationBuilder(doctorArgs);
-            ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
-            doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
-            doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
-            doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
-            doctorBuilder.Services.AddDoctorChecks();
-            doctorBuilder.Logging.ClearProviders();
-            doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
-
-            using var doctorHost = doctorBuilder.Build();
-            using var scope = doctorHost.Services.CreateScope();
-            var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
-            var result = await runner.RunAsync();
-            WriteDoctorResult(result);
-            Environment.ExitCode = result.ExitCode;
-        }
-
+        await RunConfigEditorAsync(args, configPaths);
         return;
     }
 
@@ -1174,6 +1119,85 @@ static void WriteCrashLog(Exception ex)
 // never receive a quit key — an un-killable subprocess. Fail fast in that case.
 // Daemon connectivity failures are handled here because the chat route can
 // resolve daemon-backed services while TerminaApplication is being constructed.
+// Boots the interactive `netclaw config` editor host. Shared by the `config` command
+// and the existing-install menu's "Open configuration editor" handoff so both reach an
+// identical editor (simplify-netclaw-init).
+static async Task RunConfigEditorAsync(string[] args, NetclawPaths configPaths)
+{
+    var builder = Host.CreateApplicationBuilder(args);
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    builder.Services.AddSingleton(configPaths);
+    builder.Services.AddSingleton(new ConfigDashboardNavigationState());
+    builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
+    builder.Services.AddSingleton<IBrowserAutomationPrerequisiteProbe, BrowserAutomationPrerequisiteProbe>();
+    builder.Services.AddSingleton<ISkillFeedReachabilityProbe, SkillFeedReachabilityProbe>();
+    builder.Services.AddSingleton<TuiNavigation>();
+    builder.Services.AddProviderDescriptors();
+    builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+    builder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+    builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
+    builder.Services.AddHttpClient("OAuthDeviceFlow");
+    builder.Services.AddSingleton(sp =>
+        new OAuthDeviceFlowService(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+            sp.GetService<TimeProvider>()));
+    builder.Services.AddSingleton(sp =>
+        new OpenAiDeviceFlowService(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient("OAuthDeviceFlow"),
+            sp.GetService<TimeProvider>()));
+    builder.Services.AddSingleton<DeviceFlowServiceFactory>();
+    builder.Services
+        .AddSectionEditor<SecurityPostureStepViewModel>()
+        .AddSectionEditor<FeatureSelectionStepViewModel>()
+        .AddSectionEditor<ExposureModeStepViewModel>();
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+    var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
+    builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
+
+    builder.Services.AddTermina("/config", t =>
+    {
+        t.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>("/config");
+        t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
+        t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
+        t.RegisterRoute<ChannelsConfigPage, ChannelsConfigViewModel>("/channels");
+        t.RegisterRoute<InboundWebhooksConfigPage, InboundWebhooksConfigViewModel>("/inbound-webhooks");
+        t.RegisterRoute<SkillSourcesConfigPage, SkillSourcesConfigViewModel>("/skill-sources");
+        t.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>("/search", Termina.Pages.NavigationBehavior.PreserveState);
+        t.RegisterRoute<BrowserAutomationConfigPage, BrowserAutomationConfigViewModel>("/browser-automation");
+        t.RegisterRoute<TelemetryAlertingConfigPage, TelemetryAlertingConfigViewModel>("/telemetry-alerting");
+        t.RegisterRoute<WorkspacesConfigPage, WorkspacesConfigViewModel>("/workspaces");
+        t.RegisterRoute<SecurityAccessPage, SecurityAccessViewModel>("/security");
+        t.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>("/exposure-mode");
+        t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
+    });
+
+    using var host = builder.Build();
+    var navigationState = host.Services.GetRequiredService<ConfigDashboardNavigationState>();
+    await RunTerminaHostAsync(host);
+
+    if (navigationState.PendingAction == ConfigDashboardAction.RunDoctor)
+    {
+        var doctorArgs = new[] { "doctor" };
+        var doctorBuilder = Host.CreateApplicationBuilder(doctorArgs);
+        ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
+        doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
+        doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
+        doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
+        doctorBuilder.Services.AddDoctorChecks();
+        doctorBuilder.Logging.ClearProviders();
+        doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+
+        using var doctorHost = doctorBuilder.Build();
+        using var scope = doctorHost.Services.CreateScope();
+        var runner = scope.ServiceProvider.GetRequiredService<DoctorRunner>();
+        var result = await runner.RunAsync();
+        WriteDoctorResult(result);
+        Environment.ExitCode = result.ExitCode;
+    }
+}
+
 static async Task RunTerminaHostAsync(IHost host)
 {
     try

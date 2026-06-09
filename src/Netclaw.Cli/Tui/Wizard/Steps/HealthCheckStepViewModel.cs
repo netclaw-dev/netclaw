@@ -47,6 +47,11 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     // ── Reactive state ──
     public ReactiveProperty<bool> IsRunning { get; } = new(false);
     public ReactiveProperty<bool> IsComplete { get; } = new(false);
+
+    /// <summary>True once the check completed with all probes passing. Drives the
+    /// post-flight UX: a clean bootstrap shows the "ready" summary and launches chat on
+    /// Enter; warnings/failures stay on the summary and exit on Enter.</summary>
+    public ReactiveProperty<bool> Succeeded { get; } = new(false);
     public List<HealthCheckItem> Results { get; } = [];
     internal ReactiveProperty<int> ResultVersion { get; } = new(0);
 
@@ -81,6 +86,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         {
             IsRunning.Value = false;
             IsComplete.Value = false;
+            Succeeded.Value = false;
             Results.Clear();
             NotifyChanged();
         }
@@ -222,16 +228,25 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
         NotifyChanged();
 
         allPassed = runner.AllPassed;
+        Succeeded.Value = allPassed;
         if (allPassed && _context is not null)
         {
-            _context.StatusMessage.Value = "Setup complete! Launching chat...";
-            Navigate?.Invoke("/chat");
+            // Don't auto-launch: show the post-flight summary so the operator sees the
+            // bootstrap-vs-config split (Enter launches `netclaw chat`; `netclaw config`
+            // owns ongoing settings). The page invokes LaunchChat() on Enter.
+            _context.StatusMessage.Value =
+                "✓ Netclaw is ready. Press Enter to start chatting — run `netclaw config` anytime to adjust settings.";
         }
         else if (_context is not null)
         {
-            _context.StatusMessage.Value = "Setup complete with warnings. Run `netclaw daemon start` to begin.";
+            _context.StatusMessage.Value =
+                "Setup complete with warnings. Run `netclaw daemon start`, then `netclaw chat`. Adjust settings with `netclaw config`.";
         }
     }
+
+    /// <summary>Launch the chat experience after a successful bootstrap. Routed through
+    /// the wrapped <see cref="Navigate"/> delegate so the onboarding trigger is set first.</summary>
+    public void LaunchChat() => Navigate?.Invoke("/chat");
 
     /// <summary>
     /// Applies the freshly-written config and waits for the daemon to be ready on it.
@@ -357,6 +372,7 @@ public sealed class HealthCheckStepViewModel : IWizardStepViewModel
     {
         IsRunning.Dispose();
         IsComplete.Dispose();
+        Succeeded.Dispose();
         ResultVersion.Dispose();
     }
 }

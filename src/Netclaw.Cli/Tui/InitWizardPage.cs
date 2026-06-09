@@ -225,11 +225,15 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
     private LayoutNode BuildKeyBindings()
     {
         return Observable.CombineLatest(ViewModel.Orchestrator.CurrentStepIndex, ViewModel.IsComplete,
-                (_, complete) =>
+                ViewModel.HealthCheckStep.Succeeded,
+                (_, complete, succeeded) =>
                 {
                     if (complete)
+                    {
+                        var doneLabel = succeeded ? "Launch netclaw chat" : "Exit";
                         return (ILayoutNode)new TextNode(
-                            " [Enter] Exit  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
+                            $" [Enter] {doneLabel}  [Ctrl+Q] Quit").WithForeground(Color.BrightBlack);
+                    }
 
                     var backLabel = ViewModel.Orchestrator.CurrentStepIndex.Value == 0 ? "Quit" : "Back";
                     return (ILayoutNode)new TextNode(
@@ -350,13 +354,21 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             }
         }
 
-        // Health check step: Enter triggers the check or exits
+        // Health check step: Enter triggers the check, or finishes the post-flight summary.
+        // A clean bootstrap launches `netclaw chat`; warnings/failures just exit.
         if (currentStep is HealthCheckStepViewModel healthVm && keyInfo.Key == ConsoleKey.Enter)
         {
             if (healthVm.IsComplete.Value)
-                ViewModel.RequestQuit();
+            {
+                if (healthVm.Succeeded.Value)
+                    healthVm.LaunchChat();
+                else
+                    ViewModel.RequestQuit();
+            }
             else
+            {
                 ViewModel.GoNext();
+            }
             return;
         }
 

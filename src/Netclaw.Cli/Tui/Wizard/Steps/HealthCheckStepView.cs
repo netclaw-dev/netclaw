@@ -40,6 +40,16 @@ public sealed class HealthCheckStepView : IWizardStepView
         if (lines.Count == 0)
             lines.Add(new TextNode("  Press Enter to run health checks...").WithForeground(Color.BrightBlack));
 
+        // Post-flight summary: once the checks finish, nudge toward the bootstrap-vs-config
+        // split so the operator knows where ongoing settings live (simplify-netclaw-init §6).
+        if (vm.IsComplete.Value)
+        {
+            lines.Add(new TextNode(""));
+            lines.Add(new TextNode("  Next steps:").WithForeground(Color.Gray));
+            lines.Add(new TextNode("    netclaw chat    — start talking to your agent").WithForeground(Color.Gray));
+            lines.Add(new TextNode("    netclaw config  — adjust settings any time").WithForeground(Color.Gray));
+        }
+
         var layout = Layouts.Vertical();
         foreach (var line in lines)
             layout.WithChild(line);
