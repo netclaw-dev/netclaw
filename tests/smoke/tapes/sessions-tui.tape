@@ -18,6 +18,7 @@ Sleep 300ms
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Escape
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo SESSIONS_TUI_EXIT=$?"

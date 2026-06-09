@@ -17,6 +17,7 @@ Sleep 300ms
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo MODEL_MANAGER_EXIT=$?"
