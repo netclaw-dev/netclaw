@@ -135,6 +135,18 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
+    public void ExtractPatterns_digit_bearing_operand_terminates_pattern()
+    {
+        // Digit-bearing operands (`test123`) are call-specific values and
+        // terminate the pattern; flags before the value are retained.
+        var patterns = _matcher.ExtractPatterns(
+            new ToolName("shell_execute"),
+            Args("docker run --name test123 --port=8080"));
+        Assert.Single(patterns);
+        Assert.Equal("docker run --name", patterns[0]);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
     public void IsApproved_git_tag_grant_matches_both_version_forms()
     {
         // The exact production scenario: a standing `git tag` (anywhere) grant
