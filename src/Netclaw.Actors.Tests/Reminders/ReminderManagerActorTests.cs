@@ -666,6 +666,41 @@ public class ReminderManagerActorTests : TestKit
         }
     }
 
+    // The session dedups redeliveries by the delivery key, so the key MUST be
+    // built from the envelope's scheduled fire time (identical across
+    // redeliveries) — not the per-execution dispatch wall-clock, which drifts
+    // and would let a redelivery slip past dedup and deliver twice.
+    [Fact]
+    public async Task CurrentSession_delivery_key_is_built_from_envelope_fire_time()
+    {
+        var manager = await GetManagerAsync();
+
+        var gatewayProbe = CreateTestProbe("stable-key-gateway");
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-stable-key");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+        var definition = CreateCurrentSessionDefinition("stable-key", deliveryRequired: true);
+        _definitionStore.Save(definition);
+
+        // A distinctive fire time far from "now": a key built from the dispatch
+        // wall-clock would not match it.
+        var fireTime = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+        var envelope = new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(definition.Id.Value),
+            dueTimeUtc: fireTime,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = definition.Id });
+
+        manager.Tell(envelope);
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal($"{definition.Id}:{fireTime.ToUnixTimeMilliseconds()}", delivered.Source.ReminderId);
+    }
+
     [Fact]
     public async Task CurrentSession_delivery_required_succeeds_when_delivery_is_observed()
     {

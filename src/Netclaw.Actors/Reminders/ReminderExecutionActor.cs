@@ -197,7 +197,15 @@ internal sealed class ReminderExecutionActor : ReceiveActor
             var audience = _definition.Audience;
             var boundary = GetPersistedBoundaryOrThrow();
 
-            var reminderDeliveryKey = $"{_definition.Id}:{_dispatchedAt.ToUnixTimeMilliseconds()}";
+            // Dedup key must be STABLE across Akka.Reminders redeliveries of the
+            // same fire, or the target session can't recognize a redelivery and
+            // re-runs it (duplicate delivery). The envelope's scheduled fire time
+            // (DueTimeUtc) is identical on every redelivery; _dispatchedAt is
+            // captured fresh per execution actor and drifts, defeating the dedup.
+            // Deferred re-runs carry no envelope and are never redelivered, so the
+            // dispatch time is a fine fallback there.
+            var fireTimeMs = (_envelope?.DueTimeUtc ?? _dispatchedAt).ToUnixTimeMilliseconds();
+            var reminderDeliveryKey = $"{_definition.Id}:{fireTimeMs}";
 
             _log.Info(
                 "ReminderExecution CurrentSession Initialized: execution_id={ExecutionId} reminder_id={ReminderId} session_id={SessionId} origin={Origin} audience={Audience}",
