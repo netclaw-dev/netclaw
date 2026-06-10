@@ -1,3 +1,23 @@
+#### 0.24.0-beta.3 2026-06-10 ####
+
+Netclaw v0.24.0-beta.3 — Channel infrastructure standardization, Discord/Mattermost gateway self-healing, and install script fix
+
+**Features**
+
+* **Standardized channel infrastructure (SPEC-015)** — generic `ChannelLifecycleActor` and `RemoteChatChannelBuilder` reduce new channel implementations to ~80 LOC (down from 1,100+ duplicated LOC across Discord and Mattermost), while enforcing a standardized security pipeline and gateway lifecycle. ([#1375](https://github.com/netclaw-dev/netclaw/pull/1375))
+
+* **`lookup_channel_destination` blank-query support** — passing `query: null` or an empty string now returns all available destinations, enabling "Select Destination" TUI steps that list every channel without filtering. ([#1375](https://github.com/netclaw-dev/netclaw/pull/1375))
+
+**Bug Fixes**
+
+* **Discord gateway no longer enters zombie state after failed auto-retry** — fixed a critical reliability issue where the Discord gateway dropped every inbound message for 30+ minutes and would not recover without a daemon restart. The gateway now correctly enters its self-healing reconnect loop and publishes `ConnectionRestored` on recovery. ([#1374](https://github.com/netclaw-dev/netclaw/pull/1374))
+
+* **Mattermost auto-retry recovery publishes `ConnectionRestored`** — the same gateway-lifecycle fix applied to the Mattermost actor; auto-retry timeouts now correctly trigger the self-healing reconnect loop. ([#1375](https://github.com/netclaw-dev/netclaw/pull/1375))
+
+* **Install scripts persist `--channel` preference to config** — `Daemon.UpdateChannel` is now written to `netclaw.json` during `--channel beta` installs (both `install.sh` and `install.ps1`), so the daemon's self-update mechanism no longer silently defaults to stable. The init wizard preserves an existing beta channel from config. ([#1377](https://github.com/netclaw-dev/netclaw/pull/1377))
+
+---
+
 #### 0.24.0-beta.2 2026-06-09 ####
 
 Netclaw v0.24.0-beta.2 — Channel delivery descriptor registry, TUI improvements, and dependency updates

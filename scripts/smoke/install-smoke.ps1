@@ -182,10 +182,73 @@ try {
     } else {
         Fail "channel: unknown value should fail (exit=$LASTEXITCODE)"
     }
+    # 9. Config channel persistence
+    Write-Host ""
+    Write-Host "=== config channel persistence ==="
+
+    # 9a. Fresh install with -Channel beta seeds a config file
+    $freshDir = Join-Path $Work "fresh-beta"
+    $freshConfigDir = Join-Path $Work "fresh-beta-config"
+    $env:NETCLAW_CONFIG_DIR = $freshConfigDir
+    & pwsh -NoProfile -File $InstallPs1 -InstallDir $freshDir -Channel beta 2>&1 | Out-Null
+    $freshConfig = Join-Path $freshConfigDir "netclaw.json"
+    if ((Test-Path $freshConfig)) {
+        $c = Get-Content -Raw $freshConfig | ConvertFrom-Json
+        if ($c.Daemon.UpdateChannel -eq "beta") {
+            Pass "config: fresh -Channel beta seeds config with UpdateChannel=beta"
+        } else {
+            Fail "config: fresh -Channel beta wrote UpdateChannel='$($c.Daemon.UpdateChannel)'"
+        }
+    } else {
+        Fail "config: fresh -Channel beta did not create config file"
+    }
+
+    # 9b. -Channel beta on existing config patches UpdateChannel
+    $existDir = Join-Path $Work "exist-beta"
+    $existConfigDir = Join-Path $Work "exist-beta-config"
+    New-Item -ItemType Directory -Path $existConfigDir -Force | Out-Null
+    '{"configVersion":1,"Daemon":{"ExposureMode":"local"}}' | Set-Content -Path (Join-Path $existConfigDir "netclaw.json") -Encoding UTF8
+    $env:NETCLAW_CONFIG_DIR = $existConfigDir
+    & pwsh -NoProfile -File $InstallPs1 -InstallDir $existDir -Channel beta 2>&1 | Out-Null
+    $c = Get-Content -Raw (Join-Path $existConfigDir "netclaw.json") | ConvertFrom-Json
+    if ($c.Daemon.UpdateChannel -eq "beta" -and $c.Daemon.ExposureMode -eq "local") {
+        Pass "config: -Channel beta patches existing config, preserves other Daemon keys"
+    } else {
+        Fail "config: -Channel beta patch (UpdateChannel='$($c.Daemon.UpdateChannel)', ExposureMode='$($c.Daemon.ExposureMode)')"
+    }
+
+    # 9c. Plain upgrade (no -Channel) leaves existing beta config alone
+    $noflagDir = Join-Path $Work "noflag"
+    $noflagConfigDir = Join-Path $Work "noflag-config"
+    New-Item -ItemType Directory -Path $noflagConfigDir -Force | Out-Null
+    '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path $noflagConfigDir "netclaw.json") -Encoding UTF8
+    $env:NETCLAW_CONFIG_DIR = $noflagConfigDir
+    & pwsh -NoProfile -File $InstallPs1 -InstallDir $noflagDir 2>&1 | Out-Null
+    $c = Get-Content -Raw (Join-Path $noflagConfigDir "netclaw.json") | ConvertFrom-Json
+    if ($c.Daemon.UpdateChannel -eq "beta") {
+        Pass "config: plain upgrade preserves existing beta channel"
+    } else {
+        Fail "config: plain upgrade changed UpdateChannel to '$($c.Daemon.UpdateChannel)'"
+    }
+
+    # 9d. -Channel stable on existing beta overwrites to stable
+    $downDir = Join-Path $Work "downgrade"
+    $downConfigDir = Join-Path $Work "downgrade-config"
+    New-Item -ItemType Directory -Path $downConfigDir -Force | Out-Null
+    '{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}' | Set-Content -Path (Join-Path $downConfigDir "netclaw.json") -Encoding UTF8
+    $env:NETCLAW_CONFIG_DIR = $downConfigDir
+    & pwsh -NoProfile -File $InstallPs1 -InstallDir $downDir -Channel stable 2>&1 | Out-Null
+    $c = Get-Content -Raw (Join-Path $downConfigDir "netclaw.json") | ConvertFrom-Json
+    if ($c.Daemon.UpdateChannel -eq "stable") {
+        Pass "config: -Channel stable overwrites existing beta"
+    } else {
+        Fail "config: -Channel stable wrote UpdateChannel='$($c.Daemon.UpdateChannel)'"
+    }
 }
 finally {
     if ($ServerProc -and -not $ServerProc.HasExited) { $ServerProc.Kill() }
     $env:MANIFEST_URL = $null
+    $env:NETCLAW_CONFIG_DIR = $null
     Remove-Item -Path $Work -Recurse -Force -ErrorAction SilentlyContinue
 }
 

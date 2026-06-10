@@ -426,4 +426,133 @@ public sealed class WizardConfigBuilderTests : WizardStepTestBase
         AssertNoEnabledKey(config, "Webhooks");
     }
 
+    // ── Daemon.UpdateChannel ────────────────────────────────────────────────
+
+    [Fact]
+    public void BuildConfigDictionary_DaemonWithBetaChannel_WritesUpdateChannel()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection
+            {
+                UpdateChannel = UpdateChannel.Beta,
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        Assert.True(config.ContainsKey("Daemon"));
+        var daemon = (Dictionary<string, object>)config["Daemon"];
+        Assert.Equal("beta", daemon["UpdateChannel"]);
+        Assert.False(daemon.ContainsKey("ExposureMode"));
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_DaemonWithBetaChannelAndNonLocalMode_WritesBoth()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection
+            {
+                ExposureMode = ExposureMode.TailscaleServe,
+                UpdateChannel = UpdateChannel.Beta,
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var daemon = (Dictionary<string, object>)config["Daemon"];
+        Assert.Equal("tailscale-serve", daemon["ExposureMode"]);
+        Assert.Equal("beta", daemon["UpdateChannel"]);
+    }
+
+    [Fact]
+    public void BuildConfigDictionary_DaemonWithNullChannel_OmitsUpdateChannel()
+    {
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection
+            {
+                ExposureMode = ExposureMode.TailscaleServe,
+            }
+        };
+
+        var config = builder.BuildConfigDictionary();
+
+        var daemon = (Dictionary<string, object>)config["Daemon"];
+        Assert.False(daemon.ContainsKey("UpdateChannel"));
+    }
+
+    [Fact]
+    public void WriteConfigFile_PreservesExistingBetaChannel_WhenWizardDoesNotSetOne()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, """
+            {
+              "configVersion": 1,
+              "Daemon": { "UpdateChannel": "beta" }
+            }
+            """);
+
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Security = new SecurityConfigSection()
+        };
+
+        builder.WriteConfigFile();
+
+        var written = JsonSerializer.Deserialize<JsonElement>(
+            File.ReadAllText(Context.Paths.NetclawConfigPath));
+        var daemon = written.GetProperty("Daemon");
+        Assert.Equal("beta", daemon.GetProperty("UpdateChannel").GetString());
+    }
+
+    [Fact]
+    public void WriteConfigFile_DoesNotPreserveStableChannel()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, """
+            {
+              "configVersion": 1,
+              "Daemon": { "UpdateChannel": "stable" }
+            }
+            """);
+
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Security = new SecurityConfigSection()
+        };
+
+        builder.WriteConfigFile();
+
+        var written = JsonSerializer.Deserialize<JsonElement>(
+            File.ReadAllText(Context.Paths.NetclawConfigPath));
+        Assert.False(written.TryGetProperty("Daemon", out _));
+    }
+
+    [Fact]
+    public void WriteConfigFile_ExplicitChannelOnBuilder_TakesPrecedenceOverExisting()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, """
+            {
+              "configVersion": 1,
+              "Daemon": { "UpdateChannel": "beta" }
+            }
+            """);
+
+        var builder = new WizardConfigBuilder(Context.Paths)
+        {
+            Daemon = new DaemonConfigSection
+            {
+                UpdateChannel = UpdateChannel.Stable,
+            },
+            Security = new SecurityConfigSection()
+        };
+
+        builder.WriteConfigFile();
+
+        var written = JsonSerializer.Deserialize<JsonElement>(
+            File.ReadAllText(Context.Paths.NetclawConfigPath));
+        var daemon = written.GetProperty("Daemon");
+        Assert.Equal("stable", daemon.GetProperty("UpdateChannel").GetString());
+    }
+
 }

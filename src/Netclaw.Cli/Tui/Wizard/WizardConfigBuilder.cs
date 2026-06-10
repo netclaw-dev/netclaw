@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
@@ -49,14 +50,38 @@ public sealed class WizardConfigBuilder
 
     /// <summary>
     /// Assemble the typed sections into netclaw.json and write it.
+    /// Preserves <c>Daemon.UpdateChannel</c> from an existing config when no wizard step
+    /// explicitly sets it — so <c>install.sh --channel beta</c> followed by <c>netclaw init</c>
+    /// doesn't lose the channel preference.
     /// </summary>
     public void WriteConfigFile()
     {
         _paths.EnsureDirectoriesExist();
+        PreserveExistingUpdateChannel();
         var config = BuildConfigDictionary();
 
         File.WriteAllText(_paths.NetclawConfigPath,
             JsonSerializer.Serialize(config, JsonDefaults.ConfigFile));
+    }
+
+    private void PreserveExistingUpdateChannel()
+    {
+        if (Daemon?.UpdateChannel is not null)
+            return;
+
+        if (!File.Exists(_paths.NetclawConfigPath))
+            return;
+
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(_paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .Build();
+
+        var existing = DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
+        if (existing.UpdateChannel == UpdateChannel.Stable)
+            return;
+
+        var prev = Daemon ?? new DaemonConfigSection();
+        Daemon = prev with { UpdateChannel = existing.UpdateChannel };
     }
 
     /// <summary>
@@ -304,13 +329,16 @@ public sealed class WizardConfigBuilder
             };
         }
 
-        // Daemon section — only written for non-default exposure modes (local = omit)
-        if (Daemon is not null && Daemon.ExposureMode != ExposureMode.Local)
+        // Daemon section — written when exposure mode is non-default OR update channel is set
+        if (Daemon is not null)
         {
-            var daemonSection = new Dictionary<string, object>
-            {
-                ["ExposureMode"] = Daemon.ExposureMode.ToWireValue()
-            };
+            var daemonSection = new Dictionary<string, object>();
+
+            if (Daemon.ExposureMode != ExposureMode.Local)
+                daemonSection["ExposureMode"] = Daemon.ExposureMode.ToWireValue();
+
+            if (Daemon.UpdateChannel is not null)
+                daemonSection["UpdateChannel"] = Daemon.UpdateChannel.Value.ToString().ToLowerInvariant();
 
             if (!string.IsNullOrWhiteSpace(Daemon.Host))
                 daemonSection["Host"] = Daemon.Host;
@@ -318,7 +346,8 @@ public sealed class WizardConfigBuilder
             if (Daemon.TrustedProxies.Count > 0)
                 daemonSection["TrustedProxies"] = Daemon.TrustedProxies;
 
-            config["Daemon"] = daemonSection;
+            if (daemonSection.Count > 0)
+                config["Daemon"] = daemonSection;
         }
 
         // Webhooks section — only written when enabled (disabled = default, omit)
@@ -523,9 +552,16 @@ public sealed class IdentityConfigSection
     public required string UserTimezone { get; init; }
 }
 
-public sealed class DaemonConfigSection
+public sealed record DaemonConfigSection
 {
     public ExposureMode ExposureMode { get; init; } = ExposureMode.Local;
+
+    /// <summary>
+    /// Release channel for the daemon's self-update mechanism. When null, the Daemon
+    /// section omits the key and <see cref="DaemonConfig"/> defaults to
+    /// <see cref="UpdateChannel.Stable"/>.
+    /// </summary>
+    public UpdateChannel? UpdateChannel { get; init; }
 
     /// <summary>
     /// Bind address for the daemon. Only emitted when set; the daemon defaults to
