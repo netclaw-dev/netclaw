@@ -30,5 +30,5 @@ tasks below are checked where the work is already done and verified.
   matching" (this change)
 - [x] 3.2 Sync delta to `openspec/specs/tool-approval-gates/spec.md`
   (`/opsx-sync`) and commit on the PR branch
-- [ ] 3.3 Verify implementation matches artifacts (`/opsx-verify`)
-- [ ] 3.4 Archive the change after PR #1388 merges (`/opsx-archive`)
+- [x] 3.3 Verify implementation matches artifacts (`/opsx-verify`)
+- [x] 3.4 Archive the change after PR #1388 merges (`/opsx-archive`)
