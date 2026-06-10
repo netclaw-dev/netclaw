@@ -110,15 +110,6 @@ internal sealed class InboundWebhooksConfigViewModel : ReactiveViewModel
             return false;
         }
 
-        if (Enabled.Value && RouteSummary.Value.Enabled == 0)
-        {
-            Status.Value = new ConfigStatusMessage(
-                "Inbound webhooks cannot be enabled until at least one valid route exists. Use `netclaw webhooks set` first.",
-                ConfigStatusTone.Error);
-            RequestRedraw();
-            return false;
-        }
-
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         config["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
         ConfigFileHelper.SetPathValue(config, "Webhooks.Enabled", Enabled.Value);
@@ -128,7 +119,17 @@ internal sealed class InboundWebhooksConfigViewModel : ReactiveViewModel
         _acceptedTimeoutText = timeoutSeconds.ToString();
         TimeoutDraft.Value = _acceptedTimeoutText;
         IsSaved.Value = true;
-        Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
+
+        // Enabling the gateway before any routes exist is the intended setup order:
+        // `Webhooks.Enabled` is only the feature toggle (inbound-webhooks spec), and with
+        // no routes every inbound request fails closed at 404 — the gateway stays inert
+        // until routes are authored via `netclaw webhooks set`. So persist the toggle and
+        // advise the next step rather than blocking the save.
+        Status.Value = Enabled.Value && RouteSummary.Value.Enabled == 0
+            ? new ConfigStatusMessage(
+                "Inbound webhooks enabled. Add at least one route with `netclaw webhooks set` to start receiving deliveries.",
+                ConfigStatusTone.Warning)
+            : new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
         RequestRedraw();
         return true;
     }

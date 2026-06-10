@@ -43,7 +43,7 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     {
         var externalDir = Path.Combine(_dir.Path, "team-skills");
         Directory.CreateDirectory(externalDir);
-        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
 
         AddLocalFolder(vm, externalDir, "team-skills");
         AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
@@ -126,13 +126,12 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     public void Save_rejects_multiline_skill_feed_api_key_before_persistence()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
 
         BeginAddRemoteServer(vm);
         vm.AppendText("https://skills.example.test");
         vm.ActivateSelected();
-        vm.MoveSelection(1);
-        vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
         vm.AppendText("token\nnext");
         vm.ActivateSelected();
 
@@ -150,17 +149,20 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         BeginAddRemoteServer(vm);
         vm.AppendText("https://skills.example.test");
         vm.ActivateSelected();
-        vm.ActivateSelected();
 
+        Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
         Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
         Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
 
         vm.ActivateSelected();
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
         ReplaceDraft(vm, "custom-feed");
         vm.ActivateSelected();
 
-        Assert.Equal("https://skills.example.test", SingleFeedSection()["Url"]);
+        var feed = SingleFeedSection();
+        Assert.Equal("https://skills.example.test", feed["Url"]);
+        Assert.Null(feed["ApiKey"]);
     }
 
     [Fact]
@@ -205,7 +207,7 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     [Fact]
     public void Location_detail_row_opens_remote_url_editor()
     {
-        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true, requiresAuth: true));
 
         AddRemoteServer(vm, "https://skills.example.test", "secret-token", "custom-feed");
         MoveToDetailAction(vm, SkillSourceDetailAction.Location);
@@ -364,13 +366,13 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
     }
 
+    // Drives the probe-driven add flow for an auth-gated server: the URL probe returns 401
+    // and reveals the bearer-token field, the token re-probes successfully, then name → save.
+    // The vm must be constructed with a requiresAuth FakeSkillFeedProbe.
     private static void AddRemoteServer(SkillSourcesConfigViewModel vm, string url, string token, string name)
     {
         BeginAddRemoteServer(vm);
         vm.AppendText(url);
-        vm.ActivateSelected();
-        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
-        vm.MoveSelection(1);
         vm.ActivateSelected();
         Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
         vm.AppendText(token);
@@ -451,12 +453,29 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
     private string Decrypt(string encrypted)
         => SecretsProtection.CreateProtector(_paths).Unprotect(encrypted);
 
-    private sealed class FakeSkillFeedProbe(bool success) : ISkillFeedReachabilityProbe
+    private sealed class FakeSkillFeedProbe(bool success, bool requiresAuth = false, bool failWithToken = false)
+        : ISkillFeedReachabilityProbe
     {
         public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
-            => success
+        {
+            // Simulate an auth-gated server: 401 (RequiresAuth) until a bearer token is
+            // supplied. Drives the probe-driven token disclosure path. With a token the
+            // re-probe either succeeds (default) or, when failWithToken is set, fails with a
+            // non-auth error so the token-step override dialog appears.
+            if (requiresAuth)
+            {
+                if (string.IsNullOrEmpty(apiKey))
+                    return new SkillFeedReachabilityResult(false, "auth required", RequiresAuth: true);
+
+                return failWithToken
+                    ? new SkillFeedReachabilityResult(false, "unreachable")
+                    : new SkillFeedReachabilityResult(true, "reachable");
+            }
+
+            return success
                 ? new SkillFeedReachabilityResult(true, "reachable")
                 : new SkillFeedReachabilityResult(false, "unreachable");
+        }
     }
 
     private sealed class CountingSkillFeedProbe(bool success) : ISkillFeedReachabilityProbe

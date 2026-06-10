@@ -37,20 +37,22 @@ public sealed class InboundWebhookRoutesDoctorCheckTests : IDisposable
     }
 
     [Fact]
-    public async Task ReturnsError_WhenInboundWebhooksEnabledWithoutRoutes()
+    public async Task ReturnsWarning_WhenInboundWebhooksEnabledWithoutRoutes()
     {
+        // Enable-first is a valid setup order: `Webhooks.Enabled` is only the feature
+        // toggle and the gateway is inert (404s) until routes are added — advisory, not error.
         File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Webhooks\":{\"Enabled\":true}}");
         var check = new InboundWebhookRoutesDoctorCheck(_paths);
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("enabled but no route files", result.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("netclaw webhooks set", result.Remediation, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task ReturnsError_WhenInboundWebhooksEnabledButAllRoutesDisabled()
+    public async Task ReturnsWarning_WhenInboundWebhooksEnabledButAllRoutesDisabled()
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{\"configVersion\":1,\"Webhooks\":{\"Enabled\":true}}");
         WriteRouteFile("github-issues", new WebhookRouteConfig
@@ -67,7 +69,7 @@ public sealed class InboundWebhookRoutesDoctorCheckTests : IDisposable
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
         Assert.Contains("no valid enabled route", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 

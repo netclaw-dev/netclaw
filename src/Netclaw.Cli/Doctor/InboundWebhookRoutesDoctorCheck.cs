@@ -27,7 +27,10 @@ public sealed class InboundWebhookRoutesDoctorCheck(NetclawPaths paths) : IDocto
         {
             if (inboundWebhooksEnabled)
             {
-                return Task.FromResult(DoctorCheckResult.Error(
+                // Advisory, not an error: `Webhooks.Enabled` is only the feature toggle.
+                // With no routes the gateway fails every request closed at 404 (inert),
+                // so enable-first is a valid setup order — nudge, don't fail the config.
+                return Task.FromResult(DoctorCheckResult.Warning(
                     CheckName,
                     "Inbound webhooks are enabled but no route files are configured.",
                     $"Create at least one valid route with `netclaw webhooks set` or disable Webhooks.Enabled. Routes live under {paths.WebhooksDirectory}."));
@@ -60,7 +63,9 @@ public sealed class InboundWebhookRoutesDoctorCheck(NetclawPaths paths) : IDocto
         {
             if (inboundWebhooksEnabled && enabledRouteCount == 0)
             {
-                return Task.FromResult(DoctorCheckResult.Error(
+                // Advisory, not an error (see above): route files exist but none are
+                // enabled, so the gateway serves nothing yet. Enable a route or add one.
+                return Task.FromResult(DoctorCheckResult.Warning(
                     CheckName,
                     "Inbound webhooks are enabled but no valid enabled route files are configured.",
                     "Enable or create at least one valid route with `netclaw webhooks set`, or disable Webhooks.Enabled."));

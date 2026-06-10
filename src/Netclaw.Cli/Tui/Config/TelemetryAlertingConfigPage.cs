@@ -108,9 +108,9 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
         return Layouts.Vertical()
             .WithChild(new TextNode(title).WithForeground(Color.White).Bold())
             .WithChild(Layouts.Empty().Height(1))
-            .WithChild(FormRow(0, "Name        ", DisplayField(ViewModel.WebhookNameDraft.Value, "(optional)", masked: false)))
-            .WithChild(FormRow(1, "URL         ", DisplayField(ViewModel.WebhookUrlDraft.Value, "https://hooks.slack.com/services/…", masked: false)))
-            .WithChild(FormRow(2, "Auth header ", DisplayField(ViewModel.WebhookAuthHeaderDraft.Value, authState, masked: true)))
+            .WithChild(FormRow(0, "Name        ", ViewModel.WebhookNameDraft.Value, "(optional)", masked: false))
+            .WithChild(FormRow(1, "URL         ", ViewModel.WebhookUrlDraft.Value, "e.g. https://hooks.slack.com/services/…", masked: false))
+            .WithChild(FormRow(2, "Auth header ", ViewModel.WebhookAuthHeaderDraft.Value, authState, masked: true))
             .WithChild(Layouts.Empty().Height(1))
             .WithChild(Hint($"  Format:  {format} (auto-detected from URL)"))
             .WithChild(Hint("  URL is required. Auth header is optional and stored masked."));
@@ -219,8 +219,15 @@ internal sealed class TelemetryAlertingConfigPage : ReactivePage<TelemetryAlerti
     private ILayoutNode Row(int index, string label)
         => ConfigSelectionRow.Create($"  {label}", index == ViewModel.SelectedRow.Value);
 
-    private ILayoutNode FormRow(int index, string label, string value)
-        => ConfigSelectionRow.Create($"  {label} {value}", index == ViewModel.FormFieldIndex.Value);
+    private ILayoutNode FormRow(int index, string label, string draft, string placeholder, bool masked)
+    {
+        var isPlaceholder = string.IsNullOrEmpty(draft);
+        var value = DisplayField(draft, placeholder, masked);
+        // Placeholder/example text renders dim (hint gray) so it never reads as an
+        // entered value; a real (or masked) value renders bright white.
+        var valueColor = isPlaceholder ? Color.Gray : Color.White;
+        return ConfigSelectionRow.CreateLabeled($"  {label} ", value, index == ViewModel.FormFieldIndex.Value, valueColor);
+    }
 
     private string FocusedHelp()
     {

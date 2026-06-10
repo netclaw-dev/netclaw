@@ -16,7 +16,7 @@ using Termina.Reactive;
 
 namespace Netclaw.Cli.Tui.Config;
 
-internal sealed record SkillFeedReachabilityResult(bool Success, string Message);
+internal sealed record SkillFeedReachabilityResult(bool Success, string Message, bool RequiresAuth = false);
 
 internal interface ISkillFeedReachabilityProbe
 {
@@ -45,7 +45,7 @@ internal sealed class SkillFeedReachabilityProbe : ISkillFeedReachabilityProbe
                 return new SkillFeedReachabilityResult(true, "Skill feed discovery endpoint is reachable.");
 
             if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-                return new SkillFeedReachabilityResult(false, $"Skill feed authentication failed with HTTP {(int)response.StatusCode}.");
+                return new SkillFeedReachabilityResult(false, $"Skill feed authentication failed with HTTP {(int)response.StatusCode}.", RequiresAuth: true);
 
             return new SkillFeedReachabilityResult(false, $"Skill feed probe returned HTTP {(int)response.StatusCode}.");
         }
@@ -70,7 +70,6 @@ internal enum SkillSourcesScreen
     AddLocalSymlinks,
     AddLocalName,
     AddRemoteUrl,
-    AddRemoteAuth,
     AddRemoteToken,
     AddRemoteName,
     RenameSource,
@@ -231,7 +230,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         SkillSourcesScreen.AddLocalSymlinks => "Local Folder Security",
         SkillSourcesScreen.AddLocalName => "Review Local Folder",
         SkillSourcesScreen.AddRemoteUrl => "Add Skill Server",
-        SkillSourcesScreen.AddRemoteAuth => "Skill Server Authentication",
         SkillSourcesScreen.AddRemoteToken => "Skill Server Token",
         SkillSourcesScreen.AddRemoteName => "Review Skill Server",
         SkillSourcesScreen.RenameSource => "Rename Skill Source",
@@ -300,9 +298,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
                 break;
             case SkillSourcesScreen.AddRemoteUrl:
                 ContinueAddRemoteUrl();
-                break;
-            case SkillSourcesScreen.AddRemoteAuth:
-                ContinueAddRemoteAuth();
                 break;
             case SkillSourcesScreen.AddRemoteToken:
                 ContinueAddRemoteToken();
@@ -476,9 +471,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             case SkillSourcesScreen.AddLocalName:
                 ShowChoiceScreen(SkillSourcesScreen.AddLocalSymlinks, _pendingLocalAllowSymlinks ? 1 : 0);
                 break;
-            case SkillSourcesScreen.AddRemoteAuth:
-                ShowTextScreen(SkillSourcesScreen.AddRemoteUrl, _pendingRemoteUrl ?? string.Empty);
-                break;
             case SkillSourcesScreen.AddRemoteToken:
                 if (_editingAction == SkillSourceDetailAction.RotateToken)
                 {
@@ -486,13 +478,15 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
                     break;
                 }
 
-                ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, _pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken ? 1 : 0);
+                // Probe-driven flow: the token field was reached from the URL probe, so
+                // Back returns to the URL entry (there is no separate auth-choice screen).
+                ShowTextScreen(SkillSourcesScreen.AddRemoteUrl, _pendingRemoteUrl ?? string.Empty);
                 break;
             case SkillSourcesScreen.AddRemoteName:
                 if (_pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken)
                     ShowTextScreen(SkillSourcesScreen.AddRemoteToken, _pendingRemoteApiKey ?? string.Empty);
                 else
-                    ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, 0);
+                    ShowTextScreen(SkillSourcesScreen.AddRemoteUrl, _pendingRemoteUrl ?? string.Empty);
                 break;
             case SkillSourcesScreen.RenameSource:
             case SkillSourcesScreen.ChangeLocation:
@@ -697,27 +691,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     internal void CommitAddRemoteUrl(string draft)
         => CommitStructural(draft, ValidateAddRemoteUrlDraft, CommitAddRemoteUrlDraft);
 
-    internal void CommitAddRemoteAuth(SkillSourceAuthMode authMode)
-    {
-        var structural = ValidateAddRemoteAuthDraft(authMode);
-        if (!structural.Success)
-        {
-            ApplyCommitResult(structural);
-            return;
-        }
-
-        ReplaceAddRemoteAuthDraft(authMode);
-        var probe = ValidateAddRemoteAuthReachabilityAsync(authMode, CancellationToken.None)
-            .AsTask().GetAwaiter().GetResult();
-        if (!probe.Success)
-        {
-            ApplyCommitResult(probe);
-            return;
-        }
-
-        CommitAddRemoteAuthDraft(authMode);
-    }
-
     internal void CommitAddRemoteToken(string draft)
     {
         var structural = ValidateAddRemoteTokenDraft(draft);
@@ -821,9 +794,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         ActiveValidationDialog.Value = null;
         switch (Screen.Value)
         {
-            case SkillSourcesScreen.AddRemoteAuth:
-                CommitAddRemoteAuthDraft(ReadAddRemoteAuthDraft());
-                break;
             case SkillSourcesScreen.AddRemoteToken:
                 CommitAddRemoteTokenDraft(Draft.Value);
                 break;
@@ -861,9 +831,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             case SkillSourcesScreen.ChangeLocation:
                 ShowTextScreen(editScreen.Value, editDraft ?? string.Empty);
                 break;
-            case SkillSourcesScreen.AddRemoteAuth:
-                ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, _pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken ? 1 : 0);
-                break;
             default:
                 RequestRedraw();
                 break;
@@ -874,7 +841,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     {
         _validationEditScreen = Screen.Value switch
         {
-            SkillSourcesScreen.AddRemoteAuth => SkillSourcesScreen.AddRemoteUrl,
             SkillSourcesScreen.AddRemoteToken => SkillSourcesScreen.AddRemoteToken,
             SkillSourcesScreen.ChangeLocation => SkillSourcesScreen.ChangeLocation,
             _ => Screen.Value,
@@ -997,7 +963,16 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
         _pendingRemoteApiKey = null;
         _pendingRemoteProbeMessage = null;
         _pendingRemoteTimeoutSeconds = DefaultFeedTimeoutSeconds;
-        ShowChoiceScreen(SkillSourcesScreen.AddRemoteAuth, 0);
+
+        // Probe-driven disclosure: probe with no auth first. The bearer-token field is
+        // revealed only when the server actually requires auth (401/403); open targets
+        // go straight to the name/review step and never see a secret field.
+        //
+        // Do NOT reset _saveAnywayFingerprint here: ClearPendingFlow already clears it at
+        // flow start, and this method runs on every Enter on the URL screen — clearing it
+        // here would defeat "press Enter again to save anyway" for an unreachable open
+        // server (the second Enter must match the prior fingerprint and advance).
+        ProbePendingRemoteThenReview();
     }
 
     internal SkillSourceCommitResult ValidateAddRemoteUrlDraft(string value)
@@ -1009,69 +984,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
     {
         Draft.Value = value;
         ContinueAddRemoteUrl();
-    }
-
-    private void ContinueAddRemoteAuth()
-    {
-        _pendingRemoteAuthMode = SelectedRow.Value == 1 ? SkillSourceAuthMode.BearerToken : SkillSourceAuthMode.None;
-        if (_pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken)
-        {
-            ShowTextScreen(SkillSourcesScreen.AddRemoteToken, string.Empty);
-            return;
-        }
-
-        ProbePendingRemoteThenReview();
-    }
-
-    internal SkillSourceAuthMode ReadAddRemoteAuthDraft()
-        => SelectedRow.Value == 1 ? SkillSourceAuthMode.BearerToken : SkillSourceAuthMode.None;
-
-    internal void ReplaceAddRemoteAuthDraft(SkillSourceAuthMode value)
-    {
-        if (Screen.Value != SkillSourcesScreen.AddRemoteAuth)
-            return;
-
-        var row = value == SkillSourceAuthMode.BearerToken ? 1 : 0;
-        if (SelectedRow.Value == row)
-            return;
-
-        SelectedRow.Value = row;
-        MarkDirty();
-    }
-
-    internal SkillSourceCommitResult ValidateAddRemoteAuthDraft(SkillSourceAuthMode value)
-        => _pendingRemoteUrl is null
-            ? SkillSourceCommitResult.Failed("Skill server URL is required before testing a source.")
-            : SkillSourceCommitResult.Ok();
-
-    internal ValueTask<SkillSourceCommitResult> ValidateAddRemoteAuthReachabilityAsync(
-        SkillSourceAuthMode value,
-        CancellationToken ct)
-    {
-        if (value == SkillSourceAuthMode.BearerToken)
-            return ValueTask.FromResult(SkillSourceCommitResult.Ok());
-
-        if (_pendingRemoteUrl is null)
-            return ValueTask.FromResult(SkillSourceCommitResult.Failed("Skill server URL is required before testing a source."));
-
-        var result = _probe.Probe(_pendingRemoteUrl, null, _pendingRemoteTimeoutSeconds);
-        _pendingRemoteProbeMessage = result.Message;
-        return ValueTask.FromResult(result.Success
-            ? SkillSourceCommitResult.Ok(result.Message)
-            : SkillSourceCommitResult.Warning(result.Message));
-    }
-
-    internal void CommitAddRemoteAuthDraft(SkillSourceAuthMode value)
-    {
-        _pendingRemoteAuthMode = value;
-        if (_pendingRemoteAuthMode == SkillSourceAuthMode.BearerToken)
-        {
-            ShowTextScreen(SkillSourcesScreen.AddRemoteToken, string.Empty);
-            return;
-        }
-
-        var suggestedName = SuggestNameFromUrl(_pendingRemoteUrl ?? "skill-server");
-        ShowTextScreen(SkillSourcesScreen.AddRemoteName, MakeUniqueName(suggestedName));
     }
 
     private void ContinueAddRemoteToken()
@@ -1184,6 +1096,19 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             _pendingRemoteProbeMessage = result.Message;
             if (!result.Success)
             {
+                // Probe-driven disclosure: a 401/403 with no bearer token means the
+                // server requires auth — reveal the token field and re-probe rather
+                // than offering "save anyway". Once a token is present (or the failure
+                // is not auth-related) fall through to the save-anyway override.
+                if (result.RequiresAuth && _pendingRemoteAuthMode != SkillSourceAuthMode.BearerToken)
+                {
+                    _pendingRemoteAuthMode = SkillSourceAuthMode.BearerToken;
+                    _saveAnywayFingerprint = null;
+                    ShowTextScreen(SkillSourcesScreen.AddRemoteToken, string.Empty);
+                    SetStatus($"{result.Message} Enter a bearer token to continue.", ConfigStatusTone.Warning);
+                    return;
+                }
+
                 _saveAnywayFingerprint = fingerprint;
                 SetStatus($"{result.Message} Press Enter again to save anyway.", ConfigStatusTone.Warning);
                 return;
@@ -1825,7 +1750,6 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             SkillSourcesScreen.Inventory => InventoryRows.Count,
             SkillSourcesScreen.SourceDetail => DetailRows.Count,
             SkillSourcesScreen.AddLocalSymlinks => 2,
-            SkillSourcesScreen.AddRemoteAuth => 2,
             SkillSourcesScreen.RemoveConfirm => 2,
             _ => 1,
         };

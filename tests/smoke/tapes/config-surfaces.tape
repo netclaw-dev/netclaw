@@ -2,7 +2,7 @@
 #
 # Covers:
 #   - Workspaces Directory successful save path
-#   - Inbound Webhooks timeout editing and fail-closed enabled/no-route path
+#   - Inbound Webhooks timeout editing and enable-first advisory (no routes yet)
 #   - Browser Automation guidance-only path without shelling out from the TUI
 #
 # Post-tape assertion validates the persisted config semantically.
@@ -37,7 +37,7 @@ Type "WORKSPACES_DIR=/tmp/netclaw-smoke-config-surfaces-workspaces jq -e '.Works
 Enter
 Wait+Screen@5s /true/
 
-# ─── Inbound Webhooks timeout save and enabled/no-route guard ───────────────
+# ─── Inbound Webhooks timeout save and enable-first advisory ────────────────
 Type "netclaw config"
 Enter
 Wait+Screen@10s /Settings Areas/
@@ -51,11 +51,11 @@ Enter
 Wait+Screen@10s /Inbound Webhooks settings saved/
 Up
 Space
-Wait+Screen@10s /cannot be enabled until at least one valid route exists/
+Wait+Screen@10s /Add at least one route/
 Ctrl+Q
 Wait+Screen@10s /TAPE\$/
 
-Type "jq -e '.Webhooks.Enabled == false and .Webhooks.ExecutionTimeoutSeconds == 45' $NETCLAW_HOME/config/netclaw.json"
+Type "jq -e '.Webhooks.Enabled == true and .Webhooks.ExecutionTimeoutSeconds == 45' $NETCLAW_HOME/config/netclaw.json"
 Enter
 Wait+Screen@5s /true/
 

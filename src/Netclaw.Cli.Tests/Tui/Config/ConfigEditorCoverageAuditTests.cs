@@ -98,9 +98,8 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             ["inbound-webhooks"] = new(
                 nameof(InboundWebhooksConfigViewModelTests),
                 StructuralValidationCoverage.Required(
-                    new ValidationConceptTest("local-reference", nameof(InboundWebhooksConfigViewModelTests), nameof(InboundWebhooksConfigViewModelTests.Save_blocks_enabled_state_when_no_valid_routes_exist)),
                     new ValidationConceptTest("timeout", nameof(InboundWebhooksConfigViewModelTests), nameof(InboundWebhooksConfigViewModelTests.Save_rejects_invalid_timeout_before_persistence))),
-                DynamicValidationCoverage.NotApplicable("Inbound Webhooks validates local route files and timeout bounds; route authoring remains `netclaw webhooks` and no remote probe runs from this editor."),
+                DynamicValidationCoverage.NotApplicable("Inbound Webhooks validates timeout bounds locally; `Webhooks.Enabled` is a feature toggle that needs no route (enable-first), and route authoring remains `netclaw webhooks`, so no remote probe runs from this editor."),
                 null,
                 new RuntimeConsumerCoverage(
                     "Daemon WebhooksConfig binding and WebhookRouteCatalog consume Webhooks.Enabled and Webhooks.ExecutionTimeoutSeconds.",
@@ -358,7 +357,7 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
         Assert.Contains("TryCommitCurrentAction(ConsoleKey.Enter)", source, StringComparison.Ordinal);
         Assert.Contains("TryCommitCurrentAction(ConsoleKey.Spacebar)", source, StringComparison.Ordinal);
         Assert.Contains("ViewModel.CommitRemoveSourceAction", source, StringComparison.Ordinal);
-        Assert.Contains("ViewModel.CommitAddRemoteAuth", source, StringComparison.Ordinal);
+        Assert.Contains("ViewModel.CommitAddRemoteToken", source, StringComparison.Ordinal);
 
         // The probe-warning override dialog is still rendered via the shared dialog views.
         Assert.Contains("NetclawValidationDialogViews", source, StringComparison.Ordinal);

@@ -93,10 +93,6 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
                         "agent skills over HTTP for a team or organization.",
                         "Project: https://github.com/netclaw-dev/skill-server"
                     ]),
-                SkillSourcesScreen.AddRemoteAuth => BuildChoice(
-                    "How should Netclaw authenticate to this server?",
-                    "Choose bearer token only when the server requires it.",
-                    ["No auth required", "Bearer token"]),
                 SkillSourcesScreen.AddRemoteToken => BuildTextDraft(
                     "Enter the bearer token for this skill server.",
                     "Bearer token",
@@ -312,7 +308,7 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         {
             SkillSourcesScreen.Inventory => " [↑/↓] Navigate  [Enter] Open/Add  [Space] Toggle  [Delete] Remove  [Esc] Settings Areas  [Ctrl+Q] Quit",
             SkillSourcesScreen.SourceDetail => " [↑/↓] Navigate  [Enter/Space] Activate  [Delete] Remove  [Esc] Skill Sources  [Ctrl+Q] Quit",
-            SkillSourcesScreen.AddLocalSymlinks or SkillSourcesScreen.AddRemoteAuth or SkillSourcesScreen.RemoveConfirm =>
+            SkillSourcesScreen.AddLocalSymlinks or SkillSourcesScreen.RemoveConfirm =>
                 " [↑/↓] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
             _ => " [Type/Paste] Edit  [Backspace] Delete  [Enter] Apply  [Esc] Back  [Ctrl+Q] Quit",
         };
@@ -408,7 +404,11 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
         // Bracketed paste is auto-routed to the focused input by Termina, which bypasses
         // the per-keystroke draft sync. Stage the live input text before committing so a
         // paste immediately followed by Enter commits the full value, not a stale draft.
-        if (_textInput is not null && _textInputScreen == ViewModel.Screen.Value)
+        // Only re-stage when the text actually differs: ReplaceDraft marks the draft dirty
+        // (which clears the save-anyway fingerprint), so an unchanged re-stage on a repeated
+        // Enter would defeat "press Enter again to save anyway" for an unreachable feed.
+        if (_textInput is not null && _textInputScreen == ViewModel.Screen.Value
+            && _textInput.Text != ViewModel.Draft.Value)
             ViewModel.ReplaceDraft(_textInput.Text);
 
         var draft = ViewModel.Draft.Value;
@@ -448,11 +448,6 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
             {
                 case SkillSourcesScreen.AddLocalSymlinks:
                     ViewModel.CommitAddLocalSymlinks(ViewModel.SelectedRow.Value == 1);
-                    return true;
-                case SkillSourcesScreen.AddRemoteAuth:
-                    ViewModel.CommitAddRemoteAuth(ViewModel.SelectedRow.Value == 1
-                        ? SkillSourceAuthMode.BearerToken
-                        : SkillSourceAuthMode.None);
                     return true;
             }
         }
@@ -521,17 +516,9 @@ internal sealed class SkillSourcesConfigPage : ReactivePage<SkillSourcesConfigVi
     private void RetryCurrentCommit()
     {
         // Re-run the same commit that raised the override dialog so the probe fires again.
-        switch (ViewModel.Screen.Value)
-        {
-            case SkillSourcesScreen.AddRemoteAuth:
-                ViewModel.CommitAddRemoteAuth(ViewModel.SelectedRow.Value == 1
-                    ? SkillSourceAuthMode.BearerToken
-                    : SkillSourceAuthMode.None);
-                break;
-            default:
-                CommitCurrentTextScreen();
-                break;
-        }
+        // The dialog is only raised over text screens (token / location), so retrying the
+        // current text-screen commit re-fires the reachability probe.
+        CommitCurrentTextScreen();
     }
 
     private TextInputNode EnsureTextInputForCurrentScreen()

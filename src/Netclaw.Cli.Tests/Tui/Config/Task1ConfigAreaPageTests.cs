@@ -228,6 +228,8 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     public async Task Skill_sources_remote_url_enter_accepts_valid_url_without_persisting_incomplete_flow()
     {
         var before = File.ReadAllText(_paths.NetclawConfigPath);
+        // Default probe reports success, so the no-auth probe advances straight to the
+        // name/review step (open servers never see the bearer-token field).
         var app = CreateSkillSourcesApp(out var input, out var vm);
 
         input.EnqueueKey(ConsoleKey.DownArrow);
@@ -240,64 +242,71 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
-    public async Task Skill_sources_remote_auth_enter_blocks_unreachable_probe_before_persistence()
+    public async Task Skill_sources_remote_url_unreachable_probe_fingerprints_without_dialog_before_persistence()
     {
+        // Repurposed from a URL-step override-dialog test: the URL step no longer raises the
+        // override dialog. An unreachable (non-auth) probe now fingerprints the URL and surfaces
+        // a "save anyway" warning status while staying on AddRemoteUrl — no dialog, no persistence.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(false, "probe failed"));
 
+        // BeginRemoteUrlEntry runs the first URL commit, which fires the no-auth probe once.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
-        Assert.NotNull(vm.ActiveValidationDialog.Value);
-        Assert.Equal(string.Empty, vm.Status.Value.Text);
+        Assert.Equal(SkillSourcesScreen.AddRemoteUrl, vm.Screen.Value);
+        Assert.Null(vm.ActiveValidationDialog.Value);
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("save anyway", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         var screen = terminal.ToString();
-        Assert.True(screen.Contains("Skill Server Validation Warning", StringComparison.Ordinal),
-            $"Expected validation warning dialog. Screen:\n{terminal}");
+        Assert.DoesNotContain("Skill Server Validation Warning", screen, StringComparison.Ordinal);
         Assert.True(screen.Contains("probe failed", StringComparison.OrdinalIgnoreCase),
-            $"Expected probe failure in dialog. Screen:\n{terminal}");
-        Assert.Equal(1, CountOccurrences(screen, "probe failed", StringComparison.OrdinalIgnoreCase));
+            $"Expected probe failure in warning status. Screen:\n{terminal}");
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
-    public async Task Skill_sources_remote_auth_dialog_retry_keeps_source_unpersisted()
+    public async Task Skill_sources_remote_url_unreachable_open_server_second_enter_saves_anyway_reviews_name()
     {
+        // For an OPEN (non-auth) server that probes unreachable, the first Enter on AddRemoteUrl
+        // fingerprints the URL and warns "save anyway" (no dialog). A second Enter on the same URL
+        // matches the fingerprint, skips the probe, and advances to AddRemoteName — nothing
+        // persisted until the name commits.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
 
+        // First URL commit (inside BeginRemoteUrlEntry) warns; a second Enter saves anyway.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
-        Assert.Equal(SkillSourcesScreen.AddRemoteAuth, vm.Screen.Value);
-        Assert.NotNull(vm.ActiveValidationDialog.Value);
+        Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        Assert.Null(vm.ActiveValidationDialog.Value);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
-    public async Task Skill_sources_remote_auth_dialog_back_to_edit_returns_to_url_entry()
+    public async Task Skill_sources_remote_url_unreachable_probe_preserves_url_draft_for_editing()
     {
+        // Repurposed from a URL-step "back to edit" dialog test: the URL step no longer raises a
+        // dialog, so there is no "back to edit" action. The equivalent guarantee under the
+        // fingerprint model is that the typed URL is preserved on AddRemoteUrl so the user can
+        // edit it after an unreachable probe instead of retyping.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
         var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
 
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -312,14 +321,17 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     [Fact]
     public async Task Skill_sources_remote_token_dialog_back_to_edit_returns_to_token_entry()
     {
+        // The token screen is reached via a 401 on the no-token URL probe. The token re-probe
+        // then fails with a non-auth error (failWithToken), which raises the override dialog.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm,
+            new FakeSkillFeedProbe(message: "probe failed", requiresAuth: true, failWithToken: true));
 
+        // URL + Enter -> 401 -> AddRemoteToken. Then type the token and commit (re-probe fails).
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("secret-token");
         input.EnqueueKey(ConsoleKey.Enter);
+        // Dialog: Retry / Back to edit / Save anyway -> DownArrow once selects "Back to edit".
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
@@ -334,16 +346,16 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
-    public async Task Skill_sources_remote_auth_dialog_save_anyway_reviews_name_without_persisting_incomplete_flow()
+    public async Task Skill_sources_remote_url_success_probe_reviews_name_without_persisting_incomplete_flow()
     {
+        // Repurposed from a URL-step "save anyway" dialog test: there is no URL-step override.
+        // A reachable open server advances straight to the name/review screen with the suggested
+        // name prefilled, still without persisting until the name commits. This preserves the
+        // AddRemoteName render and suggested-name coverage the old dialog test asserted.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm, out var terminal, new FakeSkillFeedProbe(true, "reachable"));
 
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -360,35 +372,42 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     }
 
     [Fact]
-    public async Task Skill_sources_remote_auth_bearer_token_selection_advances_to_token_entry_without_probe()
+    public async Task Skill_sources_remote_url_requiring_auth_reveals_token_entry()
     {
+        // Repurposed from the auth-choice "pick Bearer" test: there is no auth-choice screen.
+        // The bearer-token field is revealed only when the no-token probe reports RequiresAuth
+        // (HTTP 401/403), with a warning prompting the user to enter a token.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm,
+            new FakeSkillFeedProbe(message: "auth required", requiresAuth: true));
 
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
         Assert.Equal(SkillSourcesScreen.AddRemoteToken, vm.Screen.Value);
-        Assert.NotEqual(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("bearer token to continue", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
-    public async Task Skill_sources_remote_token_enter_blocks_unreachable_probe_before_persistence_then_second_enter_reviews_name()
+    public async Task Skill_sources_remote_token_enter_blocks_unreachable_probe_before_persistence_then_save_anyway_reviews_name()
     {
+        // Token screen reached via 401; the token re-probe fails with a non-auth error
+        // (failWithToken), raising the override dialog. "Save anyway" advances to the name
+        // review screen without persisting.
         var before = File.ReadAllText(_paths.NetclawConfigPath);
-        var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
+        var app = CreateSkillSourcesApp(out var input, out var vm,
+            new FakeSkillFeedProbe(message: "probe failed", requiresAuth: true, failWithToken: true));
 
+        // URL + Enter -> 401 -> AddRemoteToken. Type token, Enter -> re-probe fails -> dialog.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("secret-token");
         input.EnqueueKey(ConsoleKey.Enter);
+        // Dialog: Retry / Back to edit / Save anyway -> two DownArrows select "Save anyway".
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
@@ -398,21 +417,22 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
         await app.RunAsync(cts.Token);
 
         Assert.Equal(SkillSourcesScreen.AddRemoteName, vm.Screen.Value);
+        Assert.Null(vm.ActiveValidationDialog.Value);
         Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
     }
 
     [Fact]
     public async Task Skill_sources_remote_bearer_name_enter_persists_encrypted_token_to_skill_feeds()
     {
-        var app = CreateSkillSourcesApp(out var input, out var vm);
+        // requiresAuth probe: URL probe 401s and reveals the token field; the token re-probe
+        // succeeds, advances to name, and the entered token is persisted encrypted.
+        var app = CreateSkillSourcesApp(out var input, out var vm,
+            new FakeSkillFeedProbe(message: "auth required", requiresAuth: true));
 
+        // URL + Enter -> 401 -> AddRemoteToken. Type token, Enter -> re-probe succeeds -> name.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("secret-token");
         input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -431,10 +451,12 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     [Fact]
     public async Task Skill_sources_remote_name_enter_persists_no_auth_source_to_skill_feeds()
     {
+        // Default probe reports success: the no-auth URL probe advances straight to the name
+        // screen (no token field), and Enter on the name persists an open feed with no ApiKey.
         var app = CreateSkillSourcesApp(out var input, out var vm);
 
+        // URL + Enter (inside BeginRemoteUrlEntry) -> AddRemoteName; Enter saves the open feed.
         BeginRemoteUrlEntry(input, "https://skills.example.test");
-        input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -456,13 +478,16 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     [Fact]
     public async Task Skill_sources_remote_name_enter_after_save_anyway_persists_source_to_skill_feeds()
     {
+        // OPEN-URL save-anyway path: the no-auth probe reports unreachable, so the first Enter on
+        // AddRemoteUrl fingerprints the URL and warns "save anyway". A second Enter on the same URL
+        // skips the probe and advances to AddRemoteName, and Enter on the name persists the feed
+        // with no token (open server, null ApiKey).
         var app = CreateSkillSourcesApp(out var input, out var vm, new FakeSkillFeedProbe(false, "probe failed"));
 
+        // URL + Enter (inside BeginRemoteUrlEntry) warns; a second Enter saves anyway -> AddRemoteName.
         BeginRemoteUrlEntry(input, "https://example.invalid");
         input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.DownArrow);
-        input.EnqueueKey(ConsoleKey.Enter);
+        // Now on AddRemoteName -> Enter persists.
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -747,15 +772,40 @@ public sealed class Task1ConfigAreaPageTests : IDisposable
     {
         private readonly bool _success;
         private readonly string _message;
+        private readonly bool _requiresAuth;
+        private readonly bool _failWithToken;
 
-        public FakeSkillFeedProbe(bool success = true, string message = "reachable")
+        public FakeSkillFeedProbe(
+            bool success = true,
+            string message = "reachable",
+            bool requiresAuth = false,
+            bool failWithToken = false)
         {
             _success = success;
             _message = message;
+            _requiresAuth = requiresAuth;
+            _failWithToken = failWithToken;
         }
 
         public SkillFeedReachabilityResult Probe(string baseUrl, string? apiKey, int timeoutSeconds)
-            => new(_success, _message);
+        {
+            // Simulate an auth-gated server: the no-token probe returns 401 (RequiresAuth),
+            // which reveals the bearer-token field. This is the only way to reach the
+            // AddRemoteToken screen now. With a token supplied the re-probe either succeeds
+            // (default) or, when failWithToken is set, fails with a non-auth error so the
+            // token-step override dialog appears.
+            if (_requiresAuth)
+            {
+                if (string.IsNullOrEmpty(apiKey))
+                    return new SkillFeedReachabilityResult(false, _message, RequiresAuth: true);
+
+                return _failWithToken
+                    ? new SkillFeedReachabilityResult(false, _message)
+                    : new SkillFeedReachabilityResult(true, _message);
+            }
+
+            return new SkillFeedReachabilityResult(_success, _message);
+        }
     }
 
     private static void BeginRemoteUrlEntry(VirtualInputSource input, string url)

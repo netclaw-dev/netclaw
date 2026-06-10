@@ -71,16 +71,22 @@ public sealed class InboundWebhooksConfigViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_blocks_enabled_state_when_no_valid_routes_exist()
+    public void Enabling_with_no_routes_persists_and_warns()
     {
-        var before = File.ReadAllText(_paths.NetclawConfigPath);
         using var vm = new InboundWebhooksConfigViewModel(_paths);
 
-        Assert.False(vm.ToggleEnabled());
-        Assert.Equal(ConfigStatusTone.Error, vm.Status.Value.Tone);
-        Assert.Contains("at least one valid route", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(before, File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.False(vm.Enabled.Value);
+        // Enable-first is the intended setup order: the toggle persists and the editor
+        // advises adding routes rather than blocking. With zero routes the gateway is
+        // inert (every request 404s), so this is a valid intermediate state.
+        Assert.True(vm.ToggleEnabled());
+        Assert.True(vm.Enabled.Value);
+        Assert.Equal(ConfigStatusTone.Warning, vm.Status.Value.Tone);
+        Assert.Contains("netclaw webhooks set", vm.Status.Value.Text, StringComparison.OrdinalIgnoreCase);
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Webhooks.Enabled", out var enabled));
+        Assert.True(enabled is bool flag && flag);
+        // The editor still never fabricates routes.
         Assert.Empty(Directory.EnumerateFiles(_paths.WebhooksDirectory));
     }
 

@@ -1159,10 +1159,11 @@ static async Task RunConfigEditorAsync(string[] args)
 
     builder.Services.AddTermina("/config", t =>
     {
-        // NOTE: the /config host intentionally does NOT call ConfigureNativeSelection.
-        // Raw input here breaks the vhs `config-*` smoke tapes (authored for the
-        // cooked-input config host, unlike the init/provider/model tapes). The
-        // provider/model/mcp pages still get native selection via their own commands.
+        // Every Termina host uses raw input so native terminal text-selection
+        // (mouse drag-select) and double-press Ctrl+C handling behave identically
+        // across `init`, `provider`, `model`, `config`, etc. The `config-*` smoke
+        // tapes are authored against this same raw-input mode.
+        ConfigureNativeSelection(t);
         t.RegisterRoute<ConfigDashboardPage, ConfigDashboardViewModel>("/config");
         t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
         t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
