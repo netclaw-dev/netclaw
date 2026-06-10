@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
+using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Discord;
 using Netclaw.Cli.Tests.Tui;
@@ -324,6 +325,81 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         Assert.Equal(ChannelsEditorValidationMessages.SlackBotTokenPrefix, channelsVm.Status.Value.Text);
         Assert.Equal(ConfigStatusTone.Error, channelsVm.Status.Value.Tone);
         Assert.Null(slack.BotToken);
+    }
+
+    [Fact]
+    public async Task Channels_EnableSlackByName_thenDiscordById_persistsBothSectionsAndSecrets()
+    {
+        // End-to-end reproduction of the reported live trace: a fresh config, enable
+        // Slack through the picker sub-flow entering a channel NAME (resolved to an ID
+        // on the completion autosave), then enable Discord entering a channel ID, then
+        // Escape back to the dashboard. Both sections + bot tokens must survive on disk.
+        WriteEmptyChannelFiles();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true, null, [new ResolvedSlackChannel("general", "C100")], [])
+        };
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true, null, [new ResolvedDiscordChannel("555000111", "ops", "Guild")], [])
+        };
+        var app = CreateHeadlessApp(
+            out var input,
+            out var dashboardVm,
+            out var getChannelsVm,
+            out _,
+            slackProbe: slackProbe,
+            discordProbe: discordProbe);
+        OpenChannels(dashboardVm);
+
+        // Slack: Enter to enable + enter sub-flow, type tokens + channel NAME.
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("xoxb-live");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("xapp-live");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("general"); // NAME, not ID.
+        input.EnqueueKey(ConsoleKey.Enter);
+        SelectSecondOption(input); // Disable DMs.
+        SelectSecondOption(input); // Allow anyone.
+        // Now on ChannelPermissions for Slack; go back to the picker.
+        input.EnqueueKey(ConsoleKey.Escape); // ChannelPermissions -> AdapterMenu.
+        input.EnqueueKey(ConsoleKey.Escape); // AdapterMenu -> Picker.
+
+        // Discord: move down, Enter to enable + sub-flow, type token + channel ID.
+        input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("discord-live");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueString("555000111");
+        input.EnqueueKey(ConsoleKey.Enter);
+        SelectSecondOption(input); // Disable DMs.
+        SelectSecondOption(input); // Allow anyone.
+        input.EnqueueKey(ConsoleKey.Escape); // ChannelPermissions -> AdapterMenu.
+        input.EnqueueKey(ConsoleKey.Escape); // AdapterMenu -> Picker.
+
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.Enabled", out var slackEnabled), "Slack.Enabled missing");
+        Assert.True(Assert.IsType<bool>(slackEnabled));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var slackCh), "Slack channels missing");
+        Assert.Equal(["C100"], ToStringArray(slackCh));
+        AssertSecret(secrets, "Slack.BotToken", "xoxb-live");
+
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.Enabled", out var discordEnabled), "Discord.Enabled missing");
+        Assert.True(Assert.IsType<bool>(discordEnabled));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Discord.AllowedChannelIds", out var discordCh), "Discord channels missing");
+        Assert.Equal(["555000111"], ToStringArray(discordCh));
+        AssertSecret(secrets, "Discord.BotToken", "discord-live");
     }
 
     private static void OpenChannels(ConfigDashboardViewModel dashboardVm)

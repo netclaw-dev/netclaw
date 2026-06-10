@@ -314,6 +314,144 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Enable_slack_then_discord_with_channels_then_escape_preserves_both_sections()
+    {
+        // Reproduces the reported data-loss: a fresh config, enable Slack + add a
+        // channel through the picker sub-flow, then enable Discord + add a channel,
+        // then Escape back to the dashboard. Both provider sections must survive.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1
+            }
+            """);
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("general", "C100")],
+                [])
+        };
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedDiscordChannel("555000111", "ops", "Guild")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe, discordProbe: discordProbe);
+
+        EnableAdapterFromPickerWithChannel(vm, ChannelType.Slack, botToken: "xoxb-test", appToken: "xapp-test", channelInput: "general");
+
+        // After Slack setup + add channel the config on disk must already carry Slack.
+        var afterSlack = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterSlack, "Slack.Enabled", out var slackEnabledEarly));
+        Assert.True(Assert.IsType<bool>(slackEnabledEarly));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterSlack, "Slack.AllowedChannelIds", out var slackChannelsEarly));
+        Assert.Equal(["C100"], ToStringArray(slackChannelsEarly));
+
+        EnableAdapterFromPickerWithChannel(vm, ChannelType.Discord, botToken: "discord-token", appToken: null, channelInput: "555000111");
+
+        // After Discord setup both sections must be present on disk.
+        var afterDiscord = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterDiscord, "Slack.Enabled", out var slackEnabledMid));
+        Assert.True(Assert.IsType<bool>(slackEnabledMid));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterDiscord, "Slack.AllowedChannelIds", out var slackChannelsMid));
+        Assert.Equal(["C100"], ToStringArray(slackChannelsMid));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterDiscord, "Discord.Enabled", out var discordEnabledMid));
+        Assert.True(Assert.IsType<bool>(discordEnabledMid));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterDiscord, "Discord.AllowedChannelIds", out var discordChannelsMid));
+        Assert.Equal(["555000111"], ToStringArray(discordChannelsMid));
+
+        // Escape from the picker back to the dashboard.
+        vm.GoBack();
+
+        var afterEscape = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Slack.Enabled", out var slackEnabledFinal));
+        Assert.True(Assert.IsType<bool>(slackEnabledFinal));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Slack.AllowedChannelIds", out var slackChannelsFinal));
+        Assert.Equal(["C100"], ToStringArray(slackChannelsFinal));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Discord.Enabled", out var discordEnabledFinal));
+        Assert.True(Assert.IsType<bool>(discordEnabledFinal));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Discord.AllowedChannelIds", out var discordChannelsFinal));
+        Assert.Equal(["555000111"], ToStringArray(discordChannelsFinal));
+    }
+
+    [Fact]
+    public void Enable_slack_then_discord_via_subflow_channel_names_then_escape_preserves_both()
+    {
+        // Variant that mirrors the realistic wizard path: channel names are entered
+        // during the adapter sub-flow (Slack sub-step 3 / Discord channel-IDs sub-step),
+        // which get resolved on the completion autosave. Then add a second adapter and
+        // escape. Both sections must survive.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1
+            }
+            """);
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("general", "C100")],
+                [])
+        };
+        var discordProbe = new FakeDiscordProbe
+        {
+            NextResolutionResult = new DiscordChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedDiscordChannel("555000111", "ops", "Guild")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe, discordProbe: discordProbe);
+
+        // Slack: toggle from picker, enter token + channel names in the sub-flow.
+        vm.Step.CursorIndex = GetAdapterIndex(vm, ChannelType.Slack);
+        Assert.True(vm.TryToggleSelectedAdapterFromPicker());
+        var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        slack.BotToken = "xoxb-test";
+        slack.AppToken = "xapp-test";
+        slack.ChannelNamesInput = "general";
+        for (var i = 0; i < 10 && vm.Step.IsInSubFlow; i++)
+            vm.GoNext();
+        vm.GoBack(); // ChannelPermissions -> AdapterMenu
+        vm.GoBack(); // AdapterMenu -> Picker
+
+        var afterSlack = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterSlack, "Slack.AllowedChannelIds", out var slackChannelsEarly));
+        Assert.Equal(["C100"], ToStringArray(slackChannelsEarly));
+
+        // Discord: toggle from picker, enter token + channel IDs in the sub-flow.
+        vm.Step.CursorIndex = GetAdapterIndex(vm, ChannelType.Discord);
+        Assert.True(vm.TryToggleSelectedAdapterFromPicker());
+        var discord = vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
+        discord.BotToken = "discord-token";
+        discord.ChannelIdsInput = "555000111";
+        for (var i = 0; i < 10 && vm.Step.IsInSubFlow; i++)
+            vm.GoNext();
+        vm.GoBack(); // ChannelPermissions -> AdapterMenu
+        vm.GoBack(); // AdapterMenu -> Picker
+
+        // Escape to dashboard.
+        vm.GoBack();
+
+        var afterEscape = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Slack.Enabled", out var slackEnabledFinal));
+        Assert.True(Assert.IsType<bool>(slackEnabledFinal));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Slack.AllowedChannelIds", out var slackChannelsFinal));
+        Assert.Equal(["C100"], ToStringArray(slackChannelsFinal));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Discord.Enabled", out var discordEnabledFinal));
+        Assert.True(Assert.IsType<bool>(discordEnabledFinal));
+        Assert.True(ConfigFileHelper.TryGetPathValue(afterEscape, "Discord.AllowedChannelIds", out var discordChannelsFinal));
+        Assert.Equal(["555000111"], ToStringArray(discordChannelsFinal));
+    }
+
+    [Fact]
     public void Discord_add_then_slack_disable_then_escape_preserves_provider_config()
     {
         WriteAllChannelConfig();
@@ -837,6 +975,43 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
         Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
+    [Fact]
+    public void Save_true_for_picker_enabled_adapter_persists_section_even_if_child_flag_desyncs()
+    {
+        // Regression for the confirmed data-loss: validation gates on the picker's
+        // Step.IsAdapterEnabled while the contribution used to gate on the sub-VM's
+        // SlackEnabled flag. When those two "is-enabled" sources disagree, the save
+        // validated + probed Slack as enabled but persisted only Slack.Enabled=false,
+        // dropping the live section while Save() still returned true ("saved").
+        //
+        // The invariant under test: Save() returning true MUST imply the
+        // picker-enabled adapter's section (Enabled=true + AllowedChannelIds) is on
+        // disk. Force the desync by flipping only the sub-VM flag — the picker keeps
+        // these in lockstep today, so this stands in for any future code path that
+        // mutates one source without the other.
+        WriteChannelConfig();
+        WriteChannelSecrets();
+        using var vm = CreateViewModel();
+
+        var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        Assert.True(vm.Step.IsAdapterEnabled(ChannelType.Slack));
+        slack.SlackEnabled = false; // Desync: picker still enabled, child flag disabled.
+        slack.ChannelNamesInput = "C01, C02, C03";
+
+        var saved = vm.Save();
+
+        Assert.True(saved);
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.Enabled", out var enabled));
+        Assert.True(Assert.IsType<bool>(enabled));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
+        Assert.Equal(["C01", "C02", "C03"], ToStringArray(channelsRaw));
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Slack.BotToken", out var botToken));
+        Assert.Equal("xoxb-test", ConfigFileHelper.DecryptIfEncrypted(_paths, botToken?.ToString()));
+    }
+
     private ChannelsConfigViewModel CreateViewModel(
         FakeSlackProbe? slackProbe = null,
         FakeDiscordProbe? discordProbe = null,
@@ -845,6 +1020,53 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
             slackProbe ?? new FakeSlackProbe(),
             discordProbe ?? new FakeDiscordProbe(),
             mattermostProbe ?? new FakeMattermostProbe());
+
+    // Drives the real picker-driven entry flow for a brand-new adapter: select its
+    // row in the picker, toggle it on (which enters the credential/channel sub-flow),
+    // stage credentials + channel input on the step VM, step through the sub-flow to
+    // completion (autosaves), then resolve+add one channel in the permissions screen.
+    private static void EnableAdapterFromPickerWithChannel(
+        ChannelsConfigViewModel vm,
+        ChannelType type,
+        string botToken,
+        string? appToken,
+        string channelInput)
+    {
+        var adapterIndex = GetAdapterIndex(vm, type);
+        vm.Step.CursorIndex = adapterIndex;
+        Assert.True(vm.TryToggleSelectedAdapterFromPicker());
+        Assert.True(vm.Step.IsInSubFlow);
+
+        switch (type)
+        {
+            case ChannelType.Slack:
+                var slack = vm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+                slack.BotToken = botToken;
+                slack.AppToken = appToken;
+                break;
+            case ChannelType.Discord:
+                vm.Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).BotToken = botToken;
+                break;
+        }
+
+        // Walk the sub-flow to completion; GoNext returns to the picker and opens the
+        // channel-permissions screen with an autosave once the sub-flow finishes.
+        for (var i = 0; i < 10 && vm.Step.IsInSubFlow; i++)
+            vm.GoNext();
+
+        Assert.False(vm.Step.IsInSubFlow);
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+
+        vm.BeginAddChannel();
+        vm.AddChannelInput = channelInput;
+        vm.ApplyAddChannel();
+        Assert.Equal(ChannelsConfigScreen.ChannelPermissions, vm.Screen.Value);
+
+        // Return to the picker, mirroring "Done adding channels" before switching adapters.
+        vm.GoBack();
+        vm.GoBack();
+        Assert.Equal(ChannelsConfigScreen.Picker, vm.Screen.Value);
+    }
 
     private static void ConfirmReset(ChannelsConfigViewModel vm, ChannelType type)
     {

@@ -42,5 +42,30 @@ Driver: real terminal via `docker exec -it netclaw-config-poc-local …`.
 
 ## Pending (logged, batch before push)
 
+7. **(DATA LOSS — FIXED) Channels save reported "saved" but persisted nothing for an enabled adapter.**
+   User configured Slack (by name) + Discord (by id) with **real tokens**, saw green **"…saved"**, but
+   `netclaw.json` had no channel sections and `secrets.json` no bot tokens — confirmed via the live
+   Termina trace (status showed "saved") + on-disk state. **Root cause:** the save used two different
+   "is this adapter enabled?" sources — dynamic validation gated on `Step.IsAdapterEnabled` (the picker
+   dict), but `BuildContribution`/`AddSlackContribution` gated on the sub-VM's `SlackEnabled` flag. When
+   those disagree, the save validates + probes the adapter as enabled, then the contribution emits only
+   `Enabled=false` (dropping `AllowedChannelIds`/audiences) while `session.Save()` runs and "saved"
+   still shows — a success-reporting silent half-write. The happy-path fake-probe tests passed because
+   the flags stayed synced there. **Fix:** `BuildContribution` now reads the single source of truth
+   `step.IsAdapterEnabled(type)` (same as validation) and threads `enabled` into the per-adapter
+   contributions; the sub-VM `*Enabled` flags remain reload-sync targets but no longer decide
+   persistence. Invariant test added (`Save_true_for_picker_enabled_adapter_persists_section_even_if_child_flag_desyncs`,
+   proven load-bearing) + an end-to-end navigation regression mirroring the trace
+   (`Channels_EnableSlackByName_thenDiscordById_persistsBothSectionsAndSecrets`). Full suite 1043 green.
+
 5. **`config-*` smoke tape re-validation under raw input** (from finding 1) + the updated
    `config-surfaces` tape — run `./scripts/smoke/run-smoke.sh light` and fix any breakage before push.
+
+6. **(Minor/optional, not a bug) Skill feed shows "0 skills" right after adding it.** Remote feed
+   fetching is owned by the daemon (`ServerFeedSkillSyncService`, synced on config hot-reload via
+   `ConfigWatcherService`, then every `SyncIntervalMinutes`); the config TUI only re-reads local
+   state (`RescanAll → ReloadSources`), and `Rescan all` is correctly scoped to local source status.
+   So a freshly-added remote feed reads "0 skills" until the daemon reloads — which looks like
+   failure. Consider an editor hint ("Skills sync when the daemon reloads this config") or a
+   sync-status line. Verified the add flow + feed are correct (server returned HTTP 200 with a real
+   index); the sandbox simply has no `netclawd` running.

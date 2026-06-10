@@ -1670,10 +1670,17 @@ internal sealed class ChannelsConfigPersistenceMapper
         var fields = new List<SectionFieldAction>();
         var secrets = new List<SectionSecretAction>();
 
+        // The picker (Step.IsAdapterEnabled) is the single source of truth for
+        // "is this adapter enabled?" — the same source dynamic validation uses. The
+        // sub-VM's own *Enabled flag is a parallel copy; gating the contribution on it
+        // instead let a validated+probed adapter persist nothing (Enabled=false, no
+        // channels) while Save() still reported success. Read the canonical flag here
+        // so a save can never half-write an adapter the editor treats as enabled.
         AddSlackContribution(
             fields,
             secrets,
             step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack),
+            step.IsAdapterEnabled(ChannelType.Slack),
             knownProviders.Contains(ChannelType.Slack),
             channelAudiences,
             posture);
@@ -1681,6 +1688,7 @@ internal sealed class ChannelsConfigPersistenceMapper
             fields,
             secrets,
             step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord),
+            step.IsAdapterEnabled(ChannelType.Discord),
             knownProviders.Contains(ChannelType.Discord),
             channelAudiences,
             posture);
@@ -1688,6 +1696,7 @@ internal sealed class ChannelsConfigPersistenceMapper
             fields,
             secrets,
             step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost),
+            step.IsAdapterEnabled(ChannelType.Mattermost),
             knownProviders.Contains(ChannelType.Mattermost),
             channelAudiences,
             posture);
@@ -1812,11 +1821,12 @@ internal sealed class ChannelsConfigPersistenceMapper
         List<SectionFieldAction> fields,
         List<SectionSecretAction> secrets,
         SlackStepViewModel vm,
+        bool enabled,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
         DeploymentPosture posture)
     {
-        if (!vm.SlackEnabled)
+        if (!enabled)
         {
             if (knownProvider)
                 fields.Add(new SectionFieldAction("Slack.Enabled", SectionFieldActionKind.Set, false));
@@ -1844,11 +1854,12 @@ internal sealed class ChannelsConfigPersistenceMapper
         List<SectionFieldAction> fields,
         List<SectionSecretAction> secrets,
         DiscordStepViewModel vm,
+        bool enabled,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
         DeploymentPosture posture)
     {
-        if (!vm.DiscordEnabled)
+        if (!enabled)
         {
             if (knownProvider)
                 fields.Add(new SectionFieldAction("Discord.Enabled", SectionFieldActionKind.Set, false));
@@ -1872,11 +1883,12 @@ internal sealed class ChannelsConfigPersistenceMapper
         List<SectionFieldAction> fields,
         List<SectionSecretAction> secrets,
         MattermostStepViewModel vm,
+        bool enabled,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
         DeploymentPosture posture)
     {
-        if (!vm.MattermostEnabled)
+        if (!enabled)
         {
             if (knownProvider)
                 fields.Add(new SectionFieldAction("Mattermost.Enabled", SectionFieldActionKind.Set, false));
