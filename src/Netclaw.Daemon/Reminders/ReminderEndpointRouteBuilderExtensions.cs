@@ -32,7 +32,7 @@ public static class ReminderEndpointRouteBuilderExtensions
         {
             var manager = await actor.GetAsync(ct);
             var response = await manager.Ask<ReminderListResponse>(
-                new ListRemindersCommand(IncludeDisabled: false), TimeSpan.FromSeconds(10), ct);
+                new ListRemindersCommand(), TimeSpan.FromSeconds(10), ct);
             var projected = response.Reminders.Select(r => new ReminderSummaryDto(
                 Id: r.Id.Value,
                 Title: r.Title,
@@ -46,7 +46,7 @@ public static class ReminderEndpointRouteBuilderExtensions
             return TypedResults.Ok(projected);
         })
         .WithName("ListReminders")
-        .WithSummary("List all active reminders.");
+        .WithSummary("List all reminders.");
 
         reminders.MapPost("", async ValueTask<Results<Ok<ReminderMessageResponse>, BadRequest<ReminderErrorResponse>, ProblemHttpResult>> (
             CreateReminderRequest request,
