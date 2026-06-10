@@ -63,10 +63,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
-    // Reply target for the current reminder turn's delivery confirmation.
-    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
-    // on TurnCompleted, then cleared.
-    private IActorRef? _reminderDeliveryObserver;
+    // Reply targets for in-flight reminder delivery confirmations, keyed by
+    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
+    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
+    // Keyed (not a single field) because multiple reminders can target the
+    // same session concurrently — a single field would be clobbered.
+    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
@@ -233,6 +235,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         CommandAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
+            // A reinit aborts any in-flight reminder turn before its
+            // TurnCompleted. Report those as not-delivered now so the
+            // execution actor redelivers immediately instead of stalling
+            // until the backstop timeout.
+            FailPendingReminderDeliveries($"Discord pipeline reinitialized: {msg.Reason}");
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -1045,7 +1052,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             AckTarget = ackTarget
         };
 
-        _reminderDeliveryObserver = message.Source.DeliveryObserver;
+        // Only delivery-gated (DeliveryRequired) reminders carry a
+        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
+        // second concurrent reminder to this session can't overwrite the
+        // first's observer before its turn reaches TurnCompleted.
+        if (message.Source.DeliveryObserver is { } deliveryObserver
+            && !string.IsNullOrWhiteSpace(message.Source.ReminderId))
+            _reminderDeliveryObservers[message.Source.ReminderId] = deliveryObserver;
 
         try
         {
@@ -1167,15 +1180,15 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                     AdvanceCursor(pendingSnowflake);
                 _pendingCursorSnowflake = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
+                    && _reminderDeliveryObservers.Remove(completed.SourceReminderId, out var reminderObserver))
                 {
-                    _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
+                    reminderObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Discord,
                         Delivered: _deliveredThisTurn,
                         FailureReason: _deliveredThisTurn ? null : "Discord post did not succeed",
                         ObservedAtMs: completed.TimestampMs));
-                    _reminderDeliveryObserver = null;
                 }
 
                 if (!_deliveredThisTurn)
@@ -1196,7 +1209,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
-                _reminderDeliveryObserver = null;
                 break;
         }
     }
@@ -1391,6 +1403,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _rootMessageId = null;
             _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
         }
+    }
+
+    /// <summary>
+    /// Tells every in-flight reminder observer that delivery did not happen,
+    /// then clears them. Called when a turn can no longer reach TurnCompleted
+    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
+    /// rather than waiting out its backstop timeout.
+    /// </summary>
+    private void FailPendingReminderDeliveries(string reason)
+    {
+        if (_reminderDeliveryObservers.Count == 0)
+            return;
+
+        foreach (var (key, observer) in _reminderDeliveryObservers)
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Discord, Delivered: false, FailureReason: reason));
+
+        _reminderDeliveryObservers.Clear();
     }
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)

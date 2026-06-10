@@ -317,6 +317,45 @@ public abstract class SessionBindingContractTests : TestKit
         ClearReplyClientThrows();
     }
 
+    // Regression for the observer-clobber bug: two distinct reminders can target
+    // the same session concurrently. A single observer field is overwritten by
+    // the second dispatch before the first turn completes, so the first
+    // reminder's result is misrouted. Each observer must receive ITS OWN keyed
+    // result.
+    [Fact]
+    public async Task Concurrent_reminders_to_same_session_each_get_their_own_result()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-reminder-concurrent");
+        const string keyA = "reminder-A:111";
+        const string keyB = "reminder-B:222";
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("reply A") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = keyA },
+            new TextOutput("reply B") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2), SourceReminderId = keyB }
+        ], reactive: true);
+
+        var observerA = CreateTestProbe();
+        var observerB = CreateTestProbe();
+        var binding = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created;
+
+        // Both reminders dispatched before either turn completes.
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "reminder A", CreateReminderSource(keyA, observerA.Ref)));
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "reminder B", CreateReminderSource(keyB, observerB.Ref)));
+
+        var resultA = await observerA.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(keyA, resultA.ReminderDeliveryKey);
+
+        var resultB = await observerB.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(keyB, resultB.ReminderDeliveryKey);
+    }
+
     private MessageSource CreateReminderSource(string reminderKey, IActorRef deliveryObserver)
         => new()
         {

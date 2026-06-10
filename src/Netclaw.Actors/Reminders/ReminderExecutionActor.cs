@@ -51,7 +51,6 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private HistoryRecord? _pendingHistory;
     private bool _awaitingDeliveryResult;
     private string? _expectedReminderDeliveryKey;
-    private ChannelType? _expectedDeliveryChannel;
     private ICancelable? _deliveryTimeoutCancelable;
 
     private bool RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession;
@@ -256,7 +255,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                             // the ReminderDeliveryResult message it is waiting
                             // for. Arm state + a backstop timer and return; the
                             // result (or timeout) is handled as a normal message.
-                            BeginAwaitingDeliveryResult(reminderDeliveryKey, originChannelType);
+                            BeginAwaitingDeliveryResult(reminderDeliveryKey);
                             break;
                         }
 
@@ -301,11 +300,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// processing and can handle the <see cref="ReminderDeliveryResult"/> the
     /// binding actor tells it (or the <see cref="DeliveryBackstopTimeout"/>).
     /// </summary>
-    private void BeginAwaitingDeliveryResult(string reminderDeliveryKey, ChannelType channelType)
+    private void BeginAwaitingDeliveryResult(string reminderDeliveryKey)
     {
         _awaitingDeliveryResult = true;
         _expectedReminderDeliveryKey = reminderDeliveryKey;
-        _expectedDeliveryChannel = channelType;
         _deliveryTimeoutCancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(
             DeliveryObservedTimeout,
             Self,
@@ -318,10 +316,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
             return;
 
+        // Correlate on the delivery key alone. The result was told point-to-
+        // point to this actor's own Self (via MessageSource.DeliveryObserver),
+        // and the key is unique per execution — matching the reported
+        // ChannelType too would only fail closed (e.g. a cold SignalR actor
+        // reports its default Tui rather than the origin SignalR), silently
+        // dropping a valid result and stalling on the backstop.
         if (!string.Equals(result.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
-            return;
-
-        if (_expectedDeliveryChannel is { } expectedChannel && result.ChannelType != expectedChannel)
             return;
 
         _awaitingDeliveryResult = false;
@@ -335,8 +336,19 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                 _executionId, _definition.Id, result.ReminderDeliveryKey, result.ChannelType);
             RunTask(async () =>
             {
-                await TryAckEnvelopeAsync();
-                ReportAndStop(true);
+                try
+                {
+                    await TryAckEnvelopeAsync();
+                    ReportAndStop(true);
+                }
+                catch (Exception ex)
+                {
+                    // Never let an ack fault escalate to a supervisor restart:
+                    // that would re-run PreStart and re-post the reminder turn
+                    // in a loop. Report failure (no ack) and stop instead.
+                    LogFullException(ex, "ReminderExecution AckFailed");
+                    ReportAndStop(false, ex.Message);
+                }
             });
         }
         else
@@ -366,7 +378,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private async Task TryAckEnvelopeAsync()
     {
-        var ackResponse = await _reminderClient!.AckAsync(_envelope!);
+        // No envelope to ack when the reminder was re-run from the deferred
+        // queue: that path already acked-and-dropped the envelope eagerly
+        // (ReminderManagerActor concurrency gate). Acking null would throw.
+        if (_envelope is null)
+            return;
+
+        var ackResponse = await _reminderClient!.AckAsync(_envelope);
         if (ackResponse.ResponseCode != ReminderAckResponseCode.Success)
         {
             _log.Warning(

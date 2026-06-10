@@ -38,10 +38,12 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private bool _postedThisTurn;
     private bool _uploadedFileThisTurn;
     private PostResult? _lastFailedPost;
-    // Reply target for the current reminder turn's delivery confirmation.
-    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
-    // on TurnCompleted, then cleared.
-    private IActorRef? _reminderDeliveryObserver;
+    // Reply targets for in-flight reminder delivery confirmations, keyed by
+    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
+    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
+    // Keyed (not a single field) because multiple reminders can target the
+    // same session concurrently — a single field would be clobbered.
+    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
     // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
@@ -276,7 +278,13 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             AckTarget = ackTarget
         };
 
-        _reminderDeliveryObserver = message.Source.DeliveryObserver;
+        // Only delivery-gated (DeliveryRequired) reminders carry a
+        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
+        // second concurrent reminder to this session can't overwrite the
+        // first's observer before its turn reaches TurnCompleted.
+        if (message.Source.DeliveryObserver is { } deliveryObserver
+            && !string.IsNullOrWhiteSpace(message.Source.ReminderId))
+            _reminderDeliveryObservers[message.Source.ReminderId] = deliveryObserver;
 
         try
         {
@@ -1006,6 +1014,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private async Task ReinitializePipelineAsync(string reason)
     {
         _pendingCursorTs = null;
+        // Reset per-turn delivery flags: a reinit aborts the in-flight turn,
+        // and a stale _postedThisTurn=true would otherwise leak into the next
+        // turn and falsely report a later reminder as delivered.
+        _postedThisTurn = false;
+        _uploadedFileThisTurn = false;
+        _lastFailedPost = null;
+        // Report any in-flight reminder turn as not-delivered now so the
+        // execution actor redelivers immediately rather than stalling until
+        // the backstop timeout.
+        FailPendingReminderDeliveries($"Slack pipeline reinitialized: {reason}");
         await _handle.ReinitializeAsync(
             reason,
             () => Timers.StartSingleTimer(
@@ -1092,16 +1110,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     AdvanceCursor(pendingTs);
                 _pendingCursorTs = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
+                    && _reminderDeliveryObservers.Remove(completed.SourceReminderId, out var reminderObserver))
                 {
                     var delivered = _postedThisTurn || _uploadedFileThisTurn;
-                    _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
+                    reminderObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Slack,
                         Delivered: delivered,
                         FailureReason: delivered ? null : "Slack post did not succeed",
                         ObservedAtMs: _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
-                    _reminderDeliveryObserver = null;
                 }
 
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
@@ -1123,7 +1141,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
                 _lastFailedPost = null;
-                _reminderDeliveryObserver = null;
                 var clearedPrompts = _pendingApprovalRequests
                     .Select(pending => new PendingApprovalPromptCleared
                     {
@@ -1436,6 +1453,23 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ChannelTelemetry.For(ChannelType.Slack).RecordReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return new PostResult(ex.Message, DeliveryFailureKind.Unknown);
         }
+    }
+
+    /// <summary>
+    /// Tells every in-flight reminder observer that delivery did not happen,
+    /// then clears them. Called when a turn can no longer reach TurnCompleted
+    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
+    /// rather than waiting out its backstop timeout.
+    /// </summary>
+    private void FailPendingReminderDeliveries(string reason)
+    {
+        if (_reminderDeliveryObservers.Count == 0)
+            return;
+
+        foreach (var (key, observer) in _reminderDeliveryObservers)
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Slack, Delivered: false, FailureReason: reason));
+
+        _reminderDeliveryObservers.Clear();
     }
 
     private async Task NotifyDeliveryFailedAsync(Actors.Protocol.TurnNumber turnNumber, DeliveryFailureKind failureKind, string errorMessage)

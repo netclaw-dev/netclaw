@@ -62,10 +62,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
-    // Reply target for the current reminder turn's delivery confirmation.
-    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
-    // on TurnCompleted, then cleared.
-    private IActorRef? _reminderDeliveryObserver;
+    // Reply targets for in-flight reminder delivery confirmations, keyed by
+    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
+    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
+    // Keyed (not a single field) because multiple reminders can target the
+    // same session concurrently — a single field would be clobbered.
+    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
     private TurnNumber _turnNumber;
     private string? _cursorPostId;
     private string? _pendingCursorPostId;
@@ -223,6 +225,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         CommandAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
+            // A reinit aborts any in-flight reminder turn before its
+            // TurnCompleted. Report those as not-delivered now so the
+            // execution actor redelivers immediately instead of stalling
+            // until the backstop timeout.
+            FailPendingReminderDeliveries($"Mattermost pipeline reinitialized: {msg.Reason}");
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -1023,7 +1030,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             AckTarget = ackTarget
         };
 
-        _reminderDeliveryObserver = message.Source.DeliveryObserver;
+        // Only delivery-gated (DeliveryRequired) reminders carry a
+        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
+        // second concurrent reminder to this session can't overwrite the
+        // first's observer before its turn reaches TurnCompleted.
+        if (message.Source.DeliveryObserver is { } deliveryObserver
+            && !string.IsNullOrWhiteSpace(message.Source.ReminderId))
+            _reminderDeliveryObservers[message.Source.ReminderId] = deliveryObserver;
 
         try
         {
@@ -1138,15 +1151,15 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     AdvanceCursor(pendingCursor);
                 _pendingCursorPostId = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
+                    && _reminderDeliveryObservers.Remove(completed.SourceReminderId, out var reminderObserver))
                 {
-                    _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
+                    reminderObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Mattermost,
                         Delivered: _deliveredThisTurn,
                         FailureReason: _deliveredThisTurn ? null : "Mattermost post did not succeed",
                         ObservedAtMs: completed.TimestampMs));
-                    _reminderDeliveryObserver = null;
                 }
 
                 if (!_deliveredThisTurn)
@@ -1167,7 +1180,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
-                _reminderDeliveryObserver = null;
                 break;
         }
     }
@@ -1331,6 +1343,23 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
             return false;
         }
+    }
+
+    /// <summary>
+    /// Tells every in-flight reminder observer that delivery did not happen,
+    /// then clears them. Called when a turn can no longer reach TurnCompleted
+    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
+    /// rather than waiting out its backstop timeout.
+    /// </summary>
+    private void FailPendingReminderDeliveries(string reason)
+    {
+        if (_reminderDeliveryObservers.Count == 0)
+            return;
+
+        foreach (var (key, observer) in _reminderDeliveryObservers)
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Mattermost, Delivered: false, FailureReason: reason));
+
+        _reminderDeliveryObservers.Clear();
     }
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
