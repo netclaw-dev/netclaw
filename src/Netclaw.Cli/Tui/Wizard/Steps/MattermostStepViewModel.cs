@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Channels;
+using Netclaw.Cli.Mattermost;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Tui.Wizard.Steps;
@@ -51,6 +52,10 @@ public sealed class MattermostStepViewModel : IWizardStepViewModel, IChannelAdap
     public string? AllowedUserIdsInput { get; set; }
     public string? CallbackUrl { get; set; }
     internal string? CallbackUrlDraft { get; set; }
+
+    // Most recent channel-id resolution against the live Mattermost server. Feeds the
+    // editor's red-flag rendering so unresolved channel rows can be marked.
+    internal MattermostChannelResolutionResult? LastChannelResolution { get; set; }
 
     internal bool SkipEnableSubStep { get; set; }
 

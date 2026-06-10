@@ -148,6 +148,16 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
         {
             var row = rows[i];
             var focused = i == ViewModel.ChannelRowIndex;
+            if (row.IsUnresolved)
+            {
+                // A channel the live probe could not resolve. It was still saved (inert
+                // allow-list entry), but we mark it red with ✗ so the operator can fix or
+                // remove it. "✗  " keeps the same 3-char width as FocusPrefix.
+                var unresolvedLine = $"✗  {Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";
+                layout = layout.WithChild(ConfigSelectionRow.Create(unresolvedLine, focused, Color.Red));
+                continue;
+            }
+
             var line = row.IsAction
                 ? $"{FocusPrefix(focused)}{row.DisplayName}"
                 : $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";

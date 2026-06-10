@@ -53,7 +53,7 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
                 StructuralValidationCoverage.Required(
                     new ValidationConceptTest("auth", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_slack_token_before_probe)),
                     new ValidationConceptTest("uri", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_mattermost_url_before_probe)),
-                    new ValidationConceptTest("local-reference", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_rejects_unresolved_slack_channel_name))),
+                    new ValidationConceptTest("local-reference", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Add_channel_that_does_not_resolve_is_not_added_and_keeps_the_add_screen))),
                 DynamicValidationCoverage.Required(
                     nameof(ChannelsConfigViewModelTests),
                     nameof(ChannelsConfigViewModelTests.Save_from_input_surfaces_dynamic_validation_exception_as_status_without_persistence)),

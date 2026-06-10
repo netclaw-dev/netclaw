@@ -174,9 +174,11 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         RequestRedraw();
 
         var dynamicValidation = await ValidateChannelAccessAsync(ct);
-        if (dynamicValidation.HasErrors)
+        if (dynamicValidation.Result.HasErrors)
         {
-            Status.Value = BuildValidationErrorStatus(dynamicValidation, "Fix channel validation errors before saving.");
+            // A probe that failed (auth/network/ErrorMessage/!Success) still blocks:
+            // we could not validate at all, so persisting nothing is correct.
+            Status.Value = BuildValidationErrorStatus(dynamicValidation.Result, "Fix channel validation errors before saving.");
             RequestRedraw();
             return false;
         }
@@ -198,10 +200,22 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Step.OnEnter(_context, NavigationDirection.Forward);
         _mapper.ApplyToStep(Step, savedDraft);
         IsSaved.Value = true;
-        Status.Value = new ConfigStatusMessage(successMessage, ConfigStatusTone.Success);
+        Status.Value = BuildSaveStatus(successMessage, dynamicValidation.Unresolved);
         NotifyContentChanged();
         return true;
     }
+
+    // The probe succeeded but some channel names/ids did not resolve. We saved the
+    // whole adapter anyway (token + resolved channels + unresolved names kept as-is)
+    // and flag the unresolved entries non-blockingly so the operator can fix or
+    // remove them. An unresolved name persisted into AllowedChannelIds is an inert
+    // allow-list entry — it matches no real channel ID, so it grants nothing.
+    private static ConfigStatusMessage BuildSaveStatus(string successMessage, IReadOnlyList<string> unresolved)
+        => unresolved.Count == 0
+            ? new ConfigStatusMessage(successMessage, ConfigStatusTone.Success)
+            : new ConfigStatusMessage(
+                $"Saved. Could not resolve: {string.Join(", ", unresolved.Select(static name => $"#{name}"))} — flagged below; fix or remove them.",
+                ConfigStatusTone.Warning);
 
     internal async Task<bool> SaveFromInputAsync(CancellationToken ct = default)
         => await ConfigAutosave.RunAsync(
@@ -366,6 +380,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     internal IReadOnlyList<ChannelPermissionRow> GetChannelRows(bool includeAddAction = true)
     {
         var rows = new List<ChannelPermissionRow>();
+        var unresolved = GetActiveAdapterUnresolved();
         foreach (var channelId in GetChannelIds(_activeAdapterType))
         {
             rows.Add(new ChannelPermissionRow(
@@ -374,7 +389,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 GetChannelAudience(_activeAdapterType, channelId, DefaultChannelAudience()),
                 IsDirectMessage: false,
                 IsAddAction: false,
-                IsDoneAction: false));
+                IsDoneAction: false,
+                IsUnresolved: unresolved.Contains(channelId)));
         }
 
         if (GetAllowDirectMessages(_activeAdapterType))
@@ -827,31 +843,59 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private ChannelsEditorValidationResult ValidateCurrentStep()
         => _validator.Validate(ChannelsEditorModel.FromStep(Step));
 
-    private async Task<ChannelsEditorValidationResult> ValidateChannelAccessAsync(CancellationToken ct)
+    // Carries the genuinely blocking validation issues (probe failure / !Success)
+    // separately from the non-blocking unresolved channel names that we persist and
+    // flag rather than reject.
+    private readonly record struct ChannelAccessValidation(
+        ChannelsEditorValidationResult Result,
+        IReadOnlyList<string> Unresolved);
+
+    private async Task<ChannelAccessValidation> ValidateChannelAccessAsync(CancellationToken ct)
     {
         var issues = new List<ChannelsEditorValidationIssue>();
+        var unresolved = new List<string>();
 
-        var slackIssue = await ValidateSlackChannelsAsync(ct);
-        if (slackIssue is not null)
-            issues.Add(slackIssue);
+        var slack = await ValidateSlackChannelsAsync(ct);
+        ApplyChannelAccessOutcome(slack, issues, unresolved);
 
-        var discordIssue = await ValidateDiscordChannelsAsync(ct);
-        if (discordIssue is not null)
-            issues.Add(discordIssue);
+        var discord = await ValidateDiscordChannelsAsync(ct);
+        ApplyChannelAccessOutcome(discord, issues, unresolved);
 
-        var mattermostIssue = await ValidateMattermostChannelsAsync(ct);
-        if (mattermostIssue is not null)
-            issues.Add(mattermostIssue);
+        var mattermost = await ValidateMattermostChannelsAsync(ct);
+        ApplyChannelAccessOutcome(mattermost, issues, unresolved);
 
-        return issues.Count == 0
+        var result = issues.Count == 0
             ? ChannelsEditorValidationResult.Empty
             : new ChannelsEditorValidationResult(issues);
+        return new ChannelAccessValidation(result, unresolved);
     }
 
-    private async Task<ChannelsEditorValidationIssue?> ValidateSlackChannelsAsync(CancellationToken ct)
+    private static void ApplyChannelAccessOutcome(
+        ChannelAccessOutcome outcome,
+        List<ChannelsEditorValidationIssue> issues,
+        List<string> unresolved)
+    {
+        if (outcome.BlockingIssue is not null)
+            issues.Add(outcome.BlockingIssue);
+
+        unresolved.AddRange(outcome.Unresolved);
+    }
+
+    // Result of probing one adapter's channels: a blocking issue only when the probe
+    // itself failed, plus the names/ids that the probe could not resolve (non-blocking).
+    private readonly record struct ChannelAccessOutcome(
+        ChannelsEditorValidationIssue? BlockingIssue,
+        IReadOnlyList<string> Unresolved)
+    {
+        internal static ChannelAccessOutcome None { get; } = new(null, []);
+        internal static ChannelAccessOutcome Blocked(ChannelsEditorValidationIssue issue) => new(issue, []);
+        internal static ChannelAccessOutcome Flagged(IReadOnlyList<string> unresolved) => new(null, unresolved);
+    }
+
+    private async Task<ChannelAccessOutcome> ValidateSlackChannelsAsync(CancellationToken ct)
     {
         if (!Step.IsAdapterEnabled(ChannelType.Slack))
-            return null;
+            return ChannelAccessOutcome.None;
 
         var slack = Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
         var configuredChannels = ParseCsv(slack.ChannelNamesInput, trimHash: true);
@@ -861,24 +905,24 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             .ToArray();
 
         if (namesToResolve.Length == 0)
-            return null;
+            return ChannelAccessOutcome.None;
 
         var botToken = GetEffectiveSecret("Slack.BotToken", slack.BotToken, slack.HasPersistedBotToken);
         if (string.IsNullOrWhiteSpace(botToken))
-            return Error(ChannelsEditorFieldPaths.SlackBotToken, ChannelsEditorValidationMessages.SlackBotTokenRequired);
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackBotToken, ChannelsEditorValidationMessages.SlackBotTokenRequired));
 
         var result = await _slackProbe.ResolveChannelNamesAsync(botToken, namesToResolve, ct);
         slack.LastChannelResolution = result;
 
+        // The probe itself failed — we cannot validate at all, so block the save.
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-            return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel lookup failed: {result.ErrorMessage}");
-
-        if (result.Unresolved.Count > 0)
-            return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack {FormatNotFound(result.Unresolved, "channel", "channels", prefix: "#")}");
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel lookup failed: {result.ErrorMessage}"));
 
         if (!result.Success)
-            return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, "Slack channel lookup failed.");
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, "Slack channel lookup failed."));
 
+        // Probe succeeded. Map resolved names to IDs and keep unresolved names as-is so
+        // the whole adapter still persists; the unresolved names are flagged, not blocked.
         var resolvedByName = result.Resolved.ToDictionary(
             static channel => channel.Name,
             static channel => channel.Id,
@@ -894,77 +938,84 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 continue;
             }
 
-            if (!resolvedByName.TryGetValue(channel, out var channelId))
-                return Error(ChannelsEditorFieldPaths.SlackAllowedChannelIds, $"Slack channel not found: #{channel}");
+            if (resolvedByName.TryGetValue(channel, out var channelId))
+            {
+                resolvedChannels.Add(channelId);
+                remap[channel] = channelId;
+                continue;
+            }
 
-            resolvedChannels.Add(channelId);
-            remap[channel] = channelId;
+            // Unresolved name: keep it verbatim in the allow-list (inert until the
+            // channel exists) so a single bad name never drops the whole adapter.
+            resolvedChannels.Add(channel);
         }
 
         SetChannelIds(ChannelType.Slack, [.. resolvedChannels.Distinct(StringComparer.Ordinal)]);
         RemapChannelAudiences(ChannelType.Slack, remap);
         UpdateAdapterPickerSummary(ChannelType.Slack);
-        return null;
+        return ChannelAccessOutcome.Flagged(result.Unresolved);
     }
 
-    private async Task<ChannelsEditorValidationIssue?> ValidateDiscordChannelsAsync(CancellationToken ct)
+    private async Task<ChannelAccessOutcome> ValidateDiscordChannelsAsync(CancellationToken ct)
     {
         if (!Step.IsAdapterEnabled(ChannelType.Discord))
-            return null;
+            return ChannelAccessOutcome.None;
 
         var discord = Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
         var channelIds = ParseCsv(discord.ChannelIdsInput, trimHash: true);
         if (channelIds.Count == 0)
-            return null;
+            return ChannelAccessOutcome.None;
 
         var botToken = GetEffectiveSecret("Discord.BotToken", discord.BotToken, discord.HasPersistedBotToken);
         if (string.IsNullOrWhiteSpace(botToken))
-            return Error(ChannelsEditorFieldPaths.DiscordBotToken, ChannelsEditorValidationMessages.DiscordBotTokenRequired);
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordBotToken, ChannelsEditorValidationMessages.DiscordBotTokenRequired));
 
         var result = await _discordProbe.ResolveChannelIdsAsync(botToken, channelIds, ct);
         discord.LastChannelResolution = result;
 
+        // The probe itself failed — block the save (cannot validate).
         if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-            return Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord channel lookup failed: {result.ErrorMessage}");
-
-        if (result.Unresolved.Count > 0)
-            return Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord {FormatNotFound(result.Unresolved, "channel ID", "channel IDs")}");
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, $"Discord channel lookup failed: {result.ErrorMessage}"));
 
         if (!result.Success)
-            return Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, "Discord channel lookup failed.");
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.DiscordAllowedChannelIds, "Discord channel lookup failed."));
 
-        return null;
+        // Discord allow-list already stores raw IDs, so unresolved IDs persist as-is;
+        // they are flagged but not blocked.
+        return ChannelAccessOutcome.Flagged(result.Unresolved);
     }
 
-    private async Task<ChannelsEditorValidationIssue?> ValidateMattermostChannelsAsync(CancellationToken ct)
+    private async Task<ChannelAccessOutcome> ValidateMattermostChannelsAsync(CancellationToken ct)
     {
         if (!Step.IsAdapterEnabled(ChannelType.Mattermost))
-            return null;
+            return ChannelAccessOutcome.None;
 
         var mattermost = Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
         var channelIds = ParseCsv(mattermost.ChannelIdsInput, trimHash: true);
         if (channelIds.Count == 0)
-            return null;
+            return ChannelAccessOutcome.None;
 
         var serverUrl = Normalize(mattermost.ServerUrl);
         if (string.IsNullOrWhiteSpace(serverUrl))
-            return Error(ChannelsEditorFieldPaths.MattermostServerUrl, ChannelsEditorValidationMessages.MattermostServerUrlRequired);
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostServerUrl, ChannelsEditorValidationMessages.MattermostServerUrlRequired));
 
         var botToken = GetEffectiveSecret("Mattermost.BotToken", mattermost.BotToken, mattermost.HasPersistedBotToken);
         if (string.IsNullOrWhiteSpace(botToken))
-            return Error(ChannelsEditorFieldPaths.MattermostBotToken, ChannelsEditorValidationMessages.MattermostBotTokenRequired);
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostBotToken, ChannelsEditorValidationMessages.MattermostBotTokenRequired));
 
         var result = await _mattermostProbe.ResolveChannelIdsAsync(serverUrl, botToken, channelIds, ct);
-        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
-            return Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost channel lookup failed: {result.ErrorMessage}");
+        mattermost.LastChannelResolution = result;
 
-        if (result.Unresolved.Count > 0)
-            return Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost {FormatNotFound(result.Unresolved, "channel ID", "channel IDs")}");
+        // The probe itself failed — block the save (cannot validate).
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, $"Mattermost channel lookup failed: {result.ErrorMessage}"));
 
         if (!result.Success)
-            return Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, "Mattermost channel lookup failed.");
+            return ChannelAccessOutcome.Blocked(Error(ChannelsEditorFieldPaths.MattermostAllowedChannelIds, "Mattermost channel lookup failed."));
 
-        return null;
+        // Mattermost allow-list stores raw IDs, so unresolved IDs persist as-is and are
+        // flagged but not blocked.
+        return ChannelAccessOutcome.Flagged(result.Unresolved);
     }
 
     private async Task RefreshSlackChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)
@@ -1019,17 +1070,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
     private static ChannelsEditorValidationIssue Error(string fieldId, string message)
         => new(fieldId, message, ConfigValidationSeverity.Error);
-
-    private static string FormatNotFound(
-        IReadOnlyList<string> values,
-        string singular,
-        string plural,
-        string prefix = "")
-    {
-        var label = values.Count == 1 ? singular : plural;
-        var list = string.Join(", ", values.Select(value => $"{prefix}{value}"));
-        return $"{label} not found: {list}";
-    }
 
     private string? GetEffectiveSecret(string path, string? draftValue, bool hasPersistedSecret)
     {
@@ -1427,6 +1467,27 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         _ => type.ToString()
     };
 
+    // Channel names/ids the active adapter's most recent probe could not resolve.
+    // Used to flag the matching channel rows; comparison is case-insensitive because
+    // resolution is name-based for Slack and the operator's casing may not match.
+    private IReadOnlySet<string> GetActiveAdapterUnresolved()
+    {
+        var unresolved = _activeAdapterType switch
+        {
+            ChannelType.Slack => Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack).LastChannelResolution?.Unresolved,
+            ChannelType.Discord => Step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord).LastChannelResolution?.Unresolved,
+            ChannelType.Mattermost => Step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost).LastChannelResolution?.Unresolved,
+            _ => null
+        };
+
+        return unresolved is null or { Count: 0 }
+            ? EmptyUnresolved
+            : new HashSet<string>(unresolved, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static readonly IReadOnlySet<string> EmptyUnresolved =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
     private string FormatChannelLabel(ChannelType type, string channelId)
         => type switch
         {
@@ -1594,7 +1655,8 @@ internal sealed record ChannelPermissionRow(
     TrustAudience Audience,
     bool IsDirectMessage,
     bool IsAddAction,
-    bool IsDoneAction)
+    bool IsDoneAction,
+    bool IsUnresolved = false)
 {
     internal bool IsAction => IsAddAction || IsDoneAction;
 }

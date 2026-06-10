@@ -42,6 +42,20 @@ Driver: real terminal via `docker exec -it netclaw-config-poc-local …`.
 
 ## Pending (logged, batch before push)
 
+8. **(DATA LOSS — FIXED) Unresolved channel names blocked the entire adapter save.** Distinct
+   second mechanism from #7: when channel names were entered where some don't resolve (`netclaw-test`,
+   `fake-channel` alongside a valid `openclaw`), the sub-flow completion autosave's
+   `ValidateSlack/Discord/MattermostChannelsAsync` returned an `Error` on `Unresolved.Count > 0`, so
+   `SaveAsync` returned false and **nothing** persisted — not the valid channel, not the bot token —
+   and Escape discarded the in-memory editor. **Fix (owner decision: "save all, flag invalid"):** the
+   validation no longer blocks on unresolved channels — it persists the whole adapter (token +
+   resolved IDs + unresolved names kept verbatim, inert in the allow-list until the channel exists)
+   and surfaces a non-blocking warning. Unresolved rows render red with a `✗` (`ChannelPermissionRow.
+   IsUnresolved` from each adapter's `LastChannelResolution.Unresolved`). Genuine probe failures
+   (bad token / unreachable) still block. The `+ Add channel` resolve-before-add path stays strict.
+   Hard invariant test (mixed valid/invalid persists everything) + per-adapter probe-failure-blocks
+   tests added. Full Cli suite 1054 green.
+
 7. **(DATA LOSS — FIXED) Channels save reported "saved" but persisted nothing for an enabled adapter.**
    User configured Slack (by name) + Discord (by id) with **real tokens**, saw green **"…saved"**, but
    `netclaw.json` had no channel sections and `secrets.json` no bot tokens — confirmed via the live
