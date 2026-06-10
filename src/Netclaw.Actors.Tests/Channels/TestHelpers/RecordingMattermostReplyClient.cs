@@ -33,6 +33,10 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
 
     public Exception? ThrowOnUpload { get; set; }
 
+    // Throws on the next post only, then auto-clears. Lets a test fail a content
+    // post while letting a follow-up (e.g. fallback) succeed and be recorded.
+    public Exception? ThrowOnceOnPost { get; set; }
+
     private int _messageCounter;
 
     public void Clear()
@@ -49,6 +53,12 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
     {
         if (ThrowOnPost is { } ex)
             throw ex;
+
+        if (ThrowOnceOnPost is { } onceEx)
+        {
+            ThrowOnceOnPost = null;
+            throw onceEx;
+        }
 
         lock (_lock) _posts.Add(message);
         var postId = new MattermostPostId($"post-{Interlocked.Increment(ref _messageCounter)}");

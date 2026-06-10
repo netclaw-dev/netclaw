@@ -62,6 +62,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
+    // True when a content post/upload this turn was attempted but failed (the
+    // model produced output, the transport rejected it). Distinct from "nothing
+    // was produced" — it suppresses the empty-turn fallback so a failed post
+    // isn't followed by a misleading "I didn't manage to produce a reply".
+    private bool _postFailedThisTurn;
     // Reply targets for in-flight reminder delivery confirmations, keyed by
     // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
     // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
@@ -225,6 +230,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         CommandAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
+            _postFailedThisTurn = false;
             // A reinit aborts any in-flight reminder turn before its
             // TurnCompleted. Report those as not-delivered now so the
             // execution actor redelivers immediately instead of stalling
@@ -1099,16 +1105,22 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             case TextOutput textOutput:
                 if (await SafeReplyAsync(textOutput.Text))
                     _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case ErrorOutput error:
                 if (await SafeReplyAsync($":warning: {error.Message}"))
                     _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case FileOutput file:
                 if (await SafeUploadFileAsync(file))
                     _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
@@ -1162,7 +1174,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                         ObservedAtMs: completed.TimestampMs));
                 }
 
-                if (!_deliveredThisTurn)
+                // Only post the empty-turn fallback when the turn genuinely
+                // produced nothing. A failed post already notified the session
+                // (SafeReplyAsync -> NotifyDeliveryFailedAsync); posting "I
+                // didn't manage to produce a reply" on top would be misleading
+                // (a reply WAS produced) and double up with the redelivered one.
+                if (!_deliveredThisTurn && !_postFailedThisTurn)
                     await SafeReplyAsync(EmptyTurnFallbackText);
 
                 _turnNumber = completed.TurnNumber;
@@ -1180,6 +1197,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
+                _postFailedThisTurn = false;
                 break;
         }
     }

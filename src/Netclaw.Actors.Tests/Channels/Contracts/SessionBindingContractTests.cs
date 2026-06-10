@@ -39,6 +39,10 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected abstract void SetReplyClientThrows(Exception ex);
 
+    // Fail only the next post, then recover. Lets a test fail a content post
+    // while letting a follow-up (e.g. the empty-turn fallback) succeed.
+    protected abstract void SetReplyClientThrowsOnce(Exception ex);
+
     protected abstract void ClearReplyClientThrows();
 
     protected abstract ChannelType ExpectedChannelType { get; }
@@ -354,6 +358,43 @@ public abstract class SessionBindingContractTests : TestKit
         var resultB = await observerB.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
         Assert.Equal(keyB, resultB.ReminderDeliveryKey);
+    }
+
+    // Regression for the misleading-fallback bug: when the real content post
+    // fails (the model DID produce a reply, the transport rejected it), the
+    // binding must NOT then post the "I didn't manage to produce a reply"
+    // fallback. That message is for genuinely empty turns; on a failed post the
+    // session was already notified, and the fallback both misleads and doubles
+    // up with the redelivered reply. Slack already guarded this; Discord and
+    // Mattermost did not.
+    [Fact]
+    public async Task Failed_content_post_does_not_post_empty_turn_fallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-failed-post-no-fallback");
+        // Turn 1's content post fails; turn 2 is a barrier — once its reply is
+        // visible, turn 1 (including its fallback decision) is fully processed.
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("real reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) },
+            new TextOutput("barrier reply") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(2) }
+        ]);
+
+        // Fail only the first post (the real reply); the fallback, if attempted,
+        // would succeed and be recorded.
+        SetReplyClientThrowsOnce(new InvalidOperationException("transient channel error"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(GetPostedTexts(), t => t.Contains("barrier reply", StringComparison.Ordinal));
+        }, cancellationToken: ct);
+
+        var texts = GetPostedTexts();
+        Assert.DoesNotContain(texts, t => t.Contains("didn't manage to produce a reply", StringComparison.OrdinalIgnoreCase));
     }
 
     private MessageSource CreateReminderSource(string reminderKey, IActorRef deliveryObserver)
