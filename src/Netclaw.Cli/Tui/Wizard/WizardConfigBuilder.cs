@@ -86,6 +86,16 @@ public sealed class WizardConfigBuilder
         Daemon = prev with { UpdateChannel = existing.UpdateChannel };
     }
 
+    private static bool DaemonUpdateChannelIsStable(Dictionary<string, object> daemon)
+        => daemon.TryGetValue("UpdateChannel", out var value)
+            && (value switch
+            {
+                JsonElement { ValueKind: JsonValueKind.String } je => je.GetString(),
+                string s => s,
+                _ => null
+            }) is { } channel
+            && string.Equals(channel, "stable", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Assemble the non-secret config dictionary from typed sections.
     /// </summary>
@@ -370,6 +380,20 @@ public sealed class WizardConfigBuilder
 
             if (daemonSection.Count > 0)
                 config["Daemon"] = daemonSection;
+        }
+        else if (ConfigFileHelper.GetSectionOrNull(config, "Daemon") is { } existingDaemon
+            && DaemonUpdateChannelIsStable(existingDaemon))
+        {
+            // BuildConfigDictionary seeds from the existing config to preserve unrelated
+            // sections, but a default `stable` UpdateChannel must not be persisted
+            // (PreserveExistingUpdateChannel deliberately leaves the typed Daemon null for
+            // it). Strip it, and drop the Daemon section only if nothing else remains —
+            // a Daemon carrying real fields (exposure, host, proxies) stays preserved.
+            existingDaemon.Remove("UpdateChannel");
+            if (existingDaemon.Count == 0)
+                config.Remove("Daemon");
+            else
+                config["Daemon"] = existingDaemon;
         }
 
         // Webhooks section — only written when enabled (disabled = default, omit)
