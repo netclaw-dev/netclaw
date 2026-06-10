@@ -63,6 +63,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
+    // Reply target for the current reminder turn's delivery confirmation.
+    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
+    // on TurnCompleted, then cleared.
+    private IActorRef? _reminderDeliveryObserver;
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
@@ -1041,6 +1045,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             AckTarget = ackTarget
         };
 
+        _reminderDeliveryObserver = message.Source.DeliveryObserver;
+
         try
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -1100,13 +1106,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         switch (msg.Output)
         {
             case TextOutput textOutput:
-                await SafeReplyAsync(textOutput.Text);
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync(textOutput.Text))
+                    _deliveredThisTurn = true;
                 break;
 
             case ErrorOutput error:
-                await SafeReplyAsync($":warning: {error.Message}");
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync($":warning: {error.Message}"))
+                    _deliveredThisTurn = true;
                 break;
 
             case FileOutput file:
@@ -1161,12 +1167,15 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                     AdvanceCursor(pendingSnowflake);
                 _pendingCursorSnowflake = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
                 {
-                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                    _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Discord,
-                        completed.TimestampMs));
+                        Delivered: _deliveredThisTurn,
+                        FailureReason: _deliveredThisTurn ? null : "Discord post did not succeed",
+                        ObservedAtMs: completed.TimestampMs));
+                    _reminderDeliveryObserver = null;
                 }
 
                 if (!_deliveredThisTurn)
@@ -1187,6 +1196,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
+                _reminderDeliveryObserver = null;
                 break;
         }
     }
@@ -1260,7 +1270,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task SafeReplyAsync(string text)
+    /// <summary>
+    /// Posts <paramref name="text"/> (chunked) to Discord. Returns true only
+    /// when every chunk posted successfully; false if any chunk failed (after
+    /// notifying the session of the delivery failure). Callers that gate
+    /// reminder delivery confirmation on real delivery must honor the result.
+    /// </summary>
+    private async Task<bool> SafeReplyAsync(string text)
     {
         var chunks = ChunkMessage(text);
         foreach (var chunk in chunks)
@@ -1280,9 +1296,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
                 ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return;
+                return false;
             }
         }
+
+        return true;
     }
 
     private DiscordPostMessage BuildPostMessage(

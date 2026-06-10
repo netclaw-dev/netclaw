@@ -31,6 +31,10 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
     private SignalRConnectionId _currentConnectionId;
     private Actors.Channels.ChannelType _channelType = Actors.Channels.ChannelType.Tui;
     private bool _deliveredThisTurn;
+    // Reply target for the current reminder turn's delivery confirmation.
+    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
+    // on TurnCompleted, then cleared.
+    private IActorRef? _reminderDeliveryObserver;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly object ReinitializeTimerKey = new();
@@ -201,6 +205,8 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
                 AckTarget = ackTarget
             };
 
+            _reminderDeliveryObserver = msg.Source.DeliveryObserver;
+
             try
             {
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -245,8 +251,14 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
         {
             if (_currentConnectionId == default)
             {
-                if (msg.Output is TurnCompleted)
+                // No connected client → nothing was delivered. Report the
+                // outcome (false) so a DeliveryRequired reminder redelivers
+                // rather than waiting out the backstop timeout.
+                if (msg.Output is TurnCompleted noConnTurn)
+                {
+                    ReportReminderDeliveryResult(noConnTurn, delivered: false);
                     _deliveredThisTurn = false;
+                }
                 return;
             }
 
@@ -261,14 +273,7 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
             if (msg.Output is TurnCompleted completed)
             {
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
-                {
-                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
-                        completed.SourceReminderId,
-                        _channelType,
-                        completed.TimestampMs));
-                }
-
+                ReportReminderDeliveryResult(completed, delivered: _deliveredThisTurn);
                 _deliveredThisTurn = false;
             }
         }
@@ -277,9 +282,34 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
             _log.Debug(ex,
                 "Failed to deliver output to connection {ConnectionId}", _currentConnectionId.Value);
 
-            if (msg.Output is TurnCompleted)
+            // The hub send threw → the reply did not reach the client. Report
+            // failure so the reminder redelivers instead of stalling.
+            if (msg.Output is TurnCompleted failedTurn)
+            {
+                ReportReminderDeliveryResult(failedTurn, delivered: false);
                 _deliveredThisTurn = false;
+            }
         }
+    }
+
+    /// <summary>
+    /// Tells the dispatching reminder execution actor (if this turn was a
+    /// reminder delivery) whether the assistant reply reached the client,
+    /// then clears the per-turn observer ref.
+    /// </summary>
+    private void ReportReminderDeliveryResult(TurnCompleted completed, bool delivered)
+    {
+        if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
+        {
+            _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
+                completed.SourceReminderId!,
+                _channelType,
+                Delivered: delivered,
+                FailureReason: delivered ? null : "SignalR client did not receive the reply",
+                ObservedAtMs: completed.TimestampMs));
+        }
+
+        _reminderDeliveryObserver = null;
     }
 
     protected override void PostStop()

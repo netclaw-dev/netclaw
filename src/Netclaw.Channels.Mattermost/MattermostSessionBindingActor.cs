@@ -62,6 +62,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
+    // Reply target for the current reminder turn's delivery confirmation.
+    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
+    // on TurnCompleted, then cleared.
+    private IActorRef? _reminderDeliveryObserver;
     private TurnNumber _turnNumber;
     private string? _cursorPostId;
     private string? _pendingCursorPostId;
@@ -1019,6 +1023,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             AckTarget = ackTarget
         };
 
+        _reminderDeliveryObserver = message.Source.DeliveryObserver;
+
         try
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -1078,13 +1084,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         switch (msg.Output)
         {
             case TextOutput textOutput:
-                await SafeReplyAsync(textOutput.Text);
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync(textOutput.Text))
+                    _deliveredThisTurn = true;
                 break;
 
             case ErrorOutput error:
-                await SafeReplyAsync($":warning: {error.Message}");
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync($":warning: {error.Message}"))
+                    _deliveredThisTurn = true;
                 break;
 
             case FileOutput file:
@@ -1132,12 +1138,15 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                     AdvanceCursor(pendingCursor);
                 _pendingCursorPostId = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
                 {
-                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                    _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Mattermost,
-                        completed.TimestampMs));
+                        Delivered: _deliveredThisTurn,
+                        FailureReason: _deliveredThisTurn ? null : "Mattermost post did not succeed",
+                        ObservedAtMs: completed.TimestampMs));
+                    _reminderDeliveryObserver = null;
                 }
 
                 if (!_deliveredThisTurn)
@@ -1158,6 +1167,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
+                _reminderDeliveryObserver = null;
                 break;
         }
     }
@@ -1234,7 +1244,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private async Task SafeReplyAsync(string text)
+    /// <summary>
+    /// Posts <paramref name="text"/> (chunked) to Mattermost. Returns true only
+    /// when every chunk posted successfully; false if any chunk failed (after
+    /// notifying the session of the delivery failure). Callers that gate
+    /// reminder delivery confirmation on real delivery must honor the result.
+    /// </summary>
+    private async Task<bool> SafeReplyAsync(string text)
     {
         var chunks = ChunkMessage(text);
         foreach (var chunk in chunks)
@@ -1253,9 +1269,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value);
                 ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return;
+                return false;
             }
         }
+
+        return true;
     }
 
     private MattermostPostMessage BuildPostMessage(

@@ -261,27 +261,78 @@ public abstract class SessionBindingContractTests : TestKit
     }
 
     [Fact]
-    public async Task Reminder_delivery_publishes_observation()
+    public async Task Reminder_delivery_reports_success_when_post_succeeds()
     {
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-reminder");
+        var sid = new SessionId("session-reminder-success");
+        const string reminderKey = "reminder-1:123456";
         var pipeline = new RecordingSessionPipeline(_ =>
         [
             new TextOutput("reminder output") { SessionId = sid },
-            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = "reminder-1:123456" }
-        ]);
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+        ], reactive: true);
 
-        var probe = CreateTestProbe();
-        Sys.EventStream.Subscribe(probe, typeof(ReminderDeliveryObserved));
+        var observer = CreateTestProbe();
+        var binding = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created;
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "run the reminder", CreateReminderSource(reminderKey, observer.Ref)));
 
-        CreateBindingActor(sid, pipeline, detector);
-
-        var observed = await probe.ExpectMsgAsync<ReminderDeliveryObserved>(
+        var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
             TimeSpan.FromSeconds(5), cancellationToken: ct);
-        Assert.Equal("reminder-1:123456", observed.ReminderDeliveryKey);
-        Assert.Equal(ExpectedChannelType, observed.ChannelType);
+        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(ExpectedChannelType, result.ChannelType);
+        Assert.True(result.Delivered);
     }
+
+    // Regression for the silent-loss class of bugs (Discord/Mattermost marked
+    // a reminder turn delivered even when the post threw). A failed post must
+    // report Delivered=false so the execution actor redelivers instead of
+    // acking a delivery that never happened.
+    [Fact]
+    public async Task Reminder_delivery_reports_failure_when_post_throws()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-reminder-failure");
+        const string reminderKey = "reminder-1:123456";
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("reminder output") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1), SourceReminderId = reminderKey }
+        ], reactive: true);
+
+        SetReplyClientThrows(new InvalidOperationException("channel API down"));
+        var observer = CreateTestProbe();
+        var binding = CreateBindingActor(sid, pipeline, detector);
+        await pipeline.Created;
+        binding.Tell(new DeliverTrustedSessionTurn(sid, "run the reminder", CreateReminderSource(reminderKey, observer.Ref)));
+
+        var result = await observer.ExpectMsgAsync<ReminderDeliveryResult>(
+            TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Assert.Equal(reminderKey, result.ReminderDeliveryKey);
+        Assert.Equal(ExpectedChannelType, result.ChannelType);
+        Assert.False(result.Delivered);
+
+        ClearReplyClientThrows();
+    }
+
+    private MessageSource CreateReminderSource(string reminderKey, IActorRef deliveryObserver)
+        => new()
+        {
+            ChannelType = ExpectedChannelType,
+            SenderId = new Netclaw.Actors.Protocol.SenderId("reminder-system"),
+            Audience = TrustAudience.Public,
+            Boundary = TrustBoundary.TrustedInstance,
+            Principal = PrincipalClassification.VerifiedAutomation,
+            Provenance = new SourceProvenance(TransportAuthenticity.LocalProcess, PayloadTaint.Trusted)
+            {
+                SourceKind = new SourceKind("reminder")
+            },
+            ReceivedAt = DateTimeOffset.UnixEpoch,
+            ReminderId = reminderKey,
+            DeliveryObserver = deliveryObserver
+        };
 
     // --- Approval Flow ---
 

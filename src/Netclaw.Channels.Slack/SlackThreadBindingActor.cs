@@ -38,6 +38,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private bool _postedThisTurn;
     private bool _uploadedFileThisTurn;
     private PostResult? _lastFailedPost;
+    // Reply target for the current reminder turn's delivery confirmation.
+    // Captured from DeliverTrustedSessionTurn; told a ReminderDeliveryResult
+    // on TurnCompleted, then cleared.
+    private IActorRef? _reminderDeliveryObserver;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
     // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
@@ -271,6 +275,8 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ReminderId = message.Source.ReminderId,
             AckTarget = ackTarget
         };
+
+        _reminderDeliveryObserver = message.Source.DeliveryObserver;
 
         try
         {
@@ -1086,12 +1092,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                     AdvanceCursor(pendingTs);
                 _pendingCursorTs = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && (_postedThisTurn || _uploadedFileThisTurn))
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _reminderDeliveryObserver is not null)
                 {
-                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                    var delivered = _postedThisTurn || _uploadedFileThisTurn;
+                    _reminderDeliveryObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Slack,
-                        _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
+                        Delivered: delivered,
+                        FailureReason: delivered ? null : "Slack post did not succeed",
+                        ObservedAtMs: _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
+                    _reminderDeliveryObserver = null;
                 }
 
                 if (!_postedThisTurn && !_uploadedFileThisTurn)
@@ -1113,6 +1123,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 _postedThisTurn = false;
                 _uploadedFileThisTurn = false;
                 _lastFailedPost = null;
+                _reminderDeliveryObserver = null;
                 var clearedPrompts = _pendingApprovalRequests
                     .Select(pending => new PendingApprovalPromptCleared
                     {

@@ -24,8 +24,14 @@ namespace Netclaw.Actors.Reminders;
 internal sealed class ReminderExecutionActor : ReceiveActor
 {
     /// <summary>
-    /// How long CurrentSession reminders with <c>DeliveryRequired=true</c>
-    /// wait for outbound delivery observation after session <see cref="CommandAck"/>.
+    /// Backstop timeout for CurrentSession reminders with
+    /// <c>DeliveryRequired=true</c> waiting for a
+    /// <see cref="ReminderDeliveryResult"/> after session <see cref="CommandAck"/>.
+    /// The binding actor normally reports delivery success OR failure
+    /// explicitly (so failures redeliver fast); this timeout only fires when
+    /// the binding actor never responds at all — e.g. it crashed mid-turn.
+    /// It is deliberately generous: firing it early on a slow-but-live turn
+    /// would report a false failure and redeliver, duplicating the message.
     /// </summary>
     internal static TimeSpan DeliveryObservedTimeout = TimeSpan.FromHours(1);
 
@@ -43,9 +49,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     private bool _completed;
     private string? _sessionIdValue;
     private HistoryRecord? _pendingHistory;
-    private TaskCompletionSource<ReminderDeliveryObserved>? _deliveryObservedTcs;
+    private bool _awaitingDeliveryResult;
     private string? _expectedReminderDeliveryKey;
     private ChannelType? _expectedDeliveryChannel;
+    private ICancelable? _deliveryTimeoutCancelable;
 
     private bool RoutesBackToOriginSession => _definition.Delivery.Kind == DeliveryKind.CurrentSession;
 
@@ -90,7 +97,8 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
         Receive<ExecutionOutput>(HandleOutput);
         Receive<ExecutionStarted>(_ => { });
-        Receive<ReminderDeliveryObserved>(HandleDeliveryObserved);
+        Receive<ReminderDeliveryResult>(HandleDeliveryResult);
+        Receive<DeliveryBackstopTimeout>(HandleDeliveryBackstopTimeout);
     }
 
     protected override void PreStart()
@@ -170,9 +178,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor
     /// to the originating channel's gateway and calls
     /// <c>IReminderClient.AckAsync(envelope)</c> exactly once once the
     /// target session has acknowledged receipt via the
-    /// <c>MessageSource.AckTarget</c>-propagated <c>CommandAck</c>. On
-    /// timeout, <c>CommandNack</c>, or any exception, <c>AckAsync</c> is
-    /// NOT called and Akka.Reminders redelivers per its built-in policy.
+    /// <c>MessageSource.AckTarget</c>-propagated <c>CommandAck</c>. When
+    /// <c>DeliveryRequired</c> is true, ack is further gated on a
+    /// <see cref="ReminderDeliveryResult"/> reporting an actual successful
+    /// post (the binding actor tells it directly via
+    /// <c>MessageSource.DeliveryObserver</c>). On <c>CommandNack</c>, a
+    /// delivery failure, the backstop timeout, or any exception,
+    /// <c>AckAsync</c> is NOT called and Akka.Reminders redelivers per its
+    /// built-in policy.
     /// </summary>
     private async Task InitializeCurrentSessionAsync()
     {
@@ -207,7 +220,13 @@ internal sealed class ReminderExecutionActor : ReceiveActor
                     SourceKind = new SourceKind("reminder")
                 },
                 ReceivedAt = _dispatchedAt,
-                ReminderId = reminderDeliveryKey
+                ReminderId = reminderDeliveryKey,
+                // Only reminders that gate on delivery need a confirmation
+                // channel. The binding actor tells this ref a
+                // ReminderDeliveryResult on turn completion; leaving it null
+                // for non-required reminders avoids a dead-letter when this
+                // actor has already acked and stopped.
+                DeliveryObserver = _definition.DeliveryRequired ? Self : null
             };
 
             var gateway = ResolveGatewayFor(originChannelType);
@@ -231,12 +250,14 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
                         if (_definition.DeliveryRequired)
                         {
-                            var observed = await WaitForDeliveryObservationAsync(reminderDeliveryKey, originChannelType);
-                            if (!observed)
-                            {
-                                ReportAndStop(false, $"delivery not observed within {DeliveryObservedTimeout}");
-                                break;
-                            }
+                            // Do NOT await the delivery result here: this runs
+                            // inside RunTask, which suspends the mailbox until
+                            // the task completes — the actor could not process
+                            // the ReminderDeliveryResult message it is waiting
+                            // for. Arm state + a backstop timer and return; the
+                            // result (or timeout) is handled as a normal message.
+                            BeginAwaitingDeliveryResult(reminderDeliveryKey, originChannelType);
+                            break;
                         }
 
                         await TryAckEnvelopeAsync();
@@ -273,51 +294,74 @@ internal sealed class ReminderExecutionActor : ReceiveActor
         }
     }
 
-    private void HandleDeliveryObserved(ReminderDeliveryObserved observed)
+    /// <summary>
+    /// Enters the message-driven "waiting for delivery confirmation" state and
+    /// schedules a backstop timeout. Runs at the tail of the dispatch
+    /// <c>RunTask</c>; once that task returns, the actor resumes normal mailbox
+    /// processing and can handle the <see cref="ReminderDeliveryResult"/> the
+    /// binding actor tells it (or the <see cref="DeliveryBackstopTimeout"/>).
+    /// </summary>
+    private void BeginAwaitingDeliveryResult(string reminderDeliveryKey, ChannelType channelType)
     {
-        if (_deliveryObservedTcs is null || _expectedReminderDeliveryKey is null)
-            return;
-
-        if (!string.Equals(observed.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
-            return;
-
-        if (_expectedDeliveryChannel is { } expectedChannel && observed.ChannelType != expectedChannel)
-            return;
-
-        _deliveryObservedTcs.TrySetResult(observed);
-    }
-
-    private async Task<bool> WaitForDeliveryObservationAsync(string reminderDeliveryKey, ChannelType channelType)
-    {
+        _awaitingDeliveryResult = true;
         _expectedReminderDeliveryKey = reminderDeliveryKey;
         _expectedDeliveryChannel = channelType;
-        _deliveryObservedTcs = new TaskCompletionSource<ReminderDeliveryObserved>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Context.System.EventStream.Subscribe(Self, typeof(ReminderDeliveryObserved));
+        _deliveryTimeoutCancelable = Context.System.Scheduler.ScheduleTellOnceCancelable(
+            DeliveryObservedTimeout,
+            Self,
+            new DeliveryBackstopTimeout(reminderDeliveryKey),
+            Self);
+    }
 
-        try
+    private void HandleDeliveryResult(ReminderDeliveryResult result)
+    {
+        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
+            return;
+
+        if (!string.Equals(result.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+            return;
+
+        if (_expectedDeliveryChannel is { } expectedChannel && result.ChannelType != expectedChannel)
+            return;
+
+        _awaitingDeliveryResult = false;
+        _deliveryTimeoutCancelable?.Cancel();
+        _deliveryTimeoutCancelable = null;
+
+        if (result.Delivered)
         {
-            var completed = await Task.WhenAny(_deliveryObservedTcs.Task, Task.Delay(DeliveryObservedTimeout));
-            if (completed != _deliveryObservedTcs.Task)
-            {
-                _log.Warning(
-                    "reminder_delivery_observation_timeout execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} timeout={Timeout}",
-                    _executionId, _definition.Id, reminderDeliveryKey, DeliveryObservedTimeout);
-                return false;
-            }
-
-            var observed = await _deliveryObservedTcs.Task;
             _log.Info(
                 "reminder_delivery_observed execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} channel={ChannelType}",
-                _executionId, _definition.Id, observed.ReminderDeliveryKey, observed.ChannelType);
-            return true;
+                _executionId, _definition.Id, result.ReminderDeliveryKey, result.ChannelType);
+            RunTask(async () =>
+            {
+                await TryAckEnvelopeAsync();
+                ReportAndStop(true);
+            });
         }
-        finally
+        else
         {
-            Context.System.EventStream.Unsubscribe(Self, typeof(ReminderDeliveryObserved));
-            _deliveryObservedTcs = null;
-            _expectedReminderDeliveryKey = null;
-            _expectedDeliveryChannel = null;
+            _log.Warning(
+                "reminder_delivery_failed execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} channel={ChannelType} reason={Reason}",
+                _executionId, _definition.Id, result.ReminderDeliveryKey, result.ChannelType, result.FailureReason);
+            ReportAndStop(false, result.FailureReason ?? "channel reported delivery failure");
         }
+    }
+
+    private void HandleDeliveryBackstopTimeout(DeliveryBackstopTimeout msg)
+    {
+        if (!_awaitingDeliveryResult || _expectedReminderDeliveryKey is null)
+            return;
+
+        if (!string.Equals(msg.ReminderDeliveryKey, _expectedReminderDeliveryKey, StringComparison.Ordinal))
+            return;
+
+        _awaitingDeliveryResult = false;
+        _deliveryTimeoutCancelable = null;
+        _log.Warning(
+            "reminder_delivery_observation_timeout execution_id={ExecutionId} reminder_id={ReminderId} key={ReminderDeliveryKey} timeout={Timeout}",
+            _executionId, _definition.Id, msg.ReminderDeliveryKey, DeliveryObservedTimeout);
+        ReportAndStop(false, $"delivery not observed within {DeliveryObservedTimeout}");
     }
 
     private async Task TryAckEnvelopeAsync()
@@ -507,6 +551,9 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     protected override void PostStop()
     {
+        _deliveryTimeoutCancelable?.Cancel();
+        _deliveryTimeoutCancelable = null;
+
         if (_pendingHistory is not null)
         {
             try
@@ -539,4 +586,11 @@ internal sealed class ReminderExecutionActor : ReceiveActor
 
     private sealed record ExecutionStarted : INoSerializationVerificationNeeded;
     private sealed record ExecutionOutput(SessionOutput Output) : INoSerializationVerificationNeeded;
+
+    /// <summary>
+    /// Self-scheduled backstop fired when no <see cref="ReminderDeliveryResult"/>
+    /// arrives within <see cref="DeliveryObservedTimeout"/> (e.g. the binding
+    /// actor crashed mid-turn).
+    /// </summary>
+    private sealed record DeliveryBackstopTimeout(string ReminderDeliveryKey) : INoSerializationVerificationNeeded;
 }

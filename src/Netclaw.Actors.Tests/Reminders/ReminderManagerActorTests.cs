@@ -617,6 +617,56 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
+    public async Task CurrentSession_delivery_required_fails_fast_on_explicit_delivery_failure()
+    {
+        var manager = await GetManagerAsync();
+
+        // Generous backstop: if the explicit failure signal weren't honored,
+        // this test would hang for the full timeout rather than fail fast.
+        var originalTimeout = ReminderExecutionActor.DeliveryObservedTimeout;
+        ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(30);
+        try
+        {
+            var gatewayProbe = CreateTestProbe("current-session-failed-gateway");
+            var autoAckRef = Sys.ActorOf(
+                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+                "auto-ack-current-session-failed");
+            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
+
+            var definition = CreateCurrentSessionDefinition("current-session-failed", deliveryRequired: true);
+            _definitionStore.Save(definition);
+
+            manager.Tell(CreateEnvelope(definition.Id.Value));
+
+            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.NotNull(delivered.Source.ReminderId);
+            Assert.NotNull(delivered.Source.DeliveryObserver);
+
+            // Channel reports the post failed — execution must report failure
+            // (so Akka.Reminders redelivers) without acking the envelope.
+            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
+                delivered.Source.ReminderId!,
+                ChannelType.Slack,
+                Delivered: false,
+                FailureReason: "channel API down"));
+
+            await AwaitAssertAsync(() =>
+            {
+                Assert.Contains(_notificationSink.Alerts, alert =>
+                    alert.Category == AlertType.ReminderExecutionFailed
+                    && alert.Source == definition.Id.Value
+                    && alert.Summary.Contains("channel API down", StringComparison.OrdinalIgnoreCase));
+            }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            ReminderExecutionActor.DeliveryObservedTimeout = originalTimeout;
+        }
+    }
+
+    [Fact]
     public async Task CurrentSession_delivery_required_succeeds_when_delivery_is_observed()
     {
         var manager = await GetManagerAsync();
@@ -640,11 +690,13 @@ public class ReminderManagerActorTests : TestKit
                 TimeSpan.FromSeconds(5),
                 cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
+            Assert.NotNull(delivered.Source.DeliveryObserver);
 
-            Sys.EventStream.Publish(new ReminderDeliveryObserved(
+            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
                 delivered.Source.ReminderId!,
                 ChannelType.Slack,
-                TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+                Delivered: true,
+                ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
 
             await AwaitAssertAsync(async () =>
             {
@@ -922,11 +974,13 @@ public class ReminderManagerActorTests : TestKit
                 TimeSpan.FromSeconds(5),
                 cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
+            Assert.NotNull(delivered.Source.DeliveryObserver);
 
-            Sys.EventStream.Publish(new ReminderDeliveryObserved(
+            delivered.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
                 delivered.Source.ReminderId!,
                 ChannelType.Discord,
-                TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
+                Delivered: true,
+                ObservedAtMs: TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds()));
 
             await AwaitAssertAsync(async () =>
             {
