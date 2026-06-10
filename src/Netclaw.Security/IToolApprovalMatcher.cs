@@ -232,7 +232,18 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (!ReferenceEquals(clause, groupHead))
                 continue;  // pipe-tail clauses fold into the group head
 
-            var verb = ShellTokenizer.ApplyVerbShortCircuit(clause.Verb.Joined);
+            // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds
+            // lowercase-leading value tokens into the verb chain (`git tag
+            // v0.4.2`, `git show aa211dcb`, `git checkout feature2`), while
+            // digit-leading ones (`0.4.2`) stop the walk and land in Args
+            // (verb stays `git tag`). Both are call-specific values, not
+            // approvable intent, so strip them off the chain before gating —
+            // otherwise `git tag v0.4.2` would miss a `git tag` grant that
+            // `git tag 0.4.2` matches. Mirrors the value-termination in
+            // ReconstructClauseText so the gate candidate and the persisted
+            // pattern normalize identically.
+            var verb = ShellTokenizer.ApplyVerbShortCircuit(
+                string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens)));
             if (string.IsNullOrEmpty(verb))
                 continue;
 
@@ -362,29 +373,34 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// Rebuilds one clause's user-facing text from its parsed parts: verb
     /// chain, positional/flag args, and redirects. Synthetic cd-attribution
     /// args are dropped — they carry an inherited cwd, not a token the user
-    /// typed. Bare integer arguments (issue #1331) are also excluded since
-    /// they represent call-specific values (ticket IDs, port numbers,
-    /// timeouts) that vary between invocations of the same verb chain.
-    /// Once a bare integer is encountered, the greedy walk terminates —
-    /// subsequent args (wrapped subcommands like <c>curl</c> after
-    /// <c>timeout 30</c>) are outside the approval intent.
+    /// typed. Call-specific value arguments (issue #1331, generalized to
+    /// digit-bearing tokens — see <see cref="IsCallSpecificValueToken"/>)
+    /// are also excluded since they vary between invocations of the same
+    /// verb chain. Once a value token is encountered, the greedy walk
+    /// terminates — subsequent args (wrapped subcommands like <c>curl</c>
+    /// after <c>timeout 30</c>) are outside the approval intent.
     /// The result is fed back through
     /// <see cref="ShellTokenizer.NormalizeApprovalUnit"/> for path
     /// normalization, so this only needs to emit a clean token sequence.
     /// </summary>
     private static string ReconstructClauseText(ShellSyntaxTree.Clause clause)
     {
-        var sb = new StringBuilder(clause.Verb.Joined);
+        // Strip the trailing call-specific value tokens the greedy verb walk
+        // folded into the chain (see TrimTrailingValueTokens) so the persisted
+        // pattern matches the gate candidate for `git tag v0.4.2`.
+        var sb = new StringBuilder(string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens)));
 
         foreach (var arg in clause.Args)
         {
             if (arg.IsCwdAttribution || string.IsNullOrEmpty(arg.Raw))
                 continue;
 
-            // Issue #1331: bare integer args are a termination condition.
-            // Once we hit an integer, subsequent args (wrapped subcommands
-            // like `curl` after `timeout 30`) are outside the approval intent.
-            if (IsBareIntegerToken(arg.Raw))
+            // Issue #1331 (generalized): call-specific value args —
+            // digit-bearing non-flag, non-path tokens — are a termination
+            // condition. Once we hit one, subsequent args (wrapped subcommands
+            // like `curl` after `timeout 30`, or trailing flags after a
+            // version) are outside the approval intent.
+            if (IsCallSpecificValueToken(arg.Raw))
                 break;
 
             if (sb.Length > 0)
@@ -411,30 +427,50 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
-    /// True when <paramref name="token"/> is a bare integer (sequence of
-    /// digits with an optional leading minus for negative numbers). Excludes
-    /// flag-form tokens (those starting with <c>-</c>) — e.g. <c>-c</c>,
-    /// <c>--version</c> are never treated as integers. Negative flags like
-    /// <c>-3</c> start with <c>-</c> so the flag check short-circuits first.
+    /// True when <paramref name="token"/> is a call-specific value that varies
+    /// between invocations of the same verb chain. The classification is
+    /// morphological — one rule, not a taxonomy of value shapes: any non-flag,
+    /// non-path token containing a digit is a value. That covers versions
+    /// (<c>v0.4.2</c>, <c>0.4.2</c>), SHAs (<c>aa211dcb</c>), IPs, ports,
+    /// ticket IDs, and digit-bearing refs (<c>feature2</c>) — generalizing
+    /// issue #1331's bare-integer rule. Flags are exempt (<c>-3</c>,
+    /// <c>--max-count=10</c> carry invocation intent, not values);
+    /// path-shaped tokens are exempt so digit-bearing paths
+    /// (<c>/tmp/build2</c>) still reach directory scoping and the display
+    /// pattern. All-alpha operands (branch names, package names) are
+    /// intentionally NOT classified — no shape rule can tell them apart from
+    /// subcommands, and mis-stripping a subcommand silently widens a grant.
     /// </summary>
-    private static bool IsBareIntegerToken(string token)
+    private static bool IsCallSpecificValueToken(string token)
     {
-        // Negative flags like `-3` start with `-` — not a bare integer.
-        if (token.Length == 0 || token[0] == '-')
+        if (string.IsNullOrEmpty(token) || token[0] == '-')
             return false;
 
-        var length = token.Length;
-        // Must be at least one digit.
-        if (!char.IsDigit(token[0]))
+        if (ShellTokenizer.IsPathToken(token))
             return false;
 
-        for (var i = 1; i < length; i++)
+        foreach (var c in token)
         {
-            if (!char.IsDigit(token[i]))
-                return false;
+            if (char.IsAsciiDigit(c))
+                return true;
         }
 
-        return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Drops trailing call-specific value tokens from a parsed verb chain,
+    /// always retaining at least the command word. See
+    /// <see cref="IsCallSpecificValueToken"/> for why <c>git tag v0.4.2</c> and
+    /// <c>git tag 0.4.2</c> must both normalize to <c>git tag</c>.
+    /// </summary>
+    private static IReadOnlyList<string> TrimTrailingValueTokens(IReadOnlyList<string> verbTokens)
+    {
+        var end = verbTokens.Count;
+        while (end > 1 && IsCallSpecificValueToken(verbTokens[end - 1]))
+            end--;
+
+        return end == verbTokens.Count ? verbTokens : verbTokens.Take(end).ToList();
     }
 
     private static string RedirectToken(ShellSyntaxTree.RedirectDirection direction) => direction switch
