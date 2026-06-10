@@ -99,11 +99,12 @@ public sealed class ShellApprovalMatcherTests
         Assert.Equal("cat", verbs[0]);
     }
 
-    // ---- Call-specific value normalization (version / tag-name args) ----
-    // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds a lowercase-leading
-    // version like `v0.4.2` into the verb chain (`git tag v0.4.2`) but stops at
-    // a digit-leading `0.4.2` (verb stays `git tag`). Both are call-specific
-    // values, so the matcher normalizes them off the chain on the gate path
+    // ---- Call-specific value normalization (digit-bearing tokens) ----
+    // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds lowercase-leading
+    // value tokens into the verb chain (`git tag v0.4.2`, `git show aa211dcb`)
+    // but stops at digit-leading ones (`0.4.2` lands in Args, verb stays
+    // `git tag`). Both are call-specific values, so the matcher trims trailing
+    // digit-bearing non-flag, non-path tokens off the chain on the gate path
     // (ExtractCandidateVerbs / IsApproved) AND the persisted-pattern path
     // (ExtractPatterns), so the same intent yields one stable verb. Regression
     // for the v0.4.2-vs-0.4.2 approval divergence.
@@ -113,7 +114,7 @@ public sealed class ShellApprovalMatcherTests
     [InlineData("git tag 0.4.2")]
     [InlineData("git tag 1.0.0-beta.3")]
     [InlineData("git tag v2.0")]
-    public void ExtractCandidateVerbs_strips_trailing_version_token(string command)
+    public void ExtractCandidateVerbs_strips_trailing_value_token(string command)
     {
         var verbs = _matcher.ExtractCandidateVerbs(new ToolName("shell_execute"), Args(command));
         Assert.Single(verbs);
@@ -123,7 +124,7 @@ public sealed class ShellApprovalMatcherTests
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
     [InlineData("git tag v0.4.2")]
     [InlineData("git tag 0.4.2")]
-    public void ExtractPatterns_strips_trailing_version_token(string command)
+    public void ExtractPatterns_strips_trailing_value_token(string command)
     {
         // The persisted grant (ExtractPatterns) must normalize to the same
         // `git tag` the gate compares, so a freshly-granted version generalizes
@@ -162,11 +163,13 @@ public sealed class ShellApprovalMatcherTests
     }
 
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only — matcher routes through BashParser on POSIX")]
-    [InlineData("git checkout v2", "git checkout v2")]            // no dot -> not a version value
-    [InlineData("git show 1234abcd", "git show")]                 // digit-leading hex SHA is an arg
-    [InlineData("git show aa211dcb", "git show aa211dcb")]        // alpha-leading SHA stays (not version-shaped)
-    [InlineData("git push origin main", "git push origin main")]  // branch name preserved
-    public void ExtractCandidateVerbs_preserves_non_version_tokens(string command, string expected)
+    [InlineData("git checkout v2", "git checkout")]               // digit-bearing ref is a value
+    [InlineData("git show 1234abcd", "git show")]                 // digit-leading SHA lands in Args
+    [InlineData("git show aa211dcb", "git show")]                 // alpha-leading SHA folds into chain, then trims
+    [InlineData("git log v0.4.1..dev", "git log")]                // range ref is a value
+    [InlineData("git push origin main", "git push origin main")]  // all-alpha operands are unclassifiable by shape -> preserved
+    [InlineData("aws s3 ls", "aws s3 ls")]                        // mid-chain digit token is not trailing -> untouched
+    public void ExtractCandidateVerbs_trims_digit_bearing_tokens_trailing_only(string command, string expected)
     {
         var verbs = _matcher.ExtractCandidateVerbs(new ToolName("shell_execute"), Args(command));
         Assert.Single(verbs);

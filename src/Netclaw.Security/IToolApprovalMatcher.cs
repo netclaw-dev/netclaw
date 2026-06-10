@@ -232,15 +232,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (!ReferenceEquals(clause, groupHead))
                 continue;  // pipe-tail clauses fold into the group head
 
-            // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds a
-            // lowercase-leading version token such as `v0.4.2` into the verb
-            // chain (`git tag v0.4.2`), while a digit-leading `0.4.2` stops the
-            // walk and lands in Args (verb stays `git tag`). Both are
-            // call-specific values, not approvable intent, so strip them off
-            // the chain before gating — otherwise `git tag v0.4.2` would miss a
-            // `git tag` grant that `git tag 0.4.2` matches. Mirrors the #1331
-            // arg-stripping in ReconstructClauseText so the gate candidate and
-            // the persisted pattern normalize identically.
+            // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds
+            // lowercase-leading value tokens into the verb chain (`git tag
+            // v0.4.2`, `git show aa211dcb`, `git checkout feature2`), while
+            // digit-leading ones (`0.4.2`) stop the walk and land in Args
+            // (verb stays `git tag`). Both are call-specific values, not
+            // approvable intent, so strip them off the chain before gating —
+            // otherwise `git tag v0.4.2` would miss a `git tag` grant that
+            // `git tag 0.4.2` matches. Mirrors the value-termination in
+            // ReconstructClauseText so the gate candidate and the persisted
+            // pattern normalize identically.
             var verb = ShellTokenizer.ApplyVerbShortCircuit(
                 string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens)));
             if (string.IsNullOrEmpty(verb))
@@ -372,12 +373,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// Rebuilds one clause's user-facing text from its parsed parts: verb
     /// chain, positional/flag args, and redirects. Synthetic cd-attribution
     /// args are dropped — they carry an inherited cwd, not a token the user
-    /// typed. Bare integer arguments (issue #1331) are also excluded since
-    /// they represent call-specific values (ticket IDs, port numbers,
-    /// timeouts) that vary between invocations of the same verb chain.
-    /// Once a bare integer is encountered, the greedy walk terminates —
-    /// subsequent args (wrapped subcommands like <c>curl</c> after
-    /// <c>timeout 30</c>) are outside the approval intent.
+    /// typed. Call-specific value arguments (issue #1331, generalized to
+    /// digit-bearing tokens — see <see cref="IsCallSpecificValueToken"/>)
+    /// are also excluded since they vary between invocations of the same
+    /// verb chain. Once a value token is encountered, the greedy walk
+    /// terminates — subsequent args (wrapped subcommands like <c>curl</c>
+    /// after <c>timeout 30</c>) are outside the approval intent.
     /// The result is fed back through
     /// <see cref="ShellTokenizer.NormalizeApprovalUnit"/> for path
     /// normalization, so this only needs to emit a clean token sequence.
@@ -394,8 +395,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (arg.IsCwdAttribution || string.IsNullOrEmpty(arg.Raw))
                 continue;
 
-            // Issue #1331 (extended): call-specific value args — bare integers
-            // and version-shaped tokens like `0.4.2` — are a termination
+            // Issue #1331 (generalized): call-specific value args —
+            // digit-bearing non-flag, non-path tokens — are a termination
             // condition. Once we hit one, subsequent args (wrapped subcommands
             // like `curl` after `timeout 30`, or trailing flags after a
             // version) are outside the approval intent.
@@ -426,77 +427,35 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
-    /// True when <paramref name="token"/> is a bare integer (sequence of
-    /// digits with an optional leading minus for negative numbers). Excludes
-    /// flag-form tokens (those starting with <c>-</c>) — e.g. <c>-c</c>,
-    /// <c>--version</c> are never treated as integers. Negative flags like
-    /// <c>-3</c> start with <c>-</c> so the flag check short-circuits first.
-    /// </summary>
-    private static bool IsBareIntegerToken(string token)
-    {
-        // Negative flags like `-3` start with `-` — not a bare integer.
-        if (token.Length == 0 || token[0] == '-')
-            return false;
-
-        var length = token.Length;
-        // Must be at least one digit.
-        if (!char.IsDigit(token[0]))
-            return false;
-
-        for (var i = 1; i < length; i++)
-        {
-            if (!char.IsDigit(token[i]))
-                return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
     /// True when <paramref name="token"/> is a call-specific value that varies
-    /// between invocations of the same verb chain — a bare integer (issue
-    /// #1331: ticket IDs, ports, timeouts) or a version-shaped token
-    /// (<c>v0.4.2</c>, <c>0.4.2</c>, <c>1.0-rc1</c>). These are operands, not
-    /// approvable intent, so they are normalized out of the verb chain on both
-    /// the gate path and the persisted-pattern path.
+    /// between invocations of the same verb chain. The classification is
+    /// morphological — one rule, not a taxonomy of value shapes: any non-flag,
+    /// non-path token containing a digit is a value. That covers versions
+    /// (<c>v0.4.2</c>, <c>0.4.2</c>), SHAs (<c>aa211dcb</c>), IPs, ports,
+    /// ticket IDs, and digit-bearing refs (<c>feature2</c>) — generalizing
+    /// issue #1331's bare-integer rule. Flags are exempt (<c>-3</c>,
+    /// <c>--max-count=10</c> carry invocation intent, not values);
+    /// path-shaped tokens are exempt so digit-bearing paths
+    /// (<c>/tmp/build2</c>) still reach directory scoping and the display
+    /// pattern. All-alpha operands (branch names, package names) are
+    /// intentionally NOT classified — no shape rule can tell them apart from
+    /// subcommands, and mis-stripping a subcommand silently widens a grant.
     /// </summary>
     private static bool IsCallSpecificValueToken(string token)
-        => IsBareIntegerToken(token) || IsVersionShapedToken(token);
-
-    /// <summary>
-    /// True when <paramref name="token"/> looks like a dotted version: an
-    /// optional leading <c>v</c>/<c>V</c>, then a digit, then a run of
-    /// alphanumerics, dots, dashes, and pluses containing at least one dot. So
-    /// <c>v0.4.2</c>, <c>2.0.0-beta.3</c>, and <c>1.0+build</c> match, but
-    /// subcommand words (<c>version</c>), branch-like single tokens
-    /// (<c>v2</c>), and hex SHAs (<c>1234abcd</c>) do not. The dot requirement
-    /// keeps the predicate from swallowing single-token subcommands; bare
-    /// integers are handled separately by <see cref="IsBareIntegerToken"/>.
-    /// </summary>
-    private static bool IsVersionShapedToken(string token)
     {
-        if (string.IsNullOrEmpty(token))
+        if (string.IsNullOrEmpty(token) || token[0] == '-')
             return false;
 
-        var i = token[0] is 'v' or 'V' ? 1 : 0;
-        if (i >= token.Length || !char.IsAsciiDigit(token[i]))
+        if (ShellTokenizer.IsPathToken(token))
             return false;
 
-        var hasDot = false;
-        for (; i < token.Length; i++)
+        foreach (var c in token)
         {
-            var c = token[i];
-            if (c == '.')
-            {
-                hasDot = true;
-                continue;
-            }
-
-            if (!(char.IsAsciiLetterOrDigit(c) || c is '-' or '+'))
-                return false;
+            if (char.IsAsciiDigit(c))
+                return true;
         }
 
-        return hasDot;
+        return false;
     }
 
     /// <summary>
