@@ -232,7 +232,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (!ReferenceEquals(clause, groupHead))
                 continue;  // pipe-tail clauses fold into the group head
 
-            var verb = ShellTokenizer.ApplyVerbShortCircuit(clause.Verb.Joined);
+            // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds a
+            // lowercase-leading version token such as `v0.4.2` into the verb
+            // chain (`git tag v0.4.2`), while a digit-leading `0.4.2` stops the
+            // walk and lands in Args (verb stays `git tag`). Both are
+            // call-specific values, not approvable intent, so strip them off
+            // the chain before gating — otherwise `git tag v0.4.2` would miss a
+            // `git tag` grant that `git tag 0.4.2` matches. Mirrors the #1331
+            // arg-stripping in ReconstructClauseText so the gate candidate and
+            // the persisted pattern normalize identically.
+            var verb = ShellTokenizer.ApplyVerbShortCircuit(
+                string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens)));
             if (string.IsNullOrEmpty(verb))
                 continue;
 
@@ -374,17 +384,22 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// </summary>
     private static string ReconstructClauseText(ShellSyntaxTree.Clause clause)
     {
-        var sb = new StringBuilder(clause.Verb.Joined);
+        // Strip the trailing call-specific value tokens the greedy verb walk
+        // folded into the chain (see TrimTrailingValueTokens) so the persisted
+        // pattern matches the gate candidate for `git tag v0.4.2`.
+        var sb = new StringBuilder(string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens)));
 
         foreach (var arg in clause.Args)
         {
             if (arg.IsCwdAttribution || string.IsNullOrEmpty(arg.Raw))
                 continue;
 
-            // Issue #1331: bare integer args are a termination condition.
-            // Once we hit an integer, subsequent args (wrapped subcommands
-            // like `curl` after `timeout 30`) are outside the approval intent.
-            if (IsBareIntegerToken(arg.Raw))
+            // Issue #1331 (extended): call-specific value args — bare integers
+            // and version-shaped tokens like `0.4.2` — are a termination
+            // condition. Once we hit one, subsequent args (wrapped subcommands
+            // like `curl` after `timeout 30`, or trailing flags after a
+            // version) are outside the approval intent.
+            if (IsCallSpecificValueToken(arg.Raw))
                 break;
 
             if (sb.Length > 0)
@@ -435,6 +450,68 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// True when <paramref name="token"/> is a call-specific value that varies
+    /// between invocations of the same verb chain — a bare integer (issue
+    /// #1331: ticket IDs, ports, timeouts) or a version-shaped token
+    /// (<c>v0.4.2</c>, <c>0.4.2</c>, <c>1.0-rc1</c>). These are operands, not
+    /// approvable intent, so they are normalized out of the verb chain on both
+    /// the gate path and the persisted-pattern path.
+    /// </summary>
+    private static bool IsCallSpecificValueToken(string token)
+        => IsBareIntegerToken(token) || IsVersionShapedToken(token);
+
+    /// <summary>
+    /// True when <paramref name="token"/> looks like a dotted version: an
+    /// optional leading <c>v</c>/<c>V</c>, then a digit, then a run of
+    /// alphanumerics, dots, dashes, and pluses containing at least one dot. So
+    /// <c>v0.4.2</c>, <c>2.0.0-beta.3</c>, and <c>1.0+build</c> match, but
+    /// subcommand words (<c>version</c>), branch-like single tokens
+    /// (<c>v2</c>), and hex SHAs (<c>1234abcd</c>) do not. The dot requirement
+    /// keeps the predicate from swallowing single-token subcommands; bare
+    /// integers are handled separately by <see cref="IsBareIntegerToken"/>.
+    /// </summary>
+    private static bool IsVersionShapedToken(string token)
+    {
+        if (string.IsNullOrEmpty(token))
+            return false;
+
+        var i = token[0] is 'v' or 'V' ? 1 : 0;
+        if (i >= token.Length || !char.IsAsciiDigit(token[i]))
+            return false;
+
+        var hasDot = false;
+        for (; i < token.Length; i++)
+        {
+            var c = token[i];
+            if (c == '.')
+            {
+                hasDot = true;
+                continue;
+            }
+
+            if (!(char.IsAsciiLetterOrDigit(c) || c is '-' or '+'))
+                return false;
+        }
+
+        return hasDot;
+    }
+
+    /// <summary>
+    /// Drops trailing call-specific value tokens from a parsed verb chain,
+    /// always retaining at least the command word. See
+    /// <see cref="IsCallSpecificValueToken"/> for why <c>git tag v0.4.2</c> and
+    /// <c>git tag 0.4.2</c> must both normalize to <c>git tag</c>.
+    /// </summary>
+    private static IReadOnlyList<string> TrimTrailingValueTokens(IReadOnlyList<string> verbTokens)
+    {
+        var end = verbTokens.Count;
+        while (end > 1 && IsCallSpecificValueToken(verbTokens[end - 1]))
+            end--;
+
+        return end == verbTokens.Count ? verbTokens : verbTokens.Take(end).ToList();
     }
 
     private static string RedirectToken(ShellSyntaxTree.RedirectDirection direction) => direction switch
