@@ -160,6 +160,53 @@ public class ToolArgumentValidatorTests
         Assert.DoesNotContain("should-not-run", result);
     }
 
+    // A native tool that declares 'text' (like send_channel_message) but binds
+    // an interchangeable 'Message' key at runtime — recognition must accept the
+    // alias bidirectionally or a previously-working call shape regresses.
+    private sealed class TextAliasTool : INetclawTool
+    {
+        public string Name => "fake_text_tool";
+        public LlmFacingToolName LlmFacingName { get; } = LlmFacingToolName.FromCanonical("fake_text_tool");
+        public string Description => "";
+        public string GrantCategory => "test";
+        public System.Text.Json.JsonElement ParameterSchema { get; } =
+            System.Text.Json.JsonDocument.Parse(
+                """{"type":"object","properties":{"text":{"type":"string"},"_rationale":{"type":"string"}}}""")
+                .RootElement.Clone();
+
+        public Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, CancellationToken ct = default)
+            => Task.FromResult("ok");
+
+        // Not exercised by key validation, which reads only Name + ParameterSchema.
+        public AITool ToAITool() => AIFunctionFactory.Create(() => "ok", Name);
+    }
+
+    [Fact]
+    public void Declared_text_accepts_message_alias_and_vice_versa()
+    {
+        var tool = new TextAliasTool();
+
+        // 'Message' is consumed by binding's text↔Message fallback even though
+        // only 'text' is declared — it must not be rejected.
+        Assert.Null(ToolArgumentValidator.ValidateArgumentKeys(tool, new Dictionary<string, object?>
+        {
+            ["Message"] = "hi",
+            ["_rationale"] = "test"
+        }));
+
+        // The declared key itself still works.
+        Assert.Null(ToolArgumentValidator.ValidateArgumentKeys(tool, new Dictionary<string, object?>
+        {
+            ["text"] = "hi"
+        }));
+
+        // A genuinely unknown key is still rejected.
+        Assert.NotNull(ToolArgumentValidator.ValidateArgumentKeys(tool, new Dictionary<string, object?>
+        {
+            ["bogus"] = "x"
+        }));
+    }
+
     [Fact]
     public async Task Mcp_tools_exempt_from_native_validation()
     {

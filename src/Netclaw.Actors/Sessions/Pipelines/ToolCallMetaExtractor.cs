@@ -48,7 +48,7 @@ internal static class ToolCallMetaExtractor
         if (hintSeconds.Value > maxToolTimeoutSeconds)
         {
             return (TimeSpan.FromSeconds(maxToolTimeoutSeconds),
-                $"[timeout clamped: requested {hintSeconds.Value}s, maximum {maxToolTimeoutSeconds}s — use _background:true for longer work]");
+                $"[timeout clamped: requested {hintSeconds.Value}s, maximum {maxToolTimeoutSeconds}s applied — to run without blocking the turn, submit it with _background:true (same maximum)]");
         }
 
         return (TimeSpan.FromSeconds(hintSeconds.Value), null);
@@ -67,51 +67,24 @@ internal static class ToolCallMetaExtractor
         if (arguments is null || arguments.Count == 0)
             return null;
 
+        // Validity is defined as "the shared coercion accepts it" — the same
+        // TryCoerce* ToolCallMeta.ExtractFrom binds through — so a value can
+        // never validate here yet extract to null (or vice versa). A timeout
+        // additionally must be positive, matching ExtractFrom's `> 0` guard.
         if (arguments.TryGetValue("_timeout_seconds", out var tVal)
             && tVal is not null and not JsonElement { ValueKind: JsonValueKind.Null }
-            && !IsValidTimeout(tVal))
+            && !(ToolArgumentHelper.TryCoerceInt(tVal, out var t) && t > 0))
         {
-            return $"Error: Meta argument '_timeout_seconds' value '{Render(tVal)}' is not a valid positive integer. The tool was NOT executed.";
+            return $"Error: Meta argument '_timeout_seconds' value '{ToolArgumentHelper.RenderValue(tVal)}' is not a valid positive integer. The tool was NOT executed.";
         }
 
         if (arguments.TryGetValue("_background", out var bVal)
             && bVal is not null and not JsonElement { ValueKind: JsonValueKind.Null }
-            && !IsValidBackground(bVal))
+            && !ToolArgumentHelper.TryCoerceBool(bVal, out _))
         {
-            return $"Error: Meta argument '_background' value '{Render(bVal)}' is not a valid boolean. The tool was NOT executed.";
+            return $"Error: Meta argument '_background' value '{ToolArgumentHelper.RenderValue(bVal)}' is not a valid boolean. The tool was NOT executed.";
         }
 
         return null;
-    }
-
-    private static bool IsValidTimeout(object value) => value switch
-    {
-        int i => i > 0,
-        long l => l is > 0 and <= int.MaxValue,
-        double d => d > 0 && double.IsInteger(d) && d <= int.MaxValue,
-        JsonElement { ValueKind: JsonValueKind.Number } je => je.TryGetInt32(out var parsed) && parsed > 0,
-        string s => int.TryParse(s, out var parsed) && parsed > 0,
-        JsonElement { ValueKind: JsonValueKind.String } je => int.TryParse(je.GetString(), out var parsed) && parsed > 0,
-        _ => false
-    };
-
-    private static bool IsValidBackground(object value) => value switch
-    {
-        bool => true,
-        JsonElement { ValueKind: JsonValueKind.True or JsonValueKind.False } => true,
-        string s => bool.TryParse(s, out _),
-        JsonElement { ValueKind: JsonValueKind.String } je => bool.TryParse(je.GetString(), out _),
-        _ => false
-    };
-
-    private static string Render(object value)
-    {
-        var rendered = value switch
-        {
-            JsonElement je => je.GetRawText(),
-            _ => value.ToString() ?? string.Empty
-        };
-
-        return rendered.Length > 100 ? rendered[..100] + "…" : rendered;
     }
 }

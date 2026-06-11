@@ -95,6 +95,13 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.CompletedTask;
 
+        // Mirror the real executor's registry-free pre-dispatch validation
+        // (sentinel + meta values) so the pipeline rejects the same calls it
+        // would in production. The schema/unknown-key half needs a registry and
+        // is covered by ToolArgumentValidatorTests against the real executor.
+        public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
+            => DispatchingToolExecutor.ValidateArguments(toolCall.Arguments);
+
         public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
         {
             Invocations++;
@@ -137,6 +144,24 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         Assert.Equal(1, executor.Invocations);
         Assert.Equal(60, executor.LastContext?.RequestedTimeoutSeconds);
         Assert.Contains("[timeout request 10s is below the 60s tool default; 60s applied]", content);
+    }
+
+    [Fact]
+    public async Task Integral_decimal_json_timeout_accepted_and_executes()
+    {
+        // {"_timeout_seconds": 300.0} — a common LLM emission — must be accepted
+        // (TryGetInt32 rejects "300.0"; the integral-double fallback rescues it),
+        // not rejected as invalid.
+        var executor = new EchoExecutor();
+        var completed = await RunPipelineAsync(executor, new Dictionary<string, object?>
+        {
+            ["Command"] = "echo hi",
+            ["_timeout_seconds"] = JsonDocument.Parse("300.0").RootElement.Clone()
+        });
+
+        Assert.Equal(1, executor.Invocations);
+        Assert.Equal(300, executor.LastContext?.RequestedTimeoutSeconds);
+        Assert.DoesNotContain("NOT executed", completed.ToolResults[0].Content);
     }
 
     [Fact]

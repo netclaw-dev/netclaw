@@ -118,6 +118,54 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
     }
 
     [Fact]
+    public async Task ExplicitBackground_ClampsTimeoutToCeiling()
+    {
+        // _background must not be a way around MaxToolTimeoutSeconds: a huge
+        // requested timeout is clamped to the same ceiling as the sync path,
+        // not scheduled as an ~11-day kill timer.
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe-bg-clamp");
+        var jobManagerProbe = CreateTestProbe("job-manager-bg-clamp");
+        var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobManager(jobManagerProbe.Ref)));
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-clamp", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "sleep 1000000",
+                ["_background"] = true,
+                ["_timeout_seconds"] = 999999,
+                ["_rationale"] = "long job"
+            })
+        };
+
+        await SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor, toolCalls,
+            new SessionId("test/background-clamp"),
+            source: TestMessageSource(),
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            maxToolTimeoutSeconds: 600,
+            backgroundJobManager: fakeJobManager,
+            ct: TestContext.Current.CancellationToken);
+
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(600, received.TimeoutSeconds);
+    }
+
+    [Fact]
     public async Task ExplicitBackground_PreservesWorkingDirectory()
     {
         var executor = new EchoExecutor();

@@ -111,11 +111,16 @@ public static class ToolArgumentValidator
                 normalizedDeclared[ToolArgumentHelper.NormalizeKey(name)] = name;
         }
 
-        // ToolArgumentHelper.GetString consumes a 'text' key as an alias for a
-        // declared 'Message' parameter — recognition must include it or working
-        // callers would be rejected.
-        if (normalizedDeclared.ContainsKey("message"))
-            normalizedDeclared.TryAdd("text", "Message");
+        // A key binding would consume via an interchangeable alias (text↔message)
+        // must be recognized too, or validation rejects calls binding accepts.
+        // The alias groups live in ToolArgumentHelper so binding and validation
+        // share one definition (bidirectional: declaring either member accepts
+        // the other).
+        foreach (var declared in normalizedDeclared.Keys.ToArray())
+        {
+            foreach (var alias in ToolArgumentHelper.NormalizedAliasesFor(declared))
+                normalizedDeclared.TryAdd(alias, normalizedDeclared[declared]);
+        }
 
         return new RecognizedKeys(exact, normalizedDeclared, [.. meta], [.. names]);
     }

@@ -21,6 +21,18 @@ public interface IToolExecutor
     Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default);
 
     /// <summary>
+    /// Pre-dispatch argument validation shared by every caller (main session
+    /// pipeline AND sub-agent loop AND any direct caller): provider args-parse
+    /// failure, present-but-invalid meta values, and unrecognized argument keys.
+    /// Returns null when the call may proceed, otherwise a model-facing
+    /// rejection. Centralizing here is what keeps the no-silent-discard
+    /// invariant from holding only on the pipeline path. The default returns
+    /// null so test fakes need not implement it; <see cref="DispatchingToolExecutor"/>
+    /// provides the real check.
+    /// </summary>
+    ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall) => null;
+
+    /// <summary>
     /// Execute a tool call as a stream of <see cref="ToolCallUpdate"/> items. The
     /// default implementation runs <see cref="ExecuteAsync"/> and yields its
     /// result as a single terminal completion item; <see cref="DispatchingToolExecutor"/>
@@ -34,6 +46,13 @@ public interface IToolExecutor
         yield return new ToolCompletedUpdate(await ExecuteAsync(toolCall, context, ct));
     }
 }
+
+/// <summary>
+/// A pre-dispatch tool-argument rejection: the model-facing message and a
+/// stable audit reason. Carries the reason so callers audit the denial
+/// accurately instead of misreporting a rejected call as executed.
+/// </summary>
+public sealed record ToolArgumentRejection(string Message, string DenyReason);
 
 /// <summary>
 /// Audit entry for tool invocations. Logged regardless of allow/deny.

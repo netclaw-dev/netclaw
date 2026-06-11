@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text.Json;
 using Netclaw.Tools;
 using Xunit;
@@ -81,6 +82,23 @@ public class ToolArgumentHelperStrictTests
     public void IntStrict_json_number_parses()
     {
         Assert.Equal(300, ToolArgumentHelper.GetIntStrict(Args("Limit", Json("300")), "Limit"));
+    }
+
+    [Fact]
+    public void IntStrict_json_integral_with_decimal_point_accepted()
+    {
+        // Models commonly emit whole numbers as 300.0 — JsonElement.TryGetInt32
+        // rejects that text, so it must fall through to the integral-double
+        // check rather than being rejected as invalid.
+        Assert.Equal(300, ToolArgumentHelper.GetIntStrict(Args("Limit", Json("300.0")), "Limit"));
+        Assert.Equal(12, ToolArgumentHelper.GetIntStrict(Args("Limit", Json("12.0")), "Limit"));
+    }
+
+    [Fact]
+    public void IntStrict_json_fractional_still_rejected()
+    {
+        Assert.Throws<ArgumentException>(
+            () => ToolArgumentHelper.GetIntStrict(Args("Limit", Json("12.5")), "Limit"));
     }
 
     [Fact]
@@ -188,5 +206,25 @@ public class ToolArgumentHelperStrictTests
         var ex = Assert.Throws<ArgumentException>(
             () => ToolArgumentHelper.GetIntStrict(Args("Limit", huge), "Limit"));
         Assert.True(ex.Message.Length < 300);
+    }
+
+    [Fact]
+    public void Strict_string_parsing_is_culture_invariant()
+    {
+        // The daemon does not run with InvariantGlobalization, so a comma-decimal
+        // host locale must not change how a string-typed numeric argument parses.
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = new CultureInfo("de-DE");
+            Assert.Equal(1.5, ToolArgumentHelper.GetDoubleStrict(Args("Scale", "1.5"), "Scale"));
+            Assert.Equal(1500, ToolArgumentHelper.GetIntStrict(Args("Limit", "1500"), "Limit"));
+            // de-DE would read "1.5" as 15 via a group separator if culture leaked in.
+            Assert.NotEqual(15.0, ToolArgumentHelper.GetDoubleStrict(Args("Scale", "1.5"), "Scale"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 }

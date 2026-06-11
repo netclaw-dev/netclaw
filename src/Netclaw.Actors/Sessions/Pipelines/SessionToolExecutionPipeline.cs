@@ -207,56 +207,31 @@ internal static class SessionToolExecutionPipeline
         TurnContext? turnContext = null,
         ModelInputBatchBudget? modelInputBudget = null)
     {
-        // Provider-boundary args parse failure: the model emitted arguments
-        // that did not deserialize, and the provider carried the failure with
-        // the call instead of dispatching null args. Reject before extraction
-        // so the model learns its emission was broken and can re-issue
-        // (tool-arg-validation spec). Deterministic on persistence re-drive.
-        if (tc.Arguments is not null
-            && tc.Arguments.TryGetValue(ToolCallArgumentErrors.ArgsParseErrorKey, out var argsParseFailure))
+        // Pre-dispatch validation, on the ORIGINAL (pre-extraction) arguments:
+        // provider args-parse sentinel, present-but-invalid meta values, and
+        // unrecognized argument keys. Shared with the executor (and thus the
+        // sub-agent path) via IToolExecutor.ValidateToolCall so the rules live
+        // in one place. Rejecting here — rather than letting the executor return
+        // the rejection string from ExecuteAsync — is what lets the denial be
+        // audited as Allowed=false instead of being misreported as executed.
+        if (executor.ValidateToolCall(tc) is { } rejection)
         {
-            var parseError =
-                $"Error: Tool call arguments were not valid JSON: {argsParseFailure} The tool was NOT executed.";
-
             auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, TimeSpan.Zero, meta: null) with
             {
                 Allowed = false,
-                DenyReason = "args_parse_error"
+                DenyReason = rejection.DenyReason
             });
 
             return new ToolCallResult(new SerializableChatMessage
             {
                 Role = Protocol.ChatRole.Tool,
-                Content = parseError,
+                Content = rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             }, [], [], [], []);
         }
 
         var (meta, cleanedTc) = ToolCallMetaExtractor.Extract(tc);
-
-        // Present-but-invalid meta values reject before dispatch: the agent
-        // expressed execution semantics we cannot honor, so we do not run the
-        // call on defaults instead. Validated on the ORIGINAL arguments —
-        // ExtractFrom yields null for an invalid value, which would otherwise
-        // silently drop the expressed intent (tool-call-metadata spec).
-        if (ToolCallMetaExtractor.ValidateMetaValues(tc.Arguments) is { } metaError)
-        {
-            auditLogger?.Log(BuildAuditEntry(sessionId, tc, timeProvider, TimeSpan.Zero, meta) with
-            {
-                Allowed = false,
-                DenyReason = "invalid_meta_value"
-            });
-
-            return new ToolCallResult(new SerializableChatMessage
-            {
-                Role = Protocol.ChatRole.Tool,
-                Content = metaError,
-                ToolCallId = new ToolCallId(tc.CallId),
-                Name = tc.Name
-            }, [], [], [], []);
-        }
-
         tc = cleanedTc;
 
         string? timeoutNotice = null;
@@ -428,7 +403,11 @@ internal static class SessionToolExecutionPipeline
                         tc, sessionId, source, auditLogger, timeProvider,
                         turnContext,
                         meta, backgroundJobManager,
-                        meta.TimeoutHintSeconds ?? shellTimeoutSeconds,
+                        // Clamp to the same ceiling as the synchronous path —
+                        // background execution must not become a way to exceed
+                        // MaxToolTimeoutSeconds (its value is non-blocking
+                        // execution, not an unbounded timeout).
+                        Math.Min(meta.TimeoutHintSeconds ?? shellTimeoutSeconds, maxToolTimeoutSeconds),
                         sw.Elapsed, logger,
                         context.AppliedApprovalDecision,
                         context.AppliedApprovalPattern);
@@ -528,7 +507,11 @@ internal static class SessionToolExecutionPipeline
                         tc, sessionId, source, auditLogger, timeProvider,
                         turnContext,
                         meta, backgroundJobManager,
-                        meta.TimeoutHintSeconds ?? shellTimeoutSeconds,
+                        // Clamp to the same ceiling as the synchronous path —
+                        // background execution must not become a way to exceed
+                        // MaxToolTimeoutSeconds (its value is non-blocking
+                        // execution, not an unbounded timeout).
+                        Math.Min(meta.TimeoutHintSeconds ?? shellTimeoutSeconds, maxToolTimeoutSeconds),
                         sw.Elapsed, logger,
                         decision.ToString(),
                         string.Join(", ", ctx.Patterns));

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers;
 using System.ComponentModel;
 using System.Net;
 using System.Text;
@@ -231,14 +232,35 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
     private static async Task<(byte[] Bytes, bool Truncated)> ReadBytesWithLimitAsync(HttpResponseMessage response, CancellationToken ct)
     {
         var stream = await response.Content.ReadAsStreamAsync(ct);
-        using var limited = new BinaryReader(stream);
-        // Read one byte past the cap so "exactly at the cap" and "truncated"
-        // are distinguishable — the truncation must be surfaced, not inferred
-        // from a suspicious byte count (netclaw-tools spec).
-        var bytes = limited.ReadBytes(MaxResponseBytes + 1);
-        return bytes.Length > MaxResponseBytes
-            ? (bytes[..MaxResponseBytes], true)
-            : (bytes, false);
+
+        // Stream into a buffer that grows to the actual content size, capped at
+        // MaxResponseBytes. Avoids eagerly allocating the full cap for every
+        // small fetch (the old BinaryReader.ReadBytes(cap) cost) and the 5 MB
+        // slice-copy a truncated response used to pay. Truncation is detected by
+        // reading one extra byte past the cap, so it is surfaced, not inferred.
+        using var buffer = new MemoryStream();
+        var chunk = ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            int read;
+            while ((read = await stream.ReadAsync(chunk, ct)) > 0)
+            {
+                var remaining = MaxResponseBytes - (int)buffer.Length;
+                if (read >= remaining)
+                {
+                    buffer.Write(chunk, 0, remaining);
+                    return (buffer.ToArray(), Truncated: true);
+                }
+
+                buffer.Write(chunk, 0, read);
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(chunk);
+        }
+
+        return (buffer.ToArray(), Truncated: false);
     }
 
     private string BuildFilePath(Uri uri, string directory, string extension)

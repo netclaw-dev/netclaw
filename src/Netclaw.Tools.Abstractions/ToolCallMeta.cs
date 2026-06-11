@@ -79,36 +79,26 @@ public sealed record ToolCallMeta
 
         if (arguments.TryGetValue("_timeout_seconds", out var tVal) && tVal is not null)
         {
-            timeoutSeconds = tVal switch
+            // Shares ToolArgumentHelper.TryCoerceInt with ValidateMetaValues so
+            // acceptance here and rejection there cannot drift. A positive int
+            // is a valid hint; anything else (including 0/negative) is left null
+            // and validation rejects it loudly before dispatch.
+            if (ToolArgumentHelper.TryCoerceInt(tVal, out var parsedTimeout) && parsedTimeout > 0)
             {
-                int i when i > 0 => i,
-                long l and > 0 and <= int.MaxValue => (int)l,
-                // Non-integral numerics are not valid timeouts — no silent
-                // truncation; TryGetInt32 also keeps non-integral/overflow JSON
-                // numbers from throwing out of extraction.
-                double d when d > 0 && double.IsInteger(d) && d <= int.MaxValue => (int)d,
-                JsonElement { ValueKind: JsonValueKind.Number } je when je.TryGetInt32(out var parsed) && parsed > 0 => parsed,
-                string s when int.TryParse(s, out var parsed) && parsed > 0 => parsed,
-                JsonElement { ValueKind: JsonValueKind.String } je when int.TryParse(je.GetString(), out var parsed) && parsed > 0 => parsed,
-                _ => null
-            };
-            if (timeoutSeconds.HasValue)
+                timeoutSeconds = parsedTimeout;
                 hasAnyMeta = true;
+            }
         }
 
         if (arguments.TryGetValue("_background", out var bVal) && bVal is not null)
         {
-            background = bVal switch
+            // Shares ToolArgumentHelper.TryCoerceBool with ValidateMetaValues.
+            if (ToolArgumentHelper.TryCoerceBool(bVal, out var parsedBackground))
             {
-                bool b => b,
-                JsonElement { ValueKind: JsonValueKind.True } => true,
-                JsonElement { ValueKind: JsonValueKind.False } => false,
-                string s when bool.TryParse(s, out var parsed) => parsed,
-                JsonElement { ValueKind: JsonValueKind.String } je when bool.TryParse(je.GetString(), out var parsed) => parsed,
-                _ => false
-            };
-            if (background)
-                hasAnyMeta = true;
+                background = parsedBackground;
+                if (background)
+                    hasAnyMeta = true;
+            }
         }
 
         if (!hasAnyMeta)
