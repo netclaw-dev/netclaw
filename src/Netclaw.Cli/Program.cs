@@ -90,7 +90,7 @@ static async Task RunAsync(string[] args)
     {
         var backgroundUpdateConfig = BuildCliConfig();
         var backgroundDaemonConfig = DaemonConfig.BindFromConfiguration(backgroundUpdateConfig.GetSection("Daemon"));
-        _ = UpdateCommand.BackgroundUpdateCheckAsync(backgroundDaemonConfig.DisableSelfUpdate);
+        _ = UpdateCommand.BackgroundUpdateCheckAsync(backgroundDaemonConfig.DisableSelfUpdate, backgroundDaemonConfig.UpdateChannel);
     }
 
     // ── Lightweight modes (no Akka, no persistence) ──
@@ -190,6 +190,7 @@ static async Task RunAsync(string[] args)
 
             builder.Services.AddTermina("/init", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<InitWizardPage, InitWizardViewModel>("/init");
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
@@ -422,6 +423,7 @@ static async Task RunAsync(string[] args)
             builder.Services.AddSingleton(new StatsNavigationState { Days = statsDays ?? 7 });
             builder.Services.AddTermina("/stats", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<StatsPage, StatsViewModel>("/stats");
             });
 
@@ -633,7 +635,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/mcp-tools", t =>
-                t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>("/mcp-tools");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -691,7 +696,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/provider", t =>
-                t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>("/provider");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -720,7 +728,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/model", t =>
-                t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ModelManagerPage, ModelManagerViewModel>("/model");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -749,7 +760,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/approvals", t =>
-                t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>("/approvals");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -773,7 +787,10 @@ static async Task RunAsync(string[] args)
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
 
             builder.Services.AddTermina("/reminder", t =>
-                t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder"));
+            {
+                ConfigureNativeSelection(t);
+                t.RegisterRoute<ReminderCreatePage, ReminderCreateViewModel>("/reminder");
+            });
 
             await RunTerminaHostAsync(builder.Build());
             return;
@@ -852,7 +869,7 @@ static async Task RunAsync(string[] args)
         using var host = builder.Build();
         var paths = host.Services.GetRequiredService<NetclawPaths>();
         var daemonConfig = host.Services.GetRequiredService<DaemonConfig>();
-        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths, daemonConfig.DisableSelfUpdate);
+        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths, daemonConfig.DisableSelfUpdate, daemonConfig.UpdateChannel);
         return;
     }
 
@@ -984,6 +1001,7 @@ static async Task RunAsync(string[] args)
         case "chat":
             webBuilder.Services.AddTermina("/chat", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
             break;
@@ -991,6 +1009,7 @@ static async Task RunAsync(string[] args)
         case "sessions":
             webBuilder.Services.AddTermina("/sessions", termina =>
             {
+                ConfigureNativeSelection(termina);
                 termina.RegisterRoute<SessionsPage, SessionsViewModel>("/sessions");
                 termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
@@ -1018,6 +1037,16 @@ static async Task RunAsync(string[] args)
     await RunTerminaHostAsync(app);
 }
 
+static void ConfigureNativeSelection(TerminaBuilder termina)
+{
+    termina.ConfigureRuntime(options =>
+    {
+        options.PreferRawInput = true;
+        options.ScrollInputMode = ScrollInputMode.AlternateScroll;
+        options.CtrlCHandlingMode = CtrlCHandlingMode.DoublePressWhenRawInput;
+    });
+}
+
 static void WriteCrashLog(Exception ex)
 {
     CrashLogWriter.Write(ex, "CLI");
@@ -1027,20 +1056,29 @@ static void WriteCrashLog(Exception ex)
 // AddTermina, which also registers TerminaApplication) drives an interactive
 // terminal: spawned by shell_execute or fed piped stdin it would render but
 // never receive a quit key — an un-killable subprocess. Fail fast in that case.
-// Non-Termina hosts (headless mode) carry no TerminaApplication and run unguarded.
+// Daemon connectivity failures are handled here because the chat route can
+// resolve daemon-backed services while TerminaApplication is being constructed.
 static async Task RunTerminaHostAsync(IHost host)
 {
-    if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+    try
     {
-        Console.Error.WriteLine(
-            "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
-        Console.Error.WriteLine(
-            "Non-interactive alternatives: 'netclaw sessions --once [--json]' or 'netclaw chat -p \"...\"'.");
-        Environment.ExitCode = 1;
-        return;
-    }
+        if (host.Services.GetService<TerminaApplication>() is not null && Console.IsInputRedirected)
+        {
+            Console.Error.WriteLine(
+                "netclaw: this command is an interactive terminal UI and needs a TTY (stdin is redirected).");
+            Console.Error.WriteLine(
+                "Non-interactive alternatives: 'netclaw sessions --once [--json]' or 'netclaw chat -p \"...\"'.");
+            Environment.ExitCode = 1;
+            return;
+        }
 
-    await host.RunAsync();
+        await host.RunAsync();
+    }
+    catch (DaemonUnavailableException ex)
+    {
+        Console.Error.WriteLine($"netclaw: {ex.Message}");
+        Environment.ExitCode = 1;
+    }
 }
 
 static void WriteDaemonResult(DaemonResult result)
@@ -1317,7 +1355,9 @@ static async Task<int> RunStatusAsync(IServiceProvider services, bool jsonOutput
     // Start CLI update check concurrently with daemon status fetch (3s timeout, non-blocking).
     using var updateCts = new CancellationTokenSource();
     var updateClient = httpClientFactory.CreateClient();
-    var updateTask = StatusUpdateChecker.CheckAsync(updateClient, BuildInfo.Version, updateCts.Token);
+    var updateChannel = services.GetRequiredService<DaemonConfig>().UpdateChannel;
+    var updateTask = StatusUpdateChecker.CheckAsync(
+        updateClient, BuildInfo.FullVersion, updateCts.Token, channel: updateChannel);
 
     try
     {
@@ -1775,6 +1815,9 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     services.AddHttpClient();
     services.AddSingleton<DaemonApi>();
 
+    // Whether an external supervisor (e.g. the Docker entrypoint) owns the daemon lifecycle.
+    services.AddSingleton<IContainerSupervisor, ContainerSupervisor>();
+
     return paths;
 }
 
@@ -1832,15 +1875,14 @@ static ModelCapabilities BuildModelCapabilities(IConfiguration configuration, Da
         };
     }
 
-    var contextWindow = ContextWindowResolution.ResolveAsync(
-        models.Main.ContextWindow,
-        daemonApi,
-        models.Main.ModelId).GetAwaiter().GetResult();
+    var runtime = ContextWindowResolution.ResolveRuntimeAsync(
+        models.Main,
+        daemonApi).GetAwaiter().GetResult();
 
     return new ModelCapabilities
     {
-        ModelId = models.Main.ModelId,
-        ContextWindowTokens = contextWindow,
+        ModelId = runtime.ModelId,
+        ContextWindowTokens = runtime.ContextWindowTokens,
         CompactionModelId = models.Compaction?.ModelId,
     };
 }

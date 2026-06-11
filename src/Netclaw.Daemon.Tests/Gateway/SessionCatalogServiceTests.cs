@@ -157,6 +157,48 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     [Fact]
+    public void ListRecent_AppliesLimitAndOffset()
+    {
+        var paths = CreatePaths();
+
+        using (var conn = OpenConn(paths))
+        {
+            RunSql(conn,
+                """
+                CREATE TABLE sessions (
+                    persistence_id    TEXT NOT NULL PRIMARY KEY,
+                    channel           TEXT NOT NULL,
+                    created_at        INTEGER NOT NULL,
+                    last_activity     INTEGER NOT NULL,
+                    status            TEXT NOT NULL DEFAULT 'active',
+                    turn_count        INTEGER NOT NULL DEFAULT 0,
+                    title             TEXT,
+                    description       TEXT,
+                    last_input_tokens INTEGER,
+                    log_path          TEXT,
+                    metadata          TEXT
+                )
+                """);
+
+            for (var i = 1; i <= 5; i++)
+            {
+                RunSql(conn,
+                    $"""
+                    INSERT INTO sessions (persistence_id, channel, created_at, last_activity, status, turn_count)
+                    VALUES ('session-{i}', 'signalr', {i}, {i * 100}, 'inactive', {i})
+                    """);
+            }
+        }
+
+        var service = CreateService(paths);
+        var entries = service.ListRecent(limit: 2, offset: 1);
+
+        Assert.Collection(entries,
+            first => Assert.Equal("session-4", first.PersistenceId),
+            second => Assert.Equal("session-3", second.PersistenceId));
+    }
+
+    [Fact]
     public void LegacyMigration_PreservesSlackChannelInference()
     {
         var paths = CreatePaths();

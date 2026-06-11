@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using System.Text;
+using Netclaw.Actors.Channels;
+using Netclaw.Channels;
 using Netclaw.Tools;
 using SlackNet.WebApi;
 
@@ -12,14 +14,25 @@ namespace Netclaw.Channels.Slack.Tools;
 
 /// <summary>
 /// LLM tool that looks up Slack users by name, display name, or email.
-/// Returns user IDs suitable for use with <see cref="SendSlackMessageTool"/>.
+/// Returns user IDs suitable for use with the generic send_channel_message tool.
 /// </summary>
 [NetclawTool("lookup_slack_user",
     "Look up a Slack user by name, display name, or email. " +
-    "Returns their user ID for use with send_slack_message.",
+    "Returns their user ID for use with send_channel_message.",
     Grant = "builtin")]
-public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserTool.Params>, IChannelTool
+public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserTool.Params>, IChannelAddressResolver
 {
+    private static readonly IReadOnlySet<ChannelAddressKind> UserAddressKinds = new HashSet<ChannelAddressKind>
+    {
+        ChannelAddressKind.User
+    };
+
+    private static readonly IReadOnlySet<ChannelAddressKind> UserAndDirectMessageAddressKinds = new HashSet<ChannelAddressKind>
+    {
+        ChannelAddressKind.User,
+        ChannelAddressKind.DirectMessage
+    };
+
     private readonly IUsersApi _usersApi;
     private readonly SlackChannelOptions _options;
     private readonly TimeProvider _timeProvider;
@@ -33,6 +46,12 @@ public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserToo
     public record Params(
         [property: Description("Name, display name, or email to search for")]
         string Query);
+
+    public ChannelDescriptorKey Key { get; } = ChannelDescriptorKey.FromChannelType(ChannelType.Slack);
+
+    public IReadOnlySet<ChannelAddressKind> AddressKinds => _options.AllowDirectMessages
+        ? UserAndDirectMessageAddressKinds
+        : UserAddressKinds;
 
     public LookupSlackUserTool(IUsersApi usersApi, SlackChannelOptions options, TimeProvider timeProvider)
     {
@@ -70,12 +89,85 @@ public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserToo
         return sb.ToString().TrimEnd();
     }
 
+    public async ValueTask<ChannelAddressResolutionResult> ResolveAsync(
+        ChannelAddressResolutionRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (!request.ChannelKey.Equals(Key))
+            return ChannelAddressResolutionResult.Unsupported($"Slack user resolver cannot resolve channel key '{request.ChannelKey}'.");
+
+        if (request.AddressKind != ChannelAddressKind.User && request.AddressKind != ChannelAddressKind.DirectMessage)
+            return ChannelAddressResolutionResult.Unsupported($"Slack user resolver does not support address kind '{request.AddressKind}'.");
+
+        if (request.AddressKind == ChannelAddressKind.DirectMessage && !_options.AllowDirectMessages)
+            return ChannelAddressResolutionResult.Unsupported("Slack direct-message resolution is disabled in configuration.");
+
+        var query = NormalizeUserQuery(request.Query);
+        if (IsSlackUserId(query))
+        {
+            var userId = new SlackUserId(query);
+            return SlackAclPolicy.IsAllowedUser(userId, _options)
+                ? ChannelAddressResolutionResult.Resolved(new ResolvedChannelAddress(Key, request.AddressKind, query, query))
+                : ChannelAddressResolutionResult.NotFound($"Slack user '{query}' is not in the allowed users list.");
+        }
+
+        var users = await GetUsersAsync(cancellationToken);
+        var matches = users
+            .Where(user => MatchesQuery(user, query))
+            .Select(user => ToResolvedAddress(request.AddressKind, user))
+            .Take(10)
+            .ToArray();
+
+        if (matches.Length == 0)
+            return ChannelAddressResolutionResult.NotFound($"No Slack user matched '{query}'.");
+
+        if (matches.Length == 1)
+            return ChannelAddressResolutionResult.Resolved(matches[0]);
+
+        return ChannelAddressResolutionResult.Ambiguous(
+            matches,
+            $"Slack user query '{query}' matched {matches.Length} users.");
+    }
+
     private static bool MatchesQuery(CachedUser user, string query)
     {
         return user.RealName.Contains(query, StringComparison.OrdinalIgnoreCase)
             || user.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase)
             || user.Name.Contains(query, StringComparison.OrdinalIgnoreCase)
             || user.Email.Contains(query, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private ResolvedChannelAddress ToResolvedAddress(ChannelAddressKind addressKind, CachedUser user)
+    {
+        var displayName = GetDisplayName(user);
+        return new ResolvedChannelAddress(Key, addressKind, user.Id, displayName);
+    }
+
+    private static string GetDisplayName(CachedUser user)
+    {
+        if (!string.IsNullOrWhiteSpace(user.RealName))
+            return user.RealName;
+
+        if (!string.IsNullOrWhiteSpace(user.DisplayName))
+            return user.DisplayName;
+
+        if (!string.IsNullOrWhiteSpace(user.Name))
+            return user.Name;
+
+        return user.Id;
+    }
+
+    private static string NormalizeUserQuery(string query)
+    {
+        var normalized = query.Trim();
+        return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
+    }
+
+    private static bool IsSlackUserId(string value)
+    {
+        return value.StartsWith("U", StringComparison.Ordinal);
     }
 
     private async Task<List<CachedUser>> GetUsersAsync(CancellationToken ct)

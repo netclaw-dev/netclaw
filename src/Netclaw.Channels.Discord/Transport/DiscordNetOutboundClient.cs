@@ -75,6 +75,32 @@ internal sealed class DiscordNetOutboundClient : IDiscordOutboundClient
             ThreadOrMessageId: new DiscordThreadOrMessageId(threadIdStr));
     }
 
+    public async Task<DiscordNewDirectMessage> PostDirectMessageAsync(
+        DiscordUserId userId,
+        string text,
+        CancellationToken ct = default)
+    {
+        var userSnowflake = ParseSnowflake(userId.Value, "user ID");
+        var requestOptions = new RequestOptions { CancelToken = ct };
+        IUser? user = _client.GetUser(userSnowflake);
+        user ??= await _client.Rest.GetUserAsync(userSnowflake, requestOptions);
+
+        if (user is null)
+            throw new InvalidOperationException($"Discord user {userId.Value} not found.");
+
+        var dmChannel = await user.CreateDMChannelAsync(requestOptions);
+        var rootMessage = await dmChannel.SendMessageAsync(text: text, options: requestOptions);
+        var dmChannelId = dmChannel.Id.ToString();
+        var rootMessageId = rootMessage.Id.ToString();
+
+        return new DiscordNewDirectMessage(
+            ChannelId: new DiscordChannelId(dmChannelId),
+            ReplyChannelId: new DiscordReplyChannelId(dmChannelId),
+            ThreadOrMessageId: new DiscordThreadOrMessageId(rootMessageId),
+            RootMessageId: new DiscordMessageId(rootMessageId),
+            UserId: userId);
+    }
+
     private async Task<global::Discord.IChannel> ResolveChannelAsync(ulong channelSnowflake, string channelIdForError)
     {
         // Socket cache misses fall back to the REST API, mirroring

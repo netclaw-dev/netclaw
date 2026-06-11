@@ -56,22 +56,28 @@ Backspace 32
 Type "http://localhost:11434"
 Enter
 
-# ─── Step 3: Probe + ready-to-save ───────────────────────────────────
+# ─── Step 3: Probe + persisted provider confirmation ─────────────────
 # Probe is async; with qwen2:0.5b + all-minilm baked into native
-# ollama, this resolves in seconds. Wait directly on the "ready to
-# save" success line (skips the transient "Validating..." frame).
-Wait+Screen@45s /ready to save/
+# ollama, this resolves in seconds. The provider is persisted before
+# the success screen renders, so wait directly on the persisted-provider
+# confirmation (skips the transient "Validating..." frame).
+Wait+Screen@45s /Provider 'smoke-add-ollama' added/
 Sleep 300ms
 Enter
 
 # ─── Back at provider list ───────────────────────────────────────────
-# StatusMessage on the list view: "Added provider 'smoke-add-ollama'.
-# Restart daemon for changes to take effect."
-Wait+Screen@10s /Added provider 'smoke-add-ollama'/
+# The persisted provider row is the durable post-add proof. Avoid anchoring
+# on the status footer: fill-height list changes can legitimately move or
+# truncate footer text on small/OS-specific VHS viewports.
+Wait+Screen@10s /smoke-add-ollama/
 Sleep 300ms
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
+
+# VHS's screen scraper needs a beat to pick up the restored main buffer
+# after the TUI tears down the alternate screen (CSI ?1049l).
+Sleep 1s
 Wait+Screen@10s /TAPE\$/
 
 Type "echo PROVIDER_ADD_EXIT=$?"

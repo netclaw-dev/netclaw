@@ -45,17 +45,13 @@ public sealed class SessionsPage : ReactivePage<SessionsViewModel>
                     }
                     else
                     {
-                        for (var i = 0; i < ViewModel.Sessions.Count; i++)
-                        {
-                            var session = ViewModel.Sessions[i];
-                            var isSelected = i == selectedIndex;
-                            var line = FormatSessionLine(session);
-
-                            content.WithChild(
-                                new TextNode(isSelected ? $"> {line}" : $"  {line}")
-                                    .WithForeground(isSelected ? Color.Cyan : Color.White)
-                                    .Height(1));
-                        }
+                        var items = ViewModel.Sessions.Select(FormatSessionLine).ToList();
+                        content.WithChild(
+                            Layouts.SelectionList(items)
+                                .WithMode(SelectionMode.Single)
+                                .WithHighlightColors(Color.Black, Color.Cyan)
+                                .WithHighlightedIndex(selectedIndex)
+                                .WithFillHeight());
                     }
 
                     return (ILayoutNode)Layouts.Vertical()

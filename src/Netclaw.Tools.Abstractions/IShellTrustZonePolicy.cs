@@ -6,16 +6,19 @@
 namespace Netclaw.Tools;
 
 /// <summary>
-/// Provides trust zone roots for shell command path validation.
-/// Non-interactive channels (reminders, webhooks) use this to sandbox
-/// shell commands to allowed filesystem paths.
+/// Authorizes shell command path arguments for non-interactive channels
+/// (reminders, webhooks, headless). Delegates to the same audience-scoped
+/// write-access resolution that file tools use, so shell and <c>file_write</c>
+/// share one interpretation of the audience's filesystem mode
+/// (<c>All</c> ⇒ unrestricted, <c>Roots</c> ⇒ confined, <c>None</c> ⇒ denied).
 /// </summary>
 public interface IShellTrustZonePolicy
 {
     /// <summary>
-    /// Returns the set of allowed filesystem root directories for the given
-    /// execution context. Shell commands with path arguments outside these
-    /// roots are denied for non-interactive channels.
+    /// Returns <c>true</c> when the given already-resolved absolute path is
+    /// authorized for write under the context's audience. A shell command whose
+    /// path argument or working directory is not authorized is denied for
+    /// non-interactive channels.
     /// </summary>
-    IReadOnlyList<string> GetTrustZoneRoots(ToolExecutionContext context);
+    bool IsShellWritePathAuthorized(string fullPath, ToolExecutionContext context);
 }

@@ -157,6 +157,9 @@ internal static class ProviderCommand
 
         var supportedAuth = descriptor.Auth.SupportedAuthMethods;
 
+        if (ShouldDefaultToOAuthDevice(type, apiKey, requestedAuthMethod, supportedAuth))
+            return await RunOAuthDeviceFlowAsync(name, type, endpoint, descriptor, paths, writer);
+
         // Handle --auth oauth-device explicitly
         if (requestedAuthMethod == AuthMethod.OAuthDevice)
         {
@@ -232,6 +235,16 @@ internal static class ProviderCommand
         writer.WriteLine();
         return 0;
     }
+
+    internal static bool ShouldDefaultToOAuthDevice(
+        string providerType,
+        string? apiKey,
+        AuthMethod? requestedAuthMethod,
+        IReadOnlyList<AuthMethod> supportedAuth)
+        => requestedAuthMethod is null
+           && string.IsNullOrWhiteSpace(apiKey)
+           && string.Equals(providerType, "openai", StringComparison.OrdinalIgnoreCase)
+           && supportedAuth.Contains(AuthMethod.OAuthDevice);
 
     private static async Task<int> RunOAuthDeviceFlowAsync(
         string name, string type, string? endpoint,
@@ -407,6 +420,12 @@ internal static class ProviderCommand
                 {
                     var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, refreshToken.GetString());
                     entry.OAuthRefreshToken = new SensitiveString(decrypted);
+                }
+
+                if (prop.Value.TryGetProperty("OAuthAccountId", out var accountId))
+                {
+                    var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, accountId.GetString());
+                    entry.OAuthAccountId = new SensitiveString(decrypted);
                 }
 
                 if (prop.Value.TryGetProperty("OAuthTokenExpiry", out var tokenExpiry))

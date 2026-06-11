@@ -5,7 +5,11 @@
 #   .\install.ps1 -Component cli
 #   .\install.ps1 -Component daemon
 #   .\install.ps1 -InstallDir C:\tools\netclaw
+#   .\install.ps1 -Channel beta      # Opt into prereleases
 #   .\install.ps1 -DryRun
+#
+# -Channel beta installs the newest prerelease (or latest stable if no prerelease
+# exists). -Version pins an exact version and overrides -Channel (e.g. 0.19.0-beta.1).
 
 param(
     [ValidateSet("all", "cli", "daemon")]
@@ -14,6 +18,10 @@ param(
     [string]$InstallDir = "",
 
     [string]$Version = "",
+
+    # Release channel: "stable" (default) or "beta" (opt into prereleases).
+    [ValidateSet("stable", "beta")]
+    [string]$Channel = "stable",
 
     # Resolve and report what would be installed, but install nothing.
     [switch]$DryRun
@@ -89,6 +97,7 @@ if (-not $InstallDir) {
 Write-Host "Netclaw installer"
 Write-Host "  Platform: win-x64"
 Write-Host "  Install dir: $InstallDir"
+Write-Host "  Channel: $Channel"
 if ($DryRun) {
     Write-Host "  Mode: dry run (no changes will be made)"
 }
@@ -103,9 +112,18 @@ try {
     exit 1
 }
 
-# Determine version
+# Determine version. Precedence: explicit pin > channel selection > stable latest.
 if ($Version) {
     $targetVersion = $Version
+} elseif ($Channel -eq "beta") {
+    # Beta channel resolves to latestPrerelease (the newest of {stable, prerelease}).
+    $targetVersion = $manifest.latestPrerelease
+    if (-not $targetVersion) {
+        # Manifest predates the prerelease channel — use latest stable and say so
+        # loudly. This is the newest known version, not a silent default.
+        Write-Host "  Note: manifest has no prerelease channel; using latest stable."
+        $targetVersion = $manifest.latest
+    }
 } else {
     $targetVersion = $manifest.latest
 }
@@ -204,17 +222,55 @@ try {
         return
     }
 
-    # Check PATH
+    # ── Persist UpdateChannel into config ──
+    # Only runs when -Channel was explicitly passed. Without this guard a plain
+    # upgrade would silently overwrite an existing beta channel to stable.
+    if ($PSBoundParameters.ContainsKey('Channel')) {
+        $configDir = if ($env:NETCLAW_CONFIG_DIR) { $env:NETCLAW_CONFIG_DIR } else { Join-Path $env:USERPROFILE ".netclaw\config" }
+        $configFile = Join-Path $configDir "netclaw.json"
+        if (Test-Path $configFile) {
+            try {
+                $existingConfig = Get-Content -Raw $configFile | ConvertFrom-Json
+                if (-not $existingConfig.Daemon) {
+                    $existingConfig | Add-Member -NotePropertyName "Daemon" -NotePropertyValue ([PSCustomObject]@{ UpdateChannel = $Channel })
+                } else {
+                    if ($existingConfig.Daemon.PSObject.Properties["UpdateChannel"]) {
+                        $existingConfig.Daemon.UpdateChannel = $Channel
+                    } else {
+                        $existingConfig.Daemon | Add-Member -NotePropertyName "UpdateChannel" -NotePropertyValue $Channel
+                    }
+                }
+                $existingConfig | ConvertTo-Json -Depth 10 | Set-Content -Path $configFile -Encoding UTF8
+                Write-Host "  Set Daemon.UpdateChannel to '$Channel' in $configFile"
+            } catch {
+                Write-Host "  Note: could not update Daemon.UpdateChannel in config: $_"
+                Write-Host "  To receive $Channel updates, set Daemon.UpdateChannel to '$Channel' in $configFile"
+            }
+        } elseif ($Channel -ne "stable") {
+            # Fresh install: config doesn't exist yet. Write a minimal seed so
+            # `netclaw init` can discover the channel preference.
+            New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+            $seed = @{ configVersion = 1; Daemon = @{ UpdateChannel = $Channel } }
+            $seed | ConvertTo-Json -Depth 5 | Set-Content -Path $configFile -Encoding UTF8
+            Write-Host "  Created $configFile with UpdateChannel '$Channel'"
+        }
+    }
+
+    # Check PATH and offer to add if missing
     Write-Host ""
-    $currentPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-    if ($currentPath -split ";" | Where-Object { $_ -eq $InstallDir }) {
+    $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    $pathEntries = $userPath -split ';' | ForEach-Object { $_.TrimEnd('\') }
+    $installDirNormalized = $InstallDir.TrimEnd('\')
+
+    if ($pathEntries -contains $installDirNormalized) {
         Write-Host "Installation complete! netclaw is already on your PATH."
     } else {
         Write-Host "Installation complete!"
         Write-Host ""
-        Write-Host "Add Netclaw to your PATH:"
+        Write-Host "Add Netclaw to your PATH by running:"
         Write-Host ""
-        Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `"$InstallDir;`$env:PATH`", 'User')"
+        Write-Host "  `$userPath = [Environment]::GetEnvironmentVariable('PATH', 'User')"
+        Write-Host "  [Environment]::SetEnvironmentVariable('PATH', `"$InstallDir;`$userPath`", 'User')"
         Write-Host ""
         Write-Host "Then restart your terminal."
     }

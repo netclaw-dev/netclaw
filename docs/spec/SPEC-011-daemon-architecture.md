@@ -392,13 +392,15 @@ Recommended production deployment:
 ```bash
 docker run -d \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v ~/.netclaw:/root/.netclaw \
+  -v ~/.netclaw:/home/netclaw/.netclaw \
   -p 127.0.0.1:5199:5199 \
   netclaw-daemon
 ```
 
 - Docker socket mount enables host container management
-- Config volume persists across container restarts
+- Config volume persists across container restarts. The image entrypoint repairs
+  writable bind-mount ownership to the dedicated `netclaw` runtime UID before
+  starting the daemon.
 - Port binding on loopback only (SEC-005 default)
 - Container includes Docker CLI, git, and other management tools
 - Only the daemon runs in Docker — the CLI runs on the host and connects

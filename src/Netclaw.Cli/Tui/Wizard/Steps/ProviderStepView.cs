@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
@@ -23,9 +24,6 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ProviderStepView : IWizardStepView
 {
-    private const int MaxDisplayedModels = 30;
-    private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
-
     private readonly IClipboardService? _clipboardService;
 
     private SelectionListNode<string>? _providerList;
@@ -103,7 +101,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode("  Choose your LLM provider:").WithForeground(Color.White))
-            .WithChild(_providerList);
+            .WithChild(_providerList.WithFillHeight());
     }
 
     private ILayoutNode BuildAuthMethodSelection(ProviderStepViewModel vm, StepViewCallbacks callbacks)
@@ -218,14 +216,11 @@ public sealed class ProviderStepView : IWizardStepView
 
         if (vm.IsProbing.Value || probeResult is null)
         {
-            var elapsed = vm.ProbeElapsedSeconds.Value;
-            var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
-            var timerText = elapsed > 0 ? $" ({elapsed}s)" : "";
             var provider = vm.SelectedProviderType ?? "provider";
 
             return Layouts.Vertical()
-                .WithChild(new TextNode($"  {frame} Validating connection to {provider}...{timerText}")
-                    .WithForeground(Color.Yellow));
+                .WithChild(SpinnerViews.WithElapsed(
+                    $"Validating connection to {provider}...", Color.Yellow, vm.ProbeElapsedSeconds));
         }
 
         if (probeResult.Success)
@@ -251,15 +246,7 @@ public sealed class ProviderStepView : IWizardStepView
             return BuildManualModelInput(vm, callbacks);
 
         var models = vm.DiscoveredModels;
-        var items = new List<string>();
-
-        var displayCount = Math.Min(models.Count, MaxDisplayedModels);
-        for (var i = 0; i < displayCount; i++)
-            items.Add(models[i].ModelId.Value);
-
-        if (models.Count > MaxDisplayedModels)
-            items.Add($"... and {models.Count - MaxDisplayedModels} more (enter manually)");
-
+        var items = models.Select(m => m.ModelId.Value).ToList();
         items.Add("Enter model ID manually...");
 
         _modelList = Layouts.SelectionList(items)
@@ -275,7 +262,7 @@ public sealed class ProviderStepView : IWizardStepView
                 if (selected.Count > 0)
                 {
                     var choice = selected[0];
-                    if (choice == "Enter model ID manually..." || choice.StartsWith("... and ", StringComparison.Ordinal))
+                    if (choice == "Enter model ID manually...")
                     {
                         _manualModelEntry = true;
                         callbacks.InvalidateContent();
@@ -296,7 +283,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         return Layouts.Vertical()
             .WithChild(new TextNode(header).WithForeground(Color.White))
-            .WithChild(_modelList);
+            .WithChild(_modelList.WithFillHeight());
     }
 
     private ILayoutNode BuildManualModelInput(ProviderStepViewModel vm, StepViewCallbacks callbacks)
@@ -348,9 +335,6 @@ public sealed class ProviderStepView : IWizardStepView
             case DeviceFlowState.WaitingForUser:
             case DeviceFlowState.Polling:
             {
-                var elapsed = vm.ProbeElapsedSeconds.Value;
-                var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
-
                 // Prefer verification_uri_complete (RFC 8628 §3.3.1, with user
                 // code embedded) so [O] opens a one-click-complete URL.
                 var displayUri = vm.OAuth.VerificationUriComplete ?? vm.OAuth.VerificationUri;
@@ -381,8 +365,7 @@ public sealed class ProviderStepView : IWizardStepView
                         .WithForeground(Color.BrightBlack));
                     children.WithChild(new TextNode("").Height(1));
                 }
-                children.WithChild(new TextNode($"  {frame} Waiting for authorization...")
-                    .WithForeground(Color.Yellow));
+                children.WithChild(SpinnerViews.Labeled("Waiting for authorization...", Color.Yellow));
                 break;
             }
 
@@ -418,8 +401,7 @@ public sealed class ProviderStepView : IWizardStepView
             vm.OAuth.FlowState.Value,
             vm.OAuth.BrowserOpenFailed,
             vm.OAuth.VerificationUri,
-            vm.SpinnerTick.Value,
-            vm.ProbeElapsedSeconds.Value,
+            vm.ProbeElapsedSeconds,
             vm.OAuth.ErrorMessage,
             _clipboardService,
             ref _redirectUrlInput,

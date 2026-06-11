@@ -57,11 +57,13 @@ public partial class InitWizardViewModel : ReactiveViewModel
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         DaemonApi? daemonApi = null,
-        IClipboardService? clipboardService = null)
+        IClipboardService? clipboardService = null,
+        TimeProvider? timeProvider = null)
         : this(paths, registry, registry, slackProbe, discordProbe,
             navigationState: navigationState,
             oauthFactory: oauthFactory, daemonManager: daemonManager, daemonApi: daemonApi,
-            clipboardService: clipboardService)
+            clipboardService: clipboardService,
+            timeProvider: timeProvider)
     {
     }
 
@@ -78,7 +80,8 @@ public partial class InitWizardViewModel : ReactiveViewModel
         DeviceFlowServiceFactory? oauthFactory = null,
         DaemonManager? daemonManager = null,
         DaemonApi? daemonApi = null,
-        IClipboardService? clipboardService = null)
+        IClipboardService? clipboardService = null,
+        TimeProvider? timeProvider = null)
     {
         // Create shared context
         _context = new WizardContext
@@ -90,7 +93,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
 
         // Create step VMs in the canonical order:
         // provider -> security-posture -> feature-selection -> channel-picker -> channels -> search -> browser-automation -> identity -> external-skills -> exposure-mode -> health-check
-        ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory);
+        ProviderStep = new ProviderStepViewModel(registry, probe, oauthFactory, daemonApi);
         var securityPostureStep = new SecurityPostureStepViewModel();
         var featureSelectionStep = new FeatureSelectionStepViewModel();
         var exposureModeStep = new ExposureModeStepViewModel();
@@ -101,7 +104,7 @@ public partial class InitWizardViewModel : ReactiveViewModel
         var identityStep = new IdentityStepViewModel();
         var externalSkillsStep = new ExternalSkillsStepViewModel();
         var skillFeedsStep = new SkillFeedsStepViewModel();
-        _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState);
+        _healthCheckStep = new HealthCheckStepViewModel(daemonManager, daemonApi, navigationState, timeProvider);
 
         var steps = new List<IWizardStepViewModel>
         {

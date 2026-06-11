@@ -4,9 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -120,6 +122,36 @@ public sealed class ProviderCommandTests : IDisposable
         var config = ReadConfigFile(_paths.NetclawConfigPath);
         var provider = config.RootElement.GetProperty("Providers").GetProperty("my-openai");
         Assert.Equal("ApiKey", provider.GetProperty("AuthMethod").GetString());
+    }
+
+    [Fact]
+    public void ShouldDefaultToOAuthDevice_ReturnsTrueForOpenAiWithoutExplicitCredentialChoice()
+    {
+        var result = ProviderCommand.ShouldDefaultToOAuthDevice(
+            "openai",
+            apiKey: null,
+            requestedAuthMethod: null,
+            [AuthMethod.OAuthDevice, AuthMethod.OAuthPkce, AuthMethod.ApiKey]);
+
+        Assert.True(result);
+    }
+
+    [Theory]
+    [InlineData("openai", "sk-test", null)]
+    [InlineData("openai", null, AuthMethod.ApiKey)]
+    [InlineData("anthropic", null, null)]
+    public void ShouldDefaultToOAuthDevice_ReturnsFalseWhenChoiceIsNotImplicitOpenAiOAuth(
+        string providerType,
+        string? apiKey,
+        AuthMethod? requestedAuthMethod)
+    {
+        var result = ProviderCommand.ShouldDefaultToOAuthDevice(
+            providerType,
+            apiKey,
+            requestedAuthMethod,
+            [AuthMethod.OAuthDevice, AuthMethod.OAuthPkce, AuthMethod.ApiKey]);
+
+        Assert.False(result);
     }
 
     [Fact]
@@ -266,6 +298,59 @@ public sealed class ProviderCommandTests : IDisposable
     }
 
     [Fact]
+    public void WriteProvider_OAuth_MergesMultipleProviders()
+    {
+        var registry = ProviderCommand.CreateDefaultRegistry();
+        var protector = new NullSecretsProtector();
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "openai-codex",
+            "openai",
+            AuthMethod.OAuthDevice,
+            endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(
+                new SensitiveString("openai-access-token"),
+                new SensitiveString("openai-refresh-token"),
+                DateTimeOffset.UtcNow.AddHours(1),
+                new SensitiveString("openai-account")),
+            apiKey: null,
+            registry,
+            protector);
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "my-copilot",
+            "github-copilot",
+            AuthMethod.OAuthDevice,
+            endpoint: null,
+            oauthResult: new OAuthDeviceFlowResult(
+                new SensitiveString("copilot-access-token"),
+                null,
+                DateTimeOffset.UtcNow.AddHours(1),
+                null),
+            apiKey: null,
+            registry,
+            protector);
+
+        using var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var configProviders = config.RootElement.GetProperty("Providers");
+        Assert.True(configProviders.TryGetProperty("openai-codex", out _));
+        Assert.True(configProviders.TryGetProperty("my-copilot", out _));
+
+        using var secrets = ReadConfigFile(_paths.SecretsPath);
+        var secretProviders = secrets.RootElement.GetProperty("Providers");
+        Assert.Equal("openai-access-token",
+            secretProviders.GetProperty("openai-codex").GetProperty("OAuthAccessToken").GetString());
+        Assert.Equal("copilot-access-token",
+            secretProviders.GetProperty("my-copilot").GetProperty("OAuthAccessToken").GetString());
+
+        var loaded = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal("openai-access-token", loaded["openai-codex"].OAuthAccessToken?.Value);
+        Assert.Equal("copilot-access-token", loaded["my-copilot"].OAuthAccessToken?.Value);
+    }
+
+    [Fact]
     public void LoadProviders_DecryptsEncryptedOAuthTokenExpiry()
     {
         WriteConfig(new Dictionary<string, object>
@@ -292,6 +377,7 @@ public sealed class ProviderCommandTests : IDisposable
                 ["my-openai"] = new Dictionary<string, object>
                 {
                     ["OAuthAccessToken"] = protector.Protect("oauth-access-token"),
+                    ["OAuthAccountId"] = protector.Protect("account-123"),
                     ["OAuthTokenExpiry"] = protector.Protect(expiry)
                 }
             }
@@ -300,6 +386,7 @@ public sealed class ProviderCommandTests : IDisposable
         var providers = ProviderCommand.LoadProviders(_paths);
 
         Assert.True(providers.ContainsKey("my-openai"));
+        Assert.Equal("account-123", providers["my-openai"].OAuthAccountId?.Value);
         Assert.NotNull(providers["my-openai"].OAuthTokenExpiry);
         Assert.Equal(DateTimeOffset.Parse(expiry), providers["my-openai"].OAuthTokenExpiry!.Value);
     }

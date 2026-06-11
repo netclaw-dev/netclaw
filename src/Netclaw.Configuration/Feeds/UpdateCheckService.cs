@@ -69,30 +69,29 @@ public enum ManifestFetchStatus
 /// </summary>
 public static class UpdateCheckService
 {
-    private static UpdateCheckResult? s_cachedResult;
-    private static DateTimeOffset s_cachedAt;
-    private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(1);
+    // Last computed result, kept so the daemon /status API can report update availability
+    // via GetLastResult() without its own network fetch. This is a last-result store, NOT
+    // a TTL cache — every CheckForUpdateAsync call recomputes (a cache keyed only on
+    // freshness would silently return another channel's result; the daemon already
+    // throttles network calls via its 24h recheck timer).
+    private static UpdateCheckResult? s_lastResult;
 
     /// <summary>
-    /// Returns the most recent cached result, or null if no check has been performed yet.
+    /// Returns the most recent result, or null if no check has been performed yet.
     /// </summary>
-    public static UpdateCheckResult? GetLastResult() => s_cachedResult;
+    public static UpdateCheckResult? GetLastResult() => s_lastResult;
 
     /// <summary>
-    /// Fetches the binary manifest and compares the latest version against the current version.
-    /// Returns a cached result if one exists and is less than 1 hour old.
+    /// Fetches the binary manifest and compares the latest version for <paramref name="channel"/>
+    /// against <paramref name="currentVersion"/>. Records the result for <see cref="GetLastResult"/>.
     /// Never throws — returns a "no update" result on any failure.
     /// </summary>
     public static async Task<UpdateCheckResult> CheckForUpdateAsync(
         HttpClient httpClient,
         string currentVersion,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken,
+        UpdateChannel channel)
     {
-        // Return cached result if fresh
-        var cached = s_cachedResult;
-        if (cached is not null && DateTimeOffset.UtcNow - s_cachedAt < CacheDuration)
-            return cached;
-
         try
         {
             var fetchResult = await FetchVerifiedManifestAsync(httpClient, cancellationToken);
@@ -106,12 +105,12 @@ public static class UpdateCheckService
                     CurrentVersion = currentVersion,
                     LatestVersion = currentVersion,
                 };
-                CacheResult(failed);
+                RecordResult(failed);
                 return failed;
             }
 
-            var result = EvaluateManifest(fetchResult.Manifest!, currentVersion);
-            CacheResult(result);
+            var result = EvaluateManifest(fetchResult.Manifest!, currentVersion, channel);
+            RecordResult(result);
             return result;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -124,7 +123,7 @@ public static class UpdateCheckService
                 CurrentVersion = currentVersion,
                 LatestVersion = currentVersion,
             };
-            CacheResult(failed);
+            RecordResult(failed);
             return failed;
         }
     }
@@ -229,32 +228,38 @@ public static class UpdateCheckService
         };
     }
 
-    private static void CacheResult(UpdateCheckResult result)
-    {
-        s_cachedResult = result;
-        s_cachedAt = DateTimeOffset.UtcNow;
-    }
+    private static void RecordResult(UpdateCheckResult result) => s_lastResult = result;
 
     /// <summary>
-    /// Clears the cached result. Used by tests to avoid cross-test interference.
+    /// Clears the recorded result. Used by tests to avoid cross-test interference.
     /// </summary>
-    public static void ResetCache()
-    {
-        s_cachedResult = null;
-        s_cachedAt = default;
-    }
+    public static void ResetCache() => s_lastResult = null;
 
     /// <summary>
-    /// Evaluates a manifest against the current version and RID.
+    /// Evaluates a manifest against the current version, RID, and release channel.
     /// Pure function — no I/O.
     /// </summary>
+    /// <remarks>
+    /// The <paramref name="channel"/> decides which version pointer is compared:
+    /// <see cref="UpdateChannel.Stable"/> only ever reads <see cref="BinaryFeedManifest.Latest"/>,
+    /// so a stable client can never be offered a prerelease. <see cref="UpdateChannel.Beta"/>
+    /// reads <see cref="BinaryFeedManifest.LatestPrerelease"/> (the newest of {stable, prerelease}),
+    /// falling back to <c>Latest</c> only on manifests published before the prerelease channel existed.
+    /// </remarks>
     public static UpdateCheckResult EvaluateManifest(
         BinaryFeedManifest manifest,
-        string currentVersion)
+        string currentVersion,
+        UpdateChannel channel)
     {
         var rid = GetCurrentRid();
 
-        if (string.IsNullOrEmpty(manifest.Latest))
+        // Resolve the target pointer for the channel. Beta uses latestPrerelease when
+        // present (always >= latest); an older manifest without it falls back to latest.
+        var targetVersion = channel == UpdateChannel.Beta && !string.IsNullOrEmpty(manifest.LatestPrerelease)
+            ? manifest.LatestPrerelease
+            : manifest.Latest;
+
+        if (string.IsNullOrEmpty(targetVersion))
         {
             return new UpdateCheckResult
             {
@@ -264,13 +269,13 @@ public static class UpdateCheckService
             };
         }
 
-        var isNewer = IsNewerVersion(currentVersion, manifest.Latest);
+        var isNewer = IsNewerVersion(currentVersion, targetVersion);
 
-        // Find the latest release entry
-        var latestRelease = manifest.Releases
-            .FirstOrDefault(r => r.Version == manifest.Latest);
+        // Find the release entry for the resolved target version.
+        var targetRelease = manifest.Releases
+            .FirstOrDefault(r => r.Version == targetVersion);
 
-        var matchingAssets = latestRelease?.Assets
+        var matchingAssets = targetRelease?.Assets
             .Where(a => string.Equals(a.Rid, rid, StringComparison.OrdinalIgnoreCase))
             .ToList() ?? [];
 
@@ -278,8 +283,8 @@ public static class UpdateCheckService
         {
             IsUpdateAvailable = isNewer && matchingAssets.Count > 0,
             CurrentVersion = currentVersion,
-            LatestVersion = manifest.Latest,
-            ReleaseNotesUrl = latestRelease?.ReleaseNotesUrl,
+            LatestVersion = targetVersion,
+            ReleaseNotesUrl = targetRelease?.ReleaseNotesUrl,
             MatchingAssets = matchingAssets,
         };
     }
@@ -296,16 +301,11 @@ public static class UpdateCheckService
 
     /// <summary>
     /// Returns true if <paramref name="latest"/> is newer than <paramref name="current"/>.
+    /// Uses SemVer 2.0.0 precedence (see <see cref="SemVer"/>), so prerelease versions
+    /// like "0.19.0-beta.1" compare correctly — unlike <see cref="System.Version"/>, which
+    /// cannot parse a prerelease suffix at all. On a parse failure this returns false
+    /// (fail safe: never offer an update we can't reason about).
     /// </summary>
     public static bool IsNewerVersion(string current, string latest)
-    {
-        if (Version.TryParse(current, out var currentVersion)
-            && Version.TryParse(latest, out var latestVersion))
-        {
-            return latestVersion > currentVersion;
-        }
-
-        // If parsing fails, treat as no update to avoid false positives
-        return false;
-    }
+        => SemVer.IsNewer(current, latest);
 }

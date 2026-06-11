@@ -115,6 +115,7 @@ public sealed class ProviderConfigurationLoaderTests : IDisposable
 
         var encryptedAccess = protector.Protect("oauth-access-abc");
         var encryptedRefresh = protector.Protect("oauth-refresh-xyz");
+        var encryptedAccountId = protector.Protect("account-123");
 
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -123,6 +124,7 @@ public sealed class ProviderConfigurationLoaderTests : IDisposable
                 ["Providers:anthropic:AuthMethod"] = "OAuthDevice",
                 ["Providers:anthropic:OAuthAccessToken"] = encryptedAccess,
                 ["Providers:anthropic:OAuthRefreshToken"] = encryptedRefresh,
+                ["Providers:anthropic:OAuthAccountId"] = encryptedAccountId,
             })
             .Build();
 
@@ -130,6 +132,7 @@ public sealed class ProviderConfigurationLoaderTests : IDisposable
 
         Assert.Equal("oauth-access-abc", providers["anthropic"].OAuthAccessToken?.Value);
         Assert.Equal("oauth-refresh-xyz", providers["anthropic"].OAuthRefreshToken?.Value);
+        Assert.Equal("account-123", providers["anthropic"].OAuthAccountId?.Value);
     }
 
     [Fact]

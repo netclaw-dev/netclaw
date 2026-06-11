@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 
@@ -276,6 +277,21 @@ public sealed record SubAgentOutput : SessionOutput
 /// Lifecycle — always delivered regardless of <see cref="OutputFilter"/>.
 /// </summary>
 public sealed record BufferFlush : SessionOutput;
+
+/// <summary>
+/// Signals that the session is actively processing or has returned to idle.
+/// Requires <see cref="OutputFilter.ProcessingState"/> so channel adapters can
+/// opt into native busy indicators without perturbing ordinary transcript
+/// subscribers.
+/// </summary>
+public sealed record ProcessingStateOutput(bool IsProcessing) : SessionOutput
+{
+    /// <summary>
+    /// True when this effect is required for correctness. Optional processing
+    /// indicators can be ignored by channels that do not support them.
+    /// </summary>
+    public bool IsRequired { get; init; }
+}
 
 /// <summary>
 /// Session context was compacted to stay within the context window.

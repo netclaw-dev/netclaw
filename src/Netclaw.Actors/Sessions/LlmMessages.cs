@@ -30,14 +30,33 @@ internal sealed record LlmResponseReceived : INoSerializationVerificationNeeded
     /// Stale responses from cancelled calls are ignored.
     /// </summary>
     public long CallId { get; init; }
+
+    public int StreamUpdateCount { get; init; }
+
+    public int EmptyStreamUpdateCount { get; init; }
+
+    public int StreamTextDeltaCount { get; init; }
+
+    public int StreamTextChars { get; init; }
+
+    public int StreamThinkingDeltaCount { get; init; }
+
+    public int StreamThinkingChars { get; init; }
+
+    public int StreamToolCallDeltaCount { get; init; }
 }
 
 /// <summary>
 /// Incremental streaming delta emitted while an LLM response is in-flight.
+/// <see cref="Substantive"/> is false for content-free keepalives (e.g.
+/// <c>prompt_progress</c> heartbeats) so the watchdog refreshes the prefill budget
+/// on them but only promotes to the tighter inter-delta budget on real output.
 /// </summary>
 internal sealed record LlmResponseDeltaReceived(AIContent Content) : INoSerializationVerificationNeeded
 {
     public long CallId { get; init; }
+
+    public bool Substantive { get; init; }
 }
 
 /// <summary>
@@ -55,6 +74,7 @@ internal sealed record LlmCallFailed(Exception Cause) : INoSerializationVerifica
 internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeeded
 {
     public required List<Protocol.SerializableChatMessage> ToolResults { get; init; }
+    public List<SerializableMediaReference> ModelInputMediaReferences { get; init; } = [];
     public List<FileAttachmentInfo> FileAttachments { get; init; } = [];
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
@@ -109,9 +129,13 @@ internal sealed record ToolExecutionFailed : INoSerializationVerificationNeeded
 
 /// <summary>
 /// Internal watchdog timeout used to force stuck Processing operations to fail
-/// and return the session actor to Ready state.
+/// and return the session actor to Ready state. <see cref="NoProgress"/> is true
+/// when the keepalive-immune no-progress deadline fired (the call produced no
+/// substantive output for the whole budget) rather than the liveness timer —
+/// the handler treats that as a hard kill with no grace, since keepalives never
+/// refresh it.
 /// </summary>
-internal sealed record ProcessingWatchdogExpired(long OperationId, string OperationName)
+internal sealed record ProcessingWatchdogExpired(long OperationId, string OperationName, bool NoProgress = false)
     : INoSerializationVerificationNeeded;
 
 /// <summary>
@@ -196,9 +220,3 @@ internal sealed record PassivationTimeout : INoSerializationVerificationNeeded;
 /// signal. See <c>LlmSessionActor.CompletePassivation</c>.
 /// </summary>
 internal sealed record PassivationFinalStop : INoSerializationVerificationNeeded;
-
-/// <summary>
-/// Timer-fired message that triggers an LLM call retry after exponential backoff.
-/// Carries the attempt number for observability logging.
-/// </summary>
-internal sealed record RetryLlmCallAfterBackoff(int Attempt) : INoSerializationVerificationNeeded;

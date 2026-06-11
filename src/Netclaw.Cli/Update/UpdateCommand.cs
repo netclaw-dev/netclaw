@@ -24,6 +24,8 @@ internal static class UpdateCommand
         {
             case "init":
             case "update":
+            case "secrets":
+            case "daemon":
             case "chat":
             case "sessions":
             case "headless":
@@ -45,7 +47,7 @@ internal static class UpdateCommand
         }
     }
 
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, bool selfUpdateDisabled = false)
+    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, bool selfUpdateDisabled = false, UpdateChannel channel = UpdateChannel.Stable)
     {
         var checkOnly = false;
         var force = false;
@@ -70,7 +72,7 @@ internal static class UpdateCommand
             }
         }
 
-        var currentVersion = BuildInfo.Version;
+        var currentVersion = BuildInfo.FullVersion;
 
         using var httpClient = TestHttpMessageHandlerFactory is { } createHandler
             ? new HttpClient(createHandler())
@@ -97,7 +99,7 @@ internal static class UpdateCommand
             return 1;
         }
 
-        var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion);
+        var result = UpdateCheckService.EvaluateManifest(fetchResult.Manifest!, currentVersion, channel);
 
         if (!result.IsUpdateAvailable)
         {
@@ -392,14 +394,14 @@ internal static class UpdateCommand
     /// notification in a static buffer if an update is available; emitted by
     /// <see cref="EmitPendingNoticeIfReady"/> when the program is about to exit.
     /// </summary>
-    internal static async Task BackgroundUpdateCheckAsync(bool selfUpdateDisabled = false)
+    internal static async Task BackgroundUpdateCheckAsync(bool selfUpdateDisabled = false, UpdateChannel channel = UpdateChannel.Stable)
     {
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
             using var httpClient = new HttpClient();
             var result = await UpdateCheckService.CheckForUpdateAsync(
-                httpClient, BuildInfo.Version, cts.Token);
+                httpClient, BuildInfo.FullVersion, cts.Token, channel);
 
             if (result.IsUpdateAvailable)
             {

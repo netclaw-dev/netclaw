@@ -254,6 +254,29 @@ public sealed class DaemonClientMappingTests
     }
 
     [Fact]
+    public void ProcessingStateOutput_roundtrips_through_dto()
+    {
+        var original = new ProcessingStateOutput(true)
+        {
+            SessionId = new SessionId("signalr/test"),
+            TimestampMs = 778,
+            IsRequired = true
+        };
+
+        var dto = SessionOutputDtoMapper.ToDto(original);
+        Assert.Equal(SessionOutputTypes.ProcessingState, dto.Type);
+        Assert.True(dto.IsProcessing);
+        Assert.True(dto.ProcessingStateRequired);
+
+        var roundTripped = DaemonClient.FromDto(dto);
+        var result = Assert.IsType<ProcessingStateOutput>(roundTripped);
+        Assert.Equal("signalr/test", result.SessionId.Value);
+        Assert.Equal(778, result.TimestampMs);
+        Assert.True(result.IsProcessing);
+        Assert.True(result.IsRequired);
+    }
+
+    [Fact]
     public void ToolInteractionRequest_roundtrips_through_dto()
     {
         var original = new ToolInteractionRequest

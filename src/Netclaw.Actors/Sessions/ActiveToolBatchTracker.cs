@@ -15,8 +15,11 @@ internal sealed class ActiveToolBatchTracker
 
     public int CompletedCount => _completedCallIds.Count;
 
-    public bool CanComplete => ExecutionTaskCompleted
+    public bool HasAllResults => _expectedCallIds.Count > 0
         && _completedCallIds.Count >= _expectedCallIds.Count;
+
+    public bool CanComplete => ExecutionTaskCompleted
+        && HasAllResults;
 
     private bool ExecutionTaskCompleted { get; set; }
 

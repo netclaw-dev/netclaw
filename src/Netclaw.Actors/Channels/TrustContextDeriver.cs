@@ -83,6 +83,39 @@ public sealed class TrustContextDeriver
             downgradeReason);
     }
 
+    public EffectiveTrustContext DeriveFromTurnContext(TurnContext context, WorkingContextOverride? workingContext = null)
+    {
+        var effectiveAudience = Narrowest(_defaults.Audience, context.Audience);
+        var downgradeReason = (string?)null;
+        var wasDowngraded = effectiveAudience != context.Audience || effectiveAudience != _defaults.Audience;
+
+        if (workingContext?.Audience is { } workingAudience)
+        {
+            var narrowed = Narrowest(effectiveAudience, workingAudience);
+            if (narrowed != effectiveAudience)
+            {
+                effectiveAudience = narrowed;
+                wasDowngraded = true;
+                downgradeReason = workingContext.Reason;
+            }
+        }
+
+        return new EffectiveTrustContext(
+            _defaults.DeploymentPosture,
+            _defaults.Audience,
+            context.Audience,
+            effectiveAudience,
+            context.Boundary,
+            context.RequesterPrincipal,
+            context.Provenance.TransportAuthenticity,
+            context.Provenance.PayloadTaint,
+            context.Provenance.SourceScope,
+            context.Provenance.SourceKind,
+            _defaults.UsedStrictFallback,
+            wasDowngraded,
+            downgradeReason);
+    }
+
     private static TrustAudience Narrowest(TrustAudience left, TrustAudience right)
         => left < right ? left : right;
 }

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -46,6 +47,20 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
         if (config.Scope is not null)
             payload["scope"] = config.Scope;
 
+        if (config.ExtraAuthParams is not null)
+        {
+            foreach (var (key, value) in config.ExtraAuthParams)
+            {
+                if (string.IsNullOrWhiteSpace(key)
+                    || key is "client_id" or "scope")
+                {
+                    continue;
+                }
+
+                payload[key] = value;
+            }
+        }
+
         HttpResponseMessage response;
         try
         {
@@ -68,11 +83,10 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
 
         response.EnsureSuccessStatusCode();
 
-        var result = await response.Content.ReadFromJsonAsync<OpenAiUserCodeResponse>(ct);
-        if (result is null)
-            throw new InvalidOperationException("Empty device authorization response from OpenAI.");
+        var json = await response.Content.ReadAsStringAsync(ct);
+        using var doc = JsonDocument.Parse(json);
+        var result = ParseUserCodeResponse(doc.RootElement);
 
-        // Map OpenAI's response to the shared DeviceAuthorizationResponse
         var expiresIn = result.ExpiresIn is > 0 ? result.ExpiresIn.Value : DefaultExpiresIn;
 
         return new DeviceAuthorizationResponse(
@@ -125,16 +139,9 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
                     ex);
             }
 
-            // 403 = authorization pending, keep polling
-            if (response.StatusCode == HttpStatusCode.Forbidden)
+            // 403/404 = authorization pending in OpenAI's proprietary flow.
+            if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
                 continue;
-
-            if (response.StatusCode == HttpStatusCode.NotFound)
-            {
-                onStateChanged?.Invoke(DeviceFlowState.Error);
-                throw new InvalidOperationException(
-                    "OpenAI device polling endpoint was not found (HTTP 404). Check provider OAuth endpoint configuration and try again.");
-            }
 
             // 5xx = transient server error, keep polling (momentary 502/503 shouldn't kill the flow)
             if ((int)response.StatusCode >= 500)
@@ -205,7 +212,11 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        return ParseTokenResponse(doc.RootElement);
+        var result = OAuthTokenResponseParser.Parse(doc.RootElement, _timeProvider);
+        return result with
+        {
+            RefreshToken = result.RefreshToken ?? refreshToken
+        };
     }
 
     public Task<OAuthDeviceFlowResult?> RefreshTokenAsync(
@@ -242,25 +253,52 @@ public sealed class OpenAiDeviceFlowService : IDeviceFlowService
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        return ParseTokenResponse(doc.RootElement);
+        return OAuthTokenResponseParser.Parse(doc.RootElement, _timeProvider);
     }
 
-    private OAuthDeviceFlowResult ParseTokenResponse(JsonElement root)
+    private static OpenAiUserCodeResponse ParseUserCodeResponse(JsonElement root)
     {
-        var accessToken = root.GetProperty("access_token").GetString()
-            ?? throw new InvalidOperationException("Missing access_token in response.");
+        return new OpenAiUserCodeResponse(
+            GetRequiredString(root, "device_auth_id"),
+            GetRequiredString(root, "user_code", "usercode"),
+            GetOptionalInt(root, "interval") ?? 1,
+            GetOptionalInt(root, "expires_in"));
+    }
 
-        string? refreshToken = root.TryGetProperty("refresh_token", out var refreshProp)
-            ? refreshProp.GetString() : null;
+    private static string GetRequiredString(JsonElement root, params string[] propertyNames)
+    {
+        foreach (var propertyName in propertyNames)
+        {
+            if (!root.TryGetProperty(propertyName, out var property)
+                || property.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
 
-        DateTimeOffset? expiresAt = root.TryGetProperty("expires_in", out var expiresProp)
-            ? _timeProvider.GetUtcNow().AddSeconds(expiresProp.GetInt32())
-            : null;
+            var value = property.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
 
-        return new OAuthDeviceFlowResult(
-            new SensitiveString(accessToken),
-            refreshToken is not null ? new SensitiveString(refreshToken) : null,
-            expiresAt);
+        throw new InvalidOperationException(
+            $"Missing {string.Join("/", propertyNames)} in OpenAI device authorization response.");
+    }
+
+    private static int? GetOptionalInt(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+            return null;
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var numericValue))
+            return numericValue;
+
+        if (property.ValueKind == JsonValueKind.String
+            && int.TryParse(property.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var stringValue))
+        {
+            return stringValue;
+        }
+
+        throw new InvalidOperationException($"Invalid {propertyName} in OpenAI device authorization response.");
     }
 
     // OpenAI-specific response DTOs

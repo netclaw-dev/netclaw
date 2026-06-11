@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
-using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
@@ -150,6 +149,63 @@ public class OAuthPkceServiceTests
         Assert.Contains("code=auth-code-123", capturedBody);
         Assert.Contains("code_verifier=verifier-xyz", capturedBody);
         Assert.Contains("redirect_uri=", capturedBody);
+    }
+
+    [Fact]
+    public async Task ExchangeCodeForTokens_ExtractsAccountIdFromIdToken()
+    {
+        var idToken = JwtTestToken.Make(new Dictionary<string, object>
+        {
+            ["https://api.openai.com/auth"] = new Dictionary<string, object>
+            {
+                ["chatgpt_account_id"] = "account-from-id-token"
+            }
+        });
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new
+            {
+                access_token = "at-secret",
+                refresh_token = "rt-secret",
+                id_token = idToken,
+                expires_in = "3600"
+            }));
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var result = await service.ExchangeCodeForTokensAsync(
+            "https://auth.example.com/token",
+            "test-client",
+            "auth-code-123",
+            "verifier-xyz",
+            "http://127.0.0.1:5199/callback", ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("account-from-id-token", result.AccountId!.Value);
+        Assert.NotNull(result.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task ExchangeCodeForTokens_ExtractsAccountIdFromTopLevelOpenAiClaim()
+    {
+        var handler = new FakeHttpMessageHandler(_ =>
+            JsonResponse(new Dictionary<string, object>
+            {
+                ["access_token"] = "at-secret",
+                ["https://api.openai.com/auth"] = new Dictionary<string, object>
+                {
+                    ["chatgpt_account_id"] = "account-from-root-claim"
+                }
+            }));
+
+        var service = new OAuthPkceService(new HttpClient(handler));
+
+        var result = await service.ExchangeCodeForTokensAsync(
+            "https://auth.example.com/token",
+            "test-client",
+            "auth-code-123",
+            "verifier-xyz",
+            "http://127.0.0.1:5199/callback", ct: TestContext.Current.CancellationToken);
+
+        Assert.Equal("account-from-root-claim", result.AccountId!.Value);
     }
 
     [Fact]

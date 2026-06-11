@@ -20,6 +20,17 @@ public enum ParentApprovalDecision
 }
 
 /// <summary>
+/// Thrown when a sub-agent needs parent approval but the parent session cannot
+/// safely emit an approval prompt with complete authority context.
+/// </summary>
+public sealed class ParentApprovalUnavailableException : InvalidOperationException
+{
+    public ParentApprovalUnavailableException(string message) : base(message)
+    {
+    }
+}
+
+/// <summary>
 /// One per-clause <c>(verb, directory)</c> pair extracted from a sub-agent's
 /// invocation. Mirrors the persisted <c>ApprovalEntry</c> shape so the parent
 /// session can record folder-scoped grants from the actual paths the sub-agent

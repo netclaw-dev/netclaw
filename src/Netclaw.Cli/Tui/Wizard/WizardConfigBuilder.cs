@@ -5,9 +5,11 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Secrets;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -48,14 +50,38 @@ public sealed class WizardConfigBuilder
 
     /// <summary>
     /// Assemble the typed sections into netclaw.json and write it.
+    /// Preserves <c>Daemon.UpdateChannel</c> from an existing config when no wizard step
+    /// explicitly sets it — so <c>install.sh --channel beta</c> followed by <c>netclaw init</c>
+    /// doesn't lose the channel preference.
     /// </summary>
     public void WriteConfigFile()
     {
         _paths.EnsureDirectoriesExist();
+        PreserveExistingUpdateChannel();
         var config = BuildConfigDictionary();
 
         File.WriteAllText(_paths.NetclawConfigPath,
             JsonSerializer.Serialize(config, JsonDefaults.ConfigFile));
+    }
+
+    private void PreserveExistingUpdateChannel()
+    {
+        if (Daemon?.UpdateChannel is not null)
+            return;
+
+        if (!File.Exists(_paths.NetclawConfigPath))
+            return;
+
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(_paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .Build();
+
+        var existing = DaemonConfig.BindFromConfiguration(config.GetSection("Daemon"));
+        if (existing.UpdateChannel == UpdateChannel.Stable)
+            return;
+
+        var prev = Daemon ?? new DaemonConfigSection();
+        Daemon = prev with { UpdateChannel = existing.UpdateChannel };
     }
 
     /// <summary>
@@ -91,17 +117,15 @@ public sealed class WizardConfigBuilder
         // Models section
         if (Model is not null)
         {
-            var modelEntry = new Dictionary<string, object>
-            {
-                ["Provider"] = Model.Provider
-            };
-
-            if (!string.IsNullOrWhiteSpace(Model.ModelId))
-                modelEntry["ModelId"] = Model.ModelId;
-
             config["Models"] = new Dictionary<string, object>
             {
-                ["Main"] = modelEntry
+                ["Main"] = ModelEntryWriter.BuildModelEntry(
+                    Model.Provider,
+                    Model.ModelId,
+                    Model.Provenance,
+                    Model.ContextWindow,
+                    Model.InputModalities,
+                    Model.OutputModalities)
             };
         }
 
@@ -305,13 +329,16 @@ public sealed class WizardConfigBuilder
             };
         }
 
-        // Daemon section — only written for non-default exposure modes (local = omit)
-        if (Daemon is not null && Daemon.ExposureMode != ExposureMode.Local)
+        // Daemon section — written when exposure mode is non-default OR update channel is set
+        if (Daemon is not null)
         {
-            var daemonSection = new Dictionary<string, object>
-            {
-                ["ExposureMode"] = Daemon.ExposureMode.ToWireValue()
-            };
+            var daemonSection = new Dictionary<string, object>();
+
+            if (Daemon.ExposureMode != ExposureMode.Local)
+                daemonSection["ExposureMode"] = Daemon.ExposureMode.ToWireValue();
+
+            if (Daemon.UpdateChannel is not null)
+                daemonSection["UpdateChannel"] = Daemon.UpdateChannel.Value.ToString().ToLowerInvariant();
 
             if (!string.IsNullOrWhiteSpace(Daemon.Host))
                 daemonSection["Host"] = Daemon.Host;
@@ -319,7 +346,8 @@ public sealed class WizardConfigBuilder
             if (Daemon.TrustedProxies.Count > 0)
                 daemonSection["TrustedProxies"] = Daemon.TrustedProxies;
 
-            config["Daemon"] = daemonSection;
+            if (daemonSection.Count > 0)
+                config["Daemon"] = daemonSection;
         }
 
         // Webhooks section — only written when enabled (disabled = default, omit)
@@ -419,8 +447,12 @@ public sealed class WizardSecretsBuilder
             {
                 foreach (var (key, value) in _secrets)
                 {
-                    if (!existingNode.ContainsKey(key))
-                        existingNode[key] = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+                    var segments = SecretsJsonUpdater.ParseKeyPath(key);
+                    var node = JsonSerializer.SerializeToNode(value, JsonDefaults.ConfigFile);
+                    if (node is JsonObject obj)
+                        SecretsJsonUpdater.MergeObject(existingNode, segments, obj);
+                    else
+                        SecretsJsonUpdater.UpsertNode(existingNode, segments, node);
                 }
 
                 SecretsFileWriter.Write(_paths.SecretsPath, existingNode.ToJsonString(JsonDefaults.ConfigFile),
@@ -447,6 +479,10 @@ public sealed class ModelConfigSection
 {
     public required string Provider { get; init; }
     public string? ModelId { get; init; }
+    public int? ContextWindow { get; init; }
+    public ModelDiscoverySource? Provenance { get; init; }
+    public ModelModality? InputModalities { get; init; }
+    public ModelModality? OutputModalities { get; init; }
 }
 
 public sealed class SlackConfigSection
@@ -516,9 +552,16 @@ public sealed class IdentityConfigSection
     public required string UserTimezone { get; init; }
 }
 
-public sealed class DaemonConfigSection
+public sealed record DaemonConfigSection
 {
     public ExposureMode ExposureMode { get; init; } = ExposureMode.Local;
+
+    /// <summary>
+    /// Release channel for the daemon's self-update mechanism. When null, the Daemon
+    /// section omits the key and <see cref="DaemonConfig"/> defaults to
+    /// <see cref="UpdateChannel.Stable"/>.
+    /// </summary>
+    public UpdateChannel? UpdateChannel { get; init; }
 
     /// <summary>
     /// Bind address for the daemon. Only emitted when set; the daemon defaults to

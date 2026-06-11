@@ -12,7 +12,7 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
-/// Defines a subagent's identity: system prompt, tools, and model.
+/// Defines a subagent's identity: system prompt, resolved runtime tools, and model.
 /// Can be constructed from built-in definitions or authored dynamically.
 /// </summary>
 public sealed record SubAgentDefinition
@@ -23,7 +23,7 @@ public sealed record SubAgentDefinition
     /// <summary>System prompt for the subagent's LLM context.</summary>
     public required string SystemPrompt { get; init; }
 
-    /// <summary>Tools available to the subagent during execution.</summary>
+    /// <summary>Runtime tools available to the subagent after audience-policy filtering.</summary>
     public required IReadOnlyList<INetclawTool> Tools { get; init; }
 
     /// <summary>
@@ -58,8 +58,32 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     /// </summary>
     public string? RuntimeContext { get; init; }
 
-    /// <summary>Wall-clock timeout set by the caller.</summary>
+    /// <summary>
+    /// Inter-delta inactivity budget: the maximum gap between streaming deltas
+    /// once the model has started responding, and the general inactivity budget
+    /// for the tool loop. The watchdog promotes to this budget on the first
+    /// substantive delta.
+    /// </summary>
     public required TimeSpan Timeout { get; init; }
+
+    /// <summary>
+    /// Generous wait-for-first-delta budget covering queue wait and cold prefill.
+    /// The watchdog starts on this budget and content-free keepalives refresh it,
+    /// so a healthy-but-slow self-hosted prefill is not killed. When unset
+    /// (<see cref="TimeSpan.Zero"/>), the sub-agent defaults to the same 1800s
+    /// budget as the main session path rather than collapsing to <see cref="Timeout"/>.
+    /// </summary>
+    public TimeSpan PrefillTimeout { get; init; }
+
+    /// <summary>
+    /// Hard ceiling on time without substantive output. Reset only by real
+    /// streaming tokens — content-free keepalives never extend it — so a backend
+    /// that heartbeats forever without producing a token is killed once this
+    /// elapses. <see cref="TimeSpan.Zero"/> (unset) leaves the call bounded only by
+    /// the liveness watchdog; the spawner always populates it from
+    /// <see cref="Configuration.SubAgentConfig.NoProgressTimeoutSeconds"/>.
+    /// </summary>
+    public TimeSpan NoProgressTimeout { get; init; }
 
     /// <summary>
     /// Cancellation token from the calling tool execution. Used to stop the
@@ -83,6 +107,16 @@ public sealed record RunSubAgent : INoSerializationVerificationNeeded
     public TrustBoundary? Boundary { get; init; }
 
     public string? ChannelType { get; init; }
+
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
+
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; init; }
+
+    /// <summary>
+    /// Input modalities supported by the model selected for this sub-agent run.
+    /// Tools use this to decide whether model-visible media handoff is allowed.
+    /// </summary>
+    public ModelModality ModelInputModalities { get; init; } = ModelModality.Text;
 
     /// <summary>
     /// Parent session's session directory snapshot when the subagent was spawned.

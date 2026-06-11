@@ -4,7 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Serialization;
-using Netclaw.Security;
+using Netclaw.Media;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;

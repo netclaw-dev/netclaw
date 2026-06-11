@@ -16,6 +16,63 @@ namespace Netclaw.Daemon.Tests.Providers;
 /// </summary>
 public sealed class OpenAiCompatibleCapabilityResolverTests
 {
+    [Theory]
+    [InlineData("{\"id\":\"Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf\",\"meta\":{\"n_ctx\":131072,\"n_ctx_train\":262144}}", 131_072)]
+    [InlineData("{\"id\":\"Qwen/Qwen3.6-VL-30B-FP8\",\"max_model_len\":256000}", 256_000)]
+    public void ParseModels_ReadsSelfHostedContextMetadata(string modelJson, int expectedContextWindow)
+    {
+        var json = $$"""
+        {
+          "object": "list",
+          "data": [ {{modelJson}} ]
+        }
+        """;
+
+        var result = OpenAiCompatibleDescriptor.ParseModels(json);
+
+        var model = Assert.Single(result.Models);
+        Assert.Equal(expectedContextWindow, model.ContextWindowTokens);
+    }
+
+    [Theory]
+    [InlineData("{\"id\":\"router-model\",\"meta\":{\"n_ctx\":0}}")]
+    [InlineData("{\"id\":\"router-model\",\"max_model_len\":0}")]
+    public void ParseModels_TreatsZeroContextMetadataAsUnknown(string modelJson)
+    {
+        var json = $$"""
+        {
+          "object": "list",
+          "data": [ {{modelJson}} ]
+        }
+        """;
+
+        var result = OpenAiCompatibleDescriptor.ParseModels(json);
+
+        var model = Assert.Single(result.Models);
+        Assert.Null(model.ContextWindowTokens);
+    }
+
+    [Fact]
+    public void ParseModels_ZeroNCtxDoesNotFallBackToTrainContext()
+    {
+        const string json = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "router-model",
+              "meta": { "n_ctx": 0, "n_ctx_train": 262144 }
+            }
+          ]
+        }
+        """;
+
+        var result = OpenAiCompatibleDescriptor.ParseModels(json);
+
+        var model = Assert.Single(result.Models);
+        Assert.Null(model.ContextWindowTokens);
+    }
+
     [Fact]
     public void ResolveFromProbe_VllmShape_DispatchesToVllmStrategy()
     {
@@ -51,27 +108,64 @@ public sealed class OpenAiCompatibleCapabilityResolverTests
           "object": "list",
           "data": [
             {
-              "id": "Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf",
-              "meta": { "n_ctx_train": 262144 }
+              "id": "Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf",
+              "meta": { "n_ctx": 131072, "n_ctx_train": 262144 }
             }
           ]
         }
         """;
         const string propsJson = """
         {
-          "default_generation_settings": { "params": { "n_ctx": 65536 } },
+          "default_generation_settings": { "n_ctx": 131072 },
           "modalities": { "vision": true }
         }
         """;
 
         var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(
-            "Qwen3.5-35B-A3B-UD-Q4_K_XL.gguf", modelsJson, propsJson);
+            "Qwen3.6-27B-MTP-UD-Q4_K_XL.gguf", modelsJson, propsJson);
 
         Assert.NotNull(result);
-        // /props.n_ctx wins over meta.n_ctx_train when both are present.
-        Assert.Equal(65_536, result.ContextWindowTokens);
+        // /props.n_ctx wins as the runtime-effective context window.
+        Assert.Equal(131_072, result.ContextWindowTokens);
         Assert.Equal(ModelModality.Text | ModelModality.Image, result.InputModalities);
         Assert.Equal(ModelModality.Text, result.OutputModalities);
+    }
+
+    [Fact]
+    public void ResolveFromProbe_LlamaCppRouterPropsZero_ReturnsUnknownContext()
+    {
+        const string modelsJson = """
+        {
+          "object": "list",
+          "data": [
+            {
+              "id": "router-model",
+              "object": "model",
+              "owned_by": "llamacpp"
+            }
+          ]
+        }
+        """;
+        const string propsJson = """
+        {
+          "role": "router",
+          "default_generation_settings": {
+            "params": {},
+            "n_ctx": 0
+          },
+          "modalities": {
+            "vision": false
+          }
+        }
+        """;
+
+        var result = OpenAiCompatibleCapabilityResolver.ResolveFromProbe(
+            "router-model", modelsJson, propsJson);
+
+        Assert.NotNull(result);
+        Assert.Null(result.ContextWindowTokens);
+        Assert.Null(result.InputModalities);
+        Assert.Null(result.OutputModalities);
     }
 
     [Fact]

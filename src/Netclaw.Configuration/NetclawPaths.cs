@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
+
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -123,30 +125,124 @@ public sealed class NetclawPaths
     /// </summary>
     public void EnsureDirectoriesExist()
     {
-        Directory.CreateDirectory(IdentityDirectory);
-        Directory.CreateDirectory(SoulDetailDirectory);
-        Directory.CreateDirectory(AgentsDetailDirectory);
-        Directory.CreateDirectory(ToolingDetailDirectory);
-        Directory.CreateDirectory(ToolingShadowDirectory);
-        Directory.CreateDirectory(McpShadowDirectory);
-        Directory.CreateDirectory(SkillsDirectory);
-        Directory.CreateDirectory(SystemSkillsDirectory);
-        Directory.CreateDirectory(ServerFeedsDirectory);
-        Directory.CreateDirectory(ProjectsDirectory);
-        Directory.CreateDirectory(ClientDirectory);
-        Directory.CreateDirectory(EnvironmentDirectory);
-        Directory.CreateDirectory(SchedulesDirectory);
-        Directory.CreateDirectory(RemindersDirectory);
-        Directory.CreateDirectory(JobsDirectory);
-        Directory.CreateDirectory(ConfigDirectory);
-        Directory.CreateDirectory(WebhooksDirectory);
-        Directory.CreateDirectory(LogsDirectory);
-        Directory.CreateDirectory(SessionLogsDirectory);
-        Directory.CreateDirectory(AgentsDirectory);
-        Directory.CreateDirectory(SessionsDirectory);
-        Directory.CreateDirectory(BinDirectory);
-        Directory.CreateDirectory(KeysDirectory);
-        Directory.CreateDirectory(CacheDirectory);
-        Directory.CreateDirectory(WorkspacesDirectory);
+        var failures = new List<NetclawDirectoryInitializationFailure>();
+
+        foreach (var directory in StandardDirectories())
+        {
+            try
+            {
+                Directory.CreateDirectory(directory);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                failures.Add(new NetclawDirectoryInitializationFailure(directory, ex));
+            }
+        }
+
+        if (failures.Count > 0)
+            throw new NetclawDirectoryInitializationException(BasePath, failures);
+    }
+
+    private IEnumerable<string> StandardDirectories()
+    {
+        yield return IdentityDirectory;
+        yield return SoulDetailDirectory;
+        yield return AgentsDetailDirectory;
+        yield return ToolingDetailDirectory;
+        yield return ToolingShadowDirectory;
+        yield return McpShadowDirectory;
+        yield return SkillsDirectory;
+        yield return SystemSkillsDirectory;
+        yield return ServerFeedsDirectory;
+        yield return ProjectsDirectory;
+        yield return ClientDirectory;
+        yield return EnvironmentDirectory;
+        yield return SchedulesDirectory;
+        yield return RemindersDirectory;
+        yield return JobsDirectory;
+        yield return ConfigDirectory;
+        yield return WebhooksDirectory;
+        yield return LogsDirectory;
+        yield return SessionLogsDirectory;
+        yield return AgentsDirectory;
+        yield return SessionsDirectory;
+        yield return BinDirectory;
+        yield return KeysDirectory;
+        yield return CacheDirectory;
+        yield return WorkspacesDirectory;
     }
 }
+
+public sealed class NetclawDirectoryInitializationException : IOException
+{
+    public NetclawDirectoryInitializationException(
+        string basePath,
+        IReadOnlyList<NetclawDirectoryInitializationFailure> failures)
+        : base(BuildMessage(basePath, failures), new AggregateException(failures.Select(f => f.Exception)))
+    {
+        BasePath = basePath;
+        Failures = failures.ToArray();
+    }
+
+    public string BasePath { get; }
+
+    public IReadOnlyList<NetclawDirectoryInitializationFailure> Failures { get; }
+
+    private static string BuildMessage(string basePath, IReadOnlyList<NetclawDirectoryInitializationFailure> failures)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Failed to initialize Netclaw directories under '{basePath}'.");
+        builder.AppendLine();
+        builder.AppendLine("The following directories could not be created:");
+        foreach (var failure in failures)
+            builder.AppendLine($"- {failure.DirectoryPath}: {failure.Exception.Message}");
+
+        builder.AppendLine();
+        builder.AppendLine($"Process user: {DescribeProcessUser()}");
+        builder.AppendLine();
+        builder.AppendLine("If this is a Docker bind mount, the host directory is probably not writable by the container's netclaw user.");
+        builder.AppendLine("The official Docker entrypoint should repair writable bind mounts automatically. If it was bypassed, pre-create the host path with:");
+        builder.AppendLine("  sudo chown -R 1654:1654 <host-netclaw-data-directory>");
+        builder.AppendLine("For non-Docker installs, grant the current user write access to the Netclaw base directory.");
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string DescribeProcessUser()
+    {
+        var userName = Environment.UserName;
+        if (!OperatingSystem.IsLinux())
+            return userName;
+
+        var ids = TryReadLinuxProcessIds();
+        return ids is null
+            ? userName
+            : $"{userName} (uid={ids.Value.Uid}, gid={ids.Value.Gid})";
+    }
+
+    private static (string Uid, string Gid)? TryReadLinuxProcessIds()
+    {
+        try
+        {
+            string? uid = null;
+            string? gid = null;
+            foreach (var line in File.ReadLines("/proc/self/status"))
+            {
+                if (line.StartsWith("Uid:", StringComparison.Ordinal))
+                    uid = line.Split('\t', StringSplitOptions.RemoveEmptyEntries)[1];
+                else if (line.StartsWith("Gid:", StringComparison.Ordinal))
+                    gid = line.Split('\t', StringSplitOptions.RemoveEmptyEntries)[1];
+
+                if (uid is not null && gid is not null)
+                    return (uid, gid);
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        return null;
+    }
+}
+
+public sealed record NetclawDirectoryInitializationFailure(string DirectoryPath, Exception Exception);

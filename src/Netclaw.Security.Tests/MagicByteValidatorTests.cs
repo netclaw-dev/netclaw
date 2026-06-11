@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Frozen;
+using Netclaw.Media;
 using Xunit;
 
 namespace Netclaw.Security.Tests;
@@ -331,6 +332,69 @@ public sealed class MagicByteValidatorTests
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.UnrecognizedFileType, result.Error);
+    }
+
+    [Fact]
+    public void Validate_OctetStreamPngWithPngExtension_AllowedAndVerifiedAsPng()
+    {
+        var result = MagicByteValidator.Validate(PngHeader, "application/octet-stream", "photo.png");
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal("image/png", result.VerifiedMimeType!.Value.Value);
+        Assert.Equal("image/png", result.DetectedMimeType!.Value.Value);
+    }
+
+    [Fact]
+    public void Validate_AllowedFile_ExposesVerifiedMimeType()
+    {
+        var result = MagicByteValidator.Validate(PdfHeader, "application/pdf", "report.pdf");
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal("application/pdf", result.VerifiedMimeType!.Value.Value);
+    }
+
+    [Fact]
+    public void ContentPolicy_DefaultAllowlist_ComesFromMediaCatalogNativeValidationSet()
+    {
+        var catalogSet = MimeTypeCatalog.GetNativeSignatureValidatedMimeTypes()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.True(catalogSet.SetEquals(ContentPolicy.DefaultAllowedMimeTypes));
+    }
+
+    [Fact]
+    public void SignatureMatchers_StayAlignedWithCatalogNativeValidationSet()
+    {
+        // The validator owns byte-matchers; the catalog owns the MIME/extension
+        // table. A matcher without a catalog entry (or vice versa) would let a
+        // type slip past the extension gate or be silently unscannable.
+        var catalogSet = MimeTypeCatalog.GetNativeSignatureValidatedMimeTypes()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.True(catalogSet.SetEquals(MagicByteValidator.SupportedMimeTypes));
+    }
+
+    [Fact]
+    public void Validate_accepts_bmp_with_known_dib_header()
+    {
+        // "BM" + 12 filler bytes + DIB header size 40 (LE) at offset 14.
+        byte[] bmp = [0x42, 0x4D, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x28, 0x00, 0x00, 0x00];
+
+        var result = MagicByteValidator.Validate(bmp, "image/bmp", "pic.bmp");
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal("image/bmp", result.VerifiedMimeType!.Value.Value);
+    }
+
+    [Fact]
+    public void Validate_accepts_little_endian_tiff()
+    {
+        byte[] tiff = [0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00];
+
+        var result = MagicByteValidator.Validate(tiff, "image/tiff", "scan.tiff");
+
+        Assert.True(result.IsAllowed);
+        Assert.Equal("image/tiff", result.VerifiedMimeType!.Value.Value);
     }
 
     [Fact]

@@ -90,14 +90,43 @@ SHALL be able to add or remove patterns via configuration.
 
 The system SHALL extract verb-chain prefix patterns from shell commands
 using tokenization. The verb chain SHALL consist of non-flag tokens from
-the start of the command until the first flag (`-`), path, or URL
-argument. Extraction is greedy: bare-word operands that are neither flags,
-paths, nor URLs (subcommands, remote names, branch names, refs) SHALL
-remain in the verb chain — the extractor SHALL NOT attempt to distinguish
-subcommands from positional operands. For shell approval units, `&&`,
-`||`, and `;` SHALL split into separate units, while `|` SHALL remain
-inside the current unit. For `bash -c` or `sh -c` wrappers, the inner
-command SHALL be extracted and scanned recursively.
+the start of the command until the first flag (`-`), path, URL, or
+call-specific value argument. A token SHALL be classified as a
+call-specific value iff it is not a flag, not path-shaped, and contains
+a digit — one morphological rule, not a taxonomy of value shapes.
+Extraction is greedy: bare-word operands that are neither flags, paths,
+URLs, nor digit-bearing values (all-alpha subcommands, remote names,
+branch names, refs) SHALL remain in the verb chain — the extractor SHALL
+NOT attempt to distinguish all-alpha subcommands from positional
+operands.
+
+> **Why digit-bearing tokens are excluded:** Tokens containing digits
+> (`123`, `8080`, `0.4.2`, `v0.4.2`, `aa211dcb`, `feature2`) are
+> overwhelmingly call-specific values — ticket IDs, ports, timeouts,
+> versions, SHAs, refs — that vary between invocations of the same verb
+> chain. Baking them into the pattern produces overly-specific approval
+> entries that do not generalize: `git tag v0.4.2` vs `git tag v0.5.0`
+> would create two unrelated entries, forcing separate approval for each
+> release. This generalizes the earlier bare-integer rule (issue #1331).
+> All-alpha operands are intentionally NOT classified: no shape rule can
+> distinguish a branch name (`dev`) from a subcommand (`worktree`), and
+> mis-stripping a subcommand would silently widen a grant. Flags are
+> exempt (`-3`, `--max-count=10` carry invocation intent); path-shaped
+> tokens are exempt so digit-bearing paths still reach directory scoping.
+
+Where greedy extraction has folded a trailing value token into the verb
+chain (e.g. `git tag v0.4.2`, where `v0.4.2` is lowercase-leading and
+therefore verb-like to the parser), the system SHALL trim trailing
+call-specific value tokens from the chain, always retaining at least the
+command word. Trimming SHALL be trailing-only: mid-chain digit-bearing
+tokens (`aws s3 ls`) SHALL NOT be removed. Trimming SHALL apply
+identically on the gate (candidate) path and the persisted/display
+pattern path so the two normalize to the same verb chain.
+
+For shell approval units, `&&`, `||`, and `;` SHALL split into separate
+units, while `|` SHALL remain inside the current unit. For `bash -c` or
+`sh -c` wrappers, the inner command SHALL be extracted and scanned
+recursively.
 
 When `ShellTokenizer.SplitCompoundCommand` detects bash control-flow
 tokens or unbalanced quotes/brackets, it SHALL return an empty
@@ -118,8 +147,66 @@ chain. Compound commands SHALL produce N entries from one user click on
 - **GIVEN** the command `git push origin main`
 - **WHEN** the pattern is extracted
 - **THEN** the pattern is `git push origin main`
-- **AND** the bare-word operands `origin` and `main` remain in the verb
+- **AND** the all-alpha operands `origin` and `main` remain in the verb
   chain because greedy extraction does not strip positional operands
+
+#### Scenario: Verb chain strips bare integer positional argument
+
+- **GIVEN** the command `freshdesk ticket get 123`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `freshdesk ticket get`
+- **AND** the digit-bearing token `123` is excluded because it is
+  call-specific
+
+#### Scenario: Verb chain generalizes across different integer values
+
+- **GIVEN** commands `nc host 8080` and `nc host 9090`
+- **WHEN** patterns are extracted for both
+- **THEN** both produce the same pattern `nc host`
+- **AND** approval granted for one integer value covers all values of the same verb chain
+
+#### Scenario: Verb chain terminates at value token (not just skips it)
+
+- **GIVEN** the command `timeout 30 curl http://example.com`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `timeout`
+- **AND** everything after the value token (including wrapped subcommands like `curl`) is dropped from the pattern
+
+#### Scenario: Digit-bearing operand terminates the pattern
+
+- **GIVEN** the command `docker run --name test123 --port=8080`
+- **WHEN** the pattern is extracted
+- **THEN** the pattern is `docker run --name`
+- **AND** the digit-bearing operand `test123` and everything after it are
+  excluded because digit-bearing non-flag, non-path tokens are
+  call-specific values
+- **AND** the flag `--name` is retained because flags are exempt from
+  value classification
+
+#### Scenario: Version arguments normalize to one verb chain regardless of prefix
+
+- **GIVEN** commands `git tag v0.4.2` and `git tag 0.4.2`
+- **WHEN** candidate verbs and patterns are extracted for both
+- **THEN** both produce the verb chain `git tag`
+- **AND** a standing `git tag` grant auto-approves both forms
+- **AND** the lowercase-leading form is handled by trimming the trailing
+  value token the greedy walk folded into the chain
+
+#### Scenario: Digit-bearing ref folded into the chain is trimmed
+
+- **GIVEN** the command `git show aa211dcb`
+- **WHEN** the candidate verb is extracted
+- **THEN** the verb chain is `git show`
+- **AND** the alpha-leading SHA normalizes the same way as a
+  digit-leading SHA (`git show 1234abcd`)
+
+#### Scenario: Trailing-only trim never removes mid-chain tokens
+
+- **GIVEN** the command `aws s3 ls`
+- **WHEN** the candidate verb is extracted
+- **THEN** the verb chain is `aws s3 ls`
+- **AND** the mid-chain digit-bearing token `s3` is untouched because
+  only trailing value tokens are trimmed
 
 #### Scenario: Verb chain stops at flag
 
@@ -489,6 +576,11 @@ capability flag. When a tool requires approval and the active channel does NOT
 support it, the system SHALL immediately deny the tool with reason
 `channel_does_not_support_approval`. The system SHALL NOT hang or timeout.
 
+Channels that support interactive approval SHALL render approval prompts using
+their richest available interaction surface and SHALL always provide a
+deterministic text fallback path with equivalent decision options when the
+rich interaction surface is unavailable or not configured.
+
 #### Scenario: Unsupported channel auto-denies
 
 - **GIVEN** the headless channel (no interactive user)
@@ -503,6 +595,24 @@ support it, the system SHALL immediately deny the tool with reason
 - **AND** `shell_execute` is in Approval mode
 - **WHEN** the agent invokes an unapproved `shell_execute` command
 - **THEN** the channel renders the approval prompt as a text A/B/C/D reply flow
+
+#### Scenario: Mattermost channel renders interactive approval buttons
+
+- **GIVEN** the Mattermost channel (supports interactive approval)
+- **AND** interactive approvals are configured for the Mattermost channel
+- **AND** `shell_execute` is in Approval mode
+- **WHEN** the agent invokes an unapproved `shell_execute` command
+- **THEN** the channel renders the approval prompt as Mattermost interactive
+  buttons
+- **AND** a clicked button is routed as a `ToolInteractionResponse`
+
+#### Scenario: Mattermost channel falls back to deterministic text options
+
+- **GIVEN** the Mattermost channel (supports interactive approval)
+- **AND** interactive approvals are not configured for the Mattermost channel
+- **WHEN** the agent invokes an unapproved `shell_execute` command
+- **THEN** the channel renders a deterministic A/B/C/D text approval prompt
+- **AND** text replies map to equivalent approval decisions
 
 ### Requirement: Directory-root approvals for shell_execute
 
@@ -917,3 +1027,166 @@ shares the candidate's verb, no near-miss diagnostic SHALL be emitted
 - **WHEN** the gate evaluates the candidate
 - **THEN** the candidate remains unapproved
 - **AND** the user is still prompted
+
+### Requirement: Sub-agent approval bridge preserves prompt correlation
+
+Sub-agent approval prompts SHALL use the same channel-agnostic `ToolInteractionRequest` contract as parent-session tool prompts. The request SHALL use a parent-scoped correlation call id that is unique per bridged approval request while preserving the child call id as part of the correlation value. The request SHALL preserve tool name, display text, exact blocked patterns, candidate verbs, per-candidate directories, cwd, messy-command flag, computed approval options, requester identity, principal, audience-derived authority, and adopted-context safety metadata from the parent turn authority context.
+
+#### Scenario: Sub-agent prompt includes approval candidates and options
+- **GIVEN** a sub-agent shell tool call requires approval
+- **WHEN** the parent approval bridge emits the prompt
+- **THEN** the prompt includes the exact blocked patterns shown to the user
+- **AND** the prompt includes candidate verbs and per-candidate directories for grant persistence
+- **AND** the prompt includes the same computed approval options the parent approval gate produced
+
+#### Scenario: Sub-agent prompt carries adopted-context safety metadata
+- **GIVEN** a sub-agent was spawned from a parent turn with adopted context
+- **WHEN** the sub-agent emits an approval prompt
+- **THEN** the prompt includes adopted-context and third-party adopted-context flags
+- **AND** the prompt includes adopted speaker ids when present
+
+#### Scenario: Duplicate child call ids do not share approval state
+- **GIVEN** two bridged sub-agent approval waits have the same child-local tool call id
+- **WHEN** the parent approval bridge emits prompts for both waits
+- **THEN** each prompt uses a distinct parent-scoped call id
+- **AND** approving one prompt cannot complete or authorize the other wait
+
+### Requirement: Sub-agent approval responses do not execute expired work
+
+Approval responses for sub-agent prompts SHALL execute a tool only while the originating sub-agent wait is still live and correlated to the pending call id. A response that arrives after the sub-agent wait was cancelled, completed, or abandoned SHALL fail closed as expired and SHALL NOT execute the gated tool.
+
+#### Scenario: Late approval after cancellation is expired
+- **GIVEN** a sub-agent approval prompt is pending
+- **AND** the parent cancels the `spawn_agent` call before the user responds
+- **WHEN** the user later approves the stale prompt
+- **THEN** the sub-agent tool is not executed
+- **AND** the response is treated as expired or no-longer-pending
+
+#### Scenario: Live session response requires live approval wait
+- **GIVEN** the parent session still has persisted prompt metadata for a sub-agent approval
+- **AND** the child sub-agent approval wait has already been cancelled or completed
+- **WHEN** an approval response arrives while the parent session is processing
+- **THEN** the response is rejected as expired
+- **AND** no approval grant is applied to execute stale sub-agent work
+
+#### Scenario: Durable grant is written only after live wait is claimed
+- **GIVEN** a sub-agent approval response requests a session or persistent grant
+- **AND** the child approval wait is cancelled before the parent claims the response
+- **WHEN** the response is handled
+- **THEN** no durable approval grant is written
+- **AND** the response is rejected as expired
+
+#### Scenario: No bridge fails closed
+- **GIVEN** a sub-agent tool call requires approval
+- **AND** no parent approval bridge is available
+- **WHEN** the tool executor reports that approval is required
+- **THEN** no approval prompt is emitted
+- **AND** the gated tool is not executed
+- **AND** the sub-agent completes with a failed `SubAgentResult`
+
+### Requirement: Approval pause persistence carries turn context
+
+When a tool approval prompt is emitted from a session turn, the persisted approval request SHALL carry the original turn context as a single durable context record. The approval request MAY continue to carry tool-specific prompt data, option keys, candidates, and compatibility fields, but authority-bearing session context SHALL have one canonical persisted representation for new events.
+
+#### Scenario: Approval request persists context record
+
+- **GIVEN** a tool call requires approval during a session turn
+- **WHEN** the session persists the approval request
+- **THEN** the journaled event includes the turn context for the original request
+- **AND** the pending interaction restored from that event carries the same context
+
+#### Scenario: Tool-specific prompt data remains separate
+
+- **GIVEN** an approval request includes command patterns, candidate verbs, option keys, and directory candidates
+- **WHEN** the turn context is persisted with the approval request
+- **THEN** tool-specific prompt data remains separate from the turn context
+- **AND** the turn context does not become a dumping ground for approval-rendering state
+
+### Requirement: Approval responses use persisted requester context
+
+Approval response authorization SHALL use the requester and principal from the persisted turn context for the pending approval. A recovered approval response SHALL enforce the same requester-only approval rule as the live path, unless the original requester principal represents verified automation where channel-member approval is allowed.
+
+#### Scenario: Non-requester approval rejected after recovery
+
+- **GIVEN** a pending approval was restored with requester `U-requester`
+- **WHEN** sender `U-other` approves the prompt
+- **THEN** the approval response is rejected
+- **AND** the tool is not redriven
+
+#### Scenario: Verified automation approval remains approvable by channel member
+
+- **GIVEN** a pending approval was restored with a verified automation principal
+- **WHEN** a valid channel member approves the prompt
+- **THEN** the approval response is accepted according to the same rule used on the live path
+- **AND** the redrive uses the original turn context
+
+### Requirement: Subagent approval evaluation uses the inherited parent cwd
+
+The approval gate SHALL treat a subagent's `shell_execute` invocation as
+having the cwd inherited from the parent session at spawn time, captured per
+the `session-cwd` capability's "Resolved shell cwd flows to spawned subagents
+as read-only snapshot" requirement. Persisted folder-scoped grants whose
+directory contains the inherited cwd SHALL therefore auto-approve the
+subagent invocation under the same rules as the parent session. Persisted
+global grants (`directory: null`) SHALL continue to auto-approve regardless
+of cwd, including when the inherited cwd is `null`. The matcher SHALL NOT
+introduce a new short-circuit that bypasses persisted grants when the
+inherited cwd is `null`; the existing
+`ApprovalPatternMatching.MatchesShellApproval` semantics apply.
+
+#### Scenario: Folder-scoped parent grant covers subagent invocation
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"dotnet build","directory":"/home/user/repos/foo/"}`
+- **AND** the parent session's resolved cwd at subagent spawn is
+  `/home/user/repos/foo/`
+- **WHEN** the spawned subagent invokes `dotnet build` with no explicit
+  `WorkingDirectory` argument
+- **THEN** the matcher returns approved
+- **AND** no approval prompt is rendered to the user
+
+#### Scenario: Global grant covers subagent invocation with null cwd
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"netclaw stats","directory":null}`
+- **AND** the spawned subagent has no inherited cwd (the parent had none
+  either)
+- **WHEN** the subagent invokes `netclaw stats`
+- **THEN** the matcher returns approved regardless of the null cwd
+- **AND** no approval prompt is rendered
+
+#### Scenario: Folder-scoped parent grant does not match subagent with null cwd
+
+- **GIVEN** `tool-approvals.json` contains
+  `{"verb":"dotnet build","directory":"/home/user/repos/foo/"}`
+- **AND** the spawned subagent has no inherited cwd
+- **WHEN** the subagent invokes `dotnet build` with no explicit
+  `WorkingDirectory` argument
+- **THEN** the folder-scoped grant SHALL NOT match (no effective directory)
+- **AND** the approval gate prompts the user with the header form
+  `Approve dotnet build in (no working directory)?` as documented in this
+  capability's "Five-button approval prompt with verb-and-directory framing"
+  requirement
+- **AND** the daemon log SHALL emit an `approval_near_miss` diagnostic with
+  reason `NoCandidateDirectory` so the operator can see why the grant did
+  not match
+
+### Requirement: Subagent inherits parent session-scoped approvals
+
+The approval gate SHALL walk from a subagent's scope id toward its parent
+session and SHALL treat any session-scoped approval (a `This chat` click)
+recorded against the parent session id as also authorizing the subagent's
+verbs. The subagent scope id has the form
+`{parentSessionId}/subagent/{name}/{runId}`; the walk SHALL terminate at the
+first non-`/subagent/` segment so unrelated sessions never share
+session-scoped approvals. This requirement codifies the existing
+`ToolApprovalActor.IsSessionApproved` scope-walk behavior so future
+refactors SHALL NOT regress it; it does not introduce a new code path.
+
+#### Scenario: This-chat grant in parent authorizes subagent invocation
+
+- **GIVEN** the parent session granted `This chat` for verb `gh pr view` in
+  the current chat
+- **WHEN** a spawned subagent in that chat invokes `gh pr view 123`
+- **THEN** the matcher returns approved via the session-scoped grant
+- **AND** no approval prompt is rendered

@@ -18,18 +18,21 @@ namespace Netclaw.Actors.Sessions;
 internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
 {
     private readonly IApprovalChannel _channel;
-    private readonly Action<ToolInteractionRequest> _emitRequest;
+    private readonly Action<ToolInteractionRequestDispatch> _emitRequest;
     private readonly SessionId _sessionId;
+    private readonly string _approvalScopeId;
     private readonly SenderId? _requesterSenderId;
     private readonly PrincipalClassification? _requesterPrincipal;
     private readonly bool _hasAdoptedContext;
     private readonly bool _hasThirdPartyAdoptedContext;
     private readonly IReadOnlyList<string> _adoptedSpeakerIds;
+    private int _nextApprovalRequestId;
 
     public ParentSessionApprovalBridge(
         IApprovalChannel channel,
-        Action<ToolInteractionRequest> emitRequest,
+        Action<ToolInteractionRequestDispatch> emitRequest,
         SessionId sessionId,
+        string approvalScopeId,
         SenderId? requesterSenderId,
         PrincipalClassification? requesterPrincipal,
         bool hasAdoptedContext,
@@ -39,6 +42,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         _channel = channel;
         _emitRequest = emitRequest;
         _sessionId = sessionId;
+        _approvalScopeId = approvalScopeId;
         _requesterSenderId = requesterSenderId;
         _requesterPrincipal = requesterPrincipal;
         _hasAdoptedContext = hasAdoptedContext;
@@ -58,18 +62,21 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         bool isMessy,
         CancellationToken ct)
     {
-        var waitTask = _channel.WaitForApprovalAsync(callId, Timeout.InfiniteTimeSpan, ct);
+        EnsureAuthorityContext();
+
+        var parentCallId = CreateParentCallId();
+        var waitTask = _channel.WaitForApprovalAsync(parentCallId, Timeout.InfiniteTimeSpan, ct);
 
         // Emit verbatim from the gate's computed options so persistent-grant
         // buttons (Always here / Always anywhere) and the messy-command
         // four-button fallback stay in lock-step with the parent path. The
         // earlier hardcoded list silently dropped "Always anywhere" for
         // sub-agents.
-        _emitRequest(new ToolInteractionRequest
+        _emitRequest(new ToolInteractionRequestDispatch(new ToolInteractionRequest
         {
             SessionId = _sessionId,
             Kind = "approval",
-            CallId = callId,
+            CallId = parentCallId,
             ToolName = new Netclaw.Tools.ToolName(toolName),
             DisplayText = displayText,
             RequesterSenderId = _requesterSenderId,
@@ -86,7 +93,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             Options = options
                 .Select(o => new ToolInteractionOption(new ApprovalOptionKey(o.Key), o.Label))
                 .ToList()
-        });
+        }, PersistApprovalState: false));
 
         var decision = await waitTask;
 
@@ -99,5 +106,36 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             ApprovalDecision.TimedOut => ParentApprovalDecision.TimedOut,
             _ => ParentApprovalDecision.Denied
         };
+    }
+
+    private ToolCallId CreateParentCallId()
+    {
+        // This bridge is created by the session actor but used by thread-pool
+        // tool tasks. Multiple child tool calls can request approval at once,
+        // so the sequence allocation is not actor-mailbox confined.
+        var requestId = Interlocked.Increment(ref _nextApprovalRequestId);
+
+        // Child call ids are only unique inside the sub-agent's tool loop. The
+        // parent approval channel is session-wide, so include the spawning tool
+        // call scope plus a per-bridge sequence. Keep this short: approval
+        // button payloads are capped by the most restrictive channel adapter.
+        return new ToolCallId($"{_approvalScopeId}/subagent-approval/{requestId}");
+    }
+
+    private void EnsureAuthorityContext()
+    {
+        // Approval responses are authorized against the parent requester. If we
+        // cannot reconstruct that authority context, emitting a prompt would let
+        // the channel decide without a safe requester binding.
+        if (_requesterPrincipal is null)
+            throw new ParentApprovalUnavailableException(
+                "Sub-agent approval requires parent requester principal context.");
+
+        if (_requesterPrincipal is not PrincipalClassification.VerifiedAutomation
+            && _requesterSenderId is null)
+        {
+            throw new ParentApprovalUnavailableException(
+                "Sub-agent approval requires parent requester sender context.");
+        }
     }
 }

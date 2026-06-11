@@ -323,7 +323,7 @@ start_eval_daemon() {
     # — host files can be contaminated with user-specific names (e.g., "ArdyBot")
     # that break identity evals. Templates have {{PLACEHOLDER}} tokens that we
     # substitute with eval defaults.
-    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data"
+    mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data" "$EVAL_HOME/data/agents"
     local template_dir="$REPO_ROOT/src/Netclaw.Cli/Resources/identity"
     if [[ -d "$template_dir" ]]; then
         # Substitute placeholders with eval-appropriate defaults
@@ -351,6 +351,25 @@ start_eval_daemon() {
     if [[ -d "$REPO_ROOT/evals/fixtures/skills" ]]; then
         cp -r "$REPO_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
     fi
+
+    # Copy eval-only subagent definitions into the mounted NETCLAW_HOME so
+    # spawn_agent behavior can be exercised without touching the host install.
+    if [[ -d "$REPO_ROOT/evals/fixtures/agents" ]]; then
+        cp -r "$REPO_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
+    fi
+
+    # Pre-seed a large (>256 KB) text file in the workspaces read-root for the
+    # bounded-tool-output file_read eval (complex_large_file_read_ranged). It must
+    # be too big for one inline read AND have model-unguessable content so the only
+    # way to answer "what's on line 5000" is to page it with file_read StartLine/Limit
+    # — the behavior the bounded-output steer is meant to elicit. A deterministic
+    # Lehmer PRNG (pure integer modular arithmetic, identical across awk impls)
+    # makes line 5000 reproducible so the eval can assert the exact value. Lives
+    # under workspaces (a global read-root) rather than identity/skills so it is
+    # not pulled into the system prompt or scanned as a skill. 30000 lines ≈ 314 KB.
+    mkdir -p "$EVAL_HOME/data/workspaces"
+    awk 'BEGIN{x=1;for(i=1;i<=30000;i++){x=(x*48271)%2147483647;print x}}' \
+        > "$EVAL_HOME/data/workspaces/netclaw-eval-largefile.txt"
 
     # The eval container runs as the non-root `netclaw` user and needs write
     # access to the bind-mounted identity, logs, skills, and data trees.
@@ -820,6 +839,17 @@ stdout_not_contains() {
     ! grep -qi "$1" "$STDOUT_FILE" 2>/dev/null
 }
 
+stdout_response_contains() {
+    grep -v '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qi "$1"
+}
+
+stdout_response_not_contains() {
+    if grep -v '^\[tool:call\]' "$STDOUT_FILE" 2>/dev/null | grep -qi "$1"; then
+        return 1
+    fi
+    return 0
+}
+
 daemon_log_tail() {
     if [[ -f "$DAEMON_LOG" ]]; then
         tail -n +"$((DAEMON_LOG_LINES_BEFORE + 1))" "$DAEMON_LOG" 2>/dev/null
@@ -967,6 +997,10 @@ assert_tool_discovery() {
     stdout_contains '\[tool:call\] search_tools'
 }
 
+assert_tool_channel_lookup_discovery() {
+    stdout_contains '\[tool:call\] search_tools'
+}
+
 assert_tool_shell() {
     stdout_contains '\[tool:call\] shell_execute'
 }
@@ -1012,6 +1046,17 @@ assert_autonomy_web_fetch() {
     stdout_contains '\[tool:call\] web_search' || stdout_contains '\[tool:call\] web_fetch'
 }
 
+# Category 6b: Subagents
+assert_subagent_headless_ambiguous_task() {
+    stdout_tool_called 'spawn_agent' && \
+        daemon_log_contains 'SubAgent \[headless-analyst\] completed \(success=True' && \
+        stdout_response_contains 'assumption' && \
+        stdout_response_not_contains 'which.*include' && \
+        stdout_response_not_contains 'what.*include' && \
+        stdout_response_not_contains 'please.*clarify' && \
+        stdout_response_not_contains 'need.*more.*information'
+}
+
 # Category 7: Complex Task Execution
 assert_complex_write_and_run() {
     stdout_contains '\[tool:call\] file_write' && \
@@ -1026,6 +1071,45 @@ assert_complex_gh_issues() {
 
 assert_complex_diagnose_self() {
     stdout_contains '\[tool:call\] shell_execute' && stdout_contains 'netclaw.*doctor'
+}
+
+# bounded-tool-output coverage (bound-tool-output-with-file-spill change).
+# These two cases assert on OUTCOME, not mechanism: the prompts state only the
+# goal and give the agent NO instructions about spilling, redirecting, re-running,
+# file_read, StartLine/Limit, or grep. How the agent handles oversized output must
+# come entirely from AGENTS.md, the netclaw-operations skill, and the steer text
+# in the tool result — coaching it in the prompt would be testing instruction-
+# following, not whether the real guidance surfaces work.
+#
+# The data is a deterministic Lehmer PRNG (pure integer modular arithmetic,
+# identical across awk implementations and the host that computed the expected
+# values), so the value at a deep line is reproducible AND un-fabricatable by the
+# model. Because the tool bounds any single read to ~N=2000 inline chars, the
+# deep-line value is unreachable from one read — so a correct answer can ONLY
+# come from the agent paging/reading the oversized output the way the steer asks.
+# Outcome therefore implies correct handling; no mechanism assertion is needed.
+
+# Large SHELL output: ~210 KB on stdout exceeds N, so the daemon spills it and
+# steers. Line 200 (value 872671849) sits past the inline window; reporting it
+# proves the agent retrieved it from the bounded/spilled output unaided.
+assert_complex_large_shell_output_spill() {
+    stdout_contains '\[tool:call\] shell_execute' && \
+        stdout_response_contains '872671849'
+}
+
+# Large FILE: a pre-seeded ~314 KB file (>256 KB, so file_read returns a bounded
+# sample + steer). The prompt asks for a small line WINDOW around 5000 rather than
+# exactly line 5000: the model pages correctly with file_read StartLine/Limit (the
+# behavior under test, every run) but can misindex the line by ±1 (the original
+# run treated the param's former name "Offset" as a 0-based skip-count — the bug
+# that motivated renaming it to the 1-based StartLine). A window makes line 5000
+# (value 1629331733) fall inside the returned slice regardless of any ±1 indexing,
+# so the case measures bounded-output paging, not exact index arithmetic. Line 5000
+# is ~52 KB in, well past the inline window, so reporting its value still proves
+# the agent paged rather than dumped.
+assert_complex_large_file_read_ranged() {
+    stdout_contains '\[tool:call\] file_read' && \
+        stdout_response_contains '1629331733'
 }
 
 # Category 8: Multi-Turn Conversation (tests session-resume + KV cache behavior)
@@ -1378,6 +1462,9 @@ run_all() {
     run_case tool_discovery "search_tools called" \
         "What MCP servers are available?"
 
+    run_case tool_channel_lookup_discovery "search_tools called for channel lookup tools" \
+        "Find the available tool for looking up a user on a chat channel before messaging them."
+
     run_case tool_shell "shell_execute called" \
         "Run 'echo hello' in the shell"
 
@@ -1417,6 +1504,15 @@ run_all() {
 
     end_category
 
+    # ── Category 6b: Subagents ──
+    print_category "Subagents"
+
+    run_case subagent_headless_ambiguous_task "spawned subagent completes ambiguous task without clarification" \
+        "Use spawn_agent with agent headless-analyst. Ask it to prepare final release notes from these candidate changes without asking follow-up questions. Include everything that looks user-facing: fixed arrow-key input decoding; updated an internal test helper; improved file trace listener encoding. Return the subagent's assumptions and final notes." \
+        "Delegate this to the headless-analyst subagent using spawn_agent: decide what belongs in release notes from this ambiguous list without asking me for clarification: legacy CSI key decoding fix; private test fixture cleanup; file trace listener writes UTF-8 correctly. Include all user-facing items and return assumptions plus final notes."
+
+    end_category
+
     # ── Category 7: Complex Task Execution ──
     print_category "Complex Task Execution"
 
@@ -1428,6 +1524,25 @@ run_all() {
 
     run_case complex_diagnose_self "shell_execute with netclaw doctor" \
         "Run netclaw doctor and summarize any problems"
+
+    # bounded-tool-output: oversized SHELL output. The prompt states only the
+    # goal — run a command and report a deep line of its output. How to cope with
+    # the output being too large to return inline (read the spill the steer hands
+    # back, rather than re-running) must come from the agent's own guidance, not
+    # this prompt. The number is a deterministic-but-opaque Lehmer PRNG value; the
+    # assertion checks the agent reports the correct line-200 value (872671849).
+    run_case complex_large_shell_output_spill "retrieves a deep line from oversized shell output unaided" \
+        "Run this command with shell_execute and tell me the number it prints on line 200: awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}'" \
+        "Using shell_execute, run: awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}' — then tell me which number is printed on the 200th line of its output."
+
+    # bounded-tool-output: oversized FILE. The prompt states only the goal — read
+    # a deep line of a named large file. How to cope with it being too large for
+    # one read (page it with file_read StartLine/Limit, per the steer) must come from
+    # the agent's own guidance. The file is pre-seeded in start_eval_daemon; the
+    # assertion checks the agent reports the correct line-5000 value (1629331733).
+    run_case complex_large_file_read_ranged "retrieves a deep line from a large file unaided" \
+        "List the numbers on lines 4997 through 5003 of the file /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt" \
+        "Read lines 4997 to 5003 of /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt and list the numbers on those lines."
 
     end_category
 

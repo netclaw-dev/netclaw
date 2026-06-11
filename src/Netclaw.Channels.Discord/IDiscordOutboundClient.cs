@@ -16,6 +16,18 @@ public readonly record struct DiscordNewThread(
     DiscordThreadOrMessageId ThreadOrMessageId);
 
 /// <summary>
+/// Result of a proactive Discord DM post. Discord DMs do not have public
+/// threads; <see cref="ThreadOrMessageId"/> is the root DM message id used as
+/// the stable session key segment.
+/// </summary>
+public readonly record struct DiscordNewDirectMessage(
+    DiscordChannelId ChannelId,
+    DiscordReplyChannelId ReplyChannelId,
+    DiscordThreadOrMessageId ThreadOrMessageId,
+    DiscordMessageId RootMessageId,
+    DiscordUserId UserId);
+
+/// <summary>
 /// The root message was posted successfully, but Discord failed to create the
 /// follow-up thread needed for session binding. Callers should report this as a
 /// partial success so operators do not retry and spam duplicate root messages.
@@ -56,5 +68,14 @@ public interface IDiscordOutboundClient
         DiscordChannelId channelId,
         string text,
         string threadName,
+        CancellationToken ct = default);
+
+    /// <summary>
+    /// Opens or reuses a DM channel for <paramref name="userId"/> and posts a
+    /// root message that becomes the session anchor.
+    /// </summary>
+    Task<DiscordNewDirectMessage> PostDirectMessageAsync(
+        DiscordUserId userId,
+        string text,
         CancellationToken ct = default);
 }

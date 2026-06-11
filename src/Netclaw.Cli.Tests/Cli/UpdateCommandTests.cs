@@ -95,6 +95,8 @@ public sealed class UpdateCommandTests : IDisposable
     {
         yield return [new[] { "init" }];
         yield return [new[] { "update" }];
+        yield return [new[] { "secrets", "set", "Discord:BotToken", "token" }];
+        yield return [new[] { "daemon", "stop" }];
         yield return [new[] { "chat" }];
         yield return [new[] { "chat", "-p", "hello" }];
         yield return [new[] { "sessions" }];

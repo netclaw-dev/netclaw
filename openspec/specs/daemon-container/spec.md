@@ -1,4 +1,17 @@
-## ADDED Requirements
+# daemon-container Specification
+
+## Purpose
+
+This capability defines how `netclawd` is packaged and shipped as a Docker
+image and how the behavioral eval suite runs against an ephemeral instance of
+that image. It specifies the release-grade image published to GHCR, the
+container's entrypoint and configuration surface, the operator state volume,
+the bundled autonomous-agent tooling and runtime-installable base OS, the
+single local build entrypoint, the dedicated Docker validation workflow, and
+the eval harness contract that spins up and tears down its own container
+without touching the operator's real daemon, identity, or client state.
+
+## Requirements
 
 ### Requirement: Release-grade Docker image published on tag
 

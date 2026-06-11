@@ -43,8 +43,17 @@ public static class OAuthTokenPersistence
 
         providerNode["OAuthAccessToken"] = result.AccessToken.Value;
 
+        // Preserve any previously-stored refresh token / account id when the new
+        // result omits them. An OAuth response that doesn't echo refresh_token means
+        // "keep using the existing one" (RFC 6749 §5.1), and a partial refresh that
+        // lacks the ChatGPT account id must not wipe a value the Codex backend still
+        // requires. (OAuthTokenExpiry below is still cleared on null — a stale expiry
+        // is worse than an absent one.)
         if (result.RefreshToken is not null)
             providerNode["OAuthRefreshToken"] = result.RefreshToken.Value;
+
+        if (result.AccountId is not null)
+            providerNode["OAuthAccountId"] = result.AccountId.Value;
 
         // OAuthTokenExpiry is NOT a secret and must NOT go in secrets.json.
         // SecretsFileWriter encrypts the entire file, and encrypted DateTimeOffset
@@ -53,19 +62,46 @@ public static class OAuthTokenPersistence
         var json = root.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
-        if (result.ExpiresAt.HasValue)
+        PersistTokenExpiry(paths, providerName, result.ExpiresAt);
+    }
+
+    private static void PersistTokenExpiry(NetclawPaths paths, string providerName, DateTimeOffset? expiresAt)
+    {
+        if (!expiresAt.HasValue && !File.Exists(paths.NetclawConfigPath))
+            return;
+
+        var configJson = File.Exists(paths.NetclawConfigPath)
+            ? File.ReadAllText(paths.NetclawConfigPath)
+            : "{}";
+        var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? [];
+        var configProviders = configRoot["Providers"]?.AsObject();
+
+        if (configProviders is null)
         {
-            var configJson = File.Exists(paths.NetclawConfigPath)
-                ? File.ReadAllText(paths.NetclawConfigPath) : "{}";
-            var configRoot = JsonNode.Parse(configJson)?.AsObject() ?? [];
-            var configProviders = configRoot["Providers"]?.AsObject() ?? [];
+            if (!expiresAt.HasValue)
+                return;
+
+            configProviders = [];
             configRoot["Providers"] = configProviders;
-            var configProvider = configProviders[providerName]?.AsObject() ?? [];
-            configProviders[providerName] = configProvider;
-            configProvider["OAuthTokenExpiry"] = result.ExpiresAt.Value.ToString("o");
-            File.WriteAllText(paths.NetclawConfigPath,
-                configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
         }
+
+        var configProvider = configProviders[providerName]?.AsObject();
+        if (configProvider is null)
+        {
+            if (!expiresAt.HasValue)
+                return;
+
+            configProvider = [];
+            configProviders[providerName] = configProvider;
+        }
+
+        if (expiresAt.HasValue)
+            configProvider["OAuthTokenExpiry"] = expiresAt.Value.ToString("o");
+        else
+            configProvider.Remove("OAuthTokenExpiry");
+
+        File.WriteAllText(paths.NetclawConfigPath,
+            configRoot.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
     /// <summary>
@@ -107,6 +143,14 @@ public static class OAuthTokenPersistence
                 refreshTokenStr = protector.Unprotect(refreshTokenStr);
         }
 
+        string? accountIdStr = null;
+        if (provider.TryGetProperty("OAuthAccountId", out var accountIdProp))
+        {
+            accountIdStr = accountIdProp.GetString();
+            if (protector is not null && accountIdStr is not null && ISecretsProtector.IsEncrypted(accountIdStr))
+                accountIdStr = protector.Unprotect(accountIdStr);
+        }
+
         DateTimeOffset? expiresAt = null;
         if (provider.TryGetProperty("OAuthTokenExpiry", out var expiryProp))
         {
@@ -121,6 +165,7 @@ public static class OAuthTokenPersistence
         return new OAuthDeviceFlowResult(
             new SensitiveString(accessTokenStr),
             refreshTokenStr is not null ? new SensitiveString(refreshTokenStr) : null,
-            expiresAt);
+            expiresAt,
+            accountIdStr is not null ? new SensitiveString(accountIdStr) : null);
     }
 }

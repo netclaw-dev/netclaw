@@ -7,7 +7,7 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Channels.Discord;
 
-public sealed class DiscordChannelOptions
+public sealed class DiscordChannelOptions : IRemoteChatChannelOptions
 {
     public bool Enabled { get; init; }
 

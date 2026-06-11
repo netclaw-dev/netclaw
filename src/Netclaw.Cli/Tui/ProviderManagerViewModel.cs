@@ -72,7 +72,6 @@ public sealed class ProviderDisplayItem
 /// </summary>
 public sealed class ProviderManagerViewModel : ReactiveViewModel
 {
-    private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
 
     private readonly NetclawPaths _paths;
     private readonly ProviderDescriptorRegistry _registry;
@@ -86,9 +85,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
-    public ReactiveProperty<int> SpinnerTick { get; } = new(0);
     public ReactiveProperty<bool> IsEagerProbing { get; } = new(false);
-    public ReactiveProperty<int> EagerProbeElapsedSeconds { get; } = new(0);
 
     /// <summary>
     /// Version counter for state changes that require DynamicLayoutNode invalidation.
@@ -115,6 +112,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     public AuthMethod NewAuthMethod { get; set; } = AuthMethod.None;
     public string? NewApiKey { get; set; }
     public string? NewEndpoint { get; set; }
+    private bool _newProviderPersisted;
 
     // ── OAuth flow (shared coordinator) ──
     public OAuthFlowCoordinator OAuth { get; private set; } = null!; // initialized in constructor
@@ -245,16 +243,15 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
 
         IsEagerProbing.Value = true;
-        EagerProbeElapsedSeconds.Value = 0;
 
         foreach (var item in configuredItems)
             item.Health = ProviderHealthStatus.Probing;
 
         NotifyStateChanged();
 
-        using var timerCts = new CancellationTokenSource();
-        _ = RunEagerProbeTimerAsync(timerCts.Token);
-
+        // Each provider's completion calls NotifyStateChanged() to refresh its
+        // health glyph; the in-progress spinners self-animate via SpinnerNode, so
+        // no eager-probe redraw timer is needed.
         var probeTasks = configuredItems.Select(async item =>
         {
             try
@@ -279,22 +276,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         await Task.WhenAll(probeTasks);
 
-        timerCts.Cancel();
         IsEagerProbing.Value = false;
         CurrentState.Value = ProviderManagerState.List;
         NotifyStateChanged();
-    }
-
-    private async Task RunEagerProbeTimerAsync(CancellationToken ct)
-    {
-        while (!ct.IsCancellationRequested)
-        {
-            try { await Task.Delay(1000, ct); }
-            catch (OperationCanceledException) { return; }
-
-            EagerProbeElapsedSeconds.Value++;
-            RequestRedraw();
-        }
     }
 
     /// <summary>
@@ -447,6 +431,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
 
         NewProviderType = type;
         NewProviderName = DetailProvider.ConfiguredName;
+        NewEndpoint = DetailProvider.Entry?.Endpoint;
         IsFixFlow = true;
 
         var oauthMethod = descriptor.Auth.SupportedAuthMethods
@@ -575,11 +560,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
-    /// Write the new provider to config files after successful validation.
+    /// Finish a successful add flow and return to the refreshed provider list.
     /// </summary>
     public void ConfirmAdd()
     {
-        WriteProviderConfig();
+        if (!_newProviderPersisted)
+            WriteProviderConfig();
+
         StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
         ClearAddState();
         RefreshAndProbeAll();
@@ -815,7 +802,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddComplete:
-                GoBackToList();
+                ConfirmAdd();
                 break;
             case ProviderManagerState.Details:
             case ProviderManagerState.FixCredentials:
@@ -874,6 +861,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
         var providerType = NewProviderType ?? "unknown";
+        var probeEntry = BuildNewProviderProbeEntry(providerType);
         var probeId = IdGen.ShortId();
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
@@ -896,13 +884,11 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
         try
         {
-            result = await _probe.ProbeAsync(
-                    providerType,
-                    NewEndpoint,
-                    NewApiKey,
-                    NewAuthMethod,
-                    ct)
-                .WaitAsync(ProbeHardTimeout, ct);
+            // Whole-probe wall-clock (covers pre-request work like OAuth token exchange);
+            // ProbeTimeouts.InteractiveWallClock stays above the descriptor's per-request
+            // deadline so it never truncates a legitimately slow self-hosted probe (#1292).
+            result = await _probe.ProbeAsync(probeEntry, ct)
+                .WaitAsync(ProbeTimeouts.InteractiveWallClock, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -911,7 +897,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         catch (TimeoutException)
         {
             result = new ProviderProbeResult(false,
-                $"Validation timed out after {(int)ProbeHardTimeout.TotalSeconds} seconds. Check network connectivity and try again.", []);
+                $"Validation timed out after {(int)ProbeTimeouts.InteractiveWallClock.TotalSeconds} seconds. Check network connectivity and try again.", []);
         }
         catch (Exception ex)
         {
@@ -941,6 +927,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         {
             if (IsFixFlow)
             {
+                if (NewProviderName is not null && OAuth.Result is not null)
+                {
+                    WriteProviderConfig();
+                    _newProviderPersisted = true;
+                }
+
                 // Fix flow: re-probe all providers so list shows fresh health
                 IsFixFlow = false;
                 StatusMessage.Value = "Credentials updated successfully. Restart daemon for changes to take effect.";
@@ -948,6 +940,9 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             }
             else
             {
+                WriteProviderConfig();
+                _newProviderPersisted = true;
+                StatusMessage.Value = $"Added provider '{NewProviderName}'. Restart daemon for changes to take effect.";
                 CurrentState.Value = ProviderManagerState.AddComplete;
             }
         }
@@ -955,22 +950,48 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
+    // Drives only the cosmetic "(Ns)" elapsed counter now that the spinner glyph
+    // self-animates via SpinnerNode; a 1 Hz tick is all that's needed.
     private async Task RunProbeTimerAsync(CancellationToken ct)
     {
-        var tickCount = 0;
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(120, ct); }
+            try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { return; }
 
-            tickCount++;
-            SpinnerTick.Value = tickCount;
-
-            if (tickCount % 8 == 0)
-                ProbeElapsedSeconds.Value++;
-
-            RequestRedraw();
+            ProbeElapsedSeconds.Value++;
         }
+    }
+
+    private ProviderEntry BuildNewProviderProbeEntry(string providerType)
+    {
+        var entry = new ProviderEntry
+        {
+            Type = providerType,
+            Endpoint = NewEndpoint ?? "",
+            AuthMethod = NewAuthMethod
+        };
+
+        if (NewAuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce)
+        {
+            var result = OAuth.Result;
+            var credential = NewApiKey;
+            if (string.IsNullOrWhiteSpace(credential))
+                credential = result?.AccessToken.Value;
+
+            entry.OAuthAccessToken = !string.IsNullOrWhiteSpace(credential)
+                ? new SensitiveString(credential)
+                : null;
+            entry.OAuthRefreshToken = result?.RefreshToken;
+            entry.OAuthTokenExpiry = result?.ExpiresAt;
+            entry.OAuthAccountId = result?.AccountId;
+        }
+        else if (!string.IsNullOrWhiteSpace(NewApiKey))
+        {
+            entry.ApiKey = new SensitiveString(NewApiKey);
+        }
+
+        return entry;
     }
 
 
@@ -1026,6 +1047,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         ProbeResult.Value = null;
         ProbeElapsedSeconds.Value = 0;
         IsFixFlow = false;
+        _newProviderPersisted = false;
     }
 
     private void NotifyStateChanged()
@@ -1054,9 +1076,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
-        SpinnerTick.Dispose();
         IsEagerProbing.Dispose();
-        EagerProbeElapsedSeconds.Dispose();
         StateVersion.Dispose();
         base.Dispose();
     }

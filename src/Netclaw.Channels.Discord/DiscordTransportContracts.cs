@@ -55,17 +55,33 @@ public sealed record DiscordGatewayInteraction(
     DiscordMessageId? PromptMessageId = null,
     DiscordReplyChannelId? ReplyChannelId = null);
 
+public sealed record DiscordGatewaySnapshot(
+    bool IsConnected,
+    bool IsReady,
+    string? HealthDetail,
+    DiscordUserId? BotUserId) : IGatewaySnapshot;
+
 public interface IDiscordGatewayClient
 {
     event Func<DiscordGatewayMessage, Task>? MessageReceived;
 
     event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
 
-    bool IsConnected { get; }
+    /// <summary>
+    /// Raised when the current Discord socket/session must be discarded and
+    /// replaced with a fresh login/start cycle.
+    /// </summary>
+    event Func<string, Task>? CleanReconnectRequired;
 
-    DiscordUserId? BotUserId { get; }
+    /// <summary>
+    /// Raised when the lifecycle actor successfully reconnects after a transient
+    /// failure. The snapshot contains the restored bot identity and health state.
+    /// </summary>
+    event Func<DiscordGatewaySnapshot, Task>? ConnectionRestored;
 
-    Task ConnectAsync(string botToken, CancellationToken cancellationToken = default);
+    Task<DiscordGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default);
+
+    Task<DiscordGatewaySnapshot> ConnectAsync(string botToken, CancellationToken cancellationToken = default);
 
     Task DisconnectAsync(CancellationToken cancellationToken = default);
 }
@@ -82,6 +98,10 @@ public interface IDiscordReplyClient
         string text,
         bool removeComponents = false,
         CancellationToken cancellationToken = default);
+
+    Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default);
+
+    Task<DiscordMessageId?> UploadFileAsync(DiscordFileUpload upload, CancellationToken cancellationToken = default);
 }
 
 public sealed record DiscordPostMessage(
@@ -98,6 +118,13 @@ public sealed record DiscordPostResult(
 {
     public static readonly DiscordPostResult Default = new();
 }
+
+public sealed record DiscordFileUpload(
+    DiscordReplyChannelId ReplyChannelId,
+    string FilePath,
+    string FileName,
+    string Text,
+    DiscordMessageId? RootMessageId = null);
 
 public sealed record DiscordButtonSpec(
     string CustomId,
@@ -130,13 +157,28 @@ public sealed class UnconfiguredDiscordGatewayClient : IDiscordGatewayClient
         remove { }
     }
 
-    public bool IsConnected => false;
+    public event Func<string, Task>? CleanReconnectRequired
+    {
+        add { }
+        remove { }
+    }
 
-    public DiscordUserId? BotUserId => null;
+    public event Func<DiscordGatewaySnapshot, Task>? ConnectionRestored
+    {
+        add { }
+        remove { }
+    }
 
-    public Task ConnectAsync(string botToken, CancellationToken cancellationToken = default)
-        => throw new InvalidOperationException(
-            "Discord channel is enabled, but no Discord gateway client is configured.");
+    public Task<DiscordGatewaySnapshot> GetSnapshotAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(new DiscordGatewaySnapshot(
+            IsConnected: false,
+            IsReady: false,
+            HealthDetail: "Discord gateway client is not configured.",
+            BotUserId: null));
+
+    public Task<DiscordGatewaySnapshot> ConnectAsync(string botToken, CancellationToken cancellationToken = default)
+        => Task.FromException<DiscordGatewaySnapshot>(new InvalidOperationException(
+            "Discord channel is enabled, but no Discord gateway client is configured."));
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default)
         => Task.CompletedTask;
@@ -159,4 +201,12 @@ public sealed class UnconfiguredDiscordReplyClient : IDiscordReplyClient
         bool removeComponents = false, CancellationToken cancellationToken = default)
         => throw new InvalidOperationException(
             "Discord channel attempted to update a message, but no Discord reply client is configured.");
+
+    public Task TriggerTypingAsync(DiscordReplyChannelId channelId, CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Discord channel attempted to trigger typing, but no Discord reply client is configured.");
+
+    public Task<DiscordMessageId?> UploadFileAsync(DiscordFileUpload upload, CancellationToken cancellationToken = default)
+        => throw new InvalidOperationException(
+            "Discord channel attempted to upload a file, but no Discord reply client is configured.");
 }

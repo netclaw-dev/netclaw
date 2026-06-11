@@ -66,4 +66,14 @@ public static class DiscordAclPolicy
         return options.AllowedChannelIds.Contains(channelId.Value, StringComparer.Ordinal);
     }
 
+    public static bool IsAllowedUser(
+        DiscordUserId userId,
+        DiscordChannelOptions options)
+    {
+        if (options.AllowedUserIds.Length == 0)
+            return true;
+
+        return options.AllowedUserIds.Contains(userId.Value, StringComparer.Ordinal);
+    }
+
 }

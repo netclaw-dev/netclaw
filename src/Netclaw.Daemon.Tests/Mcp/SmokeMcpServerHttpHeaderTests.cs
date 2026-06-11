@@ -153,6 +153,53 @@ public sealed class SmokeMcpServerHttpHeaderTests
 
         Assert.Contains("(none)", observed, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// End-to-end regression for #1350: the smoke server returns 401 +
+    /// WWW-Authenticate with OAuth resource_metadata on unauthenticated
+    /// requests, but the user has a static Authorization header configured.
+    /// Both the OAuth probe and the MCP transport hit the same real server —
+    /// no fakes. The probe caches metadata but must NOT block the connection;
+    /// the static header must reach the server and the connection must succeed.
+    /// </summary>
+    [Fact]
+    public async Task ConfiguredHeader_WhenOAuthProbeReturnsMetadata_StillReachesServer()
+    {
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var ct = cts.Token;
+
+        const string expectedHeader = "Bearer static-token-oauth-probe-test";
+
+        await using var server = await SmokeHttpMcpServer.StartAsync(ct, requireAuth: true);
+
+        var entry = new McpServerEntry
+        {
+            Transport = "http",
+            Url = server.Url,
+            Enabled = true,
+            Headers = new Dictionary<string, SensitiveString>
+            {
+                ["Authorization"] = new SensitiveString(expectedHeader),
+            },
+        };
+
+        var registry = new ToolRegistry();
+        await using var harness = McpSmokeHarness.Create(
+            new Dictionary<string, McpServerEntry> { ["smoke-http"] = entry }, registry);
+
+        await harness.Manager.StartAsync(ct);
+
+        var lastAuthHeader = registry.GetAllRegistrations()
+            .Select(r => r.Tool)
+            .OfType<McpToolAdapter>()
+            .SingleOrDefault(t => t.Name == "smoke-http/last_auth_header");
+        Assert.NotNull(lastAuthHeader);
+
+        var observed = await lastAuthHeader!.ExecuteAsync(
+            new Dictionary<string, object?>(), ToolExecutionContext.Empty, ct);
+
+        Assert.Contains(expectedHeader, observed, StringComparison.Ordinal);
+    }
 }
 
 /// <summary>
@@ -182,7 +229,8 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
 
     public string Url { get; }
 
-    public static async Task<SmokeHttpMcpServer> StartAsync(CancellationToken ct)
+    public static async Task<SmokeHttpMcpServer> StartAsync(
+        CancellationToken ct, bool requireAuth = false)
     {
         var info = new ProcessStartInfo("dotnet")
         {
@@ -197,6 +245,8 @@ internal sealed class SmokeHttpMcpServer : IAsyncDisposable
         info.ArgumentList.Add("--port");
         info.ArgumentList.Add("0");
         info.ArgumentList.Add("--capture-auth");
+        if (requireAuth)
+            info.ArgumentList.Add("--require-auth");
 
         var process = Process.Start(info)
             ?? throw new InvalidOperationException("Failed to start smoke MCP server");

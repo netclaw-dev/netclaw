@@ -16,17 +16,20 @@ namespace Netclaw.Actors.SubAgents;
 
 /// <summary>
 /// Shared utility that encapsulates the subagent spawn-ask-report lifecycle.
-/// Resolves tools by name, spawns a <see cref="SubAgentActor"/> as a child of the
+/// Resolves audience-scoped runtime tools, spawns a <see cref="SubAgentActor"/> as a child of the
 /// owning session actor, awaits results, and emits observability notifications.
 /// Singleton — registered in DI.
 /// </summary>
 public sealed class SubAgentSpawner
 {
+    private const int SubAgentMaxToolIterations = 30;
+
     private readonly IChatClientProvider _chatClientProvider;
     private readonly ToolRegistry _toolRegistry;
     private readonly ToolAccessPolicy _toolAccessPolicy;
     private readonly IToolApprovalService? _approvalService;
     private readonly ISystemPromptProvider _promptProvider;
+    private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger<SubAgentSpawner> _logger;
 
     public SubAgentSpawner(
@@ -35,13 +38,15 @@ public sealed class SubAgentSpawner
         ToolAccessPolicy toolAccessPolicy,
         IToolApprovalService? approvalService,
         ISystemPromptProvider promptProvider,
-        ILogger<SubAgentSpawner> logger)
+        ILogger<SubAgentSpawner> logger,
+        SubAgentConfig? subAgentConfig = null)
     {
         _chatClientProvider = chatClientProvider;
         _toolRegistry = toolRegistry;
         _toolAccessPolicy = toolAccessPolicy;
         _approvalService = approvalService;
         _promptProvider = promptProvider;
+        _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger;
     }
 
@@ -73,15 +78,17 @@ public sealed class SubAgentSpawner
             };
         }
 
-        var tools = ResolveTools(profile);
+        var tools = ResolveTools(profile, context);
         if (tools.Count == 0)
         {
-            _logger.LogWarning("SubAgent [{AgentName}] has no resolvable tools — cannot spawn", profile.Name);
+            _logger.LogWarning(
+                "SubAgent [{AgentName}] has no tools available under the parent audience policy — cannot spawn",
+                profile.Name);
             activitySink?.TryComplete();
             return new SubAgentResult
             {
                 Success = false,
-                Output = $"Cannot spawn subagent '{profile.Name}': none of its tools are currently available.",
+                Output = $"Cannot spawn subagent '{profile.Name}': no tools are available under the parent audience policy.",
                 AgentName = new AgentName(profile.Name)
             };
         }
@@ -109,12 +116,20 @@ public sealed class SubAgentSpawner
 
         var chatClient = _chatClientProvider.GetClient(definition.ModelRole);
         var subAgentTimeout = TimeSpan.FromSeconds(profile.TimeoutSeconds);
+        var prefillTimeout = TimeSpan.FromSeconds(
+            profile.PrefillTimeoutSeconds ?? _subAgentConfig.PrefillTimeoutSeconds);
+        var noProgressTimeout = TimeSpan.FromSeconds(_subAgentConfig.NoProgressTimeoutSeconds);
         var subAgentScopeId = !string.IsNullOrWhiteSpace(context.SessionId)
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
 
         // Spawn as child of the session actor via the context factory
-        var props = SubAgentActor.CreateProps(definition, chatClient, _toolAccessPolicy, _approvalService);
+        var props = SubAgentActor.CreateProps(
+            definition,
+            chatClient,
+            _toolAccessPolicy,
+            _approvalService,
+            SubAgentMaxToolIterations);
         var actorName = $"subagent-{definition.Name}-{runId}";
         var subAgent = (IActorRef)await context.SpawnChildActor(props, actorName, ct);
 
@@ -127,10 +142,15 @@ public sealed class SubAgentSpawner
                     Task = task,
                     RuntimeContext = runtimeContext,
                     Timeout = subAgentTimeout,
+                    PrefillTimeout = prefillTimeout,
+                    NoProgressTimeout = noProgressTimeout,
                     SessionScopeId = subAgentScopeId,
                     Audience = context.Audience,
                     Boundary = context.Boundary,
                     ChannelType = context.ChannelType,
+                    DefaultDeliveryTarget = context.DefaultDeliveryTarget,
+                    RequestedDeliveryTarget = context.RequestedDeliveryTarget,
+                    ModelInputModalities = context.ModelInputModalities,
                     ParentSessionDirectory = context.SessionDirectory,
                     ParentProjectDirectory = context.ProjectDirectory,
                     ParentCwd = context.ResolveShellCwd(null),
@@ -141,12 +161,16 @@ public sealed class SubAgentSpawner
                     // pass a real sink so parent tool liveness sees progress.
                     ActivitySink = activitySink
                 },
-                // No Ask timeout: a healthy run is inactivity-bounded, not
-                // wall-clock-bounded (like the parent LLM session), so any finite
-                // ceiling could pre-empt a legitimately long run. A stalled run
-                // self-completes via the sub-agent's inactivity watchdog; a wedged
-                // run is cancelled through ct — the spawning tool call's token,
-                // governed by the parent's per-call watchdog.
+                // No Ask timeout: a healthy run is bounded by the sub-agent's own
+                // watchdogs, not by wall-clock, so any finite ceiling here could
+                // pre-empt a legitimately long run. The sub-agent self-completes on
+                // two internal budgets: the liveness watchdog (no bytes at all,
+                // including keepalives) and the no-progress deadline (keepalives but
+                // no real tokens for NoProgressTimeoutSeconds). ct — the spawning
+                // tool call's token — only adds parent-turn / user cancellation on
+                // top; note the parent's own per-call watchdog does NOT bound a
+                // keepalive wedge, because the sub-agent emits liveness activity on
+                // every keepalive, which refreshes it.
                 timeout: Timeout.InfiniteTimeSpan,
                 cancellationToken: ct);
 
@@ -198,38 +222,12 @@ public sealed class SubAgentSpawner
         }
     }
 
-    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile)
+    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolExecutionContext context)
     {
-        // When no tools specified, inherit all registered tools (matches Claude Code behavior).
-        // When tools are specified, use them as a whitelist to limit access.
-        IEnumerable<INetclawTool> candidates;
-        if (profile.ToolNames.Count == 0)
-        {
-            candidates = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
-        }
-        else
-        {
-            var resolved = new List<INetclawTool>();
-            foreach (var name in profile.ToolNames)
-            {
-                var tool = _toolRegistry.GetByName(name);
-                if (tool is not null)
-                {
-                    resolved.Add(tool);
-                }
-                else
-                {
-                    _logger.LogWarning(
-                        "SubAgent [{AgentName}] references tool '{ToolName}' which is not registered — skipping",
-                        profile.Name, name);
-                }
-            }
-
-            candidates = resolved;
-        }
-
-        // Sub-agents inherit the parent session's runtime tool policy; the only
-        // static sub-agent-specific filter denies recursive spawn_agent delegation.
+        // Sub-agents inherit the parent session's runtime tool policy. Agent
+        // definition tool metadata is advisory only; the only static
+        // sub-agent-specific filter denies recursive spawn_agent delegation.
+        var candidates = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
         var tools = new List<INetclawTool>();
         foreach (var tool in candidates)
         {
@@ -245,7 +243,7 @@ public sealed class SubAgentSpawner
             }
         }
 
-        return tools;
+        return _toolAccessPolicy.FilterDiscoverableTools(tools, context);
     }
 
     private static void TryStopSubAgent(IActorRef subAgent)

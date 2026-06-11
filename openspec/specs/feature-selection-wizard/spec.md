@@ -1,4 +1,9 @@
-## ADDED Requirements
+## Purpose
+
+Define the bootstrap and post-install behavior of deployment-wide runtime
+feature enablement, separate from posture and per-audience access policy.
+
+## Requirements
 
 ### Requirement: Feature selection wizard step
 
@@ -55,6 +60,11 @@ level `Scheduling` section whose only property is `Enabled`. The Feature
 Selection wizard step SHALL write these flags to the config during
 `ContributeConfig()`.
 
+These flags MAY be set during bootstrap and SHALL be editable post-install
+through the `Enabled Features` leaf. The post-install editor and bootstrap
+flow SHALL preserve config semantics for equivalent inputs; byte-identical
+serialization is not required.
+
 #### Scenario: Disabled memory writes Enabled false
 
 - **GIVEN** the operator disabled memory in Feature Selection
@@ -67,6 +77,12 @@ Selection wizard step SHALL write these flags to the config during
 - **WHEN** config is finalized
 - **THEN** `Search.Enabled` is `false` in `netclaw.json`
 
+#### Scenario: Enabled Features writes deployment-wide flags
+
+- **GIVEN** the operator disables search in Enabled Features
+- **WHEN** the editor saves
+- **THEN** `Search.Enabled` is `false` in `netclaw.json`
+
 #### Scenario: Disabled scheduling writes top-level Scheduling.Enabled false
 
 - **GIVEN** the operator disabled scheduling in Feature Selection
@@ -74,11 +90,30 @@ Selection wizard step SHALL write these flags to the config during
 - **THEN** `Scheduling.Enabled` is `false` in `netclaw.json`
 - **AND** `Scheduling` contains no other properties in this change
 
-#### Scenario: Default Personal config has all features enabled
+#### Scenario: Personal posture default keeps all features enabled
 
 - **GIVEN** the operator selected Personal posture (Feature Selection skipped)
 - **WHEN** config is finalized
 - **THEN** all `Enabled` flags default to `true`
+
+### Requirement: Post-install runtime feature editing moves to Enabled Features
+
+Post-install runtime feature enablement SHALL remain deployment-wide and a
+separate concept from Security Posture and Audience Profiles. Post-install
+editing therefore moves to `netclaw config -> Security & Access -> Enabled
+Features`, not to Audience Profiles.
+
+Audience Profiles remains a curated per-audience access editor and SHALL NOT
+own per-audience runtime feature toggles.
+
+#### Scenario: Post-install feature editing does not use Audience Profiles
+
+- **GIVEN** the operator wants to change deployment-wide search or memory
+  enablement after install
+- **WHEN** they use `netclaw config`
+- **THEN** the change is made in `Enabled Features`
+- **AND** Audience Profiles is not used for that runtime toggle
+
 
 ### Requirement: Feature flags respected at runtime
 

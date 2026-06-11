@@ -147,7 +147,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     {
         if (!_options.Enabled)
         {
-            _logger.LogInformation("Slack channel disabled by configuration.");
+            _logger.LogInformation("Channel disabled by configuration.");
             return;
         }
 
@@ -189,13 +189,13 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         try
         {
             await ConnectCoreAsync(cancellationToken);
-            _logger.LogInformation("Slack channel connected as user {BotUserId}.", _botUserId);
+            _logger.LogInformation("Channel connected as user {BotUserId}.", _botUserId);
         }
         catch (Exception ex)
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogInformation("Slack channel connect cancelled during shutdown.");
+                _logger.LogInformation("Channel connect cancelled during shutdown.");
                 return;
             }
 
@@ -322,13 +322,13 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Slack transport reset before reconnect failed; continuing.");
+                _logger.LogDebug(ex, "Transport reset before reconnect failed; continuing.");
             }
 
             try
             {
                 await ConnectCoreAsync(cancellationToken);
-                _logger.LogInformation("Slack channel reconnected after a transient failure.");
+                _logger.LogInformation("Channel reconnected after a transient failure.");
                 return;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -371,7 +371,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Slack reconnect loop ended with an error during shutdown.");
+                _logger.LogDebug(ex, "Reconnect loop ended with an error during shutdown.");
             }
         }
 

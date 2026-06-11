@@ -23,6 +23,7 @@ public sealed class ProviderEntry
     public SensitiveString? ApiKey { get; set; }
     public SensitiveString? OAuthAccessToken { get; set; }
     public SensitiveString? OAuthRefreshToken { get; set; }
+    public SensitiveString? OAuthAccountId { get; set; }
     public DateTimeOffset? OAuthTokenExpiry { get; set; }
 
     /// <summary>

@@ -1,4 +1,19 @@
-## ADDED Requirements
+# tool-call-metadata Specification
+
+## Purpose
+
+Define a cross-cutting metadata envelope (`ToolCallMeta`) that is injected into
+every tool's JSON schema and populated by the LLM as part of normal tool
+calling. The metadata captures the model's intent (`_rationale`), a per-call
+synchronous timeout hint (`_timeout_seconds`), and an explicit background
+execution signal (`_background`). The tool execution pipeline extracts these
+fields before dispatch so tool implementations never receive them, clamps the
+timeout hint to a configurable ceiling, persists the metadata on the tool call
+for journal replay, and enriches audit entries with the rationale and timeout
+hint. This capability defines the signaling and metadata mechanism only;
+actual background job execution is consumed by a follow-on change.
+
+## Requirements
 
 ### Requirement: ToolCallMeta envelope on every tool invocation
 

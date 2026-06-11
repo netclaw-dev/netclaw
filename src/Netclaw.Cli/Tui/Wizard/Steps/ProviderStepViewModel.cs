@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Cli.Config;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -21,8 +22,6 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// </summary>
 public sealed class ProviderStepViewModel : IWizardStepViewModel
 {
-    private static readonly TimeSpan ProbeHardTimeout = TimeSpan.FromSeconds(20);
-
     private readonly IProviderProbe _probe;
     private readonly ProviderDescriptorRegistry _registry;
     private readonly DeviceFlowServiceFactory? _oauthFactory;
@@ -36,12 +35,13 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public ProviderStepViewModel(
         ProviderDescriptorRegistry registry,
         IProviderProbe probe,
-        DeviceFlowServiceFactory? oauthFactory = null)
+        DeviceFlowServiceFactory? oauthFactory = null,
+        DaemonApi? daemonApi = null)
     {
         _registry = registry;
         _probe = probe;
         _oauthFactory = oauthFactory;
-        OAuth = new OAuthFlowCoordinator(registry, oauthFactory, null, () => { });
+        OAuth = new OAuthFlowCoordinator(registry, oauthFactory, daemonApi, () => { });
     }
 
     public string StepId => WizardStepIds.Provider;
@@ -61,7 +61,6 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
     public ReactiveProperty<int> ProbeElapsedSeconds { get; } = new(0);
-    public ReactiveProperty<int> SpinnerTick { get; } = new(0);
 
     public bool IsApplicable(WizardContext context) => true;
 
@@ -167,13 +166,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         _probeCts = new CancellationTokenSource();
         var ct = _probeCts.Token;
         var providerType = SelectedProviderType ?? "unknown";
-        var credential = ApiKeyInput;
-        if (string.IsNullOrWhiteSpace(credential)
-            && SelectedAuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce
-            && OAuth.Result is not null)
-        {
-            credential = OAuth.Result.AccessToken.Value;
-        }
+        var probeEntry = BuildProbeEntry(providerType);
 
         IsProbing.Value = true;
         ProbeResult.Value = null;
@@ -184,13 +177,15 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         var result = new ProviderProbeResult(false, "Validation failed before probe completed.", []);
         try
         {
-            result = await _probe.ProbeAsync(
-                    providerType,
-                    EndpointInput,
-                    credential,
-                    SelectedAuthMethod,
-                    ct)
-                .WaitAsync(ProbeHardTimeout, ct);
+            // Outer wall-clock for the WHOLE probe. The descriptor's own per-request
+            // deadline covers only the /models call; it does NOT cover pre-request work
+            // such as OAuth token exchange, which would otherwise be bounded only by the
+            // HttpClient default (~100s). This budget is deliberately larger than the
+            // descriptor's self-hosted deadline (see ProbeTimeouts.InteractiveWallClock)
+            // so it bounds a hung token exchange without truncating a legitimately slow
+            // self-hosted /models probe — the truncation that was the heart of #1292.
+            result = await _probe.ProbeAsync(probeEntry, ct)
+                .WaitAsync(ProbeTimeouts.InteractiveWallClock, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -199,7 +194,8 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         catch (TimeoutException)
         {
             result = new ProviderProbeResult(false,
-                $"Validation timed out after {(int)ProbeHardTimeout.TotalSeconds} seconds.", []);
+                $"Validation timed out after {(int)ProbeTimeouts.InteractiveWallClock.TotalSeconds} seconds — "
+                + "the provider did not respond. Check connectivity and try again.", []);
         }
         catch (Exception ex)
         {
@@ -218,19 +214,48 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         ProbeResult.Value = result;
     }
 
+    // Drives only the cosmetic "(Ns)" elapsed counter now that the spinner glyph
+    // self-animates via SpinnerNode; a 1 Hz tick is all that's needed.
     private async Task RunProbeTimerAsync(CancellationToken ct)
     {
-        var tickCount = 0;
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(120, ct); }
+            try { await Task.Delay(1000, ct); }
             catch (OperationCanceledException) { return; }
 
-            tickCount++;
-            SpinnerTick.Value = tickCount;
-            if (tickCount % 8 == 0)
-                ProbeElapsedSeconds.Value++;
+            ProbeElapsedSeconds.Value++;
         }
+    }
+
+    private ProviderEntry BuildProbeEntry(string providerType)
+    {
+        var entry = new ProviderEntry
+        {
+            Type = providerType,
+            Endpoint = EndpointInput ?? "",
+            AuthMethod = SelectedAuthMethod
+        };
+
+        if (SelectedAuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce)
+        {
+            var result = OAuth.Result;
+            var credential = ApiKeyInput;
+            if (string.IsNullOrWhiteSpace(credential))
+                credential = result?.AccessToken.Value;
+
+            entry.OAuthAccessToken = !string.IsNullOrWhiteSpace(credential)
+                ? new SensitiveString(credential)
+                : null;
+            entry.OAuthRefreshToken = result?.RefreshToken;
+            entry.OAuthTokenExpiry = result?.ExpiresAt;
+            entry.OAuthAccountId = result?.AccountId;
+        }
+        else if (!string.IsNullOrWhiteSpace(ApiKeyInput))
+        {
+            entry.ApiKey = new SensitiveString(ApiKeyInput);
+        }
+
+        return entry;
     }
 
     // ── OAuth ──
@@ -294,10 +319,17 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
                     : null
         };
 
+        var selectedModel = DiscoveredModels.FirstOrDefault(model =>
+            string.Equals(model.ModelId.Value, SelectedModelId, StringComparison.OrdinalIgnoreCase));
+
         builder.Model = new ModelConfigSection
         {
             Provider = providerName,
-            ModelId = SelectedModelId
+            ModelId = SelectedModelId,
+            ContextWindow = selectedModel?.ContextWindowTokens,
+            Provenance = selectedModel is null ? ModelDiscoverySource.Manual : ModelDiscoverySource.Live,
+            InputModalities = selectedModel?.InputModalities,
+            OutputModalities = selectedModel?.OutputModalities,
         };
     }
 
@@ -368,6 +400,5 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel
         IsProbing.Dispose();
         ProbeResult.Dispose();
         ProbeElapsedSeconds.Dispose();
-        SpinnerTick.Dispose();
     }
 }

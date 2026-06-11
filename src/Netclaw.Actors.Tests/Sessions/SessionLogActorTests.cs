@@ -53,13 +53,13 @@ public sealed class SessionLogActorTests : TestKit
 
     /// <summary>
     /// Reads a session log file with the same permissive share mask the writer
-    /// (<see cref="SessionLogFile.AppendLine"/>) uses. A plain
+    /// (<see cref="SessionLogActor"/>) uses. A plain
     /// <see cref="File.ReadAllTextAsync(string, System.Threading.CancellationToken)"/>
     /// opens with <see cref="FileShare.Read"/>, which on Windows denies the
     /// actor's concurrent <see cref="FileAccess.Write"/> append open and can
-    /// starve <c>AppendLine</c>'s bounded retry budget until an audit line is
-    /// silently dropped — making the polling assertion unsatisfiable. Matching
-    /// the writer's mask lets reader and writer coexist.
+    /// starve the writer's I/O until an audit line is silently dropped —
+    /// making the polling assertion unsatisfiable. Matching the writer's mask
+    /// lets reader and writer coexist.
     /// </summary>
     private static async Task<string> ReadLogAsync(string path, CancellationToken cancellationToken)
     {
@@ -113,32 +113,40 @@ public sealed class SessionLogActorTests : TestKit
 
         try
         {
-            var dispatcher1 = SpawnDispatcher(Sys, basePath, timeProvider);
-            dispatcher1.Tell(new TextOutput("first") { SessionId = sessionId }, ActorRefs.NoSender);
-
-            await AwaitAssertAsync(async () =>
+            // If the writer ever drops an audit line (SessionLogActor logs a
+            // "Dropped ... audit line" warning when AppendLine exhausts its retry
+            // budget), the polling assertions below would otherwise spin until the
+            // AwaitAssert deadline and fail with an opaque "substring not found".
+            // Assert zero such warnings so a drop fails fast with the real cause.
+            await EventFilter.Warning(contains: "Dropped").ExpectAsync(0, async () =>
             {
-                var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
-                var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
-                Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
-            }, cancellationToken: TestContext.Current.CancellationToken);
+                var dispatcher1 = SpawnDispatcher(Sys, basePath, timeProvider);
+                dispatcher1.Tell(new TextOutput("first") { SessionId = sessionId }, ActorRefs.NoSender);
 
-            Watch(dispatcher1);
-            Sys.Stop(dispatcher1);
-            await ExpectTerminatedAsync(dispatcher1, cancellationToken: TestContext.Current.CancellationToken);
+                await AwaitAssertAsync(async () =>
+                {
+                    var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
+                    var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
+                    Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
+                }, cancellationToken: TestContext.Current.CancellationToken);
 
-            var dispatcher2 = SpawnDispatcher(Sys, basePath, timeProvider);
-            dispatcher2.Tell(new TextOutput("second") { SessionId = sessionId }, ActorRefs.NoSender);
+                Watch(dispatcher1);
+                Sys.Stop(dispatcher1);
+                await ExpectTerminatedAsync(dispatcher1, cancellationToken: TestContext.Current.CancellationToken);
 
-            await AwaitAssertAsync(async () =>
-            {
-                var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
-                Assert.True(File.Exists(logFile));
-                Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logFile)!, "*.log", SearchOption.TopDirectoryOnly));
+                var dispatcher2 = SpawnDispatcher(Sys, basePath, timeProvider);
+                dispatcher2.Tell(new TextOutput("second") { SessionId = sessionId }, ActorRefs.NoSender);
 
-                var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
-                Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
-                Assert.Contains("Assistant: second", text, StringComparison.Ordinal);
+                await AwaitAssertAsync(async () =>
+                {
+                    var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
+                    Assert.True(File.Exists(logFile));
+                    Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logFile)!, "*.log", SearchOption.TopDirectoryOnly));
+
+                    var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
+                    Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
+                    Assert.Contains("Assistant: second", text, StringComparison.Ordinal);
+                }, cancellationToken: TestContext.Current.CancellationToken);
             }, cancellationToken: TestContext.Current.CancellationToken);
         }
         finally

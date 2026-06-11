@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Tests.Channels;
 public sealed class ExecutionOutputAccumulatorTests
 {
     private static readonly SessionId TestSessionId = new("test/session");
-    private static readonly ToolName TestNotifyTool = new("send_slack_message");
+    private static readonly ToolName TestNotifyTool = new("send_channel_message");
 
     [Fact]
     public void TextDeltaOutput_accumulates_text()
@@ -99,7 +99,7 @@ public sealed class ExecutionOutputAccumulatorTests
         {
             SessionId = TestSessionId,
             CallId = new Netclaw.Tools.ToolCallId("call-1"),
-            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
+            ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
             Result = "Message sent to channel C1."
         });
 
@@ -116,7 +116,7 @@ public sealed class ExecutionOutputAccumulatorTests
         {
             SessionId = TestSessionId,
             CallId = new Netclaw.Tools.ToolCallId("call-2"),
-            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
+            ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
             Result = "Error: channel not found"
         });
 
@@ -180,7 +180,7 @@ public sealed class ExecutionOutputAccumulatorTests
         {
             SessionId = TestSessionId,
             CallId = new Netclaw.Tools.ToolCallId("call-ok"),
-            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
+            ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
             Result = "Message sent."
         });
 
@@ -197,7 +197,7 @@ public sealed class ExecutionOutputAccumulatorTests
         {
             SessionId = TestSessionId,
             CallId = new Netclaw.Tools.ToolCallId("call-err"),
-            ToolName = new Netclaw.Tools.ToolName("send_slack_message"),
+            ToolName = new Netclaw.Tools.ToolName("send_channel_message"),
             Result = "Error: channel not found"
         });
 

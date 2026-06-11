@@ -176,6 +176,57 @@ public sealed class ProviderStepViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ContributeConfig_SelectedDiscoveredModel_CarriesModelMetadata()
+    {
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
+        step.SelectedProviderType = "OpenAI";
+        step.SelectedAuthMethod = AuthMethod.OAuthDevice;
+        step.SelectedModelId = "gpt-new-codex";
+        step.DiscoveredModels.Add(new DiscoveredModel
+        {
+            ModelId = new Netclaw.Configuration.ModelId("gpt-new-codex"),
+            ContextWindowTokens = 512000,
+            InputModalities = ModelModality.Text | ModelModality.Image,
+            OutputModalities = ModelModality.Text,
+        });
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Model);
+        Assert.Equal(512000, builder.Model!.ContextWindow);
+        Assert.Equal(ModelDiscoverySource.Live, builder.Model.Provenance);
+        Assert.Equal(ModelModality.Text | ModelModality.Image, builder.Model.InputModalities);
+        Assert.Equal(ModelModality.Text, builder.Model.OutputModalities);
+    }
+
+    [Fact]
+    public void ContributeConfig_DiscoveredModelWithoutModalities_PersistsNone()
+    {
+        // An openai-compatible /v1/models listing reports no modalities, so the
+        // discovered model leaves them unset. The wizard must NOT bake a guessed Text
+        // into config — that override would beat real detection on every daemon boot
+        // and silently demote a multimodal model to text-only (#1290).
+        using var step = new ProviderStepViewModel(_registry, _fakeProbe);
+        step.SelectedProviderType = "openai-compatible";
+        step.SelectedAuthMethod = AuthMethod.None;
+        step.SelectedModelId = "qwen-vl";
+        step.DiscoveredModels.Add(new DiscoveredModel
+        {
+            ModelId = new Netclaw.Configuration.ModelId("qwen-vl"),
+            ContextWindowTokens = 32768,
+        });
+
+        var builder = new WizardConfigBuilder(_context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Model);
+        Assert.Equal(32768, builder.Model!.ContextWindow);
+        Assert.Null(builder.Model.InputModalities);
+        Assert.Null(builder.Model.OutputModalities);
+    }
+
+    [Fact]
     public void ContributeConfig_NoProvider_NoSection()
     {
         using var step = new ProviderStepViewModel(_registry, _fakeProbe);
@@ -240,7 +291,11 @@ public sealed class ProviderStepViewModelTests : IDisposable
 
         public Task<ProviderProbeResult> ProbeAsync(
             ProviderEntry entry, CancellationToken ct = default)
-            => Task.FromResult(NextResult);
+        {
+            LastProviderType = entry.Type;
+            LastApiKey = entry.ApiKey?.Value ?? entry.OAuthAccessToken?.Value;
+            return Task.FromResult(NextResult);
+        }
 
         public Task<ProviderProbeResult> ProbeAsync(
             string providerType, string? endpoint, string? credential,

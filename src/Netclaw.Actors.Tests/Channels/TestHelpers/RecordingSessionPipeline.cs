@@ -16,8 +16,13 @@ namespace Netclaw.Actors.Tests.Channels.TestHelpers;
 
 public sealed class RecordingSessionPipeline : ISessionPipeline
 {
+    private readonly object _feedbackLock = new();
+    private readonly List<IWithSessionId> _recordedFeedback = [];
     private readonly Func<SessionId, IReadOnlyList<SessionOutput>> _outputFactory;
     private readonly bool _reactive;
+    private readonly TaskCompletionSource<SessionPipelineOptions> _created = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
+    private SessionPipelineOptions? _capturedOptions;
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -43,8 +48,13 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         _reactive = reactive;
     }
 
-    public SessionPipelineOptions? CapturedOptions { get; private set; }
-    public List<IWithSessionId> RecordedFeedback { get; } = [];
+    public SessionPipelineOptions? CapturedOptions => Volatile.Read(ref _capturedOptions);
+    public Task<SessionPipelineOptions> Created => _created.Task;
+    public IReadOnlyList<IWithSessionId> RecordedFeedback
+    {
+        get { lock (_feedbackLock) return _recordedFeedback.ToList(); }
+    }
+
     public ConcurrentQueue<ChannelInput> CapturedInputs { get; } = new();
     public Func<IWithSessionId, CancellationToken, Task<ICommandReply>>? ResponseFactory { get; set; }
 
@@ -54,7 +64,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
-        CapturedOptions = options;
+        Volatile.Write(ref _capturedOptions, options);
+        _created.TrySetResult(options);
 
         var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
         var outputs = _outputFactory(sessionId).ToList();
@@ -119,13 +130,13 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
 
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
-        RecordedFeedback.Add(feedback);
+        lock (_feedbackLock) _recordedFeedback.Add(feedback);
         return Task.CompletedTask;
     }
 
     public Task<ICommandReply> SendFeedbackAndWaitAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
-        RecordedFeedback.Add(feedback);
+        lock (_feedbackLock) _recordedFeedback.Add(feedback);
         var response = ResponseFactory?.Invoke(feedback, ct)
             ?? Task.FromResult<ICommandReply>(CommandAck.For(feedback.SessionId));
         return response;

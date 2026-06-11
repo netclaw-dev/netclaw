@@ -18,18 +18,41 @@ public sealed partial class DaemonManager
 {
     private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
+    private readonly IContainerSupervisor _supervisor;
 
-    public DaemonManager(NetclawPaths paths, TimeProvider timeProvider)
+    public DaemonManager(NetclawPaths paths, TimeProvider timeProvider, IContainerSupervisor? supervisor = null)
     {
         _paths = paths;
         _timeProvider = timeProvider;
+        _supervisor = supervisor ?? new ContainerSupervisor();
     }
 
     /// <summary>
     /// Starts the daemon as a detached background process.
     /// </summary>
+    /// <remarks>
+    /// When an external supervisor owns the lifecycle (the official Docker image,
+    /// where entrypoint.sh is PID 1), this never spawns a process: a second
+    /// netclawd would race the supervised one for the singleton lock file (#1279).
+    /// The supervisor is responsible for (re)starting the daemon.
+    /// </remarks>
     public DaemonResult Start()
     {
+        if (_supervisor.IsExternallySupervised)
+        {
+            // Fail loudly rather than silently promising an auto-start: if the marker is
+            // set but no supervisor is actually present (e.g. a derived image that kept
+            // NETCLAW_CONTAINER_SUPERVISOR but replaced the entrypoint), nothing will
+            // start the daemon and the operator needs to know to check the container.
+            return TryGetRunningPid(out var supervisedPid)
+                ? new DaemonResult(true, $"Daemon managed by container supervisor (PID {supervisedPid}).")
+                : new DaemonResult(false,
+                    "Daemon is not running and its startup is managed by the container supervisor "
+                    + "(NETCLAW_CONTAINER_SUPERVISOR is set); this command does not start it. If it is "
+                    + "not coming up, check the container/entrypoint logs — the marker may be set without "
+                    + "a supervisor present.");
+        }
+
         if (TryGetRunningPid(out var existingPid))
             return new DaemonResult(false, $"Daemon already running (PID {existingPid}).");
 

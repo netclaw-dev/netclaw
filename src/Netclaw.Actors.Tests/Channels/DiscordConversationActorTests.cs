@@ -482,6 +482,8 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
         IDiscordReplyClient? replyClient = null,
         Func<SessionId, DiscordChannelId, DiscordReplyChannelId, DiscordThreadOrMessageId, DiscordMessageId?, DiscordGatewayDependencies, Props>? sessionPropsFactory = null)
     {
+        var resolvedReplyClient = replyClient ?? new UnconfiguredDiscordReplyClient();
+
         return new DiscordGatewayDependencies(
             Pipeline: null!,
             IngressGate: ingressGate,
@@ -493,7 +495,8 @@ public sealed class DiscordConversationActorTests(ITestOutputHelper output) : Te
                 AllowedChannelIds = ["ch-1"]
             },
             DefaultChannelId: null,
-            ReplyClient: replyClient ?? new UnconfiguredDiscordReplyClient(),
+            ChannelRegistry: TestChannelRegistries.DiscordWithProcessingRenderer(resolvedReplyClient),
+            ReplyClient: resolvedReplyClient,
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,

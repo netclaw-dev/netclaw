@@ -203,6 +203,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
                     ? atProp.GetString() : null;
                 var refreshToken = statusResponse.TryGetProperty("refreshToken", out var rtProp)
                     ? rtProp.GetString() : null;
+                var accountId = statusResponse.TryGetProperty("accountId", out var accountIdProp)
+                    ? accountIdProp.GetString() : null;
                 var expiresAt = statusResponse.TryGetProperty("expiresAt", out var expProp)
                     ? expProp.GetString() : null;
 
@@ -211,7 +213,8 @@ public sealed class OAuthFlowCoordinator : IDisposable
                     return new OAuthDeviceFlowResult(
                         new SensitiveString(accessToken),
                         refreshToken is not null ? new SensitiveString(refreshToken) : null,
-                        expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null);
+                        expiresAt is not null ? DateTimeOffset.Parse(expiresAt) : null,
+                        accountId is not null ? new SensitiveString(accountId) : null);
                 }
 
                 return null;

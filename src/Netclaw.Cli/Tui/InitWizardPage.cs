@@ -91,18 +91,6 @@ public sealed class InitWizardPage : ReactivePage<InitWizardViewModel>
             })
             .DisposeWith(Subscriptions);
 
-        // Provider step: animate spinner on validation/OAuth sub-steps
-        ViewModel.ProviderStep.SpinnerTick
-            .Subscribe(_ =>
-            {
-                if (ViewModel.Orchestrator.CurrentStep is ProviderStepViewModel { CurrentSubStep: 3 or 5 or 6 })
-                {
-                    _stepContentNode?.Invalidate();
-                    ViewModel.RequestRedraw();
-                }
-            })
-            .DisposeWith(Subscriptions);
-
         // Provider step: OAuth flow state changes
         ViewModel.ProviderStep.OAuth.FlowState
             .Subscribe(state =>

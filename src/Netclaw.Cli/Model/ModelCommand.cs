@@ -27,7 +27,7 @@ internal static class ModelCommand
         return subcommand switch
         {
             "list" => RunList(paths, writer),
-            "set" => RunSet(args, paths, writer),
+            "set" => await RunSetAsync(args, paths, probe, writer),
             "discover" => await RunDiscoverAsync(args, paths, probe, writer),
             "clear" => RunClear(args, paths, writer),
             "help" or "-h" or "--help" => WriteHelp(writer),
@@ -70,7 +70,8 @@ internal static class ModelCommand
         writer.WriteLine($"{role,-12} {model.Provider,-20} {model.ModelId,-30} {ctxWindow}");
     }
 
-    private static int RunSet(string[] args, NetclawPaths paths, TextWriter writer)
+    private static async Task<int> RunSetAsync(
+        string[] args, NetclawPaths paths, IProviderProbe? probe, TextWriter writer)
     {
         // Parse: netclaw model set <role> <provider> <model-id> [--context-window <tokens>]
         if (args.Length < 5)
@@ -117,7 +118,7 @@ internal static class ModelCommand
 
         // Validate provider exists
         var providers = ProviderCommand.LoadProviders(paths);
-        if (!providers.ContainsKey(providerName))
+        if (!providers.TryGetValue(providerName, out var providerEntry))
         {
             writer.WriteLine($"Error: Provider '{providerName}' not found in configuration.");
             writer.WriteLine("Configured providers: " +
@@ -138,25 +139,74 @@ internal static class ModelCommand
             }
         }
 
+        DiscoveredModel? discoveredModel = null;
+        var provenance = ModelDiscoverySource.Manual;
+        if (contextWindow is null && ShouldProbeForMetadata(providerEntry))
+        {
+            probe ??= ProviderCommand.CreateDefaultRegistry();
+            ProviderProbeResult probeResult;
+            await using (ProbeProgressReporter.Start(ResolveProbeEndpoint(probe, providerEntry)))
+                probeResult = await probe.ProbeAsync(providerEntry, CancellationToken.None);
+            if (!probeResult.Success)
+            {
+                writer.WriteLine($"Error: Could not resolve model metadata from provider: {probeResult.ErrorMessage}");
+                writer.WriteLine("       Use --context-window only if you want to configure the model manually.");
+                return 1;
+            }
+
+            discoveredModel = probeResult.Models.FirstOrDefault(m =>
+                string.Equals(m.ModelId.Value, modelId, StringComparison.OrdinalIgnoreCase));
+            if (discoveredModel is null)
+            {
+                writer.WriteLine($"Error: Model '{modelId}' was not returned by provider '{providerName}'.");
+                writer.WriteLine("       Run `netclaw model discover <provider>` or use --context-window to configure it manually.");
+                return 1;
+            }
+
+            provenance = ModelDiscoverySource.Live;
+        }
+
         // Write to config
         var (config, _) = ConfigFileHelper.LoadConfigFiles(paths);
         var modelsSection = ConfigFileHelper.GetOrCreateSection(config, "Models");
 
-        var modelEntry = new Dictionary<string, object>
-        {
-            ["Provider"] = providerName,
-            ["ModelId"] = modelId,
-            ["Provenance"] = ModelDiscoverySource.Manual.ToString()
-        };
-
-        if (contextWindow.HasValue)
-            modelEntry["ContextWindow"] = contextWindow.Value;
+        var modelEntry = ModelEntryWriter.BuildModelEntry(
+            providerName,
+            modelId,
+            provenance,
+            contextWindow ?? discoveredModel?.ContextWindowTokens,
+            discoveredModel?.InputModalities,
+            discoveredModel?.OutputModalities);
 
         modelsSection[roleKey] = modelEntry;
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
 
         writer.WriteLine($"Set {role} model to {providerName}/{modelId}");
         return 0;
+    }
+
+    private static bool ShouldProbeForMetadata(ProviderEntry entry)
+        => string.Equals(entry.Type, "openai", StringComparison.OrdinalIgnoreCase)
+           && entry.AuthMethod is AuthMethod.OAuthDevice or AuthMethod.OAuthPkce;
+
+    /// <summary>
+    /// The endpoint the probe will actually hit, for display. When a provider has no
+    /// explicit endpoint we surface the descriptor's default (e.g. a self-hosted
+    /// provider that silently fell back to localhost) so the target is visible rather
+    /// than hidden behind an anonymous wait (#1292).
+    /// </summary>
+    private static string ResolveProbeEndpoint(IProviderProbe probe, ProviderEntry entry)
+    {
+        // Match the normalization ExecuteProbeAsync applies (it trims a trailing slash
+        // before appending the model-listing path) so the surfaced endpoint is the one
+        // actually probed, not a cosmetically different string.
+        if (!string.IsNullOrWhiteSpace(entry.Endpoint))
+            return entry.Endpoint.TrimEnd('/');
+
+        return probe is ProviderDescriptorRegistry registry
+               && registry.TryGet(entry.Type, out var descriptor)
+            ? descriptor.DefaultEndpoint
+            : "(default endpoint)";
     }
 
     private static async Task<int> RunDiscoverAsync(string[] args, NetclawPaths paths, IProviderProbe? probe, TextWriter writer)
@@ -179,19 +229,21 @@ internal static class ModelCommand
         // Use the registry as the probe (it implements IProviderProbe)
         probe ??= ProviderCommand.CreateDefaultRegistry();
 
-        writer.WriteLine($"Discovering models from '{providerName}' ({entry.Type})...");
+        var probeEndpoint = ResolveProbeEndpoint(probe, entry);
+        writer.WriteLine($"Discovering models from '{providerName}' ({entry.Type}) at {probeEndpoint}...");
 
-        var result = await probe.ProbeAsync(
-            entry.Type,
-            string.IsNullOrWhiteSpace(entry.Endpoint) ? null : entry.Endpoint,
-            entry.ApiKey?.Value ?? entry.OAuthAccessToken?.Value,
-            CancellationToken.None);
+        ProviderProbeResult result;
+        await using (ProbeProgressReporter.Start(probeEndpoint))
+            result = await probe.ProbeAsync(entry, CancellationToken.None);
 
         if (!result.Success)
         {
             writer.WriteLine($"Error: {result.ErrorMessage}");
             return 1;
         }
+
+        if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+            writer.WriteLine($"Warning: {result.ErrorMessage}");
 
         if (result.Models.Count == 0)
         {

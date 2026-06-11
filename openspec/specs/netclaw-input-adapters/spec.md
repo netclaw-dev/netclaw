@@ -4,9 +4,7 @@
 
 Define how inbound channel adapters construct trusted inputs, preserve channel
 capabilities and provenance, and resolve message audience.
-
 ## Requirements
-
 ### Requirement: Channel interactive approval capability
 
 Each channel implementation SHALL declare whether it supports interactive
@@ -19,6 +17,12 @@ messages back to the session actor.
 #### Scenario: Slack channel declares approval support
 
 - **GIVEN** the Slack channel is active
+- **WHEN** the system queries channel capabilities
+- **THEN** `SupportsInteractiveApproval` is `true`
+
+#### Scenario: Mattermost channel declares approval support
+
+- **GIVEN** the Mattermost channel is active
 - **WHEN** the system queries channel capabilities
 - **THEN** `SupportsInteractiveApproval` is `true`
 
@@ -119,6 +123,16 @@ direct assignment, with no null-coalescing fallback.
 - **AND** the pipeline applies Personal-level grants without any Public
   fallback
 
+#### Scenario: Mattermost history-fetched messages carry the resolved audience
+
+- **GIVEN** a Mattermost direct message configured with a `dm` channel audience
+  override
+- **WHEN** the Mattermost thread-history fetcher converts a historical post into
+  a `ChannelInput`
+- **THEN** the `ChannelInput` carries the audience resolved by the Mattermost
+  channel's audience policy
+- **AND** no value originates from a pipeline-level default
+
 #### Scenario: Pipeline does not synthesize trust context
 
 - **WHEN** the message-source factory builds a `MessageSource` from a
@@ -157,3 +171,72 @@ that override SHALL be honored ahead of the default resolution above.
 - **GIVEN** `ChannelAudiences["dm"]` is set to `team`
 - **WHEN** a non-allowlisted user sends a direct message
 - **THEN** the resolved audience is `Team` as specified by the override
+
+### Requirement: Attachment ingress uses catalog-backed media classification
+
+Channel attachment ingress SHALL classify inbound files through the shared media
+catalog. Broad MIME prefixes such as `image/`, `audio/`, and `video/` SHALL NOT
+grant attachment categories unless the concrete MIME type is explicitly present
+in the catalog.
+
+#### Scenario: Public image attachment uses explicit catalog support
+
+- **GIVEN** a Public session receives an attachment declared as `image/png`
+- **AND** the media catalog classifies `image/png` as `Image`
+- **WHEN** channel attachment policy is evaluated before download
+- **THEN** the Public profile can allow the attachment category
+
+#### Scenario: Unknown media subtype does not bypass Team policy
+
+- **GIVEN** a Team session receives an attachment declared as `video/x-unknown`
+- **WHEN** channel attachment policy is evaluated before download
+- **THEN** the attachment is not accepted as `Media` by prefix alone
+- **AND** it is rejected unless the catalog explicitly supports that MIME type
+
+### Requirement: Attachment ingress uses verified MIME after content scanning
+
+Channel attachment ingress SHALL keep declared transport MIME separate from
+scanner-verified MIME. Accepted attachment announcements, inline `DataContent`,
+session media references, and logs that describe delivered file type SHALL use
+the verified canonical MIME returned by the scanner. Declared MIME MAY be logged
+as source metadata.
+
+#### Scenario: Octet-stream PNG is delivered as verified PNG
+
+- **GIVEN** a channel attachment is declared as `application/octet-stream`
+- **AND** its filename and bytes validate as PNG
+- **WHEN** the attachment is accepted
+- **THEN** the attachment announcement uses `image/png`
+- **AND** any inlined `DataContent` uses `image/png`
+
+#### Scenario: Spoofed image is rejected before delivery
+
+- **GIVEN** a channel attachment is declared as `image/png`
+- **AND** its bytes contain an executable signature
+- **WHEN** the content scanner evaluates the file
+- **THEN** the attachment is rejected
+- **AND** no `DataContent` or session media reference is produced
+
+### Requirement: Attachment file taxonomy and inline decisions
+
+The system SHALL use the same canonical file taxonomy for chat attachment ingress
+and local file inspection: `Image`, `Pdf`, `Document`, `Archive`, `Media`, and
+`Other`. Inline decisions SHALL be shared so images are inlined only when image
+input is available, PDFs remain path-only unless native provider support is
+explicitly added, and all other non-image formats are path-only.
+
+#### Scenario: Chat attachment and file_read agree on image modality gap
+
+- **GIVEN** a PNG file
+- **AND** the active model does not support image input
+- **WHEN** the file arrives as a chat attachment or is inspected by `file_read`
+- **THEN** both paths use the canonical image modality-gap note
+
+#### Scenario: PDF remains path-only
+
+- **GIVEN** a PDF file
+- **WHEN** the file arrives as a chat attachment or is inspected by `file_read`
+- **THEN** the file is not emitted as `DataContent`
+- **AND** the agent receives explicit guidance that native PDF content is not
+  available through the current path
+

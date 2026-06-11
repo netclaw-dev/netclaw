@@ -128,7 +128,7 @@ public sealed class FileSubAgentDefinitionLoader
 
             results.Add(profile);
             _logger.LogInformation(
-                "Loaded agent definition: {Name} ({ToolCount} tools, timeout={Timeout}s)",
+                "Loaded agent definition: {Name} (tool metadata={ToolCount}, timeout={Timeout}s)",
                 profile.Name, profile.ToolNames.Count, profile.TimeoutSeconds);
         }
 
@@ -199,8 +199,8 @@ public sealed class FileSubAgentDefinitionLoader
             return null;
         }
 
-        // Tools are optional. When omitted, the subagent inherits session tools at spawn time.
-        // This matches Claude Code's agent format where tools are not specified.
+        // Tool metadata is optional and advisory. Runtime access is resolved from
+        // the parent session audience at spawn time.
         var tools = frontmatter.Tools ?? [];
 
         if (!TryParseModelRole(frontmatter.ModelRole, out var modelRole))
@@ -219,6 +219,26 @@ public sealed class FileSubAgentDefinitionLoader
             return null;
         }
 
+        // Validate timeout overrides against the same bounds the JSON config schema
+        // enforces. Fail loud rather than letting an out-of-range value flow to
+        // ITimerScheduler (a non-positive timeout throws) or silently exceed the
+        // documented ceiling — the frontmatter path bypasses schema validation.
+        if (frontmatter.TimeoutSeconds is { } timeoutSeconds && timeoutSeconds is < 5 or > 600)
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has invalid timeoutSeconds {Value} (expected 5–600) — skipping",
+                frontmatter.Name, filePath, timeoutSeconds);
+            return null;
+        }
+
+        if (frontmatter.PrefillTimeoutSeconds is { } prefillSeconds && prefillSeconds is < 5 or > 3600)
+        {
+            _logger.LogWarning(
+                "Agent '{Name}' at {Path} has invalid prefillTimeoutSeconds {Value} (expected 5–3600) — skipping",
+                frontmatter.Name, filePath, prefillSeconds);
+            return null;
+        }
+
         return new SubAgentProfile
         {
             Name = frontmatter.Name.Trim(),
@@ -227,6 +247,7 @@ public sealed class FileSubAgentDefinitionLoader
             ToolNames = tools,
             ModelRole = modelRole,
             TimeoutSeconds = frontmatter.TimeoutSeconds ?? 60,
+            PrefillTimeoutSeconds = frontmatter.PrefillTimeoutSeconds,
             EmitStructuredFindings = frontmatter.EmitStructuredFindings ?? false,
             Visibility = visibility
         };

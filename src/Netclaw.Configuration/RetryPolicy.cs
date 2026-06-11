@@ -18,13 +18,22 @@ public sealed record RetryPolicy
 
     /// <summary>
     /// Determines whether the given exception is transient and should be retried.
-    /// Retries on: status-less network failures, 408/429/5xx responses,
-    /// and timeout-style cancellations.
+    /// Retries on: status-less network failures, 408/429/5xx responses (whether they
+    /// surface as a raw <see cref="HttpRequestException"/> or are curated into a
+    /// <see cref="ProviderException"/> by a provider transport layer), and
+    /// timeout-style cancellations.
     /// </summary>
     public bool ShouldRetry(Exception ex, int attempt)
     {
         if (attempt >= MaxRetries)
             return false;
+
+        // Curated provider errors (e.g. the self-hosted OpenAI-compatible client) carry
+        // the HTTP status on a ProviderException rather than a raw HttpRequestException,
+        // and it may be nested under an inner exception. Without this, the retry layer
+        // would miss the provider 429/5xx it most needs to retry.
+        if (FindInner<ProviderException>(ex) is { StatusCode: 408 or 429 or (>= 500 and <= 599) })
+            return true;
 
         return ex switch
         {
@@ -40,6 +49,18 @@ public sealed record RetryPolicy
             TimeoutException => true,
             _ => false
         };
+    }
+
+    private static T? FindInner<T>(Exception? ex) where T : Exception
+    {
+        while (ex is not null)
+        {
+            if (ex is T match)
+                return match;
+            ex = ex.InnerException;
+        }
+
+        return null;
     }
 
     /// <summary>

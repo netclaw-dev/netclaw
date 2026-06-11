@@ -96,11 +96,10 @@ public sealed class DaemonClientReconnectIntegrationTests
             reconnectDelays: [TimeSpan.Zero, TimeSpan.FromMilliseconds(50)],
             serverTimeout: TimeSpan.FromSeconds(2));
 
-        var outputs = new List<SessionOutput>();
+        var outputs = new ConcurrentQueue<SessionOutput>();
         var firstResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondResponseReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var clientDisconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var reconnectedAfterRestart = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         // Sync on Reconnecting OR TransportClosed. SignalR fires Reconnecting from
         // its state machine as soon as the transport drops, before any retry
@@ -111,22 +110,17 @@ public sealed class DaemonClientReconnectIntegrationTests
         // runners), so each StartAsync retry can take seconds rather than the
         // sub-millisecond ECONNREFUSED seen on Linux.
         //
-        // The IsCompleted guard for reconnectedAfterRestart is still safe: at
-        // least one Reconnecting/TransportClosed always precedes any subsequent
-        // Connected emission. host1's port release is already synchronous via
-        // host1.Dispose(), so it is not gated on the client observing anything.
+        // host1's port release is already synchronous via host1.Dispose(), so it
+        // is not gated on the client observing anything.
         using var connectionSub = client.ConnectionEvents.Subscribe(evt =>
         {
             if (evt.State is DaemonConnectionState.Reconnecting or DaemonConnectionState.TransportClosed)
                 clientDisconnected.TrySetResult();
-
-            if (evt.State is DaemonConnectionState.Connected && clientDisconnected.Task.IsCompleted)
-                reconnectedAfterRestart.TrySetResult();
         });
 
         using var sub = client.SessionOutput.Subscribe(output =>
         {
-            outputs.Add(output);
+            outputs.Enqueue(output);
 
             if (output is TextOutput { Text: "echo:first" })
                 firstResponseReceived.TrySetResult();
@@ -135,7 +129,7 @@ public sealed class DaemonClientReconnectIntegrationTests
                 secondResponseReceived.TrySetResult();
         });
 
-        await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
+        var firstSessionId = await client.CreateSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
         await client.SendAsync("first", TestContext.Current.CancellationToken);
 
         await WaitFor(firstResponseReceived.Task, TimeSpan.FromSeconds(5));
@@ -150,30 +144,42 @@ public sealed class DaemonClientReconnectIntegrationTests
         // not enter TIME_WAIT.
         await WaitFor(clientDisconnected.Task, TimeSpan.FromSeconds(10));
 
-        // Start the replacement server. ReconnectLoopAsync is already running at
-        // this point; it will connect to host2, re-attach the session, then emit
-        // Connected — which sets reconnectedAfterRestart.
-        using var host2 = await StartFakeHubAsync(port);
+        // Start the replacement server, then drive the user-visible contract
+        // directly. Waiting for a passive Connected event is timing-sensitive on
+        // Windows because SignalR can stay in an in-flight reconnect attempt to
+        // the closed loopback socket after host2 is already listening.
+        var host2State = new FakeHubState();
+        using var host2 = await StartFakeHubAsync(port, host2State);
 
-        await WaitFor(reconnectedAfterRestart.Task, TimeSpan.FromSeconds(15));
+        var recreatedSessionId = await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
+        var host2SessionId = await WaitFor(host2State.SessionEnsured.Task, TimeSpan.FromSeconds(10));
+        Assert.Equal(host2SessionId, recreatedSessionId);
+        Assert.NotEqual(firstSessionId, recreatedSessionId);
 
-        await client.EnsureSessionAsync(ChannelType.Tui, TestContext.Current.CancellationToken);
         await client.SendAsync("second", TestContext.Current.CancellationToken);
 
+        var host2Text = await WaitFor(host2State.MessageReceived.Task, TimeSpan.FromSeconds(10));
+        Assert.Equal("second", host2Text);
         await WaitFor(secondResponseReceived.Task, TimeSpan.FromSeconds(10));
 
-        var textOutputs = outputs.OfType<TextOutput>().ToList();
+        var outputSnapshot = outputs.ToArray();
+        var textOutputs = outputSnapshot.OfType<TextOutput>().ToList();
         Assert.Contains(textOutputs, o => o.Text == "echo:first");
         Assert.Contains(textOutputs, o => o.Text == "echo:second");
-        Assert.Contains(outputs, o => o is TurnCompleted);
+        Assert.Contains(outputSnapshot, o => o is TurnCompleted);
     }
 
     private static async Task WaitFor(Task task, TimeSpan timeout)
     {
-        await task.WaitAsync(timeout);
+        await task.WaitAsync(timeout, TestContext.Current.CancellationToken);
     }
 
-    private static async Task<IHost> StartFakeHubAsync(int port)
+    private static async Task<T> WaitFor<T>(Task<T> task, TimeSpan timeout)
+    {
+        return await task.WaitAsync(timeout, TestContext.Current.CancellationToken);
+    }
+
+    private static async Task<IHost> StartFakeHubAsync(int port, FakeHubState? state = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseKestrel();
@@ -191,7 +197,7 @@ public sealed class DaemonClientReconnectIntegrationTests
         // reconnected connections stay up.
         builder.Services.AddSignalR(options =>
             options.KeepAliveInterval = TimeSpan.FromMilliseconds(200));
-        builder.Services.AddSingleton<FakeHubState>();
+        builder.Services.AddSingleton(state ?? new FakeHubState());
 
         var app = builder.Build();
         app.MapHub<FakeSessionHub>("/hub/session", options =>
@@ -211,21 +217,33 @@ public sealed class DaemonClientReconnectIntegrationTests
         private readonly HashSet<string> _sessions = [];
         private readonly ConcurrentDictionary<string, string> _connectionSessions = new();
 
+        public TaskCompletionSource<string> SessionEnsured { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<string> MessageReceived { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public SessionEnsureResultDto Ensure(string connectionId, string? sessionId)
         {
+            SessionEnsureResultDto result;
             lock (_gate)
             {
                 if (!string.IsNullOrWhiteSpace(sessionId) && _sessions.Contains(sessionId))
                 {
                     _connectionSessions[connectionId] = sessionId;
-                    return new SessionEnsureResultDto(sessionId, false);
+                    result = new SessionEnsureResultDto(sessionId, false);
                 }
-
-                var created = $"signalr/{Guid.NewGuid():N}";
-                _sessions.Add(created);
-                _connectionSessions[connectionId] = created;
-                return new SessionEnsureResultDto(created, true);
+                else
+                {
+                    var created = $"signalr/{Guid.NewGuid():N}";
+                    _sessions.Add(created);
+                    _connectionSessions[connectionId] = created;
+                    result = new SessionEnsureResultDto(created, true);
+                }
             }
+
+            SessionEnsured.TrySetResult(result.SessionId);
+            return result;
         }
 
         public bool IsAttached(string connectionId, string sessionId)
@@ -234,6 +252,9 @@ public sealed class DaemonClientReconnectIntegrationTests
 
         public void Disconnect(string connectionId)
             => _connectionSessions.TryRemove(connectionId, out _);
+
+        public void RecordMessage(string text)
+            => MessageReceived.TrySetResult(text);
     }
 
     private sealed class FakeSessionHub : Hub<ISessionHubClient>
@@ -258,6 +279,8 @@ public sealed class DaemonClientReconnectIntegrationTests
                 Context.Abort();
                 return;
             }
+
+            _state.RecordMessage(text);
 
             await Clients.Caller.ReceiveOutput(new SessionOutputDto
             {

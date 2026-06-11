@@ -268,8 +268,12 @@ A: Yes. Add the tool name to `ToolOverrides`:
 ```
 
 **Q: What happens if I don't respond to an approval prompt?**
-A: The prompt times out after 5 minutes and auto-denies. The LLM receives
-"Approval timed out" as the tool result.
+A: While the daemon and session remain alive, approval waits remain pending until
+you approve, deny, or the blocked run is cancelled. Parent-session approvals have
+durable recovery state and can be redriven after cold recovery. Subagent approval
+waits are live-only; if the daemon or parent session restarts before you respond,
+the stale prompt is rejected as expired and the interrupted `spawn_agent` call is
+closed before the next turn continues.
 
 **Q: Can I pre-approve common commands?**
 A: Yes. Edit `~/.netclaw/config/tool-approvals.json` directly to add patterns.

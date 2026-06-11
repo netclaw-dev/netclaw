@@ -9,6 +9,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
+    <InternalsVisibleTo Include="Netclaw.Benchmarks" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,6 +34,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+    <ProjectReference Include="..\Netclaw.Media\Netclaw.Media.csproj" />
     <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj" />
     <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
     <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj" />

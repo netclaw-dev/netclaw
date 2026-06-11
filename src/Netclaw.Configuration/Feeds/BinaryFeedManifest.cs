@@ -25,6 +25,14 @@ public sealed class BinaryFeedManifest
     [JsonPropertyName("latest")]
     public string Latest { get; init; } = "";
 
+    /// <summary>
+    /// Newest version of any kind — stable or prerelease (always &gt;= <see cref="Latest"/>).
+    /// What the beta channel resolves to. Empty on manifests published before the
+    /// prerelease channel existed; stable clients never read this field.
+    /// </summary>
+    [JsonPropertyName("latestPrerelease")]
+    public string LatestPrerelease { get; init; } = "";
+
     [JsonPropertyName("releases")]
     public List<BinaryRelease> Releases { get; init; } = [];
 }

@@ -673,6 +673,10 @@ public class SetReminderToolTests : TestKit
         var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(DeliveryKind.Channel, cmd.Definition.Delivery.Kind);
         Assert.Equal("C0123ABC", cmd.Definition.Delivery.Address);
+        Assert.NotNull(cmd.Definition.Delivery.Target);
+        Assert.Equal("slack", cmd.Definition.Delivery.Target.ChannelKey);
+        Assert.Equal("destination", cmd.Definition.Delivery.Target.DestinationKind);
+        Assert.Equal("C0123ABC", cmd.Definition.Delivery.Target.DestinationId);
         Assert.Equal(1, resolver.CallCount);
 
         probe.Reply(new ReminderSavedResponse(

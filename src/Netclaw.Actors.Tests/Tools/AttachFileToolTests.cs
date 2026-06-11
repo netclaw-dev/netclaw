@@ -138,7 +138,7 @@ public class AttachFileToolTests : IDisposable
         var attachment = Assert.Single(context.FileAttachments);
         Assert.Equal(filePath, attachment.FilePath);
         Assert.Equal("chart.png", attachment.FileName);
-        Assert.Equal("image/png", attachment.MimeType);
+        Assert.Equal("image/png", attachment.MimeType.Value);
     }
 
     [Fact]
@@ -234,7 +234,7 @@ public class AttachFileToolTests : IDisposable
         Assert.StartsWith(Path.Combine(currentSessionDir, "attachments"), attachment.FilePath, StringComparison.OrdinalIgnoreCase);
         Assert.True(File.Exists(attachment.FilePath));
         Assert.Equal("Copied Report.png", attachment.FileName);
-        Assert.Equal("image/png", attachment.MimeType);
+        Assert.Equal("image/png", attachment.MimeType.Value);
     }
 
     [Fact]

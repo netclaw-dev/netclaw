@@ -6,6 +6,7 @@
 using System.Text;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
+using Netclaw.Media;
 
 namespace Netclaw.Channels;
 
@@ -98,7 +99,7 @@ public static class AdoptedContextContentBuilder
                         if (hasAttachmentAnnouncement)
                             break;
 
-                        if (data.MediaType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true)
+                        if (MimeTypeCatalog.GetMediaKind(data.MediaType) == MediaKind.Image)
                         {
                             imageCount++;
                         }

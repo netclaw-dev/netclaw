@@ -14,14 +14,14 @@ namespace Netclaw.Providers.OpenAi;
 /// <remarks>
 /// The Codex backend has stricter validation than <c>api.openai.com</c>:
 /// <list type="bullet">
-///   <item>Requires <c>ChatGPT-Account-Id</c> header (extracted from JWT)</item>
+///   <item>Requires <c>ChatGPT-Account-Id</c> header from OpenAI OAuth metadata</item>
 ///   <item>Requires <c>"store": false</c> in the request body</item>
 ///   <item>Requires <c>"instructions"</c> to be present (even if empty)</item>
 ///   <item>Rejects system messages in <c>"input"</c> — must be in <c>"instructions"</c></item>
 ///   <item>Rejects <c>"strict": null</c> in tool definitions (must be omitted or boolean)</item>
 /// </list>
 /// </remarks>
-internal sealed class OpenAiCodexRequestPolicy(string? accountId) : PipelinePolicy
+internal sealed class OpenAiCodexRequestPolicy(string accountId) : PipelinePolicy
 {
     public override void Process(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
@@ -39,10 +39,9 @@ internal sealed class OpenAiCodexRequestPolicy(string? accountId) : PipelinePoli
 
     private void Modify(PipelineMessage message)
     {
-        // Inject ChatGPT-Account-Id header (extracted from JWT by JwtAccountIdExtractor).
-        // Set even when the body is empty/non-JSON; the header is always required.
-        if (accountId is not null)
-            message.Request.Headers.Set("ChatGPT-Account-Id", accountId);
+        // Set even when the body is empty/non-JSON; the Codex backend requires
+        // this OAuth workspace selector on every request.
+        message.Request.Headers.Set("ChatGPT-Account-Id", accountId);
 
         PipelineRequestBodyEditor.EditJsonBody(message, obj =>
         {

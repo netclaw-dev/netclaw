@@ -21,6 +21,7 @@
     <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj" />
     <ProjectReference Include="..\Netclaw.Actors\Netclaw.Actors.csproj" />
     <ProjectReference Include="..\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+    <ProjectReference Include="..\Netclaw.Media\Netclaw.Media.csproj" />
     <ProjectReference Include="..\Netclaw.Security\Netclaw.Security.csproj" />
     <ProjectReference Include="..\Netclaw.Tools.Generators\Netclaw.Tools.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>

@@ -96,6 +96,102 @@ public sealed class ModelCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Set_OpenAiOAuthModel_StoresLiveDiscoveredMetadata()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel
+            {
+                ModelId = new Netclaw.Configuration.ModelId("gpt-new-codex"),
+                ContextWindowTokens = 512000,
+                InputModalities = ModelModality.Text | ModelModality.Image,
+                OutputModalities = ModelModality.Text,
+            }
+        ]);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "openai-codex", "gpt-new-codex"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var main = config.RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("Live", main.GetProperty("Provenance").GetString());
+        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
+        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
+        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
+    }
+
+    [Fact]
+    public async Task Set_OpenAiOAuthModel_WhenProbeFails_ReturnsErrorWithoutWritingModel()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(false, "Codex /models unavailable", []);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "openai-codex", "gpt-new-codex"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Could not resolve model metadata", _output.ToString());
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        Assert.False(config.RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
+    public async Task Set_OpenAiOAuthModel_WhenModelIsNotReturned_ReturnsErrorWithoutWritingModel()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("gpt-other-codex") }
+        ]);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "set", "main", "openai-codex", "gpt-new-codex"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("was not returned", _output.ToString());
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        Assert.False(config.RootElement.TryGetProperty("Models", out _));
+    }
+
+    [Fact]
     public async Task Set_InvalidRole_ReturnsError()
     {
         WriteConfig(new Dictionary<string, object>
@@ -154,6 +250,33 @@ public sealed class ModelCommandTests : IDisposable
         Assert.Contains("model-b", output);
         Assert.Contains("2 model(s) found", output);
         Assert.Equal(1, _fakeProbe.ProbeCallCount);
+    }
+
+    [Fact]
+    public async Task Discover_SuccessWithProviderWarning_PrintsWarning()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(
+            true,
+            "provider returned fallback list",
+            [new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("gpt-5.3-codex") }]);
+
+        var exitCode = await ModelCommand.RunAsync(
+            ["model", "discover", "my-openai"],
+            _paths, _fakeProbe, output: _output);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("Warning: provider returned fallback list", _output.ToString());
     }
 
     [Fact]

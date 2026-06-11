@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.9.0"
+  version: "2.11.2"
 ---
 
 # Netclaw Operations
@@ -30,6 +30,7 @@ problems, how to update preferences, or how to maintain itself.
 | Add or switch LLM provider, OAuth login | [LLM Providers](#llm-providers) |
 | Show / kick the tires on Netclaw end-to-end locally | [Demo AppHost](#demo-apphost) |
 | Search backend errors, configure SearXNG | [Search Providers](#search-providers) |
+| Rotate or repair secrets | [Secret Management](#secret-management) |
 
 ## Project Directory
 
@@ -134,25 +135,68 @@ Other scheduling tools: `list_reminders`, `cancel_reminder`,
 
 To start a brand-new conversation on a chat channel — a `delivery_kind=channel`
 reminder firing, or unprompted cross-channel outreach ("let the team know") —
-use the channel's proactive-post tool:
+use the generic proactive-post tool:
 
-- Slack: `send_slack_message` — posts to a channel or DMs a user.
-- Discord: `send_discord_message` — posts to a channel only.
-- Mattermost: `send_mattermost_message` — posts to a channel, or DMs a user
-  when direct messages are enabled.
+- `send_channel_message(channel_key, destination, text)` posts through the
+  selected enabled channel and creates a new conversation thread when that
+  channel supports it.
+- `destination` must be a resolved object with `channel_key`, `kind`, and `id`.
+  Do not pass bare display names like `#general` or `@alice`.
+- `destination.kind="destination"` posts to a channel/destination ID returned by
+  `lookup_channel_destination`.
+- `destination.kind="direct_message"` sends a DM using the stable user ID from
+  `lookup_channel_user`; this is supported only by channels that advertise DM
+  output (Slack, Discord, and Mattermost when enabled in config).
+- Reminder- and webhook-originated turns may only call `send_channel_message`
+  against the delivery target configured on the reminder or webhook route. If a
+  trigger turn has no configured target, Netclaw fails loud instead of choosing a
+  default output channel.
 
-`send_discord_message` posts the `message` to a Discord channel and creates a
-conversation thread off it, so user replies route back to a live session.
-Provide `channel_id` (or omit it to use the configured default channel); an
-optional `thread_name` titles the thread. The channel must be in the Discord
-allow-list. Discord DM targets are not supported yet — the tool posts to
-channels only.
+Use the generic lookup tools before sending when you do not already have a
+stable channel/user ID:
 
-`send_mattermost_message` behaves like the Slack tool: it posts the `message`
-to a Mattermost channel (or, when `AllowDirectMessages` is enabled, a user's
-direct-message channel) and threads replies back to a live session. Mattermost
-direct messages are addressable, so `delivery_kind=channel` reminders may
-target a DM (`@user`) — unlike Discord.
+- `lookup_channel_user(channel_key, query)` resolves users on enabled channels
+  that support user lookup, currently Slack, Discord, and Mattermost.
+- `lookup_channel_destination(channel_key, query)` resolves destinations on
+  enabled channels that support destination lookup. Slack can resolve channel
+  names and IDs; Discord can resolve channel mentions, stable IDs, and cached
+  text-channel names; Mattermost requires an exact channel ID.
+- **Discovery:** call `lookup_channel_destination` with `query` omitted (or
+  blank) to list every destination the channel can currently deliver to —
+  Slack lists the configured allowlist (the resolved default channel plus
+  `AllowedChannelIds`) with display names resolved from the API and archived
+  channels excluded, Discord lists ACL-allowed guild text channels, and
+  Mattermost lists the configured allowlist. Use this to answer "where can I
+  post?" before sending. Listing is destination-only: user directories are
+  unbounded, so `lookup_channel_user` always requires a query.
+
+Both tools require `channel_key` as the first argument. Use the returned
+`channel_key` and `stable_id` exactly; for destination lookups, use the returned
+`address_kind` (`destination`) as `destination.kind`. For user lookups, set
+`destination.kind` to `direct_message` and pass the returned user `stable_id`.
+If lookup is ambiguous, pick from the returned candidates instead of guessing.
+Do not use channel-specific lookup aliases such as `lookup_slack_user` or
+`lookup_mattermost_user`; lookup is intentionally routed through the generic
+channel tools.
+
+Examples:
+
+```
+send_channel_message(
+  channel_key: "slack",
+  destination: { channel_key: "slack", kind: "destination", id: "C0123ABC" },
+  text: "Deployment finished successfully.")
+
+send_channel_message(
+  channel_key: "mattermost",
+  destination: { channel_key: "mattermost", kind: "direct_message", id: "26characterMattermostUserId" },
+  text: "Your report is ready.")
+
+send_channel_message(
+  channel_key: "discord",
+  destination: { channel_key: "discord", kind: "direct_message", id: "123456789012345678" },
+  text: "Your report is ready.")
+```
 
 ### Approval Requirements for Reminders and Webhooks
 
@@ -184,11 +228,13 @@ If the user has already trusted the verb in a previous session, no action is
 needed — `(verb, null)` grants persist in `tool-approvals.json` across daemon
 restarts.
 
-**Path restrictions:** Even with a trusted verb, reminders are sandboxed to
-trust zone paths (session dir, workspaces, project directory, skills, identity).
-`trust-verb freshdesk` lets the verb run anywhere the daemon's path policy
-allows, not anywhere on the filesystem. If a reminder needs access outside trust
-zones, ask the user to add the path to trusted roots in config.
+**Path restrictions:** A trusted verb runs wherever the creating audience's
+file-access policy allows — the same scoping `file_write` uses. A Personal
+reminder/webhook (the default when created from a Personal session) has
+unrestricted filesystem access; a Team or Public one is confined to its session
+directory — and cannot run `shell_execute` at all, since shell is Personal-only.
+Protected paths — `secrets.json`, `.netclaw/keys`, `config/webhooks` — are always
+denied regardless of audience or pre-approval.
 
 **If a reminder fails with `command_not_pre_approved`:** The verb is not in the
 approval store as a global wildcard. Run
@@ -215,7 +261,8 @@ Rules:
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json`.
-- Output captured to `~/.netclaw/jobs/{id}/output.log`.
+- Output is captured (bounded; head+tail for very large output) to
+  `~/.netclaw/jobs/{id}/output.log` — `file_read`/`grep` it for detail beyond the tail.
 
 Monitoring tools:
 
@@ -231,6 +278,26 @@ results proactively when the job completes.
 
 Active background jobs appear in the `[active-background-jobs]` section of the
 session context on every turn.
+
+## Large tool output
+
+Tool output is bounded to a small inline budget
+(`Session.Tuning.MaxInlineToolResultChars`, default 2000 chars) so it never floods
+the context window. When a tool's output exceeds that budget you get a head+tail
+view inline plus a pointer to the full output — not the whole thing:
+
+- **`shell_execute`** spills the full (redacted) output to
+  `{session}/tool-calls/{toolCallId}.log` and gives you the path. Read a slice with
+  `file_read` (`StartLine`/`Limit`) or `grep` it — do NOT re-run the command to see more.
+- **`file_read`** on a large file returns the head and steers you to read a
+  specific range with `StartLine`/`Limit` or `grep` (`StartLine` is a 1-based line
+  number — line 1 is the first line). Don't `cat` a huge file through
+  `shell_execute` to get around it — that just spills again.
+- **`background_job`** output goes to `~/.netclaw/jobs/{id}/output.log` (bounded);
+  `check_background_job` returns a tail, and you can `file_read`/`grep` the log for the rest.
+
+Reading a targeted range or grepping is always cheaper than re-running a command or
+re-reading a whole file. Secret-bearing values are redacted from all tool output.
 
 ## Tool Discovery
 
@@ -541,6 +608,12 @@ Use the dedicated tools instead of generic file tools when available:
 When using `set_webhook`, use `delivery_required` (bool, default `true`) to
 control required notification behavior. `notify_policy` is deprecated.
 
+`set_webhook` inherits the audience of the channel/session that created it when
+`audience` is omitted — the same provenance model as reminders. A route cannot be
+minted with a broader audience than the creator holds; downgrading is always
+allowed. A webhook created from a Team channel runs as Team (and therefore cannot
+run `shell_execute`); one created from a Personal CLI session runs as Personal.
+
 Route files are secret-bearing config because they may contain inline
 verification secrets. Treat `config/webhooks` like `secrets.json` and avoid
 broad file reads/writes there unless the user explicitly wants raw config work.
@@ -554,9 +627,10 @@ Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
 
 **Approval gate:** Webhooks run without a human — they cannot prompt for
-approval. The same rules as reminders apply: commands must be pre-approved in
-`tool-approvals.json` and path arguments must be within trust zones. See
-"Approval Requirements for Reminders and Webhooks" in the Scheduling section.
+approval. The same rules as reminders apply: shell commands must be pre-approved
+in `tool-approvals.json`, and path arguments are scoped by the route's audience
+the same way `file_write` is. See "Approval Requirements for Reminders and
+Webhooks" in the Scheduling section.
 
 ### Webhook observability
 
@@ -582,14 +656,16 @@ configured notification target.
 
 ## Inbound Attachments
 
-When a user sends a file in Slack, Netclaw runs the attachment through an
-ingress pipeline before it reaches the LLM:
+When a user sends a file in Slack, Discord, or Mattermost, Netclaw runs the
+attachment through an ingress pipeline before it reaches the LLM:
 
-1. **Policy gate** — checks audience, file category, and per-message file count
+1. **Policy gate** — uses declared MIME plus filename extension for a provisional
+   catalog-backed category, then checks audience and per-message file count
    against `ChannelAttachmentPolicy`
 2. **Size gate** — rejects files above the per-audience byte limit
 3. **Download** — fetches from Slack's private file API with bot-token auth
-4. **Content scan** — runs the configured `IContentScanner` (e.g. antivirus)
+4. **Content scan** — runs the configured `IContentScanner` and produces a
+   scanner-verified canonical MIME type
 5. **Inbox write** — saves to `~/.netclaw/sessions/{session-id}/inbox/`
 6. **Announcement line** — appends `[attachment]` text to the user turn
 
@@ -599,8 +675,23 @@ The `[attachment]` line format is:
 ```
 
 `inlined="true"` means the file bytes were forwarded to the model as
-`DataContent` (images and PDFs on vision-capable models). `inlined="false"`
+`DataContent` (currently image files on image-capable models). `inlined="false"`
 means the model only sees the path reference.
+
+Declared transport MIME is metadata, not proof. Attachment announcements,
+inlined `DataContent`, and model-input handoff use the scanner-verified MIME.
+Unknown image/audio/video subtypes do not get privileged categories by prefix;
+they must be explicitly present in the media catalog. OpenAI-compatible
+providers only serialize image `DataContent` through `image_url` and fail loudly
+if non-image bytes reach that boundary.
+
+`file_read` follows the same file taxonomy as chat attachments. It reads
+text-like files directly, including UTF-8, UTF-16/UTF-32 Unicode text, and
+common Windows-1252 text files. For images, it can load the file for visual
+inspection when the active model or delegated sub-agent supports image input.
+For PDFs, audio/video, archives, binary documents, and unknown binaries, it
+returns metadata plus explicit guidance; it does not perform PDF extraction,
+OCR, transcription, keyframe extraction, or raw binary output.
 
 **Historical thread backfill** follows the same download/scan flow for all
 file types (not just images) — PDFs and other documents from prior thread
@@ -616,6 +707,27 @@ full exception internally. Exception details are **never** forwarded to Slack.
 | Download timeout | bot token valid? Slack network reachable? check `daemon-{date}.log` |
 | Content scan rejection | `netclaw status` scanner section; check scan config |
 | Inbox write failure | disk space? permissions on `~/.netclaw/sessions/`? |
+
+## Secret Management
+
+Secrets live in `~/.netclaw/config/secrets.json`; never print raw values in a
+conversation, issue, PR, or log summary. Use the CLI instead of direct edits:
+
+```bash
+netclaw secrets set Discord:BotToken <replacement>
+netclaw secrets set Slack.BotToken <replacement>
+```
+
+Rules:
+
+- `.` and `:` are both accepted as path delimiters; prefer the documented dotted
+  form unless the operator provides a configuration-style colon path.
+- `netclaw secrets add` is an alias for `set` and overwrites the same effective
+  path.
+- Re-running `netclaw init` updates secret values explicitly entered in the
+  wizard while preserving unrelated secrets.
+- If a channel reports a 401 or invalid-token error, rotate the relevant secret
+  and restart the daemon so the channel reloads config.
 
 ## LLM Providers
 
@@ -647,6 +759,26 @@ Provider-specific behavior toggles belong under
 `Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core
 config layer; each provider plugin deserializes and validates its own typed
 options instead of adding provider-specific properties to `ProviderEntry`.
+
+For OpenAI ChatGPT subscription auth, Netclaw persists the OAuth access token,
+refresh token, and ChatGPT account ID returned by the OpenAI ID token. The
+account ID is required by the Codex backend. If OpenAI OAuth validation reports
+that the account ID is missing, re-authenticate the provider with `netclaw
+provider fix <name>` or remove and add it again. API-key OpenAI auth does not
+use the Codex backend or this account-ID metadata.
+
+For `openai` OAuth providers, `netclaw model discover <provider>` queries the
+Codex backend model catalog with the OAuth bearer token and
+`ChatGPT-Account-Id`. This path is fail-closed: if the live catalog is
+unavailable, returns no picker-visible models, or omits context-window or
+input-modality metadata, Netclaw reports the provider error instead of using a
+stale built-in model list. The catalog query's `client_version` tracks the
+official `@openai/codex` release version, not Netclaw's own version, because the
+Codex backend uses that value to gate newer model entries.
+
+When adding an OpenAI provider from the CLI, `netclaw provider add <name>
+openai` defaults to the ChatGPT OAuth device flow. Use `--auth api-key
+--api-key <key>` to force platform API-key auth instead.
 
 ### Adding GitHub Copilot
 
@@ -772,7 +904,8 @@ What to expect inside `session.log`:
 | Missing tools | `netclaw mcp list`; check MCP connection state |
 | Memory recall degraded | `netclaw status` memory section |
 | Daemon won't start | crash logs at `~/.netclaw/logs/crash-*.log` |
-| Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
+| Docker daemon cannot create `/home/netclaw/.netclaw/*` | Official image entrypoint repairs writable bind mounts to UID/GID `1654:1654`; if bypassed or read-only, run `sudo chown -R 1654:1654 <host-data-dir>` or use a Docker named volume |
+| Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. Discord may also report `degraded` when Discord.Net says the socket is connected but the gateway is not ready, such as after a resumed session that Netclaw is replacing with a clean reconnect. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
 | `command not found` for `netclaw` from shell tool when daemon runs as systemd service | `netclaw doctor` (the **Systemd Unit PATH** check warns when the unit was installed before PATH was baked in) |
 
 If webhook notifications are configured, daemon crash paths emit

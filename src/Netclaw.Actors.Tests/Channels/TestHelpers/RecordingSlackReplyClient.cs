@@ -26,6 +26,10 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
 
     public Exception? ThrowOnPost { get; set; }
 
+    // Throws on the next post only, then auto-clears. Lets a test fail a content
+    // post while letting a follow-up (e.g. fallback) succeed and be recorded.
+    public Exception? ThrowOnceOnPost { get; set; }
+
     public void Clear()
     {
         lock (_lock)
@@ -39,6 +43,7 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
     {
         if (ThrowOnPost is { } ex)
             throw ex;
+        ThrowOnceIfArmed();
         lock (_lock) _posts.Add(message);
         return Task.CompletedTask;
     }
@@ -47,8 +52,18 @@ public sealed class RecordingSlackReplyClient : ISlackReplyClient
     {
         if (ThrowOnPost is { } ex)
             throw ex;
+        ThrowOnceIfArmed();
         lock (_lock) _posts.Add(message);
         return Task.FromResult("fake.ts");
+    }
+
+    private void ThrowOnceIfArmed()
+    {
+        if (ThrowOnceOnPost is { } onceEx)
+        {
+            ThrowOnceOnPost = null;
+            throw onceEx;
+        }
     }
 
     public Task UpdateThreadMessageAsync(

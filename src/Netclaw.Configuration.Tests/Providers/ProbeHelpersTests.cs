@@ -7,6 +7,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using Netclaw.Providers;
+using Netclaw.Providers.SelfHosted;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -177,7 +178,74 @@ public class ProbeHelpersTests
         Assert.Contains("credentials may lack model-listing permissions", result.ErrorMessage);
     }
 
+    // ── ParseOpenAiStyleModels: never invent modalities (#1290) ──
+
+    [Fact]
+    public void ParseOpenAiStyleModels_OmitsModalities_LeavesThemUnset()
+    {
+        // An OpenAI-style /v1/models listing carries no modality field. Discovery must
+        // report "unknown" (null), NOT default to Text — a persisted Text override would
+        // permanently demote a multimodal self-hosted model to text-only.
+        var result = ProbeHelpers.ParseOpenAiStyleModels("""{"data":[{"id":"my-model"}]}""");
+
+        Assert.True(result.Success);
+        var model = Assert.Single(result.Models);
+        Assert.Equal("my-model", model.ModelId.Value);
+        Assert.Null(model.InputModalities);
+        Assert.Null(model.OutputModalities);
+    }
+
+    [Fact]
+    public void OpenAiCompatible_ParseModels_ReadsContextWindowButNotModalities()
+    {
+        var result = OpenAiCompatibleDescriptor.ParseModels(
+            """{"data":[{"id":"qwen-vl","max_model_len":32768}]}""");
+
+        var model = Assert.Single(result.Models);
+        Assert.Equal(32768, model.ContextWindowTokens);
+        Assert.Null(model.InputModalities);
+        Assert.Null(model.OutputModalities);
+    }
+
+    // ── ExecuteProbeAsync: one caller-supplied timeout, honest message (#1292) ──
+
+    [Fact]
+    public async Task ExecuteProbeAsync_WhenServerDoesNotRespond_TimesOutNamingTheEndpoint()
+    {
+        // The server accepts the connection but never answers. The probe must honor the
+        // supplied timeout (not a buried 10s constant) and report the actual endpoint so
+        // a wrong/blank target is visible rather than failing anonymously.
+        var httpClient = new HttpClient(new HangingHandler());
+
+        var result = await ProbeHelpers.ExecuteProbeAsync(
+            httpClient, "openai-compatible", "http://localhost:11434", "/v1/models",
+            "http://my-vllm:8000", _ => { }, ProbeHelpers.ParseOpenAiStyleModels,
+            CancellationToken.None, TimeSpan.FromMilliseconds(150));
+
+        Assert.False(result.Success);
+        Assert.Contains("No response from http://my-vllm:8000", result.ErrorMessage);
+        Assert.Contains("try again", result.ErrorMessage);
+        Assert.DoesNotContain("10 seconds", result.ErrorMessage!);
+    }
+
     // ── Helpers ──
+
+    /// <summary>
+    /// Accepts the request but never responds until the probe's own timeout cancels the
+    /// token. The cancellation IS the synchronization signal — there is no arbitrary
+    /// delay — so the test is deterministic, not timing-dependent.
+    /// </summary>
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var tcs = new TaskCompletionSource<HttpResponseMessage>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            cancellationToken.Register(() => tcs.TrySetCanceled(cancellationToken));
+            return tcs.Task;
+        }
+    }
 
     private static HttpResponseMessage JsonErrorResponse(
         object body, HttpStatusCode status = HttpStatusCode.Forbidden)

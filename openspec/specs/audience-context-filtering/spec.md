@@ -1,4 +1,19 @@
-## ADDED Requirements
+# audience-context-filtering Specification
+
+## Purpose
+
+Netclaw sessions can be addressed by different trust audiences within the same
+runtime — Public (untrusted external requesters), Team (trusted operators), and
+Personal (the owner). Context assembled for the model, file-access behavior, and
+error messaging MUST respect the audience of the active turn so that internal
+information (skill/memory/subagent indexes, filesystem paths, working context,
+allowed file roots) is never surfaced to a lower-trust audience. This capability
+defines how the audience parameter flows through context-layer assembly, session
+and working-context blocks, file-access denial messaging, implicit file roots,
+and audience derivation, with secure-by-default behavior and no default-audience
+fallback.
+
+## Requirements
 
 ### Requirement: Context layer audience filtering
 

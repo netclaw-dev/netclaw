@@ -101,6 +101,8 @@ internal static class StreamingToolWatchdog
                     case ToolCompletedUpdate completed:
                         return completed.Result;
                     case ToolActivityUpdate activity:
+                        if (activity.SuspendsInactivityWatchdog)
+                            Volatile.Write(ref budgetTicks, TimeSpan.Zero.Ticks);
                         onActivity?.Invoke(activity);
                         break;
                 }

@@ -61,7 +61,7 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
                 string.Empty,
                 "No user-facing subagents are currently registered.",
                 $"Agents directory: {agentsDirectory}",
-                "Sub-agents inherit the parent session's tool policy.",
+                "Sub-agents inherit the parent audience policy.",
                 $"Denied tools for sub-agents: {deniedTools}",
                 string.Empty,
                 "To add one: create an agent definition at <agents-directory>/<name>.md. The next turn or subagent lookup reloads it automatically.",
@@ -79,9 +79,7 @@ public sealed class SubAgentDiscoveryContextLayer : IContextLayerProvider
         {
             lines.Add($"## {agent.Name}");
             lines.Add(agent.Description);
-            lines.Add(agent.ToolNames.Count == 0
-                ? "Tools: inherited from parent session policy, except denied sub-agent tools"
-                : $"Tools: {string.Join(", ", agent.ToolNames)} (except denied sub-agent tools)");
+            lines.Add("Tools: inherited from parent audience policy, except denied sub-agent tools");
             lines.Add($"Timeout: {agent.TimeoutSeconds}s");
             lines.Add(string.Empty);
         }

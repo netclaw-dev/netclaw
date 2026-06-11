@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Netclaw.Benchmarks</AssemblyName>
+    <!-- BenchmarkDotNet requires Release and an optimized, non-debuggable build to
+         produce trustworthy numbers; building it as part of the solution in Debug is
+         fine (it just won't be run that way). It is a manual console tool, not a
+         published package. It inherits TreatWarningsAsErrors=true from the repo root
+         like every other project. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Netclaw.Actors\Netclaw.Actors.csproj" />
+    <ProjectReference Include="..\..\src\Netclaw.Configuration\Netclaw.Configuration.csproj" />
+  </ItemGroup>
+
+</Project>

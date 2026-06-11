@@ -1,4 +1,17 @@
-## ADDED Requirements
+# project-instructions Specification
+
+## Purpose
+
+Define how Netclaw discovers project-scoped identity/instruction files from a
+session's project directory and incorporates their content into the assembled
+system prompt. The capability checks a fixed set of candidate files
+(`.netclaw/AGENTS.md`, `CLAUDE.md`, `AGENTS.md`, `CONTEXT.md`) in priority
+order, loads the first match alongside the global SOUL/AGENTS/TOOLING layers at
+position [0] of the system prompt, re-assembles when the project directory
+changes, and re-reads from disk after compaction so repository-owned guidance
+stays current and cache-stable.
+
+## Requirements
 
 ### Requirement: Project identity file loading from project directory
 

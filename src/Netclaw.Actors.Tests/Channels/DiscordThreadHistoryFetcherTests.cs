@@ -10,6 +10,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Discord;
 using Netclaw.Channels.Discord.Transport;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Xunit;
 

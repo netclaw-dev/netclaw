@@ -44,6 +44,42 @@ public class OAuthDeviceFlowServiceTests
     }
 
     [Fact]
+    public async Task StartDeviceAuthorization_IncludesExtraAuthParams()
+    {
+        var config = TestConfig with
+        {
+            Scope = "read:user",
+            ExtraAuthParams = new Dictionary<string, string>
+            {
+                ["prompt"] = "select_account",
+                ["originator"] = "netclaw",
+            }
+        };
+        string? capturedBody = null;
+        var handler = new FakeHttpMessageHandler(request =>
+        {
+            capturedBody = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return JsonResponse(new
+            {
+                device_code = "dc-123",
+                user_code = "USER-CODE",
+                verification_uri = "https://auth.example.com/verify",
+                expires_in = 300,
+                interval = 5
+            });
+        });
+
+        var service = new OAuthDeviceFlowService(new HttpClient(handler));
+        await service.StartDeviceAuthorizationAsync(config, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedBody);
+        Assert.Contains("client_id=test-client-id", capturedBody);
+        Assert.Contains("scope=read%3Auser", capturedBody);
+        Assert.Contains("prompt=select_account", capturedBody);
+        Assert.Contains("originator=netclaw", capturedBody);
+    }
+
+    [Fact]
     public async Task PollForToken_PendingThenSuccess_ReturnsToken()
     {
         var callCount = 0;

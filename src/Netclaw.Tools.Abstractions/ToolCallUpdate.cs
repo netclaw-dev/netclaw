@@ -21,7 +21,15 @@ public interface ToolCallUpdate;
 /// <param name="OutputChunk">
 /// Optional incremental output (e.g. streamed shell stdout) for live display.
 /// </param>
-public sealed record ToolActivityUpdate(string Phase, string? OutputChunk = null) : ToolCallUpdate;
+public sealed record ToolActivityUpdate(string Phase, string? OutputChunk = null) : ToolCallUpdate
+{
+    /// <summary>
+    /// True when the tool is intentionally blocked on external input, such as a
+    /// human approval prompt. The watchdog resumes on the next non-suspending
+    /// activity item or terminal completion.
+    /// </summary>
+    public bool SuspendsInactivityWatchdog { get; init; }
+}
 
 /// <summary>
 /// The terminal item of a tool-call stream. Its <see cref="Result"/> is the only

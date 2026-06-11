@@ -22,9 +22,10 @@ public sealed class ApprovalChannelTests
         var callId = new ToolCallId($"call-{decision}");
 
         var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
-        channel.Complete(callId, decision);
+        Assert.True(channel.Complete(callId, decision));
 
         Assert.Equal(decision, await waitTask);
+        Assert.False(channel.Complete(callId, decision));
     }
 
     [Fact]
@@ -64,8 +65,53 @@ public sealed class ApprovalChannelTests
     public void Complete_unknown_callId_is_noop()
     {
         var channel = new ApprovalChannel();
-        // Should not throw
-        channel.Complete(new ToolCallId("nonexistent"), ApprovalDecision.Denied);
+        Assert.False(channel.Complete(new ToolCallId("nonexistent"), ApprovalDecision.Denied));
+    }
+
+    [Fact]
+    public async Task Cancelled_wait_is_no_longer_pending_or_completable()
+    {
+        var channel = new ApprovalChannel();
+        var callId = new ToolCallId("call-cancelled-late");
+        using var cts = new CancellationTokenSource();
+
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), cts.Token);
+
+        await cts.CancelAsync();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => waitTask);
+
+        Assert.False(channel.Complete(callId, ApprovalDecision.ApprovedOnce));
+    }
+
+    [Fact]
+    public async Task Duplicate_wait_for_same_call_id_fails_loudly()
+    {
+        var channel = new ApprovalChannel();
+        var callId = new ToolCallId("call-duplicate");
+
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None));
+        Assert.Contains(callId.Value, ex.Message, StringComparison.Ordinal);
+
+        Assert.True(channel.Complete(callId, ApprovalDecision.Denied));
+        Assert.Equal(ApprovalDecision.Denied, await waitTask);
+    }
+
+    [Fact]
+    public async Task Claimed_wait_is_no_longer_pending_but_can_still_complete_waiter()
+    {
+        var channel = new ApprovalChannel();
+        var callId = new ToolCallId("call-claim");
+
+        var waitTask = channel.WaitForApprovalAsync(callId, TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Assert.True(channel.TryClaim(callId, out var wait));
+        Assert.False(channel.Complete(callId, ApprovalDecision.Denied));
+
+        Assert.True(wait.Complete(ApprovalDecision.ApprovedAlways));
+        Assert.Equal(ApprovalDecision.ApprovedAlways, await waitTask);
     }
 
     [Fact]

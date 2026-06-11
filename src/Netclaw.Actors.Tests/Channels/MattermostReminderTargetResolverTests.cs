@@ -24,7 +24,7 @@ public sealed class MattermostReminderTargetResolverTests
         Assert.Equal(ReminderTargetKind.User, result.Kind);
         // The canonical form preserves the "@" prefix — Mattermost user IDs and
         // channel IDs are indistinguishable bare strings, so downstream consumers
-        // (reminder prompt builder, send_mattermost_message dispatcher) need the
+        // (reminder prompt builder, send_channel_message dispatcher) need the
         // prefix to know which dispatch path to take.
         Assert.Equal("@abcdefghijklmnopqrstuvwxyz", result.ResolvedId);
         Assert.Null(result.ErrorMessage);

@@ -149,7 +149,7 @@ public sealed class OAuthPkceService
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        return ParseTokenResponse(doc.RootElement);
+        return OAuthTokenResponseParser.Parse(doc.RootElement, _timeProvider);
     }
 
     /// <summary>
@@ -188,7 +188,7 @@ public sealed class OAuthPkceService
 
         var json = await response.Content.ReadAsStringAsync(ct);
         using var doc = JsonDocument.Parse(json);
-        var result = ParseTokenResponse(doc.RootElement);
+        var result = OAuthTokenResponseParser.Parse(doc.RootElement, _timeProvider);
 
         // Preserve existing refresh token if server didn't issue a new one
         result = result with
@@ -366,23 +366,6 @@ public sealed class OAuthPkceService
             .Replace('/', '_');
     }
 
-    private OAuthDeviceFlowResult ParseTokenResponse(JsonElement root)
-    {
-        var accessToken = root.GetProperty("access_token").GetString()
-            ?? throw new InvalidOperationException("Missing access_token in response.");
-
-        string? refreshToken = root.TryGetProperty("refresh_token", out var refreshProp)
-            ? refreshProp.GetString() : null;
-
-        DateTimeOffset? expiresAt = root.TryGetProperty("expires_in", out var expiresProp)
-            ? _timeProvider.GetUtcNow().AddSeconds(expiresProp.GetInt32())
-            : null;
-
-        return new OAuthDeviceFlowResult(
-            new SensitiveString(accessToken),
-            refreshToken is not null ? new SensitiveString(refreshToken) : null,
-            expiresAt);
-    }
 }
 
 /// <summary>

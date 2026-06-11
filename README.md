@@ -94,7 +94,10 @@ curl -sSL https://releases.netclaw.dev/install.sh | bash
 curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- cli
 curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- daemon
 
-# Pin a specific version
+# Opt into the beta channel (newest prerelease, or latest stable if none)
+curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta
+
+# Pin a specific version (e.g. a prerelease)
 NETCLAW_VERSION=0.17.1 curl -sSL https://releases.netclaw.dev/install.sh | bash
 ```
 
@@ -115,6 +118,9 @@ available on macOS ([#1015](https://github.com/netclaw-dev/netclaw/issues/1015))
 iwr -useb https://releases.netclaw.dev/install.ps1 | iex
 ```
 
+The `-Component cli|daemon`, `-Channel beta`, and `-Version` options work the same
+way as their Linux counterparts (download the script and run it with the flag).
+
 **Docker** (multi-arch: amd64/arm64):
 
 ```bash
@@ -127,8 +133,39 @@ docker run -d --name netclawd \
   ghcr.io/netclaw-dev/netclaw:latest
 ```
 
+Use `ghcr.io/netclaw-dev/netclaw:beta` to track the newest prerelease, or a pinned
+tag like `:0.19.0-beta.1`. `:latest` only ever points at the latest stable release.
+
 See the [Docker deployment guide](https://netclaw.dev/deployment/docker/) for
 volume setup, environment variables, and Docker Compose examples.
+
+### Beta / prerelease versions
+
+Netclaw publishes opt-in **beta** builds so you can test an upcoming release early.
+Stable installs are never affected — the default `curl | sh`, Docker `:latest`, and
+the GitHub "Latest" release always point at the newest *stable*. The beta channel
+follows the newest prerelease and automatically rolls onto a stable release once it
+supersedes the beta.
+
+```bash
+# Linux / macOS — newest prerelease (falls back to latest stable if none is open)
+curl -sSL https://releases.netclaw.dev/install.sh | bash -s -- --channel beta
+```
+
+```powershell
+# Windows — download, then run with -Channel beta
+iwr -useb https://releases.netclaw.dev/install.ps1 -OutFile install.ps1
+./install.ps1 -Channel beta
+```
+
+```bash
+# Docker — :beta tracks the newest prerelease (:latest stays on stable)
+docker pull ghcr.io/netclaw-dev/netclaw:beta
+```
+
+To pin an exact build instead of following the channel, name the version directly:
+`NETCLAW_VERSION=0.19.0-beta.1` (Linux/macOS), `-Version 0.19.0-beta.1` (Windows), or
+the `:0.19.0-beta.1` image tag (Docker).
 
 For the full installation reference (including building from source), see the
 [installation docs](https://netclaw.dev/getting-started/installation/).

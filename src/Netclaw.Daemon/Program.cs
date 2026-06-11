@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Threading.RateLimiting;
 using Akka.Actor;
 using Akka.Hosting;
@@ -25,6 +26,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
+using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers;
@@ -51,7 +53,17 @@ using Netclaw.Security;
 using static Microsoft.Extensions.Logging.LogLevel;
 
 var bootstrapPaths = new NetclawPaths();
-bootstrapPaths.EnsureDirectoriesExist();
+try
+{
+    bootstrapPaths.EnsureDirectoriesExist();
+}
+catch (NetclawDirectoryInitializationException ex)
+{
+    Console.Error.WriteLine(ex.Message);
+    Environment.ExitCode = 1;
+    return;
+}
+
 using var crashMonitor = DaemonCrashMonitor.Register(
     bootstrapPaths,
     benignUnobservedFilters: [KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace]);
@@ -86,9 +98,19 @@ try
         do
         {
             restartSignal.Reset();
+            // Each pass through the loop is a new daemon generation; the counter is
+            // surfaced on /api/health/ready so the init wizard can confirm a config
+            // reload actually restarted the daemon (#1302).
+            restartSignal.AdvanceGeneration();
             await RunDaemonAsync(args, restartSignal, crashMonitor);
         } while (restartSignal.RestartRequested);
     }
+}
+catch (NetclawDirectoryInitializationException ex)
+{
+    crashMonitor.RecordTopLevelException(ex);
+    Console.Error.WriteLine(ex.Message);
+    Environment.ExitCode = 1;
 }
 catch (Exception ex)
 {
@@ -222,7 +244,16 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
 
     // Gateway surface
     app.MapHub<SessionHub>("/hub/session");
-    app.MapGet("/api/health/ready", () => TypedResults.Ok("healthy"))
+    app.MapGet("/api/health/ready", (DaemonRestartSignal restartSignal, HttpResponse response) =>
+        {
+            // Surface the monotonic restart generation on the anonymous readiness probe
+            // (#1302). The init wizard reads it to confirm the daemon it is polling is the
+            // post-config-reload generation, not the still-draining pre-restart one — on
+            // the anonymous endpoint precisely so first-init needs no auth token.
+            response.Headers["X-Netclaw-Generation"] =
+                restartSignal.Generation.ToString(CultureInfo.InvariantCulture);
+            return TypedResults.Ok("healthy");
+        })
         .WithName("HealthReady")
         .WithSummary("Liveness probe reporting the daemon is accepting requests.")
         .WithTags("Health");
@@ -232,8 +263,8 @@ static async Task RunDaemonAsync(string[] args, DaemonRestartSignal restartSigna
         .WithSummary("Get the daemon's runtime status, including connector health.")
         .WithTags("Health")
         .RequireAuthorization();
-    app.MapGet("/api/sessions", (SessionCatalogService catalog) =>
-        TypedResults.Ok(catalog.ListRecent(limit: 50)))
+    app.MapGet("/api/sessions", (SessionCatalogService catalog, int? limit, int? offset) =>
+        TypedResults.Ok(catalog.ListRecent(limit ?? 50, offset ?? 0)))
         .WithName("ListSessions")
         .WithSummary("List the most recent sessions.")
         .WithTags("Sessions")
@@ -334,7 +365,14 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     var validation = ProviderRuntimeValidation.Evaluate(providers, models);
 
     services.AddSingleton(validation);
-    services.AddDaemonLlmProviders(providers, models, validation);
+
+    // The transport RetryingChatClient is the single owner of LLM transient-failure
+    // retry, so it uses the configured streaming-retry budget.
+    var streamingRetryPolicy = SessionConfig
+        .BindFromConfiguration(configuration.GetSection("Session"))
+        .Tuning.StreamingRetryPolicy;
+
+    services.AddDaemonLlmProviders(providers, models, validation, streamingRetryPolicy);
 
     return paths;
 }
@@ -426,6 +464,7 @@ static void ConfigureDaemonServices(
         var resolver = sp.GetRequiredService<IModelCapabilityResolver>();
         var detected = resolver.ResolveAsync(models.Main.ModelId, CancellationToken.None)
             .GetAwaiter().GetResult();
+        var resolved = ModelCapabilityResolution.ResolveModelCapabilities(models, detected, logger: logger);
 
         if (detected is not null)
         {
@@ -436,6 +475,17 @@ static void ConfigureDaemonServices(
                 detected.OutputModalities?.ToString() ?? "unknown",
                 detected.ContextWindowTokens?.ToString() ?? "unknown");
         }
+        else if (models.Main.ContextWindow is not null
+                 || models.Main.InputModalities is not null
+                 || models.Main.OutputModalities is not null)
+        {
+            logger.LogInformation(
+                "Using configured model capabilities for {ModelId}: input={Input}, output={Output}, context_window={ContextWindow}",
+                models.Main.ModelId,
+                resolved.InputModalities,
+                resolved.OutputModalities,
+                resolved.ContextWindowTokens);
+        }
         else
         {
             logger.LogInformation(
@@ -443,7 +493,7 @@ static void ConfigureDaemonServices(
                 models.Main.ModelId);
         }
 
-        return ModelCapabilityResolution.ResolveModelCapabilities(models, detected);
+        return resolved;
     });
 
     // Session config: bind operator-facing settings from config section
@@ -842,11 +892,9 @@ static void ConfigureDaemonServices(
         : persistence.Sqlite.Path!;
 
     // Model capability resolution chain:
-    // Codex static catalog → [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default
-    // Codex resolver is first: authoritative for Codex models, zero network cost.
-    // When the main provider is Ollama, query it next — it knows the true context window
+    // [Ollama →] [OpenAI-compat →] OpenRouter oracle → HuggingFace → text-only default.
+    // When the main provider is Ollama, query it first — it knows the true context window
     // for locally hosted models that may not be indexed by external oracles.
-    services.AddSingleton<OpenAiCodexCapabilityResolver>();
     services.AddHttpClient<OpenRouterOracleResolver>().AddNetclawHeaders("capability-probe");
     services.AddHttpClient<HuggingFaceCapabilityResolver>().AddNetclawHeaders("capability-probe");
     if (ollamaEndpoint is not null)
@@ -880,10 +928,7 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton<IModelCapabilityResolver>(sp =>
     {
-        var resolvers = new List<IModelCapabilityResolver>
-        {
-            sp.GetRequiredService<OpenAiCodexCapabilityResolver>()
-        };
+        var resolvers = new List<IModelCapabilityResolver>();
         if (ollamaEndpoint is not null)
             resolvers.Add(sp.GetRequiredService<OllamaCapabilityResolver>());
         if (openAiCompatibleEndpoint is not null)
@@ -1038,9 +1083,11 @@ static void ConfigureDaemonServices(
     services.AddSingleton<SessionPipeline>();
     services.AddSingleton<ISessionPipeline>(sp => sp.GetRequiredService<SessionPipeline>());
 
-    services.AddSlackChannelIntegration(configuration);
-    services.AddDiscordChannelIntegration(configuration);
-    services.AddMattermostChannelIntegration(configuration);
+    services.AddChannelRegistry();
+    services.AddTuiChannelDescriptor();
+    // Also registers the generic channel tools (send_channel_message + the two
+    // lookups) whenever at least one remote chat channel is enabled.
+    services.AddChannelIntegrations(configuration);
 
     // Config hot-reload watcher
     services.AddSingleton<ConfigWatcherService>();

@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Media;
 using Netclaw.Tools;
+using SkiaSharp;
 using Xunit;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -275,7 +277,8 @@ public class ChatMessageConverterTests
     public void FromAiMessage_writes_DataContent_to_session_dir_and_produces_media_reference()
     {
         using var tempDir = new TempSessionDir();
-        var imageBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }; // PNG header
+        // Real PNG, small enough to pass through the egress normalizer unchanged.
+        var imageBytes = SmallPng();
         var contents = new List<AIContent>
         {
             new TextContent("Check this image"),
@@ -319,7 +322,7 @@ public class ChatMessageConverterTests
                 new SerializableMediaReference
                 {
                     RelativePath = "test.jpg",
-                    MimeType = new Netclaw.Security.MimeType("image/jpeg"),
+                    MimeType = new Netclaw.Media.MimeType("image/jpeg"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -339,13 +342,14 @@ public class ChatMessageConverterTests
     public void Full_media_round_trip_through_converter()
     {
         using var tempDir = new TempSessionDir();
-        var imageBytes = new byte[] { 0x47, 0x49, 0x46, 0x38, 0x39, 0x61 }; // GIF89a header
+        // Real PNG, small enough to pass through the egress normalizer unchanged.
+        var imageBytes = SmallPng();
 
         // Step 1: AI message with DataContent → SerializableChatMessage
         var originalAi = new AiChatMessage(AiChatRole.User,
         [
-            new TextContent("Here is a gif"),
-            new DataContent(imageBytes, "image/gif")
+            new TextContent("Here is an image"),
+            new DataContent(imageBytes, "image/png")
         ]);
         var serializable = ChatMessageConverter.FromAiMessage(originalAi, sessionDir: tempDir.Path);
         Assert.Single(serializable.MediaReferences);
@@ -354,10 +358,31 @@ public class ChatMessageConverterTests
         var reconstructed = ChatMessageConverter.ToAiMessage(serializable, sessionDir: tempDir.Path);
 
         var text = Assert.Single(reconstructed.Contents.OfType<TextContent>());
-        Assert.Equal("Here is a gif", text.Text);
+        Assert.Equal("Here is an image", text.Text);
         var data = Assert.Single(reconstructed.Contents.OfType<DataContent>());
-        Assert.Equal("image/gif", data.MediaType);
+        Assert.Equal("image/png", data.MediaType);
         Assert.Equal(imageBytes, data.Data.ToArray());
+    }
+
+    [Fact]
+    public void FromAiMessage_appends_omitted_note_when_image_is_dropped()
+    {
+        using var tempDir = new TempSessionDir();
+        // Undecodable "image": the egress normalizer drops it. The chat path must
+        // surface a visible note instead of silently losing the attachment.
+        var garbage = new byte[1024];
+        new Random(5).NextBytes(garbage);
+        var ai = new AiChatMessage(AiChatRole.User,
+        [
+            new TextContent("Look at this"),
+            new DataContent(garbage, "image/png")
+        ]);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
+
+        Assert.Empty(msg.MediaReferences); // not persisted, never shipped raw
+        Assert.Contains("Look at this", msg.Content); // original text preserved
+        Assert.Contains("[image omitted:", msg.Content); // omission surfaced
     }
 
     [Fact]
@@ -374,7 +399,7 @@ public class ChatMessageConverterTests
                 new SerializableMediaReference
                 {
                     RelativePath = "nonexistent.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -405,23 +430,44 @@ public class ChatMessageConverterTests
     }
 
     [Fact]
-    public void MimeToExtension_maps_common_types()
+    public void FromAiMessage_ignores_unknown_DataContent_media_type()
     {
-        Assert.Equal(".png", ChatMessageConverter.MimeToExtension("image/png"));
-        Assert.Equal(".jpg", ChatMessageConverter.MimeToExtension("image/jpeg"));
-        Assert.Equal(".gif", ChatMessageConverter.MimeToExtension("image/gif"));
-        Assert.Equal(".webp", ChatMessageConverter.MimeToExtension("image/webp"));
-        Assert.Equal(".mp3", ChatMessageConverter.MimeToExtension("audio/mpeg"));
-        Assert.Equal(".bin", ChatMessageConverter.MimeToExtension("application/octet-stream"));
+        using var tempDir = new TempSessionDir();
+        var contents = new List<AIContent>
+        {
+            new TextContent("Unknown bytes"),
+            new DataContent(new byte[] { 1, 2, 3 }, "application/octet-stream")
+        };
+        var ai = new AiChatMessage(AiChatRole.User, contents);
+
+        var msg = ChatMessageConverter.FromAiMessage(ai, sessionDir: tempDir.Path);
+
+        Assert.Equal("Unknown bytes", msg.Content);
+        Assert.Empty(msg.MediaReferences);
     }
 
     [Fact]
-    public void MimeToModality_classifies_correctly()
+    public void ExtensionFor_maps_common_types()
     {
-        Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/png"));
-        Assert.Equal(MediaModality.Image, ChatMessageConverter.MimeToModality("image/jpeg"));
-        Assert.Equal(MediaModality.Audio, ChatMessageConverter.MimeToModality("audio/mpeg"));
-        Assert.Equal(MediaModality.Video, ChatMessageConverter.MimeToModality("video/mp4"));
+        Assert.Equal(".png", MimeTypeCatalog.ExtensionFor("image/png"));
+        Assert.Equal(".jpg", MimeTypeCatalog.ExtensionFor("image/jpeg"));
+        Assert.Equal(".gif", MimeTypeCatalog.ExtensionFor("image/gif"));
+        Assert.Equal(".webp", MimeTypeCatalog.ExtensionFor("image/webp"));
+        Assert.Equal(".mp3", MimeTypeCatalog.ExtensionFor("audio/mpeg"));
+        Assert.Equal(".bin", MimeTypeCatalog.ExtensionFor("application/octet-stream"));
+    }
+
+    [Fact]
+    public void TryGetMediaModality_classifies_correctly()
+    {
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("image/png"), out var png));
+        Assert.Equal(MediaModality.Image, png);
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("image/jpeg"), out var jpeg));
+        Assert.Equal(MediaModality.Image, jpeg);
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("audio/mpeg"), out var mp3));
+        Assert.Equal(MediaModality.Audio, mp3);
+        Assert.True(SessionMediaStore.TryGetMediaModality(new MimeType("video/mp4"), out var mp4));
+        Assert.Equal(MediaModality.Video, mp4);
     }
 
     // ── Tool call meta extraction tests ──
@@ -546,6 +592,18 @@ public class ChatMessageConverterTests
     }
 
     /// <summary>Disposable temp directory for session media tests.</summary>
+    // A real, decodable PNG small enough that the egress image normalizer passes it
+    // through byte-for-byte (so media round-trip assertions still hold).
+    private static byte[] SmallPng(int size = 16)
+    {
+        using var bitmap = new SKBitmap(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(bitmap))
+            canvas.Clear(SKColors.CornflowerBlue);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
     private sealed class TempSessionDir : IDisposable
     {
         public string Path { get; } = System.IO.Path.Combine(

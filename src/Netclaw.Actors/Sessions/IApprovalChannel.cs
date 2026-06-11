@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
@@ -57,10 +58,33 @@ internal interface IApprovalChannel
     Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct);
 
     /// <summary>
-    /// Completes a pending approval request. Called by the session actor when a
-    /// <see cref="Protocol.ToolInteractionResponse"/> message arrives.
+    /// Atomically claims a pending approval request so no later response can use
+    /// the same prompt while the session persists any required grant state.
+    /// Returns false when the prompt is no longer backed by a live wait.
     /// </summary>
-    void Complete(ToolCallId callId, ApprovalDecision decision);
+    bool TryClaim(ToolCallId callId, out ClaimedApprovalWait wait);
+
+    /// <summary>
+    /// Completes a pending approval request. Called by tests and simple callers
+    /// that do not need a separate claim/persist/complete sequence.
+    /// </summary>
+    bool Complete(ToolCallId callId, ApprovalDecision decision);
+}
+
+/// <summary>
+/// A live approval wait that has been removed from the pending map but has not
+/// yet been completed. This lets the session claim the user response before
+/// writing durable grant state, closing stale-click races.
+/// </summary>
+internal sealed class ClaimedApprovalWait
+{
+    private readonly TaskCompletionSource<ApprovalDecision> _completion;
+
+    public ClaimedApprovalWait(TaskCompletionSource<ApprovalDecision> completion)
+        => _completion = completion;
+
+    public bool Complete(ApprovalDecision decision)
+        => _completion.TrySetResult(decision);
 }
 
 /// <summary>
@@ -73,7 +97,9 @@ internal sealed class ApprovalChannel : IApprovalChannel
 
     public async Task<ApprovalDecision> WaitForApprovalAsync(ToolCallId callId, TimeSpan timeout, CancellationToken ct)
     {
-        var tcs = _pending.GetOrAdd(callId, _ => new TaskCompletionSource<ApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously));
+        var tcs = new TaskCompletionSource<ApprovalDecision>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pending.TryAdd(callId, tcs))
+            throw new InvalidOperationException($"Approval wait for call '{callId}' is already pending.");
 
         try
         {
@@ -93,13 +119,28 @@ internal sealed class ApprovalChannel : IApprovalChannel
         }
         finally
         {
-            _pending.TryRemove(callId, out _);
+            TryRemoveExact(callId, tcs);
         }
     }
 
-    public void Complete(ToolCallId callId, ApprovalDecision decision)
+    public bool TryClaim(ToolCallId callId, out ClaimedApprovalWait wait)
     {
-        if (_pending.TryGetValue(callId, out var tcs))
-            tcs.TrySetResult(decision);
+        if (_pending.TryRemove(callId, out var tcs))
+        {
+            wait = new ClaimedApprovalWait(tcs);
+            return true;
+        }
+
+        wait = null!;
+        return false;
+    }
+
+    public bool Complete(ToolCallId callId, ApprovalDecision decision)
+        => TryClaim(callId, out var wait) && wait.Complete(decision);
+
+    private bool TryRemoveExact(ToolCallId callId, TaskCompletionSource<ApprovalDecision> tcs)
+    {
+        var pair = new KeyValuePair<ToolCallId, TaskCompletionSource<ApprovalDecision>>(callId, tcs);
+        return ((ICollection<KeyValuePair<ToolCallId, TaskCompletionSource<ApprovalDecision>>>)_pending).Remove(pair);
     }
 }

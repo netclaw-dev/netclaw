@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Media;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -12,10 +14,17 @@ public sealed record ContentScanResult(
     bool IsAllowed,
     ContentScanError? Error = null,
     MimeType? DetectedMimeType = null,
-    string? Message = null)
+    string? Message = null,
+    VerifiedMimeType? VerifiedMimeType = null)
 {
-    public static ContentScanResult Allowed(MimeType? detectedMimeType = null) =>
-        new(true, null, detectedMimeType);
+    public static ContentScanResult Allowed(MimeType detectedMimeType)
+    {
+        var verifiedMimeType = new VerifiedMimeType(detectedMimeType);
+        return new(true, null, detectedMimeType, VerifiedMimeType: verifiedMimeType);
+    }
+
+    public static ContentScanResult Allowed(VerifiedMimeType verifiedMimeType) =>
+        new(true, null, verifiedMimeType.MimeType, VerifiedMimeType: verifiedMimeType);
 
     public static ContentScanResult Rejected(
         ContentScanError error,

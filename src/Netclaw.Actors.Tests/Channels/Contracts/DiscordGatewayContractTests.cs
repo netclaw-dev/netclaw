@@ -36,13 +36,15 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
 
         // Wire a real DiscordConversationActor (which performs ACL) with a
         // SessionPropsFactory that routes accepted messages to the test probe.
+        var replyClient = new RecordingDiscordReplyClient();
         var deps = new DiscordGatewayDependencies(
             Pipeline: new FailingSessionPipeline(new InvalidOperationException("not used")),
             IngressGate: null,
             TimeProvider: TimeProvider.System,
             Options: discordOptions,
             DefaultChannelId: defaultChannelId,
-            ReplyClient: new RecordingDiscordReplyClient(),
+            ChannelRegistry: TestChannelRegistries.DiscordWithProcessingRenderer(replyClient),
+            ReplyClient: replyClient,
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,

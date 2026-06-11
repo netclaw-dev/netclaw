@@ -234,9 +234,9 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Repeated_pre_tool_empty_responses_fail_turn_and_allow_followup_prompt()
     {
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
+        // MaxPreToolEmptyRetries is 5, so 6 empty responses: 5 nudged retries + fail.
+        for (var i = 0; i < 6; i++)
+            _fakeChatClient.PlannedResponses.Enqueue([]);
 
         var sessionId = new SessionId("test-channel/pre-tool-empty");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -270,7 +270,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("[fake] Response #4", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[fake] Response #7", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -282,12 +282,10 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             new FunctionCallContent("call-1", "web_search",
                 new Dictionary<string, object?> { ["query"] = "test" })
         ];
-        // Four post-tool empty responses: the first three are nudged and
-        // retried (MaxPostToolEmptyRetries), the fourth fails the turn.
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
-        _fakeChatClient.PlannedResponses.Enqueue([]);
+        // MaxPostToolEmptyRetries is 8, so 9 empty responses: 8 nudged
+        // retries + fail.
+        for (var i = 0; i < 9; i++)
+            _fakeChatClient.PlannedResponses.Enqueue([]);
 
         var sessionId = new SessionId("test-channel/post-tool-empty");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -321,7 +319,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("[fake] Response #6", text.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[fake] Response #11", text.Text, StringComparison.OrdinalIgnoreCase);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -1500,71 +1498,11 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
     }
 
-    [Fact]
-    public async Task Streaming_retry_recovers_from_transient_502()
-    {
-        // First 2 calls throw 502, third succeeds
-        _fakeChatClient.PlannedExceptions.Enqueue(
-            new ProviderException("server error (502)", "HTTP 502", statusCode: 502));
-        _fakeChatClient.PlannedExceptions.Enqueue(
-            new ProviderException("server error (502)", "HTTP 502", statusCode: 502));
-
-        var sessionId = new SessionId("test-channel/streaming-retry-502");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("retry-502-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.Full
-        }, cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Message that should succeed after retries"
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        // Should succeed after retries — response arrives
-        var text = await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(15), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Contains("fake", text.Text, StringComparison.OrdinalIgnoreCase);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
-    }
-
-    [Fact]
-    public async Task Streaming_retry_exhaustion_fails_turn()
-    {
-        // All calls throw 502 — retries exhaust and turn fails.
-        // Default RetryPolicy.MaxRetries=3, so we need initial + 3 retries = 4 exceptions.
-        for (var i = 0; i < 5; i++)
-            _fakeChatClient.PlannedExceptions.Enqueue(
-                new ProviderException("server error (502)", "HTTP 502", statusCode: 502));
-
-        var sessionId = new SessionId("test-channel/streaming-retry-exhaust");
-        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
-        var subscriber = CreateTestProbe("retry-exhaust-sub");
-
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.Full
-        }, cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
-
-        await sessionManager.Ask<CommandAck>(new SendUserMessage
-        {
-            SessionId = sessionId,
-            Content = "Message that will fail after exhausting retries"
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        // Should fail with error after exhausting retries
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(20), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
-        var completed = await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(TurnOutcome.Failed, completed.Outcome);
-    }
+    // NOTE: transient-failure retry (including ProviderException 5xx recover/exhaust) moved
+    // from this actor to the transport RetryingChatClient and is covered by
+    // RetryingChatClientTests; the actor no longer retries, so the former
+    // Streaming_retry_recovers_from_transient_502 / _exhaustion_fails_turn integration tests
+    // were removed.
 
     [Fact]
     public async Task Reminder_redelivery_is_deduped_in_Ready_phase()

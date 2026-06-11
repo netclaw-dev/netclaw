@@ -73,6 +73,9 @@ Supported Slack settings:
 - When Slack is disabled, daemon starts normally and Slack channel stays inactive.
 - If Slack is enabled but required tokens are missing, daemon startup fails fast.
 - Socket Mode disconnects are handled by SlackNet reconnecting client behavior.
+- Slack lifecycle is hosted-service owned rather than actor-owned. Ingress only
+  forwards after the Slack gateway actor exists, while clean reconnect decisions
+  remain delegated to SlackNet Socket Mode instead of a Netclaw lifecycle actor.
 
 ## Security note
 

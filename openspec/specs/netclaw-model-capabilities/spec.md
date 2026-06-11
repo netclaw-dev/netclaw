@@ -172,9 +172,6 @@ with logged warnings.
 - **AND** log a warning with the model ID and failure reasons
 - **AND** the session SHALL proceed normally with text-only behavior
 
-<!-- Delta from 2026-03-25 refactor-llm-session-actor -->
-## MODIFIED Requirements
-
 ### Requirement: Model capability resolution produces standalone ModelCapabilities
 
 The model capability detection pipeline SHALL produce a `ModelCapabilities` record
@@ -208,25 +205,3 @@ instead take `ModelCapabilities` as a dependency.
 - **WHEN** the service is constructed
 - **THEN** it takes `ModelCapabilities` as a dependency (not `SessionConfig`)
 - **AND** reads `ModelId`, `InputModalities`, and `OutputModalities` from it
-
-### Requirement: Singleton capability cache actor
-
-The system SHALL maintain a singleton `ModelCapabilityActor` registered in the
-`ActorRegistry`. The actor SHALL maintain an in-memory cache of model
-capabilities keyed by model ID. Other actors SHALL query capabilities via
-`Ask<ModelCapabilities>` using a `GetModelCapabilities` message containing the
-model ID.
-
-#### Scenario: First query triggers lookup
-
-- **GIVEN** the capability cache has no entry for model `anthropic/claude-sonnet-4`
-- **WHEN** an actor sends `GetModelCapabilities("anthropic/claude-sonnet-4")`
-- **THEN** the actor SHALL resolve capabilities from the detection hierarchy
-- **AND** cache the result
-- **AND** respond with `ModelCapabilities` containing the resolved modalities
-
-#### Scenario: Cached query returns immediately
-
-- **GIVEN** the capability cache has an entry for model `qwen3:30b`
-- **WHEN** an actor sends `GetModelCapabilities("qwen3:30b")`
-- **THEN** the actor SHALL respond from cache without external API calls

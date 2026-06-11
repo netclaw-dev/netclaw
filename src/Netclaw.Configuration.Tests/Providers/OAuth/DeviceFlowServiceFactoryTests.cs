@@ -22,6 +22,10 @@ public class DeviceFlowServiceFactoryTests
             ClientId = "client-1",
             PollingEndpoint = new Uri("https://auth.example.com/deviceauth/token"),
             UseProprietaryDeviceFlow = true,
+            ExtraAuthParams = new Dictionary<string, string>
+            {
+                ["originator"] = "netclaw"
+            }
         };
 
         var config = OAuthDeviceFlowConfig.FromOAuth(oauth);
@@ -29,6 +33,8 @@ public class DeviceFlowServiceFactoryTests
         Assert.Equal("https://auth.example.com/usercode", config.DeviceAuthorizationEndpoint);
         Assert.Equal("https://auth.example.com/deviceauth/token", config.TokenEndpoint);
         Assert.Equal("https://auth.example.com/oauth/token", config.PkceExchangeEndpoint);
+        Assert.NotNull(config.ExtraAuthParams);
+        Assert.Equal("netclaw", config.ExtraAuthParams!["originator"]);
     }
 
     [Fact]

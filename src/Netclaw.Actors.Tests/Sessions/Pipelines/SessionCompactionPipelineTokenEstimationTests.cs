@@ -47,7 +47,7 @@ public class SessionCompactionPipelineTokenEstimationTests
                 new SerializableMediaReference
                 {
                     RelativePath = "img.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                     // FileSizeBytes intentionally omitted → 0
                 }
@@ -73,7 +73,7 @@ public class SessionCompactionPipelineTokenEstimationTests
                 new SerializableMediaReference
                 {
                     RelativePath = "img.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image,
                     FileSizeBytes = 300_000
                 }
@@ -95,9 +95,9 @@ public class SessionCompactionPipelineTokenEstimationTests
             Content = string.Empty,
             MediaReferences =
             [
-                new SerializableMediaReference { RelativePath = "a.png", MimeType = new Netclaw.Security.MimeType("image/png"), FileSizeBytes = 60_000 },
-                new SerializableMediaReference { RelativePath = "b.png", MimeType = new Netclaw.Security.MimeType("image/png"), FileSizeBytes = 30_000 },
-                new SerializableMediaReference { RelativePath = "c.png", MimeType = new Netclaw.Security.MimeType("image/png"), FileSizeBytes = 30_000 }
+                new SerializableMediaReference { RelativePath = "a.png", MimeType = new Netclaw.Media.MimeType("image/png"), FileSizeBytes = 60_000 },
+                new SerializableMediaReference { RelativePath = "b.png", MimeType = new Netclaw.Media.MimeType("image/png"), FileSizeBytes = 30_000 },
+                new SerializableMediaReference { RelativePath = "c.png", MimeType = new Netclaw.Media.MimeType("image/png"), FileSizeBytes = 30_000 }
             ]
         };
 
@@ -125,7 +125,7 @@ public class SessionCompactionPipelineTokenEstimationTests
             ],
             MediaReferences =
             [
-                new SerializableMediaReference { RelativePath = "img.png", MimeType = new Netclaw.Security.MimeType("image/png"), FileSizeBytes = 300_000 } // contributes 100_000 tokens
+                new SerializableMediaReference { RelativePath = "img.png", MimeType = new Netclaw.Media.MimeType("image/png"), FileSizeBytes = 300_000 } // contributes 100_000 tokens
             ]
         };
 
@@ -143,7 +143,7 @@ public class SessionCompactionPipelineTokenEstimationTests
             Content = new string('s', 800), // contributes 200 tokens
             MediaReferences =
             [
-                new SerializableMediaReference { RelativePath = "logo.png", MimeType = new Netclaw.Security.MimeType("image/png"), FileSizeBytes = 150_000 } // contributes 50_000
+                new SerializableMediaReference { RelativePath = "logo.png", MimeType = new Netclaw.Media.MimeType("image/png"), FileSizeBytes = 150_000 } // contributes 50_000
             ]
         };
 
@@ -161,7 +161,7 @@ public class SessionCompactionPipelineTokenEstimationTests
         var bigImage = new SerializableMediaReference
         {
             RelativePath = "huge.png",
-            MimeType = new Netclaw.Security.MimeType("image/png"),
+            MimeType = new Netclaw.Media.MimeType("image/png"),
             FileSizeBytes = 4_000_000
         };
         var messages = new List<SerializableChatMessage>();

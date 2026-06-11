@@ -36,12 +36,12 @@ public sealed class MattermostReminderTargetResolver : IReminderTargetResolver
         if (raw.StartsWith("channel:", StringComparison.OrdinalIgnoreCase))
         {
             var channelId = raw[8..].Trim();
-            if (IsMattermostId(channelId))
+            if (MattermostIdentifierFormat.IsMattermostId(channelId))
             {
                 // Preserve the "channel:" prefix in the canonical form. Mattermost
                 // channel IDs and user IDs are both 26-char alphanumeric strings,
                 // so the bare ID is indistinguishable downstream — the reminder
-                // prompt builder and send_mattermost_message dispatcher need the
+                // prompt builder and send_channel_message dispatcher need the
                 // prefix to know whether to target a channel or open a DM.
                 return Task.FromResult(new ReminderTargetResolution(
                     Success: true,
@@ -60,7 +60,7 @@ public sealed class MattermostReminderTargetResolver : IReminderTargetResolver
         if (raw.StartsWith('@'))
         {
             var userId = raw[1..].Trim();
-            if (IsMattermostId(userId))
+            if (MattermostIdentifierFormat.IsMattermostId(userId))
             {
                 // See the "channel:" branch above: the "@" prefix is preserved in
                 // the canonical form so the prompt builder and the DM-open path
@@ -84,7 +84,7 @@ public sealed class MattermostReminderTargetResolver : IReminderTargetResolver
         // channel IDs are both 26-char alphanumeric strings, so guessing here
         // could silently deliver a reminder to the wrong audience. Require an
         // explicit prefix instead of guessing.
-        if (IsMattermostId(raw))
+        if (MattermostIdentifierFormat.IsMattermostId(raw))
         {
             return Task.FromResult(new ReminderTargetResolution(
                 Success: false,
@@ -101,17 +101,4 @@ public sealed class MattermostReminderTargetResolver : IReminderTargetResolver
             ErrorMessage: $"Could not resolve Mattermost target '{target}'. Use @<userId> or channel:<channelId>."));
     }
 
-    private static bool IsMattermostId(string value)
-    {
-        if (value.Length != 26)
-            return false;
-
-        for (var i = 0; i < value.Length; i++)
-        {
-            if (!char.IsAsciiLetterOrDigit(value[i]))
-                return false;
-        }
-
-        return true;
-    }
 }

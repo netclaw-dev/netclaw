@@ -39,6 +39,9 @@ public enum OutputFilter
     /// </summary>
     TextStreaming = 1 << 5,
 
+    /// <summary><see cref="ProcessingStateOutput"/> — semantic busy/idle state for channel-native indicators.</summary>
+    ProcessingState = 1 << 6,
+
     // ── Convenience presets ──
 
     /// <summary>Final text replies only — suitable for adapters that post once (Slack).</summary>
@@ -50,7 +53,7 @@ public enum OutputFilter
     /// <summary>Text + token usage — for adapters that show context window indicators.</summary>
     TextAndUsage = Text | Usage,
 
-    /// <summary>Everything — suitable for ops consoles, debugging, and observability.</summary>
+    /// <summary>All conversational/debug output. Channel-native effects remain opt-in.</summary>
     Full = Text | TextStreaming | Thinking | ToolCalls | Usage | Files,
 }
 

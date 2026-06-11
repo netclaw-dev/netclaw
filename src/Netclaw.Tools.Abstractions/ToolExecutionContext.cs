@@ -4,13 +4,19 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
+using Netclaw.Media;
 
 namespace Netclaw.Tools;
 
 /// <summary>
+/// Describes a file a tool wants to add to the next LLM call as model input.
+/// </summary>
+public sealed record ModelInputFileInfo(string FilePath, string FileName, MimeType MimeType);
+
+/// <summary>
 /// Describes a file attachment registered by a tool during execution.
 /// </summary>
-public sealed record FileAttachmentInfo(string FilePath, string FileName, string MimeType);
+public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeType MimeType);
 
 /// <summary>
 /// Lightweight subagent activity notification for the tools abstraction layer.
@@ -60,6 +66,7 @@ public sealed class ToolExecutionContext
     private static readonly IReadOnlySet<string> EmptyApprovedPatternSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     private List<FileAttachmentInfo>? _fileAttachments;
+    private List<ModelInputFileInfo>? _modelInputFiles;
     private HashSet<string>? _oneTimeApprovedPatterns;
 
     public ToolExecutionContext(string? sessionId, string? sessionDirectory)
@@ -88,10 +95,30 @@ public sealed class ToolExecutionContext
     public string? ChannelType { get; set; }
 
     /// <summary>
+    /// Delivery target inherited from channel-originated input. Trigger sources
+    /// must not rely on this because they are not output channels.
+    /// </summary>
+    public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; set; }
+
+    /// <summary>
+    /// Explicit delivery target selected by a trigger source such as a reminder
+    /// or webhook route when it expects external output.
+    /// </summary>
+    public ChannelDeliveryTargetInfo? RequestedDeliveryTarget { get; set; }
+
+    public ChannelDeliveryTargetInfo? EffectiveDeliveryTarget
+        => RequestedDeliveryTarget ?? DefaultDeliveryTarget;
+
+    /// <summary>
     /// Whether the originating channel supports interactive approval prompts.
     /// When false, approval-gated tools are automatically denied.
     /// </summary>
     public bool? SupportsInteractiveApproval { get; set; }
+
+    /// <summary>
+    /// Modalities accepted by the active model for this tool call.
+    /// </summary>
+    public ModelModality ModelInputModalities { get; set; } = ModelModality.Text;
 
     /// <summary>
     /// Optional callback for tools that spawn subagents.
@@ -152,6 +179,17 @@ public sealed class ToolExecutionContext
     /// Created lazily on first access.
     /// </summary>
     public string? SessionDirectory { get; }
+
+    /// <summary>
+    /// The session <i>content</i> inline budget
+    /// (<c>SessionTuning.MaxInlineToolResultChars</c>), surfaced here so
+    /// <c>DispatchingToolExecutor</c> can bound a tool result and spill the
+    /// overflow to <c>{SessionDirectory}/tool-calls/{callId}.log</c>. The dispatcher
+    /// uses a tool's own <c>InlineOutputBudgetChars</c> override when set (verbose
+    /// tools), else this content budget. Zero when unset (the dispatcher falls back
+    /// to its built-in content default).
+    /// </summary>
+    public int MaxInlineToolResultChars { get; init; }
 
     /// <summary>
     /// Resolved absolute working directory for the in-flight tool call. Set
@@ -228,12 +266,33 @@ public sealed class ToolExecutionContext
         => _fileAttachments ?? (IReadOnlyList<FileAttachmentInfo>)[];
 
     /// <summary>
+    /// Files registered by tools for model-visible input on the next LLM call.
+    /// </summary>
+    public IReadOnlyList<ModelInputFileInfo> ModelInputFiles
+        => _modelInputFiles ?? (IReadOnlyList<ModelInputFileInfo>)[];
+
+    /// <summary>
     /// Register a file attachment to be emitted as <c>FileOutput</c> after tool execution.
     /// </summary>
     public void AddFileAttachment(string filePath, string fileName, string mimeType)
+        => AddFileAttachment(filePath, fileName, new MimeType(mimeType));
+
+    public void AddFileAttachment(string filePath, string fileName, MimeType mimeType)
     {
         _fileAttachments ??= [];
         _fileAttachments.Add(new FileAttachmentInfo(filePath, fileName, mimeType));
+    }
+
+    /// <summary>
+    /// Register a file to be copied into session media and supplied to the model.
+    /// </summary>
+    public void AddModelInputFile(string filePath, string fileName, string mimeType)
+        => AddModelInputFile(filePath, fileName, new MimeType(mimeType));
+
+    public void AddModelInputFile(string filePath, string fileName, MimeType mimeType)
+    {
+        _modelInputFiles ??= [];
+        _modelInputFiles.Add(new ModelInputFileInfo(filePath, fileName, mimeType));
     }
 
     public void SetOneTimeApprovedPatterns(IEnumerable<string> patterns)

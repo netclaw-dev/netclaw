@@ -222,6 +222,37 @@ public sealed class SlackStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
+    public void ContributeConfig_UsesResolvedChannelIds_ForChannelAudienceOverrides()
+    {
+        using var step = new SlackStepViewModel(_fakeProbe)
+        {
+            SlackEnabled = true,
+            ChannelNamesInput = "netclaw-supervisor",
+            LastChannelResolution = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("netclaw-supervisor", "C0B62888XAL")],
+                [])
+        };
+
+        step.OnEnter(Context, NavigationDirection.Forward);
+        step.OnLeave();
+
+        var entry = Assert.Single(Context.ChannelEntries[ChannelType.Slack]);
+        entry.Audience = TrustAudience.Personal;
+
+        var builder = new WizardConfigBuilder(Context.Paths);
+        step.ContributeConfig(builder);
+
+        Assert.NotNull(builder.Slack);
+        Assert.Equal("C0B62888XAL", Assert.Single(builder.Slack!.AllowedChannelIds!));
+
+        var audience = Assert.Single(builder.Slack.ChannelAudiences!);
+        Assert.Equal("C0B62888XAL", audience.Key);
+        Assert.Equal("personal", audience.Value);
+    }
+
+    [Fact]
     public void ContributeSecrets_AddsTokens()
     {
         using var step = new SlackStepViewModel(_fakeProbe);

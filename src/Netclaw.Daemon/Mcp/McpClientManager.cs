@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpClientManager.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -515,8 +515,12 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             var hasTokens = _oauthService.GetTokenSet(name) is not null;
             if (!hasTokens)
             {
+                // Always probe so metadata is cached for the runtime fallback
+                // in BuildConnectionFailureStatus. Only block the connection
+                // when no static headers are configured — if the user supplied
+                // headers, let the real connection attempt decide. See #1350.
                 var metadata = await _oauthService.TryDiscoverMetadataAsync(name, entry.Url, ct);
-                if (metadata is not null)
+                if (metadata is not null && entry.Headers is not { Count: > 0 })
                 {
                     _statuses[name] = CreateAwaitingAuthStatus(name);
                     _logger.LogWarning("MCP server '{Name}' requires OAuth authorization", name.Value);

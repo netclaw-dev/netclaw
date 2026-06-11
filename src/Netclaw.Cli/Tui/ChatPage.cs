@@ -270,10 +270,10 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
         {
             var toggle = isApprovalDetailVisible ? "Collapse" : "View full";
             return width >= 100
-                ? $"[Up/Down] Select  [Enter] Confirm  [Ctrl+V] {toggle}  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit"
+                ? $"[Up/Down] Select  [Enter] Confirm  [Ctrl+O] {toggle}  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit"
                 : width >= 70
-                    ? $"[↑↓] Select  [Enter] Confirm  [Ctrl+V] {toggle}  [Ctrl+Q] Quit"
-                    : $"[↑↓] [Enter] OK  [^V] {toggle}  [^Q] Quit";
+                    ? $"[↑↓] Select  [Enter] Confirm  [Ctrl+O] {toggle}  [Ctrl+Q] Quit"
+                    : $"[↑↓] [Enter] OK  [^O] {toggle}  [^Q] Quit";
         }
 
         if (isGenerating)
@@ -312,12 +312,11 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
             return;
         }
 
-        // Ctrl+V toggles full-body view of a pending approval prompt.
-        // Routed BEFORE the selection list so the list's own Ctrl+V (paste-ish)
-        // never overrides it while an approval is pending. When no approval
-        // is pending, Ctrl+V falls through to the text area for normal paste.
+        // Ctrl+O toggles full-body view of a pending approval prompt.
+        // Was originally Ctrl+V, but that's intercepted by the OS as "paste"
+        // on Windows terminals (#1334).
         if (ViewModel.HasPendingInteraction
-            && keyInfo.Key == ConsoleKey.V
+            && keyInfo.Key == ConsoleKey.O
             && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
         {
             ViewModel.ToggleApprovalDetail();

@@ -65,6 +65,44 @@ public sealed class ContextWindowDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task ExplicitContextWindow_DaemonReportsDifferentValue_ReturnsWarning()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new { Main = new { ModelId = "gpt-5.3-codex", Provider = "openai-codex", ContextWindow = 32768 } }
+        });
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(400000)));
+        var check = CreateCheck(daemonApi);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("32,768", result.Message);
+        Assert.Contains("400,000", result.Message);
+        Assert.Contains("precedence", result.Message);
+    }
+
+    [Fact]
+    public async Task ExplicitContextWindow_DaemonReportsSameValue_Passes()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            Models = new { Main = new { ModelId = "qwen3:30b", Provider = "local-ollama", ContextWindow = 262144 } }
+        });
+
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(BuildStatusResponse(262144)));
+        var check = CreateCheck(daemonApi);
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("explicitly set", result.Message);
+    }
+
+    [Fact]
     public async Task InvalidContextWindow_ReturnsError()
     {
         WriteConfig(new

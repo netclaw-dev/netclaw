@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using SessionId = Netclaw.Actors.Protocol.SessionId;
 
@@ -252,12 +253,13 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
             var llmDecision = await TryLlmEvaluationAsync(_llmClient, _sessionId, operation, candidates, _log);
             if (llmDecision is not null)
             {
+                var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(llmDecision, operation, candidates);
                 _log.Info(
                     "curation_llm_decision anchor={0} decision={1} reason={2}",
                     operation.AnchorCanonicalName,
-                    llmDecision.Kind,
-                    llmDecision.Reason);
-                return llmDecision;
+                    guarded.Kind,
+                    guarded.Reason);
+                return guarded;
             }
 
             // LLM failed — fall through to deterministic auto-resolution below
@@ -283,7 +285,7 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
                 "ambiguous: auto-resolve insufficient, defaulting to create");
         }
 
-        return rulesDecision;
+        return CurationRulesEvaluator.GuardDestructiveUpdate(rulesDecision, operation, candidates);
     }
 
     internal static async Task<CurationDecision?> TryLlmEvaluationAsync(
@@ -306,16 +308,34 @@ public sealed class MemoryCurationActor : ReceiveActor, IWithUnboundedStash
 
             var options = new ChatOptions
             {
-                MaxOutputTokens = 50
+                // Headroom for reasoning models: with a tight cap a thinking model
+                // spends the whole budget on hidden reasoning and returns empty
+                // content, silently disabling this LLM tier. Non-reasoning models
+                // still stop after the bare keyword the prompt asks for, so they pay
+                // nothing extra. (Fully suppressing reasoning is a provider-level follow-up.)
+                MaxOutputTokens = 512
             };
 
-            var response = await llmClient.GetResponseAsync(messages, options, cts.Token);
-            var responseText = response.Text?.Trim();
+            var result = await StreamingResponseReader.ReadAsync(llmClient, messages, options, cts.Token);
+            var responseText = result.Response.Text?.Trim();
+            var decision = string.IsNullOrWhiteSpace(responseText)
+                ? null
+                : CurationPromptBuilder.ParseResponse(responseText);
 
-            if (string.IsNullOrWhiteSpace(responseText))
+            if (decision is null)
+            {
+                // No silent fallback: a curation LLM that yields nothing parseable is a
+                // real signal (empty/garbled output, or a reasoning model that consumed
+                // its token budget). Surface it so the deterministic fallback that
+                // follows is observable rather than invisible.
+                log.Warning(
+                    "curation_llm_no_decision anchor={0} responseLength={1} — using deterministic fallback",
+                    operation.AnchorCanonicalName,
+                    responseText?.Length ?? 0);
                 return null;
+            }
 
-            return CurationPromptBuilder.ParseResponse(responseText);
+            return decision;
         }
         catch (OperationCanceledException)
         {

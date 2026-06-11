@@ -586,7 +586,7 @@ public sealed class SlackFileFlowIntegrationTests : TestKit
                 TimestampMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds(),
                 FilePath = tempFile,
                 FileName = "test.txt",
-                MimeType = new Netclaw.Security.MimeType("text/plain")
+                MimeType = new Netclaw.Media.MimeType("text/plain")
             },
             new TurnCompleted
             {

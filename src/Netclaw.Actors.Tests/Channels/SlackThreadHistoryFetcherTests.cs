@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels.Slack;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using SlackNet;
 using SlackNet.Events;

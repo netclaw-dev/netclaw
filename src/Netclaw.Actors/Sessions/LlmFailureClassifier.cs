@@ -107,20 +107,6 @@ internal static class LlmFailureClassifier
         return false;
     }
 
-    public static bool IsTransientStreaming(Exception? ex)
-    {
-        if (ex is null)
-            return false;
-
-        var providerEx = FindException<ProviderException>(ex);
-        if (providerEx?.StatusCode is >= 500)
-            return true;
-        if (providerEx?.StatusCode is 429)
-            return true;
-
-        return ex is HttpRequestException { StatusCode: null };
-    }
-
     private static T? FindException<T>(Exception? ex) where T : Exception
     {
         while (ex is not null)

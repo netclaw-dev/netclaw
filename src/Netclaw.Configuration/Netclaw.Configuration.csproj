@@ -32,4 +32,8 @@
     <EmbeddedResource Include="SafeVerbs/**/*.json" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Netclaw.Media\Netclaw.Media.csproj" />
+  </ItemGroup>
+
 </Project>

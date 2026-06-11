@@ -10,6 +10,12 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Http" />
+    <!-- Windows + macOS native assets come transitively from the base SkiaSharp package
+         (it depends on NativeAssets.Win32 / NativeAssets.macOS). Desktop Linux is the only
+         platform SkiaSharp doesn't pull in by default — hence the explicit headless Linux
+         asset here. Verified green on all three OS test runners (PR #1345). -->
+    <PackageReference Include="SkiaSharp" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" />
   </ItemGroup>
 
 </Project>

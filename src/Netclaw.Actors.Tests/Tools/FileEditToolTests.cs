@@ -180,6 +180,78 @@ public class FileEditToolTests : IDisposable
             Assert.Contains($"slot{i} = EDITED;", content);
     }
 
+    // ── Full-write mode via Content parameter ──
+
+    [Fact]
+    public async Task Content_creates_new_file()
+    {
+        var filePath = Path.Combine(_dir.Path, "new-via-content.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "Content", "full write"), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("Successfully wrote", result);
+        Assert.Equal("full write", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Content_overwrites_existing_file()
+    {
+        var filePath = Path.Combine(_dir.Path, "existing.txt");
+        await File.WriteAllTextAsync(filePath, "old", TestContext.Current.CancellationToken);
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "Content", "new"), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("Successfully wrote", result);
+        Assert.Equal("new", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Content_creates_parent_directories()
+    {
+        var filePath = Path.Combine(_dir.Path, "sub", "dir", "deep.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "Content", "deep"), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("Successfully wrote", result);
+        Assert.Equal("deep", await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Content_and_OldString_are_mutually_exclusive()
+    {
+        var filePath = Path.Combine(_dir.Path, "conflict.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create(
+            "Path", filePath, "Content", "full", "OldString", "old", "NewString", "new"), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("mutually exclusive", result);
+        Assert.False(File.Exists(filePath));
+    }
+
+    [Fact]
+    public async Task Content_and_NewString_are_mutually_exclusive()
+    {
+        var filePath = Path.Combine(_dir.Path, "conflict2.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create(
+            "Path", filePath, "Content", "full", "NewString", "new"), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("mutually exclusive", result);
+        Assert.False(File.Exists(filePath));
+    }
+
+    [Fact]
+    public async Task Content_and_ReplaceAll_are_mutually_exclusive()
+    {
+        var filePath = Path.Combine(_dir.Path, "conflict3.txt");
+
+        var result = await _tool.ExecuteAsync(ToolInput.Create(
+            "Path", filePath, "Content", "full", "ReplaceAll", true), CreatePersonalContext(), CancellationToken.None);
+
+        Assert.Contains("mutually exclusive", result);
+        Assert.False(File.Exists(filePath));
+    }
+
     private ToolExecutionContext CreatePersonalContext()
         => new("signalr/thread-1", _sessionDir)
         {

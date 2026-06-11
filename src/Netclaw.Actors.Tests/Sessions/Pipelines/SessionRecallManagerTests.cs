@@ -117,6 +117,49 @@ public class SessionRecallManagerTests
         Assert.Equal(0, coordinator.CallCount);
     }
 
+    [Fact]
+    public void ResolveForTurn_uses_turn_context_over_live_source_for_recovered_turns()
+    {
+        var manager = new SessionRecallManager();
+        var coordinator = new TrackingCoordinator();
+        var source = new MessageSource
+        {
+            ChannelType = ChannelType.Slack,
+            SenderId = new SenderId("U123"),
+            Audience = TrustAudience.Public,
+            Boundary = TrustBoundary.Public,
+            Principal = PrincipalClassification.UntrustedExternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Public)
+        };
+        var turnContext = new TurnContext
+        {
+            SessionId = new SessionId("slack/thread-1"),
+            TurnId = new TurnId("turn-1"),
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            ChannelType = ChannelType.Slack,
+            RequesterSenderId = new SenderId("U123"),
+            RequesterPrincipal = PrincipalClassification.TrustedInternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community),
+            SupportsInteractiveApproval = true
+        };
+        var state = SessionState.Empty.AddUserMessage("Search the team memory");
+
+        manager.ResolveForTurn(
+            recallQuery: null,
+            state,
+            new SessionId("slack/thread-1"),
+            source,
+            coordinator,
+            memoryEnabled: true,
+            turnContext: turnContext);
+
+        Assert.Equal(1, coordinator.CallCount);
+        Assert.NotNull(coordinator.LastRequest);
+        Assert.Equal(TrustAudience.Team, coordinator.LastRequest.Audience);
+        Assert.Equal(TrustBoundary.Team.Value, coordinator.LastRequest.Boundary);
+    }
+
     /// <summary>
     /// Tracking coordinator that counts invocations and returns empty results.
     /// </summary>
@@ -124,9 +167,12 @@ public class SessionRecallManagerTests
     {
         public int CallCount { get; private set; }
 
+        public AutomaticRecallRequest? LastRequest { get; private set; }
+
         public Task<AutomaticRecallResult> RecallAsync(AutomaticRecallRequest request, CancellationToken ct = default)
         {
             CallCount++;
+            LastRequest = request;
             return Task.FromResult(new AutomaticRecallResult([]));
         }
     }

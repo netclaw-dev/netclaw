@@ -47,3 +47,20 @@ public readonly record struct MattermostUserId(string Value)
 {
     public override string ToString() => Value;
 }
+
+internal static class MattermostIdentifierFormat
+{
+    internal static bool IsMattermostId(string value)
+    {
+        if (value.Length != 26)
+            return false;
+
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(value[i]))
+                return false;
+        }
+
+        return true;
+    }
+}

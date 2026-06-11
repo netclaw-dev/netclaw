@@ -83,6 +83,7 @@ public sealed class ProviderOAuthEndpointTests
         Assert.True(statusPayload.GetProperty("hasToken").GetBoolean());
         Assert.Equal("access-token", statusPayload.GetProperty("accessToken").GetString());
         Assert.Equal("refresh-token", statusPayload.GetProperty("refreshToken").GetString());
+        Assert.Equal("account-id", statusPayload.GetProperty("accountId").GetString());
     }
 
     [Fact]
@@ -104,6 +105,7 @@ public sealed class ProviderOAuthEndpointTests
         Assert.True(statusPayload.GetProperty("hasToken").GetBoolean());
         Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("accessToken").ValueKind);
         Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("refreshToken").ValueKind);
+        Assert.Equal(JsonValueKind.Null, statusPayload.GetProperty("accountId").ValueKind);
     }
 
     [Fact]
@@ -163,6 +165,13 @@ public sealed class ProviderOAuthEndpointTests
         {
             access_token = "access-token",
             refresh_token = "refresh-token",
+            id_token = JwtTestToken.Make(new Dictionary<string, object>
+            {
+                ["https://api.openai.com/auth"] = new Dictionary<string, object>
+                {
+                    ["chatgpt_account_id"] = "account-id"
+                }
+            }),
             expires_in = 3600
         });
     }

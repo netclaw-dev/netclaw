@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Protocol;
@@ -190,13 +191,13 @@ public sealed class SerializationRoundTripTests : TestKit
                 new SerializableMediaReference
                 {
                     RelativePath = "abc123.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 },
                 new SerializableMediaReference
                 {
                     RelativePath = "def456.jpg",
-                    MimeType = new Netclaw.Security.MimeType("image/jpeg"),
+                    MimeType = new Netclaw.Media.MimeType("image/jpeg"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -226,7 +227,7 @@ public sealed class SerializationRoundTripTests : TestKit
                 new SerializableMediaReference
                 {
                     RelativePath = "photo.png",
-                    MimeType = new Netclaw.Security.MimeType("image/png"),
+                    MimeType = new Netclaw.Media.MimeType("image/png"),
                     Modality = (int)MediaModality.Image
                 }
             ]
@@ -610,7 +611,7 @@ public sealed class SerializationRoundTripTests : TestKit
         var wrapped = new SerializableMediaReference
         {
             RelativePath = "photo.png",
-            MimeType = new Netclaw.Security.MimeType("image/png"),
+            MimeType = new Netclaw.Media.MimeType("image/png"),
             Modality = (int)MediaModality.Image,
             FileSizeBytes = 4096
         };
@@ -626,7 +627,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(expected, Serialize(wrapped));
 
         var result = RoundTrip(wrapped);
-        Assert.Equal(new Netclaw.Security.MimeType("image/png"), result.MimeType);
+        Assert.Equal(new Netclaw.Media.MimeType("image/png"), result.MimeType);
     }
 
     [Fact]
@@ -771,6 +772,35 @@ public sealed class SerializationRoundTripTests : TestKit
                 new ToolApprovalRequested.ApprovalCandidateRecord { Verb = "git", Directory = "/home/user/project" },
                 new ToolApprovalRequested.ApprovalCandidateRecord { Verb = "ls", Directory = null }
             ],
+            TurnContext = new TurnContextRecord
+            {
+                SessionId = new SessionId("C123/1700000000.000001"),
+                TurnId = "turn-approval-1",
+                Audience = Netclaw.Configuration.TrustAudience.Team,
+                Boundary = Netclaw.Configuration.TrustBoundary.Team,
+                ChannelType = "slack",
+                RequesterSenderId = new SenderId("U12345"),
+                RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.Operator,
+                TransportAuthenticity = Netclaw.Configuration.TransportAuthenticity.Verified,
+                PayloadTaint = Netclaw.Configuration.PayloadTaint.Community,
+                SourceScope = "slack-workspace:T123",
+                SourceKind = "slack",
+                DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                    "slack",
+                    "destination",
+                    "C123",
+                    "#alerts",
+                    "1700000000.000001"),
+                RequestedDeliveryTarget = new ChannelDeliveryTargetInfo(
+                    "mattermost",
+                    "direct_message",
+                    "user1234567890123456789012",
+                    "@alice"),
+                HasAdoptedContext = true,
+                HasThirdPartyAdoptedContext = true,
+                AdoptedSpeakerIds = ["U12345", "U-observer"],
+                SupportsInteractiveApproval = true
+            },
             RequestedAtMs = 1700000000000
         };
 
@@ -796,6 +826,62 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal("/home/user/project", result.Candidates[0].Directory);
         Assert.Equal("ls", result.Candidates[1].Verb);
         Assert.Null(result.Candidates[1].Directory);
+        Assert.NotNull(result.TurnContext);
+        Assert.Equal(wrapped.TurnContext.SessionId, result.TurnContext.SessionId);
+        Assert.Equal(wrapped.TurnContext.TurnId, result.TurnContext.TurnId);
+        Assert.Equal(wrapped.TurnContext.Audience, result.TurnContext.Audience);
+        Assert.Equal(wrapped.TurnContext.Boundary, result.TurnContext.Boundary);
+        Assert.Equal(wrapped.TurnContext.ChannelType, result.TurnContext.ChannelType);
+        Assert.Equal(wrapped.TurnContext.RequesterSenderId, result.TurnContext.RequesterSenderId);
+        Assert.Equal(wrapped.TurnContext.RequesterPrincipal, result.TurnContext.RequesterPrincipal);
+        Assert.Equal(wrapped.TurnContext.TransportAuthenticity, result.TurnContext.TransportAuthenticity);
+        Assert.Equal(wrapped.TurnContext.PayloadTaint, result.TurnContext.PayloadTaint);
+        Assert.Equal(wrapped.TurnContext.SourceScope, result.TurnContext.SourceScope);
+        Assert.Equal(wrapped.TurnContext.SourceKind, result.TurnContext.SourceKind);
+        Assert.Equal(wrapped.TurnContext.DefaultDeliveryTarget, result.TurnContext.DefaultDeliveryTarget);
+        Assert.Equal(wrapped.TurnContext.RequestedDeliveryTarget, result.TurnContext.RequestedDeliveryTarget);
+        Assert.Equal(wrapped.TurnContext.HasAdoptedContext, result.TurnContext.HasAdoptedContext);
+        Assert.Equal(wrapped.TurnContext.HasThirdPartyAdoptedContext, result.TurnContext.HasThirdPartyAdoptedContext);
+        Assert.Equal(wrapped.TurnContext.AdoptedSpeakerIds, result.TurnContext.AdoptedSpeakerIds);
+        Assert.Equal(wrapped.TurnContext.SupportsInteractiveApproval, result.TurnContext.SupportsInteractiveApproval);
+        Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_legacy_event_round_trips_without_turn_context()
+    {
+        var wrapped = new ToolApprovalRequested
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-legacy-approval",
+            ToolName = "shell_execute",
+            Patterns = ["git status"],
+            CandidateVerbs = ["git"],
+            Audience = Netclaw.Configuration.TrustAudience.Team,
+            Boundary = Netclaw.Configuration.TrustBoundary.Team,
+            ChannelType = "slack",
+            SupportsInteractiveApproval = true,
+            RequesterSenderId = new SenderId("U12345"),
+            RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.TrustedInternal,
+            OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            RequestedAtMs = 1700000000000
+        };
+
+        var result = RoundTrip(wrapped);
+
+        Assert.Equal(wrapped.SessionId, result.SessionId);
+        Assert.Equal(wrapped.CallId, result.CallId);
+        Assert.Equal(wrapped.ToolName, result.ToolName);
+        Assert.Equal(wrapped.Patterns, result.Patterns);
+        Assert.Equal(wrapped.CandidateVerbs, result.CandidateVerbs);
+        Assert.Equal(wrapped.Audience, result.Audience);
+        Assert.Equal(wrapped.Boundary, result.Boundary);
+        Assert.Equal(wrapped.ChannelType, result.ChannelType);
+        Assert.Equal(wrapped.SupportsInteractiveApproval, result.SupportsInteractiveApproval);
+        Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
+        Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
+        Assert.Null(result.TurnContext);
         Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);
     }
 

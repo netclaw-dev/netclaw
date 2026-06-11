@@ -527,6 +527,77 @@ public sealed class SlackAttachmentIngressVisionTests : TestKit
     }
 
     [Fact]
+    public async Task OctetStream_png_in_dm_uses_verified_png_mime_downstream()
+    {
+        _httpHandler.RespondWith("application/octet-stream", FakePngBytes);
+        var gateway = BuildGateway("slack-gw-octet-png-flow");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F_OCTET", "photo.png", "application/octet-stream", FakePngBytes.Length,
+                "https://files.slack.com/files-pri/T1234-F_OCTET/photo.png")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D_OCTET:3900"),
+            ChannelId: new SlackChannelId("D_OCTET"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("3900.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "octet png",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: files));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_chatClient.ReceivedMessages,
+                contents => contents.Any(c => c is TextContent t
+                    && t.Text.Contains("mime=\"image/png\"", StringComparison.Ordinal))
+                && contents.Any(c => c is DataContent d && d.MediaType == "image/png"));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Unknown_media_subtype_is_not_allowed_by_team_prefix()
+    {
+        _httpHandler.RespondWith("video/x-unknown", FakePngBytes);
+        var gateway = BuildGateway("slack-gw-unknown-media-reject");
+
+        var files = new List<SlackFileReference>
+        {
+            new("F_UNKNOWN", "clip.unknown", "video/x-unknown", FakePngBytes.Length,
+                "https://files.slack.com/files-pri/T1234-F_UNKNOWN/clip.unknown")
+        };
+
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.Message,
+            EventId: new SlackEventId("D_UNKNOWN:4000"),
+            ChannelId: new SlackChannelId("D_UNKNOWN"),
+            ThreadTs: null,
+            EventTs: new SlackEventTs("4000.1"),
+            UserId: new SlackUserId("U_HUMAN"),
+            BotId: null,
+            Text: "unknown video",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: true,
+            Files: files));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Contains(_replyClient.PostedMessages,
+                m => m.Text.Contains("clip.unknown", StringComparison.Ordinal)
+                  && m.Text.Contains("isn't allowed", StringComparison.Ordinal));
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, _httpHandler.RequestCount);
+    }
+
+    [Fact]
     public async Task Scanner_rejection_surfaces_user_visible_reply_with_no_inbox_write()
     {
         _httpHandler.RespondWith("image/png", FakePngBytes);

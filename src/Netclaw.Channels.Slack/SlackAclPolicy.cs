@@ -11,7 +11,7 @@ namespace Netclaw.Channels.Slack;
 /// <summary>
 /// Shared ACL checks for Slack channel and user authorization.
 /// Used by both <see cref="SlackConversationActor"/> (inbound) and
-/// <see cref="Tools.SendSlackMessageTool"/> (outbound/proactive).
+/// <see cref="SlackProactiveOutboundClient"/> (outbound/proactive).
 /// </summary>
 public static class SlackAclPolicy
 {

@@ -5,9 +5,7 @@
 Define the daemon's network exposure configuration, bind address management,
 exposure mode declaration, startup prerequisite validation, and diagnostic
 health checks for tunnel and reverse-proxy infrastructure.
-
 ## Requirements
-
 ### Requirement: Exposure mode declaration
 
 The system SHALL support an `ExposureMode` configuration property with the
@@ -59,35 +57,13 @@ SHALL bind to the address constructed from these properties at startup.
 
 ### Requirement: Startup prerequisite validation for tunnel modes
 
-The daemon SHALL validate that tunnel infrastructure and remote-auth
-prerequisites are met before completing startup. If prerequisites are not met,
-the daemon SHALL fail startup with a descriptive error. The daemon does NOT
-manage tunnel or proxy processes; it validates that the declared trust
-boundary is safe to honor.
+The daemon SHALL validate that tunnel infrastructure and remote-auth prerequisites are met before completing startup. If prerequisites are not met, the daemon SHALL fail startup with a descriptive error. The daemon does NOT manage tunnel or proxy processes; it validates that the declared trust boundary is safe to honor.
 
-For `tailscale-serve`, `tailscale-funnel`, and `cloudflare-tunnel`, local
-tunnel process detection SHALL remain the default prerequisite check.
-Operators MAY set `Daemon.SkipTunnelProcessCheck` to `true` as an explicit
-opt-in to bypass only that process-liveness check for sidecar or host-managed
-tunnel topologies.
+For `tailscale-serve`, `tailscale-funnel`, and `cloudflare-tunnel`, local tunnel process detection SHALL remain the default prerequisite check. Operators MAY set `Daemon.SkipTunnelProcessCheck` to `true` as an explicit opt-in to bypass only that process-liveness check for sidecar or host-managed tunnel topologies.
 
-When `Daemon.SkipTunnelProcessCheck` is `true`, the daemon SHALL still enforce
-every other exposure requirement for the selected mode, including remote-auth
-prerequisites.
+When `Daemon.SkipTunnelProcessCheck` is `true`, the daemon SHALL still enforce every other exposure requirement for the selected mode, including remote-auth prerequisites.
 
-#### Scenario: Tailscale Serve mode with tailscaled running
-
-- **GIVEN** `Daemon.ExposureMode` is `tailscale-serve`
-- **AND** the `tailscaled` process is running
-- **WHEN** the daemon starts
-- **THEN** startup succeeds
-
-#### Scenario: Tailscale Serve mode without tailscaled
-
-- **GIVEN** `Daemon.ExposureMode` is `tailscale-serve`
-- **AND** the `tailscaled` process is not running
-- **WHEN** the daemon starts
-- **THEN** startup fails with error indicating `tailscaled` is not running
+Before remote-auth validation fails a setup-owned first launch, the daemon SHALL allow daemon-owned bootstrap seeding to create the initial local paired device/token required for the local control-plane path.
 
 #### Scenario: Tunnel mode fails startup when required process is missing by default
 
@@ -95,59 +71,32 @@ prerequisites.
 - **AND** `Daemon.SkipTunnelProcessCheck` is absent or `false`
 - **AND** the required tunnel process is not running locally
 - **WHEN** the daemon starts
-- **THEN** startup fails with an error explaining that the selected tunnel mode
-  requires its tunnel process unless the operator explicitly opts out of the check
-
-#### Scenario: Tailscale Funnel mode without tailscaled
-
-- **GIVEN** `Daemon.ExposureMode` is `tailscale-funnel`
-- **AND** the `tailscaled` process is not running
-- **WHEN** the daemon starts
-- **THEN** startup fails with error indicating `tailscaled` is not running
-
-#### Scenario: Cloudflare Tunnel mode with cloudflared running
-
-- **GIVEN** `Daemon.ExposureMode` is `cloudflare-tunnel`
-- **AND** the `cloudflared` process is running
-- **WHEN** the daemon starts
-- **THEN** startup succeeds
-
-#### Scenario: Cloudflare Tunnel mode without cloudflared
-
-- **GIVEN** `Daemon.ExposureMode` is `cloudflare-tunnel`
-- **AND** the `cloudflared` process is not running
-- **WHEN** the daemon starts
-- **THEN** startup fails with error indicating `cloudflared` is not running
+- **THEN** startup fails with an error explaining that the selected tunnel mode requires its tunnel process unless the operator explicitly opts out of the check
 
 #### Scenario: Tunnel sidecar topology may skip process detection when explicitly configured
 
 - **GIVEN** `Daemon.ExposureMode` is `cloudflare-tunnel`
 - **AND** `Daemon.SkipTunnelProcessCheck` is `true`
-- **AND** the required tunnel process is not visible locally because the tunnel runs
-  in a sidecar or host-managed topology
+- **AND** the required tunnel process is not visible locally because the tunnel runs in a sidecar or host-managed topology
 - **AND** at least one remote authentication path exists
 - **WHEN** the daemon starts
-- **THEN** startup does not fail solely because the local process probe did not find
-  the tunnel process
+- **THEN** startup does not fail solely because the local process probe did not find the tunnel process
 
-#### Scenario: Reverse-proxy mode requires remote authentication
+#### Scenario: Reverse-proxy mode requires remote authentication after bootstrap seeding is considered
 
 - **GIVEN** `Daemon.ExposureMode` is `reverse-proxy`
-- **AND** no paired devices exist
+- **AND** no paired devices exist before startup validation begins
 - **AND** no alternative remote authentication scheme is configured
+- **AND** bootstrap seeding is not allowed or does not produce a paired device
 - **WHEN** the daemon starts
-- **THEN** startup fails with an error explaining that reverse-proxy mode requires
-  at least one remote authentication path before remote traffic is accepted
+- **THEN** startup fails with an error explaining that reverse-proxy mode requires at least one remote authentication path before remote traffic is accepted
 
 #### Scenario: Reverse-proxy mode rejects loopback final hop
 
 - **GIVEN** `Daemon.ExposureMode` is `reverse-proxy`
-- **AND** the final hop from the reverse proxy into Netclaw uses `127.0.0.1`, `::1`,
-  or `localhost`
+- **AND** the final hop from the reverse proxy into Netclaw uses `127.0.0.1`, `::1`, or `localhost`
 - **WHEN** the daemon starts
-- **THEN** startup fails with an error explaining that loopback auto-auth is
-  reserved for true local operator traffic and cannot be inherited through a
-  reverse proxy
+- **THEN** startup fails with an error explaining that loopback auto-auth is reserved for true local operator traffic and cannot be inherited through a reverse proxy
 
 #### Scenario: Same-host reverse proxy allowed with non-loopback final hop
 
@@ -155,25 +104,9 @@ prerequisites.
 - **AND** the reverse proxy runs on the same machine as Netclaw
 - **AND** the final hop into Netclaw uses a non-loopback internal IP
 - **AND** the proxy source is covered by `TrustedProxies`
-- **AND** at least one remote authentication path exists
+- **AND** at least one remote authentication path exists after bootstrap seeding is considered
 - **WHEN** the daemon starts
 - **THEN** startup succeeds
-
-#### Scenario: Malformed TrustedProxies entry fails startup loudly
-
-- **GIVEN** `Daemon.ExposureMode` is `reverse-proxy`
-- **AND** `Daemon.TrustedProxies` contains an invalid entry such as `"not-an-ip"`
-  or `"127.0.0.1/999"`
-- **WHEN** the daemon starts
-- **THEN** startup fails with a descriptive error naming the invalid entry
-- **AND** the daemon does not silently ignore or partially accept the remaining
-  entries
-
-#### Scenario: Local mode requires no tunnel validation
-
-- **GIVEN** `Daemon.ExposureMode` is `local`
-- **WHEN** the daemon starts
-- **THEN** no tunnel prerequisite checks are performed
 
 ### Requirement: Doctor checks for exposure health
 
@@ -322,3 +255,4 @@ Its default behavior SHALL remain `false` when omitted.
 - **THEN** validation passes
 - **AND** defaults resolve to `Host: "127.0.0.1"`, `Port: 5199`,
   `ExposureMode: "local"`
+

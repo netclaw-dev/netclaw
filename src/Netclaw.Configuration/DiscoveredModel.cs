@@ -27,9 +27,20 @@ public sealed record DiscoveredModel
     /// <summary>Cost per million output tokens in USD, if known.</summary>
     public decimal? CostPerMillionOutputTokens { get; init; }
 
-    /// <summary>Content types the model accepts as input.</summary>
-    public ModelModality InputModalities { get; init; } = ModelModality.Text;
+    /// <summary>
+    /// Content types the model accepts as input, when the provider reported them.
+    /// <see langword="null"/> means the discovery source did not say — leave it
+    /// unset and let runtime capability detection resolve it. Do NOT default this
+    /// to <see cref="ModelModality.Text"/>: a silent "Text" is indistinguishable
+    /// from a genuinely text-only model and, once persisted, permanently
+    /// short-circuits detection for multimodal models (see #1290).
+    /// </summary>
+    public ModelModality? InputModalities { get; init; }
 
-    /// <summary>Content types the model can produce as output.</summary>
-    public ModelModality OutputModalities { get; init; } = ModelModality.Text;
+    /// <summary>
+    /// Content types the model can produce as output, when the provider reported
+    /// them. <see langword="null"/> means unknown — let runtime detection resolve
+    /// it rather than persisting a guessed default.
+    /// </summary>
+    public ModelModality? OutputModalities { get; init; }
 }

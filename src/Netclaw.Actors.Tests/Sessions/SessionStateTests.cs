@@ -201,11 +201,119 @@ public class SessionStateTests
     }
 
     [Fact]
+    public void AddSystemNudge_can_carry_media_without_becoming_last_user_message()
+    {
+        var media = new SerializableMediaReference
+        {
+            RelativePath = "image.png",
+            MimeType = new Netclaw.Media.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 16
+        };
+        var state = SessionState.Empty
+            .AddUserMessage("Real user message")
+            .AddSystemNudge("Loaded media.", [media]);
+
+        var nudge = state.History[^1];
+        Assert.Single(nudge.MediaReferences);
+        Assert.Equal("Real user message", state.FindLastUserMessage()?.Content);
+    }
+
+    [Fact]
+    public void AddSystemNudge_snapshots_media_so_caller_clear_cannot_empty_it()
+    {
+        // Regression: LlmSessionActor hands its mutable
+        // _pendingModelInputMediaReferences accumulator to AddSystemNudge and then
+        // Clear()s it. Without a defensive snapshot the nudge aliased that list, so
+        // the Clear() wiped the tool-loaded image before the next LLM call hydrated
+        // it — the model was told "Image loaded" but never saw the bytes and
+        // hallucinated. The nudge must retain its own copy.
+        var media = new SerializableMediaReference
+        {
+            RelativePath = "image.png",
+            MimeType = new Netclaw.Media.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 16
+        };
+        var pending = new List<SerializableMediaReference> { media };
+
+        var state = SessionState.Empty
+            .AddUserMessage("Real user message")
+            .AddSystemNudge("Loaded media.", pending);
+
+        pending.Clear();
+
+        Assert.Single(state.History[^1].MediaReferences);
+    }
+
+    [Fact]
+    public void AddUserMessage_snapshots_media_so_caller_clear_cannot_empty_it()
+    {
+        var media = new SerializableMediaReference
+        {
+            RelativePath = "image.png",
+            MimeType = new Netclaw.Media.MimeType("image/png"),
+            Modality = (int)MediaModality.Image,
+            FileSizeBytes = 16
+        };
+        var pending = new List<SerializableMediaReference> { media };
+
+        var state = SessionState.Empty.AddUserMessage("With image", pending);
+
+        pending.Clear();
+
+        Assert.Single(state.History[^1].MediaReferences);
+    }
+
+    [Fact]
     public void FindLastUserMessage_returns_null_when_no_user_messages()
     {
         var state = WithSystemPrompt("System");
 
         Assert.Null(state.FindLastUserMessage());
+    }
+
+    [Fact]
+    public void AddVolatileContextNudge_inserts_before_trailing_real_user_message()
+    {
+        // The volatile context block must NOT sit at the tail after the real
+        // user message — a trailing volatile User-role message is read by
+        // strict ChatML templates as a fresh user turn and triggers the
+        // tool-loop acknowledgement spin. It is inserted BEFORE the user
+        // message so the real user message stays at the tail.
+        var state = SessionState.Empty
+            .AddUserMessage("real user request")
+            .AddVolatileContextNudge("[memory-recall] ...");
+
+        Assert.Equal(2, state.History.Count);
+        Assert.True(SessionState.IsSystemNudge(state.History[0]));
+        Assert.Equal(ChatRole.User, state.History[1].Role);
+        Assert.Equal("real user request", state.History[1].Content);
+
+        // The last user-role content the model sees is the real request.
+        Assert.Equal("real user request", state.FindLastUserMessage()?.Content);
+    }
+
+    [Fact]
+    public void AddVolatileContextNudge_appends_when_no_trailing_real_user_message()
+    {
+        // Reminder/scheduled/cold-recovery turns have no trailing real user
+        // message to sit before — append in that case. Also covers the case
+        // where the last entry is itself a system-nudge (e.g. delivery retry).
+        var afterAssistant = SessionState.Empty
+            .AddUserMessage("first")
+            .AddErrorReply("answer")
+            .AddVolatileContextNudge("[working-context] ...");
+
+        Assert.True(SessionState.IsSystemNudge(afterAssistant.History[^1]));
+
+        var afterNudge = SessionState.Empty
+            .AddUserMessage("first")
+            .AddSystemNudge("delivery retry")
+            .AddVolatileContextNudge("[working-context] ...");
+
+        Assert.True(SessionState.IsSystemNudge(afterNudge.History[^1]));
+        Assert.Contains("[working-context]", afterNudge.History[^1].Content);
     }
 
     [Fact]

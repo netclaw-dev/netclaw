@@ -36,7 +36,7 @@ public sealed class TurnStateTrackerTests
         if (phase == ToolPhase.AfterToolUse)
             tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
 
-        var action = tracker.EvaluateEmptyResponse(kind);
+        var action = tracker.EvaluateEmptyResponse(kind, truncated: false);
 
         var retry = Assert.IsType<EmptyResponseAction.Retry>(action);
         if (kind == LlmResponseKind.ThinkingOnly)
@@ -46,18 +46,56 @@ public sealed class TurnStateTrackerTests
     }
 
     [Fact]
+    public void TruncatedThinkingOnly_GetsBrevityNudge_NotStopThinkingScold()
+    {
+        var tracker = new TurnStateTracker();
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+
+        // A length-truncated thinking-only response was cut off, not refused —
+        // it must get the brevity nudge, never the "stop thinking" scold.
+        var truncated = Assert.IsType<EmptyResponseAction.Retry>(
+            tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly, truncated: true));
+        Assert.Contains("cut off", truncated.NudgeText);
+        Assert.DoesNotContain(ThinkingNudgeMarker, truncated.NudgeText);
+
+        // A non-truncated thinking-only still gets the stop-thinking nudge.
+        var normal = Assert.IsType<EmptyResponseAction.Retry>(
+            tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly, truncated: false));
+        Assert.Contains(ThinkingNudgeMarker, normal.NudgeText);
+    }
+
+    [Fact]
+    public void EmptyResponseCounters_ResetOnToolBatch()
+    {
+        // A thinking model that emits a thinking-only response, then does tool
+        // work, then emits another thinking-only response should NOT accumulate
+        // toward the failure threshold — the consecutive counters reset on each
+        // tool batch.
+        var tracker = new TurnStateTracker();
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+
+        for (var i = 0; i < 10; i++)
+        {
+            // One thinking-only response followed by a tool batch reset — the
+            // consecutive counter resets each time, so this never fails.
+            Assert.IsType<EmptyResponseAction.Retry>(
+                tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly, truncated: false));
+            tracker.ResetEmptyResponseGuards();
+        }
+    }
+
+    [Fact]
     public void PostToolThinkingOnly_RetriesSeveralTimesBeforeFailing()
     {
         var tracker = new TurnStateTracker();
         tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
 
-        // The first three consecutive thinking-only responses retry.
-        Assert.IsType<EmptyResponseAction.Retry>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly));
-        Assert.IsType<EmptyResponseAction.Retry>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly));
-        Assert.IsType<EmptyResponseAction.Retry>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly));
+        // The first 8 consecutive thinking-only responses retry.
+        for (var i = 0; i < 8; i++)
+            Assert.IsType<EmptyResponseAction.Retry>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly, truncated: false));
 
-        // Only the fourth fails the turn.
-        Assert.IsType<EmptyResponseAction.Fail>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly));
+        // The 9th fails the turn.
+        Assert.IsType<EmptyResponseAction.Fail>(tracker.EvaluateEmptyResponse(LlmResponseKind.ThinkingOnly, truncated: false));
     }
 
     [Fact]

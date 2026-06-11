@@ -8,6 +8,7 @@ using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using R3;
 using Termina.Clipboard;
+using Termina.Extensions;
 using Termina.Layout;
 using Termina.Terminal;
 
@@ -18,8 +19,6 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 internal static class OAuthFlowViews
 {
-    private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
-
     /// <summary>
     /// Map auth methods to user-friendly display labels for selection lists.
     /// Uses custom per-provider labels from <see cref="MultiAuth.AuthMethodLabels"/> when available.
@@ -63,12 +62,6 @@ internal static class OAuthFlowViews
             _ => AuthMethod.ApiKey
         };
     }
-
-    /// <summary>
-    /// Get a spinner frame for the given tick count.
-    /// Use a fast tick counter (not elapsed seconds) for smooth animation.
-    /// </summary>
-    public static string GetSpinnerFrame(int tick) => SpinnerFrames[tick % SpinnerFrames.Length];
 
     /// <summary>
     /// Copy a URL to clipboard via the provided service. Returns true if copied.
@@ -117,8 +110,7 @@ internal static class OAuthFlowViews
         DeviceFlowState flowState,
         bool browserOpenFailed,
         string? verificationUri,
-        int spinnerTick,
-        int elapsedSeconds,
+        Observable<int> elapsedSeconds,
         string? errorMessage,
         IClipboardService? clipboardService,
         ref TextInputNode? redirectUrlInput,
@@ -140,15 +132,13 @@ internal static class OAuthFlowViews
             case DeviceFlowState.WaitingForUser:
             case DeviceFlowState.Polling:
             {
-                var frame = GetSpinnerFrame(spinnerTick);
-
                 if (!browserOpenFailed)
                 {
-                    children.WithChild(new TextNode($"  {frame} Opening browser for authorization...")
-                        .WithForeground(Color.Yellow));
+                    children.WithChild(SpinnerViews.Labeled("Opening browser for authorization...", Color.Yellow));
                     children.WithChild(new TextNode("").Height(1));
-                    children.WithChild(new TextNode($"  Waiting for callback...  ({elapsedSeconds}s)")
-                        .WithForeground(Color.BrightBlack));
+                    children.WithChild(elapsedSeconds.AsLayout(s => (ILayoutNode)new TextNode(
+                            $"  Waiting for callback...  ({s}s)")
+                        .WithForeground(Color.BrightBlack)));
                 }
                 else
                 {
@@ -171,8 +161,7 @@ internal static class OAuthFlowViews
                     }
 
                     children.WithChild(new TextNode("").Height(1));
-                    children.WithChild(new TextNode($"  {frame} Waiting for callback...  ({elapsedSeconds}s)")
-                        .WithForeground(Color.Yellow));
+                    children.WithChild(SpinnerViews.WithElapsed("Waiting for callback...", Color.Yellow, elapsedSeconds));
                 }
 
                 children.WithChild(new TextNode("").Height(1));

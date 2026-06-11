@@ -19,10 +19,9 @@ public enum SubAgentVisibility
 }
 
 /// <summary>
-/// Declarative subagent identity — name, system prompt, allowed tools, model role,
-/// timeout, and visibility. Profiles store tool <b>names</b> (not resolved instances)
-/// so they can be defined in code or loaded from disk without coupling to runtime tool state.
-/// Tools are resolved from <see cref="Netclaw.Actors.Tools.ToolRegistry"/> at spawn time.
+/// Declarative subagent identity — name, system prompt, advisory tool metadata,
+/// model role, timeout, and visibility. Runtime tool access is resolved from the
+/// parent session's audience policy at spawn time.
 /// </summary>
 public sealed record SubAgentProfile
 {
@@ -36,8 +35,8 @@ public sealed record SubAgentProfile
     public required string SystemPrompt { get; init; }
 
     /// <summary>
-    /// Tool names resolved from <see cref="Netclaw.Actors.Tools.ToolRegistry"/> at spawn time.
-    /// Names must match registered tool names (e.g., "web_search", "shell", "memorizer/store").
+    /// Advisory tool names parsed from frontmatter for compatibility with agent
+    /// file formats. These names do not constrain runtime tool access.
     /// </summary>
     public required IReadOnlyList<string> ToolNames { get; init; }
 
@@ -47,8 +46,20 @@ public sealed record SubAgentProfile
     /// </summary>
     public ModelRole ModelRole { get; init; } = ModelRole.Compaction;
 
-    /// <summary>Wall-clock timeout in seconds for subagent execution.</summary>
+    /// <summary>
+    /// Inter-delta inactivity budget in seconds: the maximum gap between streaming
+    /// deltas once the model has started responding, and the general inactivity
+    /// budget for the tool loop. The generous wait-for-first-token budget is
+    /// <see cref="PrefillTimeoutSeconds"/> (falling back to
+    /// <see cref="SubAgentConfig.PrefillTimeoutSeconds"/>).
+    /// </summary>
     public int TimeoutSeconds { get; init; } = 60;
+
+    /// <summary>
+    /// Optional per-agent wait-for-first-delta budget in seconds, covering queue
+    /// wait and cold prefill. Null inherits <see cref="SubAgentConfig.PrefillTimeoutSeconds"/>.
+    /// </summary>
+    public int? PrefillTimeoutSeconds { get; init; }
 
     /// <summary>
     /// Whether successful free-form output should be converted into structured

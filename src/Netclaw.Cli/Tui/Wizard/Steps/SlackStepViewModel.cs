@@ -320,9 +320,20 @@ public sealed class SlackStepViewModel : IWizardStepViewModel, IChannelAdapterVi
 
         var audiences = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var entry in slackEntries)
-            audiences[entry.Id] = entry.Audience.ToWireValue();
+            audiences[ResolveChannelAudienceKey(entry)] = entry.Audience.ToWireValue();
 
         return audiences.Count > 0 ? audiences : null;
+    }
+
+    private string ResolveChannelAudienceKey(ChannelEntry entry)
+    {
+        if (entry.IsDmRow || LastChannelResolution is null)
+            return entry.Id;
+
+        var resolved = LastChannelResolution.Resolved.FirstOrDefault(
+            channel => string.Equals(channel.Name, entry.Id, StringComparison.OrdinalIgnoreCase));
+
+        return string.IsNullOrWhiteSpace(resolved?.Id) ? entry.Id : resolved.Id;
     }
 
     internal static IReadOnlyList<string> ParseChannelNames(string? input)

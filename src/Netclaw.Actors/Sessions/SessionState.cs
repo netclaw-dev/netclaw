@@ -188,8 +188,12 @@ public sealed record SessionState
     /// </summary>
     public SessionState AddUserMessage(string content, IReadOnlyList<SerializableMediaReference>? mediaReferences = null)
     {
+        // Snapshot the caller's list: SerializableChatMessage is immutable and must
+        // own its media references, so a caller that reuses/clears its list after
+        // this call cannot retroactively empty the persisted message (see
+        // BuildNudgeMessage for the concrete hazard this guards against).
         var msg = mediaReferences is { Count: > 0 }
-            ? new SerializableChatMessage { Role = ChatRole.User, Content = content, MediaReferences = mediaReferences }
+            ? new SerializableChatMessage { Role = ChatRole.User, Content = content, MediaReferences = [.. mediaReferences] }
             : new SerializableChatMessage { Role = ChatRole.User, Content = content };
 
         return this with { History = History.Add(msg) };
@@ -212,20 +216,79 @@ public sealed record SessionState
     }
 
     /// <summary>
-    /// Add a transient system nudge to history to correct LLM behavior (e.g., empty response recovery).
-    /// Not persisted as a turn — just injected into the conversation to guide the next LLM call.
+    /// Add a transient system nudge to the END of history to correct LLM
+    /// behavior mid-turn (empty-response retry, duplicate-tool, budget warning,
+    /// delivery retry). These are course-correcting instructions: the model is
+    /// meant to act on them, so they sit at the tail where the chat template
+    /// treats them as the most recent input. Not persisted as a turn — just
+    /// injected into the conversation to guide the next LLM call.
     /// </summary>
-    public SessionState AddSystemNudge(string nudge)
+    public SessionState AddSystemNudge(
+        string nudge,
+        IReadOnlyList<SerializableMediaReference>? mediaReferences = null)
     {
-        return this with
+        var message = BuildNudgeMessage(nudge, mediaReferences);
+        return this with { History = History.Add(message) };
+    }
+
+    /// <summary>
+    /// Insert the per-turn volatile context block (memory recall, current time,
+    /// working context, skill hint, slash-command body, session overlay, turn
+    /// restart notice, active background jobs) into history immediately BEFORE
+    /// the most recent real user message, so the real user message stays the
+    /// last user-role content the model sees before generating its reply.
+    ///
+    /// A volatile block placed AFTER the user message is read by strict ChatML
+    /// templates (Qwen3) as a fresh user turn: the model restarts its assistant
+    /// response, scans back for the last real user content, and re-narrates the
+    /// same plan on every tool-loop iteration until context fills — the
+    /// production spin observed on D0AC6CKBK5K. Inserting before the user
+    /// message keeps the tail as [..., volatile-nudge, real-user, assistant],
+    /// which every chat template anchors to correctly.
+    ///
+    /// Cache-prefix stability (the reason PR #1178 moved volatile context into
+    /// history) is preserved: the inserted message's byte position is fixed
+    /// once added, and subsequent turns only append, so a byte-prefix-caching
+    /// provider extends the cached prefix straight through it — identical
+    /// guarantee to the prior append-based placement, only the local order of
+    /// the two adjacent turn-start messages differs.
+    ///
+    /// When the last history entry is NOT a real user message (reminder /
+    /// scheduled turn, delivery-retry redrive, cold-recovery), there is no
+    /// trailing user message to sit before, so the block is appended.
+    /// </summary>
+    public SessionState AddVolatileContextNudge(string nudge)
+    {
+        var nudgeMsg = BuildNudgeMessage(nudge);
+
+        if (History.Count > 0
+            && History[^1].Role == ChatRole.User
+            && !IsSystemNudge(History[^1]))
         {
-            History = History.Add(new SerializableChatMessage
+            return this with { History = History.Insert(History.Count - 1, nudgeMsg) };
+        }
+
+        return this with { History = History.Add(nudgeMsg) };
+    }
+
+    private static SerializableChatMessage BuildNudgeMessage(
+        string nudge,
+        IReadOnlyList<SerializableMediaReference>? mediaReferences = null) =>
+        mediaReferences is { Count: > 0 }
+            ? new()
             {
                 Role = ChatRole.User,
-                Content = $"{SystemNudgePrefix} {nudge}]"
-            })
-        };
-    }
+                Content = $"{SystemNudgePrefix} {nudge}]",
+                // Snapshot, never alias. The model-input media nudge is built from
+                // LlmSessionActor._pendingModelInputMediaReferences, a mutable
+                // accumulator the actor Clear()s immediately after handing it off.
+                // SerializableChatMessage is an immutable persistence type that must
+                // own its media list — without this copy the subsequent Clear()
+                // empties the nudge's attachments before the next LLM call hydrates
+                // them, so a tool-loaded image silently never reaches the model.
+                MediaReferences = [.. mediaReferences]
+            }
+            : new() { Role = ChatRole.User, Content = $"{SystemNudgePrefix} {nudge}]" };
 
     /// <summary>
     /// Find the last user message in history (for building persistence events).

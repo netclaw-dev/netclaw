@@ -49,11 +49,10 @@ public static class WebhookRouteValidator
         if (route.Events.Any(string.IsNullOrWhiteSpace))
             errors.Add("Events list contains a blank entry.");
 
-        if (route.DeliveryRequired
-            && route.NotificationTarget is null
+        if (route.NotificationTarget is null
             && !string.IsNullOrWhiteSpace(route.NotifyInstructions))
         {
-            errors.Add("NotificationTarget is required when DeliveryRequired is true and NotifyInstructions are provided.");
+            errors.Add("NotificationTarget is required when NotifyInstructions are provided.");
         }
 
         if (route.NotificationTarget is { Kind: NotificationTargetKind.Slack } target

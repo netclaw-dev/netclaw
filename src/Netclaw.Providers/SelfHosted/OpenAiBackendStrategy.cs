@@ -91,12 +91,7 @@ internal sealed class VllmBackendStrategy : IOpenAiBackendStrategy
         if (!probe.TryFindModelEntry(out var model))
             return null;
 
-        int? contextWindow = null;
-        if (model.TryGetProperty("max_model_len", out var mml) &&
-            mml.ValueKind == JsonValueKind.Number)
-        {
-            contextWindow = mml.GetInt32();
-        }
+        var contextWindow = ProbeHelpers.TryReadPositiveInt32(model, "max_model_len");
 
         // vLLM exposes no modality information; null fields signal that
         // downstream resolvers in the chain (HuggingFace) should fill in.
@@ -106,8 +101,8 @@ internal sealed class VllmBackendStrategy : IOpenAiBackendStrategy
 
 /// <summary>
 /// llama.cpp-specific strategy. Recognizes llama.cpp via either a
-/// successful <c>/props</c> response or a <c>meta.n_ctx_train</c> field
-/// on a <c>/v1/models</c> entry. Prefers <c>/props.default_generation_settings.params.n_ctx</c>
+/// successful <c>/props</c> response or a <c>meta.n_ctx</c>/<c>meta.n_ctx_train</c>
+/// field on a <c>/v1/models</c> entry. Prefers <c>/props.default_generation_settings.n_ctx</c>
 /// for the runtime-effective context window, and reads
 /// <c>/props.modalities.vision</c> for input modality.
 /// </summary>
@@ -123,51 +118,82 @@ internal sealed class LlamaCppBackendStrategy : IOpenAiBackendStrategy
         if (!probe.TryFindModelEntry(out var model))
             return false;
 
-        return model.TryGetProperty("meta", out var meta) &&
-               meta.ValueKind == JsonValueKind.Object &&
-               meta.TryGetProperty("n_ctx_train", out var ctx) &&
-               ctx.ValueKind == JsonValueKind.Number;
+        return TryReadModelMetaContext(model) is not null;
     }
 
     public ResolvedModelCapabilities? Parse(BackendProbe probe)
     {
         // Start with what /v1/models tells us about context window.
         int? contextWindow = null;
-        if (probe.TryFindModelEntry(out var model) &&
-            model.TryGetProperty("meta", out var meta) &&
-            meta.ValueKind == JsonValueKind.Object &&
-            meta.TryGetProperty("n_ctx_train", out var ctx) &&
-            ctx.ValueKind == JsonValueKind.Number)
-        {
-            contextWindow = ctx.GetInt32();
-        }
+        if (probe.TryFindModelEntry(out var model))
+            contextWindow = TryReadModelMetaContext(model);
 
-        // /props overrides — runtime-effective n_ctx and vision flag.
-        var inputModalities = ModelModality.Text;
+        // /props overrides with the runtime-effective n_ctx when it is real.
+        // llama.cpp router mode returns a router-level /props body with n_ctx=0
+        // and no per-model modality evidence. That response must not override
+        // model metadata or block later resolvers from detecting image support.
+        ModelModality? inputModalities = null;
+        ModelModality? outputModalities = null;
         if (probe.PropsRoot is JsonElement props)
         {
-            if (props.TryGetProperty("default_generation_settings", out var dgs) &&
-                dgs.ValueKind == JsonValueKind.Object &&
-                dgs.TryGetProperty("params", out var parameters) &&
-                parameters.ValueKind == JsonValueKind.Object &&
-                parameters.TryGetProperty("n_ctx", out var nCtx) &&
-                nCtx.ValueKind == JsonValueKind.Number)
+            if (!IsRouterProps(props))
             {
-                contextWindow = nCtx.GetInt32();
-            }
+                contextWindow = TryReadPropsContext(props) ?? contextWindow;
 
-            if (props.TryGetProperty("modalities", out var modalities) &&
-                modalities.ValueKind == JsonValueKind.Object &&
-                modalities.TryGetProperty("vision", out var vision) &&
-                vision.ValueKind is JsonValueKind.True or JsonValueKind.False &&
-                vision.GetBoolean())
-            {
-                inputModalities |= ModelModality.Image;
+                if (TryReadInputModalities(props) is { } detectedInputModalities)
+                {
+                    inputModalities = detectedInputModalities;
+                    outputModalities = ModelModality.Text;
+                }
             }
         }
 
         return new ResolvedModelCapabilities(
-            probe.ModelId, inputModalities, ModelModality.Text, contextWindow);
+            probe.ModelId, inputModalities, outputModalities, contextWindow);
+    }
+
+    private static int? TryReadModelMetaContext(JsonElement model)
+    {
+        if (!model.TryGetProperty("meta", out var meta) ||
+            meta.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return ProbeHelpers.TryReadPositiveInt32OrFallbackWhenMissing(
+            meta, "n_ctx", "n_ctx_train");
+    }
+
+    private static int? TryReadPropsContext(JsonElement props)
+    {
+        if (!props.TryGetProperty("default_generation_settings", out var dgs) ||
+            dgs.ValueKind != JsonValueKind.Object)
+            return null;
+
+        return ProbeHelpers.TryReadPositiveInt32(dgs, "n_ctx") ??
+               (dgs.TryGetProperty("params", out var parameters)
+                   ? ProbeHelpers.TryReadPositiveInt32(parameters, "n_ctx")
+                   : null);
+    }
+
+    private static ModelModality? TryReadInputModalities(JsonElement props)
+    {
+        if (!props.TryGetProperty("modalities", out var modalities) ||
+            modalities.ValueKind != JsonValueKind.Object ||
+            !modalities.TryGetProperty("vision", out var vision) ||
+            vision.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            return null;
+
+        return vision.GetBoolean()
+            ? ModelModality.Text | ModelModality.Image
+            : ModelModality.Text;
+    }
+
+    private static bool IsRouterProps(JsonElement props)
+    {
+        // Router-level /props describes the router process, not the selected model.
+        // Do not let its placeholders become authoritative per-model capabilities.
+        return props.TryGetProperty("role", out var role) &&
+               role.ValueKind == JsonValueKind.String &&
+               string.Equals(role.GetString(), "router", StringComparison.OrdinalIgnoreCase);
     }
 }
 

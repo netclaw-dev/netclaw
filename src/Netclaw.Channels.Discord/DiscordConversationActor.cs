@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DiscordConversationActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -7,172 +7,97 @@ using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
-using Netclaw.Channels.Telemetry;
-using Netclaw.Configuration;
+using Netclaw.Channels;
 
 namespace Netclaw.Channels.Discord;
 
 /// <summary>
 /// Per-channel actor that serves as the security boundary for Discord messages.
-/// Performs ACL checks, routing policy evaluation, and ingress gating.
+/// The inbound pipeline (ACL, routing policy, ingress gating, passivation,
+/// session binding management) lives in <see cref="ChannelConversationActor{TMessage}"/>;
+/// this subclass supplies the Discord projections plus the interaction,
+/// proactive-thread, and trusted-turn receives.
 /// Uses blind-write routing: session IDs are derived deterministically from
 /// message identifiers with no routing state.
 /// </summary>
-internal sealed class DiscordConversationActor : ReceiveActor
+internal sealed class DiscordConversationActor : ChannelConversationActor<DiscordGatewayMessage>
 {
-    private const int MaxInboundTextLength = 4000;
-
     private readonly DiscordChannelId _channelId;
     private readonly DiscordGatewayDependencies _dependencies;
     private readonly string? _botMentionTag;
-    private readonly ILoggingAdapter _log;
 
     public DiscordConversationActor(DiscordChannelId channelId, DiscordGatewayDependencies dependencies)
+        : base(ChannelType.Discord, channelId.Value, dependencies.IngressGate)
     {
         _channelId = channelId;
         _dependencies = dependencies;
         _botMentionTag = dependencies.BotUserId is { } botId ? $"<@{botId.Value}>" : null;
-        _log = Context.GetLogger()
-            .WithContext("Adapter", "discord")
-            .WithContext("DiscordChannelId", _channelId.Value);
 
-        Context.SetReceiveTimeout(TimeSpan.FromHours(2));
-
-        Receive<ReceiveTimeout>(_ =>
-        {
-            _log.Info("Discord conversation idle for 2 hours, passivating");
-            Context.Stop(Self);
-        });
-
-        Receive<DiscordGatewayMessage>(HandleGatewayMessage);
         Receive<DiscordGatewayInteraction>(HandleGatewayInteraction);
         Receive<DeliverTrustedSessionTurn>(HandleTrustedSessionTurn);
         Receive<StartProactiveThread>(HandleProactiveThread);
-        Receive<Terminated>(HandleTerminated);
     }
-
-    protected override SupervisorStrategy SupervisorStrategy()
-        => new OneForOneStrategy(ex =>
-        {
-            _log.Error(ex, "Session binding child failed; stopping to allow re-creation");
-            return Directive.Stop;
-        });
 
     public static Props CreateProps(DiscordChannelId channelId, DiscordGatewayDependencies dependencies)
         => Props.Create(() => new DiscordConversationActor(channelId, dependencies));
 
-    private void HandleGatewayMessage(DiscordGatewayMessage message)
-    {
-        var options = _dependencies.Options;
+    protected override string ThreadLogContextKey => "DiscordThreadOrMessageId";
 
-        // --- ACL gate ---
-        var aclDecision = DiscordAclPolicy.EvaluateInbound(
+    protected override string EventLogContextKey => "DiscordEventId";
+
+    protected override ChannelAclDecision EvaluateAcl(DiscordGatewayMessage message) =>
+        DiscordAclPolicy.EvaluateInbound(
             message,
-            options,
+            _dependencies.Options,
             _dependencies.DefaultChannelId);
 
-        if (!aclDecision.IsAllowed)
-        {
-            var reason = aclDecision.DenyReason ?? "acl_denied";
-            _log.Info("discord_event_dropped event={0} reason={1}", message.EventId.Value, reason);
-            ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped(reason);
-            return;
-        }
+    protected override bool IsBotMessage(DiscordGatewayMessage message) => message.IsBotMessage;
 
-        // --- Bot self-loop filter ---
-        if (message.IsBotMessage)
-        {
-            _log.Info("discord_event_filtered event={0} reason=bot_message", message.EventId.Value);
-            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("bot_message");
-            return;
-        }
+    protected override string EventIdOf(DiscordGatewayMessage message) => message.EventId.Value;
 
-        // --- Ingress gate ---
-        if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
-        {
-            _log.Info("discord_event_filtered event={0} reason=restart_drain_active", message.EventId.Value);
-            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("restart_drain_active");
-            // Safe fire-and-forget: PostIngressClosedReplyAsync wraps everything in try/catch,
-            // and no synchronous code precedes the first await, so exceptions cannot escape.
-            _ = PostIngressClosedReplyAsync(message.ReplyChannelId, closedReason);
-            return;
-        }
+    protected override string ThreadKeyOf(DiscordGatewayMessage message) => message.ThreadOrMessageId.Value;
 
-        // --- Routing policy ---
-        var actorName = BuildActorName(_channelId, message.ThreadOrMessageId);
-        var existingBinding = Context.Child(actorName);
-        var threadExists = !existingBinding.IsNobody();
+    protected override string TextOf(DiscordGatewayMessage message) => message.Text;
 
+    protected override bool HasAttachments(DiscordGatewayMessage message) =>
+        message.Attachments is { Count: > 0 };
+
+    protected override ChannelRoutingVerdict EvaluateRouting(DiscordGatewayMessage message, bool threadExists)
+    {
         var decision = DiscordRoutingPolicy.Evaluate(
             message,
-            options.MentionOnly,
-            options.AllowDirectMessages,
-            options.MentionRequiredInDm,
+            _dependencies.Options.MentionOnly,
+            _dependencies.Options.AllowDirectMessages,
+            _dependencies.Options.MentionRequiredInDm,
             threadExists,
             message.ContainsBotMention);
 
-        if (decision.Kind is DiscordRoutingDecisionKind.Ignore)
+        return decision.Kind switch
         {
-            var ignoreReason = decision.IgnoreReason!.Value;
-            _log.Info(
-                "discord_event_filtered event={0} reason=routing_policy_ignore ignoreReason={1}",
-                message.EventId.Value,
-                ignoreReason);
-            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered(
-                DiscordRoutingDecision.TelemetryLabelFor(ignoreReason));
-            return;
-        }
+            DiscordRoutingDecisionKind.Ignore => ChannelRoutingVerdict.Ignore(
+                // decision.IgnoreReason is non-null here by DiscordRoutingDecision
+                // factory invariant (Ignore-kind is only constructed via Ignore(reason)).
+                decision.IgnoreReason!.Value.ToString(),
+                DiscordRoutingDecision.TelemetryLabelFor(decision.IgnoreReason!.Value)),
+            DiscordRoutingDecisionKind.ContinueOnly => ChannelRoutingVerdict.ContinueOnly,
+            _ => ChannelRoutingVerdict.StartOrContinue,
+        };
+    }
 
-        if (decision.Kind is DiscordRoutingDecisionKind.ContinueOnly && !threadExists)
-        {
-            _log.Info("discord_event_dropped event={0} reason=thread_not_initialized", message.EventId.Value);
-            ChannelTelemetry.For(ChannelType.Discord).RecordEventDropped("thread_not_initialized");
-            return;
-        }
+    protected override Props CreateSessionBindingProps(SessionId sessionId, DiscordGatewayMessage message) =>
+        SessionBindingProps(
+            sessionId,
+            _channelId,
+            message.ReplyChannelId,
+            message.ThreadOrMessageId,
+            message.RootMessageId);
 
-        // --- Empty text filter ---
-        var normalizedText = NormalizeInboundText(message.Text);
-        if (normalizedText.Length > MaxInboundTextLength)
-        {
-            _log.Warning("discord_inbound_text_truncated original={OriginalLength} clamped={MaxLength}",
-                normalizedText.Length, MaxInboundTextLength);
-            normalizedText = normalizedText[..MaxInboundTextLength];
-        }
-        var hasAttachments = message.Attachments is { Count: > 0 };
-        if (string.IsNullOrWhiteSpace(normalizedText) && !hasAttachments)
-        {
-            _log.Info("discord_event_filtered event={0} reason=empty_text", message.EventId.Value);
-            ChannelTelemetry.For(ChannelType.Discord).RecordEventFiltered("empty_text");
-            return;
-        }
-
-        // --- Build session and forward ---
-        var sessionId = new SessionId($"{_channelId.Value}/{message.ThreadOrMessageId.Value}");
-        var sessionBinding = threadExists
-            ? existingBinding
-            : GetOrCreateSessionBinding(
-                sessionId,
-                _channelId,
-                message.ReplyChannelId,
-                message.ThreadOrMessageId,
-                message.RootMessageId);
-
-        var turnId = string.IsNullOrWhiteSpace(message.EventId.Value)
-            ? IdGen.ShortId()
-            : message.EventId.Value;
-
-        var log = _log
-            .WithContext("DiscordThreadOrMessageId", message.ThreadOrMessageId.Value)
-            .WithContext("SessionId", sessionId.Value)
-            .WithContext("TurnId", turnId)
-            .WithContext("DiscordEventId", message.EventId.Value);
-
-        log.Info("discord_turn_routed event={EventId} textChars={TextLength}",
-            message.EventId.Value,
-            normalizedText.Length);
-
-        ChannelTelemetry.For(ChannelType.Discord).RecordEventRouted("message");
-        sessionBinding.Forward(new DiscordThreadInbound(
+    protected override object CreateThreadInbound(
+        SessionId sessionId,
+        DiscordGatewayMessage message,
+        ChannelAclDecision aclDecision,
+        string normalizedText) =>
+        new DiscordThreadInbound(
             SessionId: sessionId,
             ChannelId: _channelId,
             ReplyChannelId: message.ReplyChannelId,
@@ -185,7 +110,30 @@ internal sealed class DiscordConversationActor : ReceiveActor
             Provenance: aclDecision.Provenance,
             Text: normalizedText,
             ReceivedAt: message.ReceivedAt,
-            Attachments: message.Attachments));
+            Attachments: message.Attachments);
+
+    protected override async Task PostIngressClosedReplyAsync(DiscordGatewayMessage message, string closedReason)
+    {
+        try
+        {
+            await _dependencies.ReplyClient.PostReplyAsync(
+                new DiscordPostMessage(message.ReplyChannelId, closedReason));
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "Failed to post restart-drain reply to Discord channel {0}", message.ReplyChannelId.Value);
+        }
+    }
+
+    /// <summary>
+    /// Strips the bot mention tag from inbound text and trims whitespace.
+    /// </summary>
+    protected override string NormalizeInboundText(string text)
+    {
+        if (_botMentionTag is null)
+            return text.Trim();
+
+        return text.Replace(_botMentionTag, string.Empty, StringComparison.Ordinal).Trim();
     }
 
     private void HandleGatewayInteraction(DiscordGatewayInteraction interaction)
@@ -201,15 +149,18 @@ internal sealed class DiscordConversationActor : ReceiveActor
         // cold-spawn redraw path. See issue #939.
         var replyChannelId = interaction.ReplyChannelId
             ?? new DiscordReplyChannelId(interaction.ThreadOrMessageId.Value);
-        var sessionId = new SessionId($"{_channelId.Value}/{interaction.ThreadOrMessageId.Value}");
+        var sessionId = SessionIdFormat.Build(_channelId.Value, interaction.ThreadOrMessageId.Value);
         var sessionBinding = GetOrCreateSessionBinding(
-            sessionId,
-            _channelId,
-            replyChannelId,
-            interaction.ThreadOrMessageId,
-            rootMessageId: null);
+            _channelId.Value,
+            interaction.ThreadOrMessageId.Value,
+            () => SessionBindingProps(
+                sessionId,
+                _channelId,
+                replyChannelId,
+                interaction.ThreadOrMessageId,
+                rootMessageId: null));
 
-        ChannelTelemetry.For(ChannelType.Discord).RecordEventRouted("interaction");
+        Telemetry.RecordEventRouted("interaction");
         sessionBinding.Forward(new DiscordApprovalResponse(
             ChannelId: _channelId,
             ThreadOrMessageId: interaction.ThreadOrMessageId,
@@ -227,31 +178,28 @@ internal sealed class DiscordConversationActor : ReceiveActor
                 out var parsedChannelId,
                 out var threadOrMessageId))
         {
-            _log.Warning(
-                "Dropping DeliverTrustedSessionTurn with unparseable Discord SessionId {SessionId}",
-                message.SessionId.Value);
-            Sender.Tell(CommandNack.For(message.SessionId, "Invalid Discord SessionId format"));
+            NackUnparseableSessionId(message);
             return;
         }
 
         if (parsedChannelId != _channelId)
         {
-            _log.Warning(
-                "Dropping DeliverTrustedSessionTurn for wrong conversation session={Session} expected_channel={Channel}",
-                message.SessionId.Value, _channelId.Value);
-            Sender.Tell(CommandNack.For(message.SessionId, "Conversation mismatch"));
+            NackConversationMismatch(message);
             return;
         }
 
         var replyChannelId = new DiscordReplyChannelId(threadOrMessageId.Value);
         var sessionBinding = GetOrCreateSessionBinding(
-            message.SessionId,
-            _channelId,
-            replyChannelId,
-            threadOrMessageId,
-            rootMessageId: null);
+            _channelId.Value,
+            threadOrMessageId.Value,
+            () => SessionBindingProps(
+                message.SessionId,
+                _channelId,
+                replyChannelId,
+                threadOrMessageId,
+                rootMessageId: null));
 
-        _log.Debug(
+        Log.Debug(
             "Routing DeliverTrustedSessionTurn session={Session} channel={Channel} threadOrMessage={ThreadOrMessage}",
             message.SessionId.Value, parsedChannelId.Value, threadOrMessageId.Value);
         sessionBinding.Forward(message);
@@ -261,82 +209,62 @@ internal sealed class DiscordConversationActor : ReceiveActor
     {
         if (_dependencies.IngressGate?.ClosedReason is { } closedReason)
         {
-            _log.Info("Rejected proactive thread for session {0}: ingress closed", message.SessionId.Value);
+            Log.Info("Rejected proactive thread for session {0}: ingress closed", message.SessionId.Value);
             Sender.Tell(new Status.Failure(new InvalidOperationException(closedReason)));
             return;
         }
 
-        // Defense-in-depth: re-validate the channel ACL even though the tool
-        // already checked it before posting.
-        if (!DiscordAclPolicy.IsAllowedChannel(message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
+        // Defense-in-depth: re-validate the ACL even though the tool already
+        // checked it before posting. DM channel IDs are ephemeral transport
+        // channels, so the configured user ACL is the authority for DMs.
+        if (message.DirectMessageUserId is { } dmUserId)
         {
-            _log.Warning("Rejected proactive thread for disallowed channel {0}", message.ChannelId.Value);
+            if (!_dependencies.Options.AllowDirectMessages)
+            {
+                Log.Warning("Rejected proactive DM for user {0}: direct messages disabled", dmUserId.Value);
+                Sender.Tell(new Status.Failure(new InvalidOperationException(
+                    "Discord direct messages are disabled.")));
+                return;
+            }
+
+            if (!DiscordAclPolicy.IsAllowedUser(dmUserId, _dependencies.Options))
+            {
+                Log.Warning("Rejected proactive DM for disallowed user {0}", dmUserId.Value);
+                Sender.Tell(new Status.Failure(new InvalidOperationException(
+                    $"User {dmUserId.Value} is not in the allowed users list.")));
+                return;
+            }
+        }
+        else if (!DiscordAclPolicy.IsAllowedChannel(message.ChannelId, _dependencies.Options, _dependencies.DefaultChannelId))
+        {
+            Log.Warning("Rejected proactive thread for disallowed channel {0}", message.ChannelId.Value);
             Sender.Tell(new Status.Failure(new InvalidOperationException(
                 $"Channel {message.ChannelId.Value} is not in the allowed channels list.")));
             return;
         }
 
         var sessionBinding = GetOrCreateSessionBinding(
-            message.SessionId,
-            message.ChannelId,
-            message.ReplyChannelId,
-            message.ThreadOrMessageId,
-            rootMessageId: null);
+            message.ChannelId.Value,
+            message.ThreadOrMessageId.Value,
+            () => SessionBindingProps(
+                message.SessionId,
+                message.ChannelId,
+                message.ReplyChannelId,
+                message.ThreadOrMessageId,
+                message.RootMessageId));
 
-        _log.Debug("Routing proactive thread setup to session binding {0}", message.SessionId.Value);
+        Log.Debug("Routing proactive thread setup to session binding {0}", message.SessionId.Value);
         sessionBinding.Forward(message);
     }
 
-    private void HandleTerminated(Terminated msg)
-    {
-        _log.Debug("Session binding stopped: {0}", msg.ActorRef.Path.Name);
-    }
-
-    /// <summary>
-    /// Strips the bot mention tag from inbound text and trims whitespace.
-    /// </summary>
-    private string NormalizeInboundText(string text)
-    {
-        if (_botMentionTag is null)
-            return text.Trim();
-
-        return text.Replace(_botMentionTag, string.Empty, StringComparison.Ordinal).Trim();
-    }
-
-    private IActorRef GetOrCreateSessionBinding(
+    private Props SessionBindingProps(
         SessionId sessionId,
         DiscordChannelId channelId,
         DiscordReplyChannelId replyChannelId,
         DiscordThreadOrMessageId threadOrMessageId,
-        DiscordMessageId? rootMessageId)
-    {
-        var actorName = BuildActorName(channelId, threadOrMessageId);
-        var existing = Context.Child(actorName);
-        if (!existing.IsNobody())
-            return existing;
-
-        var props = _dependencies.SessionPropsFactory?.Invoke(
-                        sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies)
-                    ?? DiscordSessionBindingActor.CreateProps(
-                        sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies);
-        var child = Context.ActorOf(props, actorName);
-        Context.Watch(child);
-        return child;
-    }
-
-    private async Task PostIngressClosedReplyAsync(DiscordReplyChannelId replyChannelId, string message)
-    {
-        try
-        {
-            await _dependencies.ReplyClient.PostReplyAsync(
-                new DiscordPostMessage(replyChannelId, message));
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Failed to post restart-drain reply to Discord channel {0}", replyChannelId.Value);
-        }
-    }
-
-    private static string BuildActorName(DiscordChannelId channelId, DiscordThreadOrMessageId threadOrMessageId)
-        => Uri.EscapeDataString($"{channelId.Value}:{threadOrMessageId.Value}");
+        DiscordMessageId? rootMessageId) =>
+        _dependencies.SessionPropsFactory?.Invoke(
+            sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies)
+        ?? DiscordSessionBindingActor.CreateProps(
+            sessionId, channelId, replyChannelId, threadOrMessageId, rootMessageId, _dependencies);
 }

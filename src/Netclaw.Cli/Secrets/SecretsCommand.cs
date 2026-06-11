@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
@@ -24,14 +23,14 @@ internal static class SecretsCommand
 
         return subcommand switch
         {
-            "set" => RunSet(args, paths, writer),
+            "set" or "add" => RunSet(args, paths, writer),
             _ => RunHelp(writer),
         };
     }
 
     /// <summary>
     /// <c>netclaw secrets set Slack.BotToken xoxb-...</c>
-    /// Accepts a dotted key path (e.g. <c>Providers.ollama.ApiKey</c>),
+    /// Accepts a dotted or colon-delimited key path (e.g. <c>Providers.ollama.ApiKey</c>),
     /// upserts the value into secrets.json, encrypts all leaves, and
     /// writes with hardened permissions.
     /// </summary>
@@ -43,6 +42,7 @@ internal static class SecretsCommand
             writer.WriteLine();
             writer.WriteLine("Examples:");
             writer.WriteLine("  netclaw secrets set Slack.BotToken xoxb-...");
+            writer.WriteLine("  netclaw secrets set Discord:BotToken <token>");
             writer.WriteLine("  netclaw secrets set Providers.ollama.ApiKey sk-...");
             writer.WriteLine("  netclaw secrets set Search.BraveApiKey BSAL...");
             return 1;
@@ -63,32 +63,25 @@ internal static class SecretsCommand
             root = [];
         }
 
-        // Navigate/create the dotted key path and set the value
-        var segments = keyPath.Split('.');
-        JsonObject current = root;
-        for (var i = 0; i < segments.Length - 1; i++)
+        string[] segments;
+        try
         {
-            var seg = segments[i];
-            if (current[seg] is JsonObject child)
-            {
-                current = child;
-            }
-            else
-            {
-                var newObj = new JsonObject();
-                current[seg] = newObj;
-                current = newObj;
-            }
+            segments = SecretsJsonUpdater.ParseKeyPath(keyPath);
+        }
+        catch (InvalidOperationException ex)
+        {
+            writer.WriteLine(ex.Message);
+            return 1;
         }
 
-        current[segments[^1]] = value;
+        SecretsJsonUpdater.UpsertValue(root, segments, value);
 
         // Write with encryption — the protector encrypts all plaintext leaves
         var protector = SecretsProtection.CreateProtector(paths);
         var json = root.ToJsonString(JsonDefaults.Indented);
         SecretsFileWriter.Write(paths.SecretsPath, json, protector);
 
-        writer.WriteLine($"Set {keyPath} (encrypted).");
+        writer.WriteLine($"Set {string.Join('.', segments)} (encrypted).");
         return 0;
     }
 
@@ -98,6 +91,7 @@ internal static class SecretsCommand
         writer.WriteLine();
         writer.WriteLine("Subcommands:");
         writer.WriteLine("  set <key> <value>   Store an encrypted secret (e.g. Slack.BotToken xoxb-...)");
+        writer.WriteLine("  add <key> <value>   Alias for set");
         return 0;
     }
 }

@@ -20,8 +20,6 @@ namespace Netclaw.Cli.Tui;
 /// </summary>
 public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 {
-    private static readonly string[] SpinnerFrames = ["\u280b", "\u2819", "\u2838", "\u2834", "\u2826", "\u2807"];
-
     private SelectionListNode<string>? _roleList;
     private SelectionListNode<string>? _providerList;
     private SelectionListNode<string>? _modelList;
@@ -203,18 +201,17 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
         return Layouts.Vertical()
             .WithChild(new TextNode($"  Select provider for {ViewModel.SelectedRole ?? "role"}:")
                 .WithForeground(Color.White))
-            .WithChild(_providerList);
+            .WithChild(_providerList.WithFillHeight());
     }
 
     private ILayoutNode BuildDiscoverModels()
     {
         if (ViewModel.IsProbing.Value)
         {
-            var elapsed = ViewModel.ProbeElapsedSeconds.Value;
-            var frame = SpinnerFrames[elapsed % SpinnerFrames.Length];
             return Layouts.Vertical()
-                .WithChild(new TextNode($"  {frame} Discovering models from '{ViewModel.SelectedProvider}'... ({elapsed}s)")
-                    .WithForeground(Color.Yellow));
+                .WithChild(SpinnerViews.WithElapsed(
+                    $"Discovering models from '{ViewModel.SelectedProvider}'...", Color.Yellow,
+                    ViewModel.ProbeElapsedSeconds));
         }
 
         var result = ViewModel.ProbeResult.Value;
@@ -315,7 +312,7 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
 
         return Layouts.Vertical()
             .WithChild(new TextNode(title).WithForeground(Color.White))
-            .WithChild(_modelList);
+            .WithChild(_modelList.WithFillHeight());
     }
 
     private ILayoutNode BuildConfirmAssignment()
@@ -363,6 +360,12 @@ public sealed class ModelManagerPage : ReactivePage<ModelManagerViewModel>
     {
         var keyInfo = key.KeyInfo;
         var state = ViewModel.CurrentState.Value;
+
+        if (keyInfo.Key == ConsoleKey.Q && keyInfo.Modifiers.HasFlag(ConsoleModifiers.Control))
+        {
+            ViewModel.RequestQuit();
+            return;
+        }
 
         if (keyInfo.Key == ConsoleKey.Escape)
         {

@@ -15,6 +15,7 @@ using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 using IOPath = System.IO.Path;
@@ -62,6 +63,17 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
     private bool _deliveredThisTurn;
+    // True when a content post/upload this turn was attempted but failed (the
+    // model produced output, the transport rejected it). Distinct from "nothing
+    // was produced" — it suppresses the empty-turn fallback so a failed post
+    // isn't followed by a misleading "I didn't manage to produce a reply".
+    private bool _postFailedThisTurn;
+    // Reply targets for in-flight reminder delivery confirmations, keyed by
+    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
+    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
+    // Keyed (not a single field) because multiple reminders can target the
+    // same session concurrently — a single field would be clobbered.
+    private readonly Dictionary<string, IActorRef> _reminderDeliveryObservers = new(StringComparer.Ordinal);
     private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
     private ulong? _cursorSnowflake;
@@ -111,10 +123,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
         Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
-        // After journal replay completes, queue a one-shot hydration. The
-        // self-tell lands in the mailbox after InitializePipeline (from
-        // PreStart), so the actor finishes pipeline init first, then
-        // transitions into Hydrating and processes PerformHydration.
+        // After journal replay completes, queue a one-shot hydration. Recovery
+        // can beat pipeline initialization on slower dispatchers; Initializing
+        // unstashes after switching to Hydrating so the hydration trigger cannot
+        // strand the actor in startup.
         Recover<RecoveryCompleted>(_ => Self.Tell(PerformHydration.Instance));
 
         Initializing();
@@ -152,7 +164,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private SessionPipelineOptions BuildOptions() => new()
     {
         ChannelType = ChannelType.Discord,
-        Filter = OutputFilter.Text | OutputFilter.Files
+        Filter = OutputFilter.Text | OutputFilter.Files | OutputFilter.ProcessingState
     };
 
     private void Initializing()
@@ -163,10 +175,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             {
                 await EnsureInitializedAsync();
                 Become(Hydrating);
-                // Do NOT UnstashAll here. PerformHydration is already in the
-                // mailbox (sent from the RecoveryCompleted handler) and will be
-                // processed next by the Hydrating behavior. Stashed live
-                // inbounds stay stashed until Hydrating transitions to Active.
+                // RecoveryCompleted can be stashed while pipeline initialization
+                // is still running. Move it into Hydrating; live inbounds are
+                // re-stashed there until hydration finishes.
+                Stash.UnstashAll();
             }
             catch (Exception ex)
             {
@@ -221,13 +233,19 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 ? "completed"
                 : $"faulted: {msg.Cause.Message}";
 
-            _log.Warning("Discord output stream terminated ({Reason}); reinitializing pipeline", reason);
+            _log.Warning("Output stream terminated ({Reason}); reinitializing pipeline", reason);
             Self.Tell(new ReinitializePipeline(reason));
         });
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
             _deliveredThisTurn = false;
+            _postFailedThisTurn = false;
+            // A reinit aborts any in-flight reminder turn before its
+            // TurnCompleted. Report those as not-delivered now so the
+            // execution actor redelivers immediately instead of stalling
+            // until the backstop timeout.
+            FailPendingReminderDeliveries($"Discord pipeline reinitialized: {msg.Reason}");
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -240,11 +258,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             if (_pendingApprovalRequests.Count > 0)
             {
-                _log.Info("Discord session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
+                _log.Info("Session idle but {0} approval(s) pending; deferring passivation", _pendingApprovalRequests.Count);
                 return;
             }
 
-            _log.Info("Discord session idle for 1 hour, passivating");
+            _log.Info("Session idle for 1 hour, passivating");
             RunTask(async () =>
             {
                 await _handle.DrainAsync();
@@ -264,8 +282,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private async Task HandleProactiveThreadAsync(StartProactiveThread message)
     {
         _replyChannelId = message.ReplyChannelId;
-        _threadCreated = true;
-        _rootMessageId = null;
+        _threadCreated = message.DirectMessageUserId is not null || message.RootMessageId is null;
+        _rootMessageId = message.RootMessageId;
 
         _log.Info("Initializing proactive thread pipeline for session {0}", message.SessionId.Value);
         await EnsureInitializedAsync();
@@ -337,7 +355,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Discord input queue is not initialized; dropping inbound message");
+            _log.Warning("Input queue is not initialized; dropping inbound message");
             return;
         }
 
@@ -368,7 +386,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             Provenance = message.Provenance,
             Contents = liveContents,
             ReceivedAt = message.ReceivedAt,
-            ExecutableText = message.Text
+            ExecutableText = message.Text,
+            DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
 
         if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
@@ -388,12 +407,12 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         catch (OperationCanceledException)
         {
-            _log.Warning("Timed out enqueueing Discord message for session {0}", _sessionId.Value);
+            _log.Warning("Timed out enqueueing message for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue write timeout"));
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Discord input queue closed for session {0}", _sessionId.Value);
+            _log.Warning("Input queue closed for session {0}", _sessionId.Value);
             Self.Tell(new ReinitializePipeline("input queue closed"));
         }
     }
@@ -523,7 +542,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Discord input queue is not initialized; skipping hydration backfill");
+            _log.Warning("Input queue is not initialized; skipping hydration backfill");
             return;
         }
 
@@ -540,7 +559,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             }
 
             _log.Info(
-                "discord_hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
+                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
                 triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
             ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
         }
@@ -718,7 +737,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return baseInput;
 
         _log.Info(
-            "discord_deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
+            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
             classified.Gap.Count,
             baseInput.MessageId,
             _sessionId.Value);
@@ -1017,7 +1036,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         var writer = _handle.InputQueue;
         if (writer is null)
         {
-            _log.Warning("Discord input queue is not initialized; rejecting Mode B reminder");
+            _log.Warning("Input queue is not initialized; rejecting Mode B reminder");
             ackTarget.Tell(CommandNack.For(_sessionId, "Discord session pipeline not initialized"));
             return;
         }
@@ -1033,9 +1052,19 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             Provenance = message.Source.Provenance,
             Contents = [new TextContent(message.Content)],
             ReceivedAt = _dependencies.TimeProvider.GetUtcNow(),
+            DefaultDeliveryTarget = BuildDefaultDeliveryTarget(),
+            RequestedDeliveryTarget = message.Source.RequestedDeliveryTarget,
             ReminderId = message.Source.ReminderId,
             AckTarget = ackTarget
         };
+
+        // Only delivery-gated (DeliveryRequired) reminders carry a
+        // DeliveryObserver. Key it by the per-fire reminder delivery id so a
+        // second concurrent reminder to this session can't overwrite the
+        // first's observer before its turn reaches TurnCompleted.
+        if (message.Source.DeliveryObserver is { } deliveryObserver
+            && !string.IsNullOrWhiteSpace(message.Source.ReminderId))
+            _reminderDeliveryObservers[message.Source.ReminderId] = deliveryObserver;
 
         try
         {
@@ -1052,12 +1081,20 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         catch (ChannelClosedException)
         {
-            _log.Warning("Discord input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
+            _log.Warning("Input queue closed; rejecting Mode B reminder for session {0}", _sessionId.Value);
             ackTarget.Tell(CommandNack.For(_sessionId, "Pipeline input queue closed"));
         }
     }
 
     private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
+
+    private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
+        => new(
+            ChannelType.Discord.ToWireValue(),
+            "destination",
+            _channelId.Value,
+            _channelId.Value,
+            _threadOrMessageId.Value);
 
     private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
         DiscordUserId senderId, Netclaw.Tools.ToolCallId? callId)
@@ -1088,18 +1125,28 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         switch (msg.Output)
         {
             case TextOutput textOutput:
-                await SafeReplyAsync(textOutput.Text);
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync(textOutput.Text))
+                    _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case ErrorOutput error:
-                await SafeReplyAsync($":warning: {error.Message}");
-                _deliveredThisTurn = true;
+                if (await SafeReplyAsync($":warning: {error.Message}"))
+                    _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
                 break;
 
             case FileOutput file:
-                await SafeReplyAsync($":paperclip: Produced file `{file.FileName}` ({file.MimeType}).");
-                _deliveredThisTurn = true;
+                if (await SafeUploadFileAsync(file))
+                    _deliveredThisTurn = true;
+                else
+                    _postFailedThisTurn = true;
+                break;
+
+            case ProcessingStateOutput processing:
+                await RenderProcessingStateAsync(processing);
                 break;
 
             case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
@@ -1145,15 +1192,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                     AdvanceCursor(pendingSnowflake);
                 _pendingCursorSnowflake = null;
 
-                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId) && _deliveredThisTurn)
+                if (!string.IsNullOrWhiteSpace(completed.SourceReminderId)
+                    && _reminderDeliveryObservers.Remove(completed.SourceReminderId, out var reminderObserver))
                 {
-                    Context.System.EventStream.Publish(new ReminderDeliveryObserved(
+                    reminderObserver.Tell(new ReminderDeliveryResult(
                         completed.SourceReminderId,
                         ChannelType.Discord,
-                        completed.TimestampMs));
+                        Delivered: _deliveredThisTurn,
+                        FailureReason: _deliveredThisTurn ? null : "Discord post did not succeed",
+                        ObservedAtMs: completed.TimestampMs));
                 }
 
-                if (!_deliveredThisTurn)
+                // Only post the empty-turn fallback when the turn genuinely
+                // produced nothing. A failed post already notified the session
+                // (SafeReplyAsync -> NotifyDeliveryFailedAsync); posting "I
+                // didn't manage to produce a reply" on top would be misleading
+                // (a reply WAS produced) and double up with the redelivered one.
+                if (!_deliveredThisTurn && !_postFailedThisTurn)
                     await SafeReplyAsync(EmptyTurnFallbackText);
 
                 _turnNumber = completed.TurnNumber;
@@ -1171,8 +1226,43 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 }
                 _pendingApprovalRequests.Clear();
                 _deliveredThisTurn = false;
+                _postFailedThisTurn = false;
                 break;
         }
+    }
+
+    private async Task RenderProcessingStateAsync(ProcessingStateOutput output)
+    {
+        var requirement = output.IsRequired
+            ? ChannelOutputRequirement.Required
+            : ChannelOutputRequirement.Optional;
+        var request = new ChannelOutputRenderRequest(
+            BuildOutputRenderTarget(),
+            output,
+            ChannelOutputEffectKind.ProcessingIndicator,
+            requirement);
+
+        try
+        {
+            await _dependencies.ChannelRegistry.RenderOutputAsync(request);
+        }
+        catch (Exception ex) when (!output.IsRequired)
+        {
+            _log.Warning(ex, "Failed rendering optional Discord processing indicator");
+        }
+    }
+
+    private ChannelDeliveryTarget BuildOutputRenderTarget()
+    {
+        var channelKey = ChannelDescriptorKey.FromChannelType(ChannelType.Discord);
+        return new ChannelDeliveryTarget(
+            channelKey,
+            new ResolvedChannelAddress(
+                channelKey,
+                ChannelAddressKind.Destination,
+                _replyChannelId.Value,
+                _replyChannelId.Value),
+            _threadOrMessageId.Value);
     }
 
     private async Task<DiscordMessageId?> SafeReplyWithButtonsAsync(ToolInteractionRequest request)
@@ -1210,7 +1300,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task SafeReplyAsync(string text)
+    /// <summary>
+    /// Posts <paramref name="text"/> (chunked) to Discord. Returns true only
+    /// when every chunk posted successfully; false if any chunk failed (after
+    /// notifying the session of the delivery failure). Callers that gate
+    /// reminder delivery confirmation on real delivery must honor the result.
+    /// </summary>
+    private async Task<bool> SafeReplyAsync(string text)
     {
         var chunks = ChunkMessage(text);
         foreach (var chunk in chunks)
@@ -1230,9 +1326,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
                 ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
                 await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return;
+                return false;
             }
         }
+
+        return true;
     }
 
     private DiscordPostMessage BuildPostMessage(
@@ -1253,6 +1351,51 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             ReplyChannelId: _replyChannelId,
             Text: text,
             Buttons: buttons);
+    }
+
+    private async Task<bool> SafeUploadFileAsync(FileOutput file)
+    {
+        var startedAt = _dependencies.TimeProvider.GetTimestamp();
+        try
+        {
+            if (!File.Exists(file.FilePath))
+            {
+                _log.Warning("File not found for upload: {Path}", file.FilePath);
+                await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
+                return false;
+            }
+
+            using var cts = new CancellationTokenSource(OperationTimeout);
+            await _dependencies.ReplyClient.UploadFileAsync(
+                new DiscordFileUpload(
+                    _replyChannelId,
+                    file.FilePath,
+                    file.FileName,
+                    $":paperclip: {file.FileName}",
+                    _threadCreated ? null : _rootMessageId),
+                cts.Token);
+
+            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            ChannelTelemetry.For(ChannelType.Discord).RecordReplyPosted(duration);
+            _log.Info("Uploaded file to Discord session: {FileName}", file.FileName);
+            return true;
+        }
+        catch (OperationCanceledException ex)
+        {
+            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            _log.Error(ex, "Timed out uploading file {FileName} to Discord session", file.FileName);
+            ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
+            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
+            _log.Error(ex, "Failed to upload file {FileName} to Discord session", file.FileName);
+            ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
+            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
+            return false;
+        }
     }
 
     private async Task SafeSetThreadNameAsync(string title)
@@ -1278,6 +1421,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _rootMessageId = null;
             _log.Info("Promoted Discord session to thread reply_channel={0}", threadId.Value);
         }
+    }
+
+    /// <summary>
+    /// Tells every in-flight reminder observer that delivery did not happen,
+    /// then clears them. Called when a turn can no longer reach TurnCompleted
+    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
+    /// rather than waiting out its backstop timeout.
+    /// </summary>
+    private void FailPendingReminderDeliveries(string reason)
+    {
+        if (_reminderDeliveryObservers.Count == 0)
+            return;
+
+        foreach (var (key, observer) in _reminderDeliveryObservers)
+            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Discord, Delivered: false, FailureReason: reason));
+
+        _reminderDeliveryObservers.Clear();
     }
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
@@ -1345,7 +1505,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (files.Count > policy.MaxFilesPerMessage)
         {
             _log.Warning(
-                "discord_attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
+                "attachments_rejected count={Count} limit={Limit} audience={Audience} reason=too-many-files",
                 files.Count,
                 policy.MaxFilesPerMessage,
                 audience);
@@ -1372,13 +1532,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
             switch (attachmentResult)
             {
-                case AttachmentIngestResult.Accepted accepted:
+                case AttachmentIngestOutcome.Accepted accepted:
                     acceptedLines.Add(accepted.Line);
                     if (accepted.Inline is { } inline)
                         dataContents.Add(inline);
                     break;
 
-                case AttachmentIngestResult.Rejected rejected:
+                case AttachmentIngestOutcome.Rejected rejected:
                     rejections.Add(rejected.UserFacingReason);
                     break;
             }
@@ -1399,7 +1559,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task<AttachmentIngestResult> TryIngestSingleAttachmentAsync(
+    private Task<AttachmentIngestOutcome> TryIngestSingleAttachmentAsync(
         DiscordFileReference file,
         TrustAudience audience,
         ChannelAttachmentPolicy policy,
@@ -1407,184 +1567,30 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         string inboxDir,
         string stagingDir,
         CancellationToken cancellationToken)
-    {
-        var category = AttachmentCategories.FromMime(file.MimeType);
-
-        if (!policy.Allows(category))
-        {
-            _log.Warning(
-                "discord_attachment_rejected name={Name} mime={Mime} audience={Audience} category={Category} reason=category-not-allowed",
-                file.Name, file.MimeType, audience, category);
-            return new AttachmentIngestResult.Rejected(
-                $"`{file.Name}` ({category}) isn't allowed in {audience} channels. " +
-                "Please DM me if you want to share this class of file.");
-        }
-
-        if (file.Size > policy.MaxFileBytes)
-        {
-            _log.Warning(
-                "discord_attachment_rejected name={Name} mime={Mime} audience={Audience} size={Size} limit={Limit} reason=too-large",
-                file.Name, file.MimeType, audience, file.Size, policy.MaxFileBytes);
-            return new AttachmentIngestResult.Rejected(
-                $"`{file.Name}` ({FormatBytes(file.Size)}) exceeds the {FormatBytes(policy.MaxFileBytes)} per-file limit.");
-        }
-
-        if (!DiscordAttachmentUrlTrust.IsAllowedAttachmentDomain(file.Url))
-        {
-            _log.Warning(
-                "discord_attachment_rejected name={Name} url={Url} reason=untrusted-domain",
-                file.Name, file.Url);
-            return new AttachmentIngestResult.Rejected(
-                $"`{file.Name}` has an untrusted URL domain and was skipped.");
-        }
-
-        AttachmentDownloadResult downloadResult;
-        try
-        {
-            using var downloadCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            downloadCts.CancelAfter(OperationTimeout);
-            downloadResult = await StreamingAttachmentDownloader.DownloadToFileAsync(
+        => AttachmentIngressPipeline.IngestAsync(
+            new AttachmentIngressRequest(file.Name, file.MimeType, file.Size),
+            audience,
+            policy,
+            inlineImages,
+            inboxDir,
+            stagingDir,
+            OperationTimeout,
+            _dependencies.ContentScanner,
+            _log,
+            (staging, maxBytes, ct) => StreamingAttachmentDownloader.DownloadToFileAsync(
                 _dependencies.HttpClient!, file.Url, configureRequest: null,
-                stagingDir, policy.MaxFileBytes, downloadCts.Token,
-                (ex, path) => _log.Error(ex, "Failed to clean up staged download file {0}", path));
-        }
-        catch (AttachmentTooLargeException ex)
-        {
-            _log.Warning(
-                "discord_attachment_rejected name={Name} mime={Mime} audience={Audience} size={Size} limit={Limit} reason=too-large-during-download",
-                file.Name, file.MimeType, audience, ex.BytesReceived, ex.MaxBytes);
-            return new AttachmentIngestResult.Rejected(
-                $"`{file.Name}` ({FormatBytes(ex.BytesReceived)}) exceeds the {FormatBytes(ex.MaxBytes)} per-file limit.");
-        }
-        catch (OperationCanceledException ex)
-        {
-            _log.Warning(ex,
-                "discord_attachment_rejected name={Name} mime={Mime} reason=download-timeout",
-                file.Name, file.MimeType);
-            return new AttachmentIngestResult.Rejected(
-                $"Timed out downloading `{file.Name}`. Please try again.");
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex,
-                "discord_attachment_rejected name={Name} mime={Mime} reason=download-failed",
-                file.Name, file.MimeType);
-            return new AttachmentIngestResult.Rejected(
-                $"Couldn't download `{file.Name}` — please try again later.");
-        }
-
-        if (downloadResult.BytesWritten == 0)
-        {
-            _log.Warning(
-                "discord_attachment_rejected name={Name} mime={Mime} reason=empty-download",
-                file.Name, file.MimeType);
-            TryDeleteTemp(downloadResult.FilePath);
-            return new AttachmentIngestResult.Rejected(
-                $"`{file.Name}` downloaded as zero bytes.");
-        }
-
-        ContentScanResult scanResult;
-        try
-        {
-            using var scanCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            scanCts.CancelAfter(OperationTimeout);
-            scanResult = await _dependencies.ContentScanner.ScanFileAsync(
-                downloadResult.FilePath, file.Name, file.MimeType, scanCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex,
-                "discord_attachment_rejected name={Name} mime={Mime} reason=scan-exception",
-                file.Name, file.MimeType);
-            TryDeleteTemp(downloadResult.FilePath);
-            return new AttachmentIngestResult.Rejected(
-                $"Couldn't scan `{file.Name}` — please try again later.");
-        }
-
-        if (!scanResult.IsAllowed)
-        {
-            _log.Warning(
-                "discord_attachment_rejected name={Name} mime={Mime} reason=scan-blocked error={ScanError} message={ScanMessage}",
-                file.Name, file.MimeType, scanResult.Error?.ToString(), scanResult.Message ?? scanResult.Error?.ToString());
-
-            TryDeleteTemp(downloadResult.FilePath);
-
-            if (scanResult.Error == ContentScanError.ScanFailure)
+                staging, maxBytes, ct,
+                (ex, path) => _log.Error(ex, "Failed to clean up staged download file {0}", path)),
+            cancellationToken,
+            preDownloadGate: () =>
             {
-                return new AttachmentIngestResult.Rejected(
-                    $"Couldn't scan `{file.Name}` — please try again later.");
-            }
-
-            return new AttachmentIngestResult.Rejected(
-                $"Content scanner rejected `{file.Name}`: {scanResult.Message ?? scanResult.Error?.ToString()}.");
-        }
-
-        string inboxPath;
-        try
-        {
-            inboxPath = InboxWriter.SanitizeReserveAndMove(
-                inboxDir, file.Name, downloadResult.FilePath);
-        }
-        catch (InboxWriter.CollisionExhaustedException ex)
-        {
-            _log.Warning(ex,
-                "discord_attachment_rejected name={Name} reason=collision-exhausted",
-                file.Name);
-            TryDeleteTemp(downloadResult.FilePath);
-            return new AttachmentIngestResult.Rejected(
-                $"Too many attachments named `{file.Name}` in this session — please rename and try again.");
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex,
-                "discord_attachment_rejected name={Name} reason=inbox-write-failed",
-                file.Name);
-            TryDeleteTemp(downloadResult.FilePath);
-            return new AttachmentIngestResult.Rejected(
-                $"Couldn't save `{file.Name}` — please try again later.");
-        }
-
-        var (inlined, note) = AttachmentIngressFormatting.ResolveInlineDecision(category, inlineImages);
-
-        var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{IOPath.GetFileName(inboxPath)}";
-        var line = AttachmentIngressFormatting.BuildAttachmentLine(
-            file.Name, file.MimeType, downloadResult.BytesWritten, relativePath, inlined, note);
-
-        DataContent? inlineContent = null;
-        if (inlined)
-        {
-            var inlineBytes = await File.ReadAllBytesAsync(inboxPath, cancellationToken);
-            inlineContent = new DataContent(inlineBytes, file.MimeType);
-        }
-
-        _log.Info(
-            "discord_attachment_accepted name={Name} mime={Mime} size={Size} audience={Audience} category={Category} inlined={Inlined}",
-            file.Name, file.MimeType, downloadResult.BytesWritten, audience, category, inlined);
-
-        return new AttachmentIngestResult.Accepted(line, inlineContent);
-    }
-
-    private void TryDeleteTemp(string tempPath)
-    {
-        try
-        {
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to clean up staged attachment file {Path}", tempPath);
-        }
-    }
-
-    private static string FormatBytes(long size) => AttachmentIngressFormatting.FormatBytes(size);
-
-    private abstract record AttachmentIngestResult
-    {
-        public sealed record Accepted(string Line, DataContent? Inline) : AttachmentIngestResult;
-
-        public sealed record Rejected(string UserFacingReason) : AttachmentIngestResult;
-    }
+                if (DiscordAttachmentUrlTrust.IsAllowedAttachmentDomain(file.Url))
+                    return null;
+                _log.Warning(
+                    "attachment_rejected name={Name} url={Url} reason=untrusted-domain",
+                    file.Name, file.Url);
+                return $"`{file.Name}` has an untrusted URL domain and was skipped.";
+            });
 
     internal static List<string> ChunkMessage(string text)
     {
@@ -1617,7 +1623,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     {
         if (_cursorSnowflake is { } c && candidateSnowflake <= c)
         {
-            _log.Debug("Discord session cursor did not advance session={Session} snowflake={Snowflake}",
+            _log.Debug("Session cursor did not advance session={Session} snowflake={Snowflake}",
                 _sessionId.Value, candidateSnowflake);
             return;
         }

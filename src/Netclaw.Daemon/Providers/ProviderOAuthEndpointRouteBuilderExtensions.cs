@@ -30,6 +30,7 @@ internal sealed record ProviderOAuthStatusResponse(
     bool HasToken,
     string? AccessToken,
     string? RefreshToken,
+    string? AccountId,
     string? ExpiresAt);
 
 /// <summary>Error payload returned when a provider OAuth request is malformed or unknown.</summary>
@@ -123,6 +124,7 @@ internal static class ProviderOAuthEndpointRouteBuilderExtensions
                 HasToken: result is not null,
                 AccessToken: isLoopback ? result?.AccessToken.Value : null,
                 RefreshToken: isLoopback ? result?.RefreshToken?.Value : null,
+                AccountId: isLoopback ? result?.AccountId?.Value : null,
                 ExpiresAt: result?.ExpiresAt?.ToString("o")));
         })
         .WithName("GetProviderOAuthStatus")

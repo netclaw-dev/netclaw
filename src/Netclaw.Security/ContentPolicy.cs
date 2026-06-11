@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Frozen;
+using Netclaw.Media;
 
 namespace Netclaw.Security;
 
@@ -37,6 +38,6 @@ public sealed class ContentPolicy
     public long MaxFileSizeBytes { get; init; } = DefaultMaxFileSizeBytes;
 
     public static readonly FrozenSet<string> DefaultAllowedMimeTypes =
-        MagicByteValidator.GetSupportedMimeTypes()
+        MimeTypeCatalog.GetNativeSignatureValidatedMimeTypes()
             .ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 }

@@ -12,11 +12,14 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Makes targeted text replacements in an existing file without rewriting the entire file.
-/// Matches literal text (not regex). Fails if OldString is not found or is ambiguous.
+/// Edits files: targeted text replacement (OldString → NewString) or full content
+/// write (Content alone). When Content is supplied without OldString, the file is
+/// created or overwritten — this subsumes the former <c>file_write</c> tool.
 /// </summary>
 [NetclawTool(ToolName,
-    "Make targeted text replacements in an existing file without rewriting the entire file",
+    "Edit a file with targeted text replacement (OldString/NewString), or write entire content (Content). " +
+    "For targeted edits, matches literal text (not regex) and fails if OldString is not found or is ambiguous. " +
+    "For full writes, creates the file and parent directories if needed.",
     Grant = "file")]
 public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
 {
@@ -26,10 +29,11 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
-        [property: Description("Absolute path to the file to edit")] string Path,
-        [property: Description("The exact text to find in the file")] string OldString,
-        [property: Description("The text to replace it with (must differ from OldString; use empty string to delete)")] string NewString,
-        [property: Description("Replace all occurrences instead of just the first (default: false)")] bool? ReplaceAll = null);
+        [property: Description("Absolute path to the file")] string Path,
+        [property: Description("The exact text to find in the file (omit when using Content for a full write)")] string? OldString = null,
+        [property: Description("The text to replace OldString with (must differ from OldString; use empty string to delete)")] string? NewString = null,
+        [property: Description("Replace all occurrences instead of just the first (default: false)")] bool? ReplaceAll = null,
+        [property: Description("Full content to write to the file, creating parent directories if needed. Mutually exclusive with OldString/NewString.")] string? Content = null);
 
     public FileEditTool(ToolPathPolicy? pathPolicy = null)
     {
@@ -51,13 +55,64 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
         if (string.IsNullOrWhiteSpace(args.Path))
             return "Error: 'Path' parameter is required.";
 
+        // Full-write mode: Content is supplied without OldString
+        if (args.Content is not null)
+        {
+            if (args.OldString is not null || args.NewString is not null || args.ReplaceAll is not null)
+                return "Error: 'Content' and 'OldString'/'NewString'/'ReplaceAll' are mutually exclusive. " +
+                       "Use Content for a full file write, or OldString/NewString for targeted replacement.";
+
+            return await WriteFileAsync(args.Path, args.Content, context, ct);
+        }
+
+        // Targeted edit mode: OldString → NewString
         if (string.IsNullOrEmpty(args.OldString))
-            return "Error: 'OldString' parameter is required and must not be empty.";
+            return "Error: either 'OldString' (for targeted edit) or 'Content' (for full write) is required.";
+
+        if (args.NewString is null)
+            return "Error: 'NewString' is required when using OldString for targeted replacement.";
 
         if (args.NewString == args.OldString)
             return "Error: 'NewString' must be different from 'OldString'.";
 
-        if (!_fileAccessPolicy.TryResolveWritePath(args.Path, context, out var authorizedPath, out var accessError))
+        return await EditFileAsync(args.Path, args.OldString, args.NewString, args.ReplaceAll == true, context, ct);
+    }
+
+    internal async Task<string> WriteFileAsync(string path, string content, ToolExecutionContext context, CancellationToken ct)
+    {
+        if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
+            return accessError;
+
+        if (_pathPolicy?.IsDenied(authorizedPath) == true)
+            return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
+
+        try
+        {
+            var directory = System.IO.Path.GetDirectoryName(authorizedPath);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            var bytes = Encoding.UTF8.GetBytes(content);
+
+            return await FileMutationGate.RunExclusiveAsync(authorizedPath, async () =>
+            {
+                await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
+                return $"Successfully wrote {bytes.Length} bytes to {authorizedPath}";
+            }, ct);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return $"Error: Permission denied: {authorizedPath}";
+        }
+        catch (IOException ex)
+        {
+            return $"Error writing file: {ex.Message}";
+        }
+    }
+
+    private async Task<string> EditFileAsync(string path, string oldString, string newString, bool replaceAll, ToolExecutionContext context, CancellationToken ct)
+    {
+        if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
             return accessError;
 
         if (_pathPolicy?.IsDenied(authorizedPath) == true)
@@ -74,8 +129,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
             {
                 var content = await File.ReadAllTextAsync(authorizedPath, Encoding.UTF8, ct);
 
-                var replaceAll = args.ReplaceAll == true;
-                var occurrences = CountOccurrences(content, args.OldString);
+                var occurrences = CountOccurrences(content, oldString);
 
                 if (occurrences == 0)
                     return $"Error: The specified text was not found in {authorizedPath}";
@@ -89,17 +143,16 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
 
                 if (replaceAll)
                 {
-                    newContent = content.Replace(args.OldString, args.NewString, StringComparison.Ordinal);
+                    newContent = content.Replace(oldString, newString, StringComparison.Ordinal);
                     replacementCount = occurrences;
                 }
                 else
                 {
-                    // Single replacement at first occurrence
-                    var index = content.IndexOf(args.OldString, StringComparison.Ordinal);
+                    var index = content.IndexOf(oldString, StringComparison.Ordinal);
                     newContent = string.Concat(
                         content.AsSpan(0, index),
-                        args.NewString,
-                        content.AsSpan(index + args.OldString.Length));
+                        newString,
+                        content.AsSpan(index + oldString.Length));
                     replacementCount = 1;
                 }
 

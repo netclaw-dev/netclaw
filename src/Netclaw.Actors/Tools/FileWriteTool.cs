@@ -1,10 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="FileWriteTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
-using System.Text;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -12,7 +11,10 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Writes content to a file as UTF-8, creating parent directories if needed.
+/// Backward-compatible alias for <see cref="FileEditTool"/>'s full-write mode.
+/// Delegates to <see cref="FileEditTool.WriteFileAsync"/> so the write logic
+/// lives in one place. Registered under <c>file_write</c> so existing sessions,
+/// approval grants, and audience profiles continue to work.
 /// </summary>
 [NetclawTool(ToolName,
     "Write content to a file, creating parent directories if needed",
@@ -21,8 +23,7 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
 {
     public const string ToolName = "file_write";
 
-    private readonly ToolPathPolicy? _pathPolicy;
-    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly FileEditTool _editTool;
 
     public record Params(
         [property: Description("Absolute path to the file to write")] string Path,
@@ -30,53 +31,22 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
 
     public FileWriteTool(ToolPathPolicy? pathPolicy = null)
     {
-        _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(new ToolConfig());
+        _editTool = new FileEditTool(pathPolicy);
     }
 
     public FileWriteTool(ToolConfig config, ToolPathPolicy? pathPolicy = null)
     {
-        _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config);
+        _editTool = new FileEditTool(config, pathPolicy);
     }
 
     protected override Task<string> ExecuteAsync(Params args, CancellationToken ct)
         => ExecuteAsync(args, ToolExecutionContext.Empty, ct);
 
-    protected override async Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
+    protected override Task<string> ExecuteAsync(Params args, ToolExecutionContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return "Error: 'path' parameter is required.";
+            return Task.FromResult("Error: 'Path' parameter is required.");
 
-        if (!_fileAccessPolicy.TryResolveWritePath(args.Path, context, out var authorizedPath, out var accessError))
-            return accessError;
-
-        if (_pathPolicy?.IsDenied(authorizedPath) == true)
-            return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
-
-        try
-        {
-            var directory = System.IO.Path.GetDirectoryName(authorizedPath);
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
-
-            var bytes = Encoding.UTF8.GetBytes(args.Content);
-
-            // Serialize with file_edit / other file_write calls on this path so
-            // a concurrent same-file write cannot clobber an in-flight edit.
-            return await FileMutationGate.RunExclusiveAsync(authorizedPath, async () =>
-            {
-                await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
-                return $"Successfully wrote {bytes.Length} bytes to {authorizedPath}";
-            }, ct);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return $"Error: Permission denied: {authorizedPath}";
-        }
-        catch (IOException ex)
-        {
-            return $"Error writing file: {ex.Message}";
-        }
+        return _editTool.WriteFileAsync(args.Path, args.Content, context, ct);
     }
 }

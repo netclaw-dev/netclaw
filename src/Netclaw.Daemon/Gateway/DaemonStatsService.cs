@@ -9,9 +9,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Skills;
-using Netclaw.Actors.Channels;
-using Netclaw.Channels.Slack;
-using Netclaw.Channels.Discord;
+using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
@@ -24,10 +22,9 @@ internal sealed class DaemonStatsService(
     TimeProvider timeProvider,
     SessionCatalogService sessionCatalog,
     SkillRegistry skillRegistry,
+    IChannelRegistry channelRegistry,
     IRequiredActor<DailyStatsActorKey> dailyStatsActor,
     WebhookRouteCatalog webhookRouteCatalog,
-    SlackChannelOptions slackOptions,
-    DiscordChannelOptions discordOptions,
     SQLiteMemoryStore? sqliteMemoryStore = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
@@ -78,7 +75,7 @@ internal sealed class DaemonStatsService(
             {
                 TotalAvailable = allSkills.Count
             },
-            Channels = BuildChannelActivityList(),
+            Channels = BuildChannelActivityList(channelRegistry),
             Webhooks = BuildWebhookStats(),
             Reminders = await BuildReminderStatsAsync(ct),
             DailyBreakdown = dailyBreakdown
@@ -133,11 +130,12 @@ internal sealed class DaemonStatsService(
         };
     }
 
-    private List<DaemonStats.ChannelActivity> BuildChannelActivityList()
+    internal static List<DaemonStats.ChannelActivity> BuildChannelActivityList(IChannelRegistry registry)
     {
-        var enabledChannelTypes = new HashSet<ChannelType>();
-        if (slackOptions.Enabled) enabledChannelTypes.Add(ChannelType.Slack);
-        if (discordOptions.Enabled) enabledChannelTypes.Add(ChannelType.Discord);
+        var enabledChannelTypes = registry.ListChannels()
+            .Where(descriptor => descriptor.IsEnabled)
+            .Select(descriptor => descriptor.ChannelType)
+            .ToHashSet();
 
         return [.. ChannelTelemetry.GetAllSnapshots()
             .Where(s => enabledChannelTypes.Contains(s.ChannelType))

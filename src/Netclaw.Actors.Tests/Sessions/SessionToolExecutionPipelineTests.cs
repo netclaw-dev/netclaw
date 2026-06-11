@@ -10,10 +10,13 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 
@@ -29,6 +32,19 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     {
     }
 
+    private static TurnContext InteractiveTurnContext(SessionId sessionId) => new()
+    {
+        SessionId = sessionId,
+        TurnId = new TurnId("test-turn"),
+        Audience = TrustAudience.Personal,
+        Boundary = TrustBoundary.Personal,
+        ChannelType = ChannelType.SignalR,
+        RequesterSenderId = new SenderId("local-user"),
+        RequesterPrincipal = PrincipalClassification.Operator,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+        SupportsInteractiveApproval = true
+    };
+
     [Fact]
     public async Task Approval_wait_does_not_consume_tool_execution_timeout_budget()
     {
@@ -36,6 +52,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("tool-pipeline-probe");
         var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/approval-timeout-test");
 
         var toolCalls = new List<FunctionCallContent>
         {
@@ -48,7 +65,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("D1/approval-timeout-test"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -59,8 +76,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan);
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
+            ct: TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -83,12 +102,58 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
+    public async Task Source_less_approval_required_turn_fails_closed_without_prompt()
+    {
+        var executor = new ApprovalThenSuccessExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("source-less-approval-probe");
+        var approvals = new List<ToolInteractionRequest>();
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-no-source", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "git push origin dev"
+            })
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            new SessionId("D1/source-less-approval-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(1),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: approvalChannel,
+            emitApprovalRequest: request => approvals.Add(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Contains("no interactive approval requester is available", result.Content);
+        Assert.Empty(approvals);
+    }
+
+    [Fact]
     public async Task Approve_once_does_not_reprompt_on_retry_execution()
     {
         var executor = new ApprovalThenSuccessExecutor();
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("approve-once-no-reprompt-probe");
         var approvals = new List<ToolInteractionRequest>();
+        var sessionId = new SessionId("signalr/approve-once-no-reprompt");
 
         var toolCalls = new List<FunctionCallContent>
         {
@@ -101,7 +166,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("signalr/approve-once-no-reprompt"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -112,8 +177,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvals.Add(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan);
+            emitApprovalRequest: request => approvals.Add(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
+            ct: TestContext.Current.CancellationToken);
 
         await AwaitAssertAsync(() =>
         {
@@ -145,6 +212,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var approvalChannel = new ApprovalChannel();
         var probe = CreateTestProbe("cwd-propagation-probe");
         var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/cwd-propagation-test");
 
         var toolCalls = new List<FunctionCallContent>
         {
@@ -157,7 +225,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
             executor,
             toolCalls,
-            new SessionId("D1/cwd-propagation-test"),
+            sessionId,
             source: null,
             auditLogger: null,
             timeProvider: TimeProvider.System,
@@ -168,8 +236,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             emitSubAgentOutput: _ => { },
             spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
             approvalChannel: approvalChannel,
-            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request),
-            approvalTimeout: Timeout.InfiniteTimeSpan);
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
+            ct: TestContext.Current.CancellationToken);
 
         var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
             TimeSpan.FromSeconds(3),
@@ -181,6 +251,57 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await probe.ExpectMsgAsync<ToolExecutionCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Approval_wait_is_cancelled_by_tool_execution_token()
+    {
+        var executor = new ApprovalThenSuccessExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("approval-cancel-probe");
+        var approvalRequestTcs = new TaskCompletionSource<ToolInteractionRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/approval-cancel-test");
+        using var executionCts = new CancellationTokenSource();
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-cancel", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "git push origin dev"
+            })
+        };
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            toolCalls,
+            sessionId,
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: Path.GetTempPath(),
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(5),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            approvalChannel: approvalChannel,
+            emitApprovalRequest: request => approvalRequestTcs.TrySetResult(request.Request),
+            approvalTimeout: Timeout.InfiniteTimeSpan,
+            turnContext: InteractiveTurnContext(sessionId),
+            ct: executionCts.Token);
+
+        var approvalRequest = await approvalRequestTcs.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await executionCts.CancelAsync();
+
+        var failed = await probe.ExpectMsgAsync<ToolExecutionFailed>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.IsType<TimeoutException>(failed.Cause);
+        Assert.False(approvalChannel.Complete(approvalRequest.CallId, ApprovalDecision.ApprovedOnce));
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 
@@ -208,7 +329,8 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             timeout: TimeSpan.FromSeconds(1),
             self: probe.Ref,
             emitSubAgentOutput: _ => { },
-            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()));
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            ct: TestContext.Current.CancellationToken);
 
         // Real-time: the slow tool's per-call watchdog trips ~1-2s in (1s budget
         // plus the 1s poll interval). The ceiling stays tight so a regression —
@@ -227,6 +349,210 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal("fast_tool-ok", fast.Content);
         Assert.Contains("slow_tool", slow.Content);
         Assert.Contains("no activity", slow.Content);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_file_is_materialized_as_session_media_reference()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(imagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var executor = new ModelInputFileExecutor(imagePath);
+        var probe = CreateTestProbe("model-input-file-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+            new SessionId("D1/model-input-file-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: dir.Path,
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(3),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            modelInputModalities: ModelModality.Text | ModelModality.Image,
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var mediaRef = Assert.Single(completed.ModelInputMediaReferences);
+        Assert.Equal("image/png", mediaRef.MimeType.Value);
+        Assert.Equal((int)MediaModality.Image, mediaRef.Modality);
+        Assert.True(File.Exists(Path.Combine(dir.Path, SessionDirectoryHelper.MediaSubdirectory, mediaRef.RelativePath)));
+    }
+
+    [Fact]
+    public async Task Streaming_tool_result_persists_model_input_media_references_on_tool_message()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(imagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var executor = new ModelInputFileExecutor(imagePath);
+        var probe = CreateTestProbe("streaming-model-input-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+            new SessionId("D1/streaming-model-input-file-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: dir.Path,
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(3),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            streamToolResults: true,
+            modelInputModalities: ModelModality.Text | ModelModality.Image,
+            ct: TestContext.Current.CancellationToken);
+
+        var single = await probe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await probe.ExpectMsgAsync<ToolExecutionBatchCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var mediaRef = Assert.Single(single.Result.ModelInputMediaReferences);
+        var persistedMediaRef = Assert.Single(single.Result.Message.MediaReferences);
+        Assert.Equal(mediaRef.RelativePath, persistedMediaRef.RelativePath);
+        Assert.Equal("image/png", persistedMediaRef.MimeType.Value);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_batch_limit_is_enforced_across_registered_files()
+    {
+        using var dir = new DisposableTempDir();
+        var firstImagePath = Path.Combine(dir.Path, "first.png");
+        var secondImagePath = Path.Combine(dir.Path, "second.png");
+        await File.WriteAllBytesAsync(firstImagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        await File.WriteAllBytesAsync(secondImagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var context = new ToolExecutionContext("D1/model-input-budget-test", dir.Path)
+        {
+            Audience = TrustAudience.Personal,
+            ModelInputModalities = ModelModality.Text | ModelModality.Image
+        };
+        context.AddModelInputFile(firstImagePath, "first.png", "image/png");
+        context.AddModelInputFile(secondImagePath, "second.png", "image/png");
+        var budget = new ModelInputBatchBudget(FakePngBytes.Length);
+
+        var result = SessionToolExecutionPipeline.MaterializeModelInputFiles(
+            context,
+            dir.Path,
+            logger: null,
+            batchBudget: budget);
+
+        Assert.Equal(2, result.RequestedCount);
+        Assert.Single(result.MediaReferences);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_file_without_matching_modality_is_skipped()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(imagePath, FakePngBytes, TestContext.Current.CancellationToken);
+        var executor = new ModelInputFileExecutor(imagePath);
+        var probe = CreateTestProbe("model-input-modality-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+            new SessionId("D1/model-input-modality-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: dir.Path,
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(3),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Empty(completed.ModelInputMediaReferences);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_file_with_mismatched_magic_is_skipped()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "diagram.png");
+        await File.WriteAllBytesAsync(imagePath, FakePdfBytes, TestContext.Current.CancellationToken);
+        var executor = new ModelInputFileExecutor(imagePath);
+        var probe = CreateTestProbe("model-input-magic-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+            new SessionId("D1/model-input-magic-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: dir.Path,
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(3),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            modelInputModalities: ModelModality.Text | ModelModality.Image,
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Empty(completed.ModelInputMediaReferences);
+    }
+
+    [Fact]
+    public async Task Tool_model_input_file_over_size_limit_is_skipped()
+    {
+        using var dir = new DisposableTempDir();
+        var imagePath = Path.Combine(dir.Path, "large.png");
+        await using (var stream = File.Create(imagePath))
+        {
+            stream.SetLength(ChannelAttachmentPolicy.DefaultMaxFileBytes + 1);
+        }
+        var executor = new ModelInputFileExecutor(imagePath);
+        var probe = CreateTestProbe("model-input-size-probe");
+
+        var pipelineTask = SessionToolExecutionPipeline.ExecuteToolsAsync(
+            executor,
+            [new FunctionCallContent("call-image", FileReadTool.ToolName, new Dictionary<string, object?>())],
+            new SessionId("D1/model-input-size-test"),
+            source: null,
+            auditLogger: null,
+            timeProvider: TimeProvider.System,
+            sessionDir: dir.Path,
+            maxInlineToolResultChars: 4096,
+            timeout: TimeSpan.FromSeconds(3),
+            self: probe.Ref,
+            emitSubAgentOutput: _ => { },
+            spawnChildActor: static (_, _, _) => Task.FromResult<object>(new object()),
+            modelInputModalities: ModelModality.Text | ModelModality.Image,
+            ct: TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Empty(completed.ModelInputMediaReferences);
     }
 
     /// <summary>
@@ -256,6 +582,24 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             yield return new ToolCompletedUpdate($"{toolCall.Name}-ok");
         }
     }
+
+    private sealed class ModelInputFileExecutor(string imagePath, string mimeType = "image/png") : IToolExecutor
+    {
+        public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
+        {
+            context?.AddModelInputFile(imagePath, "diagram.png", mimeType);
+            return Task.FromResult("image loaded");
+        }
+    }
+
+    // Real PNG: the egress normalizer decodes every model-input image, so a
+    // fake magic-byte stub would now be dropped. Small enough to pass through.
+    private static readonly byte[] FakePngBytes = TestImages.SmallPng();
+
+    private static readonly byte[] FakePdfBytes = "%PDF-1.7\nfake body\n%%EOF"u8.ToArray();
 
     private sealed class ApprovalThenSuccessExecutor : IToolExecutor
     {

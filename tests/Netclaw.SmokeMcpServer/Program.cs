@@ -208,6 +208,52 @@ internal sealed class Program
             });
         }
 
+        if (args.RequireAuth)
+        {
+            // Gate: reject requests without an Authorization header with a
+            // 401 carrying OAuth resource-metadata hints. Discovery endpoints
+            // are exempt so the probe can resolve the full metadata chain.
+            app.Use(async (ctx, next) =>
+            {
+                var path = ctx.Request.Path.Value ?? "";
+                var isDiscovery = path.Contains("/oauth/", StringComparison.OrdinalIgnoreCase)
+                    || path.Contains("/.well-known/", StringComparison.OrdinalIgnoreCase);
+
+                if (!isDiscovery && !ctx.Request.Headers.ContainsKey("Authorization"))
+                {
+                    var origin = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                    ctx.Response.StatusCode = 401;
+                    ctx.Response.Headers.Append("WWW-Authenticate",
+                        $"Bearer resource_metadata=\"{origin}/oauth/resource-metadata\"");
+                    return;
+                }
+
+                await next();
+            });
+
+            // OAuth discovery endpoints — point everything back to this server
+            // so the probe resolves without hitting an external auth provider.
+            app.MapGet("/oauth/resource-metadata", (HttpContext ctx) =>
+            {
+                var origin = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                return Results.Json(new
+                {
+                    authorization_servers = new[] { origin },
+                    resource = origin,
+                });
+            });
+
+            app.MapGet("/.well-known/oauth-authorization-server", (HttpContext ctx) =>
+            {
+                var origin = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+                return Results.Json(new
+                {
+                    authorization_endpoint = $"{origin}/oauth/authorize",
+                    token_endpoint = $"{origin}/oauth/token",
+                });
+            });
+        }
+
         app.MapMcp("/mcp");
 
         await app.StartAsync();
@@ -231,6 +277,7 @@ internal sealed class Program
         var transport = "stdio";
         var port = 0;
         var captureAuth = false;
+        var requireAuth = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -245,13 +292,16 @@ internal sealed class Program
                 case "--capture-auth":
                     captureAuth = true;
                     break;
+                case "--require-auth":
+                    requireAuth = true;
+                    break;
             }
         }
 
-        return new ParsedArgs(transport, port, captureAuth);
+        return new ParsedArgs(transport, port, captureAuth, requireAuth);
     }
 
-    private sealed record ParsedArgs(string Transport, int Port, bool CaptureAuth);
+    private sealed record ParsedArgs(string Transport, int Port, bool CaptureAuth, bool RequireAuth);
 }
 
 /// <summary>

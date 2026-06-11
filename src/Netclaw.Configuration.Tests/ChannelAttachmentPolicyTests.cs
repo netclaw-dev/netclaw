@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Xunit;
+using Netclaw.Media;
 
 namespace Netclaw.Configuration.Tests;
 
@@ -131,6 +132,7 @@ public sealed class AttachmentCategoriesTests
     [InlineData("image/jpeg", AttachmentCategory.Image)]
     [InlineData("IMAGE/WEBP", AttachmentCategory.Image)]
     [InlineData("image/gif;charset=binary", AttachmentCategory.Image)]
+    [InlineData("image/x-unknown", AttachmentCategory.Other)]
     [InlineData("application/pdf", AttachmentCategory.Pdf)]
     [InlineData("APPLICATION/PDF", AttachmentCategory.Pdf)]
     [InlineData("application/msword", AttachmentCategory.Document)]
@@ -143,12 +145,13 @@ public sealed class AttachmentCategoriesTests
     [InlineData("application/gzip", AttachmentCategory.Archive)]
     [InlineData("application/x-7z-compressed", AttachmentCategory.Archive)]
     [InlineData("video/mp4", AttachmentCategory.Media)]
+    [InlineData("video/x-unknown", AttachmentCategory.Other)]
     [InlineData("audio/mpeg", AttachmentCategory.Media)]
     [InlineData("application/octet-stream", AttachmentCategory.Other)]
     [InlineData("wibble/wobble", AttachmentCategory.Other)]
     public void FromMime_classifies_known_types(string mime, AttachmentCategory expected)
     {
-        Assert.Equal(expected, AttachmentCategories.FromMime(mime));
+        Assert.Equal(expected, MimeTypeCatalog.GetCategory(mime));
     }
 
     [Theory]
@@ -157,6 +160,6 @@ public sealed class AttachmentCategoriesTests
     [InlineData(" ")]
     public void FromMime_returns_other_for_missing_input(string? mime)
     {
-        Assert.Equal(AttachmentCategory.Other, AttachmentCategories.FromMime(mime));
+        Assert.Equal(AttachmentCategory.Other, MimeTypeCatalog.GetCategory(mime));
     }
 }

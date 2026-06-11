@@ -101,7 +101,13 @@ public static class CurationPromptBuilder
         if (string.IsNullOrWhiteSpace(response))
             return null;
 
-        var trimmed = response.Trim();
+        // Reasoning models may inline hidden chain-of-thought wrapped in
+        // <think>...</think>; strip it so the bare decision keyword is what we parse.
+        // When the serving stack emits reasoning on a separate channel, the text is
+        // already just the keyword and this is a no-op.
+        var trimmed = StripThinkBlocks(response).Trim();
+        if (trimmed.Length == 0)
+            return null;
 
         // SKIP
         if (trimmed.StartsWith("SKIP", StringComparison.OrdinalIgnoreCase))
@@ -142,6 +148,16 @@ public static class CurationPromptBuilder
         }
 
         return null;
+    }
+
+    private static string StripThinkBlocks(string text)
+    {
+        // Remove complete <think>...</think> spans (case-insensitive, across newlines),
+        // then drop any dangling unclosed <think> left by a truncated reasoning trace.
+        var stripped = Regex.Replace(text, "<think>.*?</think>", string.Empty,
+            RegexOptions.IgnoreCase | RegexOptions.Singleline);
+        var openIndex = stripped.IndexOf("<think>", StringComparison.OrdinalIgnoreCase);
+        return openIndex >= 0 ? stripped[..openIndex] : stripped;
     }
 
     private static string TruncateContent(string content)

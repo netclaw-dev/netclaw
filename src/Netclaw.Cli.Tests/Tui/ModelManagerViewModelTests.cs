@@ -151,7 +151,7 @@ public sealed class ModelManagerViewModelTests : IDisposable
         vm.StartAssignment("Main");
         await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        vm.SelectModel("qwen3:30b");
+        vm.SelectModel("model-a");
         Assert.Equal(ModelManagerState.ConfirmAssignment, vm.CurrentState.Value);
 
         vm.ConfirmAssignment();
@@ -161,8 +161,55 @@ public sealed class ModelManagerViewModelTests : IDisposable
         var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         var main = config.RootElement.GetProperty("Models").GetProperty("Main");
         Assert.Equal("my-ollama", main.GetProperty("Provider").GetString());
-        Assert.Equal("qwen3:30b", main.GetProperty("ModelId").GetString());
+        Assert.Equal("model-a", main.GetProperty("ModelId").GetString());
         Assert.Equal("Live", main.GetProperty("Provenance").GetString());
+        // An Ollama /api/tags listing reports no modalities, so discovery must NOT
+        // persist a guessed "Text" override (#1290) — leaving them unset lets the
+        // daemon resolve real capabilities at runtime instead of being short-circuited.
+        Assert.False(main.TryGetProperty("InputModalities", out _));
+        Assert.False(main.TryGetProperty("OutputModalities", out _));
+    }
+
+    [Fact]
+    public async Task ConfirmAssignment_DiscoveredModelWithMetadata_WritesMetadata()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["openai-codex"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel
+            {
+                ModelId = new Netclaw.Configuration.ModelId("gpt-new-codex"),
+                ContextWindowTokens = 512000,
+                InputModalities = ModelModality.Text | ModelModality.Image,
+                OutputModalities = ModelModality.Text,
+            }
+        ]);
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.StartAssignment("Main");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        vm.SelectModel("gpt-new-codex");
+        vm.ConfirmAssignment();
+
+        var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var main = config.RootElement.GetProperty("Models").GetProperty("Main");
+        Assert.Equal("Live", main.GetProperty("Provenance").GetString());
+        Assert.Equal(512000, main.GetProperty("ContextWindow").GetInt32());
+        Assert.Equal("Text, Image", main.GetProperty("InputModalities").GetString());
+        Assert.Equal("Text", main.GetProperty("OutputModalities").GetString());
     }
 
     [Fact]
@@ -230,6 +277,84 @@ public sealed class ModelManagerViewModelTests : IDisposable
 
         Assert.Equal(false, isProbingAtResultPublish);
         Assert.False(vm.IsProbing.Value);
+    }
+
+    [Fact]
+    public async Task StartDiscovery_ClearsStaleManualEntryBeforeRenderingProbeResults()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.ManualModelEntry = true;
+        vm.SelectedModelId = "manual-model";
+        vm.DiscoveredModels.Add(new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("stale-model") });
+
+        vm.StartDiscovery("my-openai");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(vm.ManualModelEntry);
+        Assert.Null(vm.SelectedModelId);
+        Assert.Equal(2, vm.DiscoveredModels.Count);
+    }
+
+    [Fact]
+    public async Task ManualEntry_DoesNotPersistAfterReturningToProviderSelection()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["big-gpu"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "http://localhost:8000"
+                },
+                ["openai"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai",
+                    ["Endpoint"] = "https://api.openai.com",
+                    ["AuthMethod"] = "OAuthDevice"
+                }
+            }
+        });
+
+        _fakeProbe.NextResult = new ProviderProbeResult(true, null,
+        [
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-a") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-b") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-c") },
+            new DiscoveredModel { ModelId = new Netclaw.Configuration.ModelId("model-d") }
+        ]);
+
+        using var vm = CreateViewModel();
+        vm.Refresh();
+        vm.StartAssignment("Main");
+        vm.SelectProvider("openai");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        vm.ManualModelEntry = true;
+        vm.GoBack();
+        Assert.Equal(ModelManagerState.SelectProvider, vm.CurrentState.Value);
+
+        vm.SelectProvider("openai");
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.False(vm.ManualModelEntry);
+        Assert.Equal(4, vm.DiscoveredModels.Count);
     }
 
     [Fact]

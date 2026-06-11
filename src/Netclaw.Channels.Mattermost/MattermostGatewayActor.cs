@@ -13,34 +13,29 @@ using Netclaw.Security;
 
 namespace Netclaw.Channels.Mattermost;
 
-public sealed class MattermostGatewayActor : ReceiveActor
+public sealed class MattermostGatewayActor : ChannelGatewayActor<MattermostChannelId>
 {
-    private const int MaxProcessedEventIds = 4096;
-
     private readonly MattermostGatewayDependencies _dependencies;
-    private readonly ILoggingAdapter _log;
-    private readonly Dictionary<MattermostEventId, byte> _processedEventIds = [];
-    private readonly Queue<MattermostEventId> _processedEventOrder = new();
 
     public MattermostGatewayActor(MattermostGatewayDependencies dependencies)
+        : base(ChannelType.Mattermost)
     {
         _dependencies = dependencies;
-        _log = Context.GetLogger().WithContext("Adapter", "mattermost");
 
         Receive<MattermostGatewayMessage>(message =>
         {
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventReceived("message");
 
-            if (!TryMarkEventProcessed(message.EventId))
+            if (!TryMarkEventProcessed(message.EventId.Value))
             {
-                _log.Debug("Dropping duplicate Mattermost event {0}", message.EventId.Value);
+                Log.Debug("Dropping duplicate Mattermost event {0}", message.EventId.Value);
                 ChannelTelemetry.For(ChannelType.Mattermost).RecordEventFiltered("duplicate_event");
                 return;
             }
 
-            var conversation = GetOrCreateConversationActor(message.ChannelId);
+            var conversation = GetOrCreateConversation(message.ChannelId);
 
-            _log.Debug("Routing Mattermost event {0} to conversation {1}", message.EventId.Value, message.ChannelId);
+            Log.Debug("Routing Mattermost event {0} to conversation {1}", message.EventId.Value, message.ChannelId);
             conversation.Forward(message);
         });
 
@@ -48,38 +43,19 @@ public sealed class MattermostGatewayActor : ReceiveActor
         {
             ChannelTelemetry.For(ChannelType.Mattermost).RecordEventReceived("interaction");
 
-            var conversation = GetOrCreateConversationActor(interaction.ChannelId);
+            var conversation = GetOrCreateConversation(interaction.ChannelId);
 
-            _log.Debug("Routing Mattermost interaction to conversation {0}", interaction.ChannelId);
+            Log.Debug("Routing Mattermost interaction to conversation {0}", interaction.ChannelId);
             conversation.Forward(interaction);
         });
 
         Receive<StartMattermostProactiveThread>(message =>
         {
-            var conversation = GetOrCreateConversationActor(message.ChannelId);
+            var conversation = GetOrCreateConversation(message.ChannelId);
 
-            _log.Debug(
+            Log.Debug(
                 "Routing StartMattermostProactiveThread session={Session} channel={Channel} rootPost={RootPost}",
                 message.SessionId.Value, message.ChannelId.Value, message.RootPostId.Value);
-            conversation.Forward(message);
-        });
-
-        Receive<DeliverTrustedSessionTurn>(message =>
-        {
-            if (!TryParseMattermostSessionId(message.SessionId, out var channelId, out _))
-            {
-                _log.Warning(
-                    "Dropping DeliverTrustedSessionTurn with unparseable Mattermost SessionId {SessionId}",
-                    message.SessionId.Value);
-                Sender.Tell(CommandNack.For(message.SessionId, "Invalid Mattermost SessionId format"));
-                return;
-            }
-
-            var conversation = GetOrCreateConversationActor(channelId);
-
-            _log.Debug(
-                "Routing DeliverTrustedSessionTurn session={Session} channel={Channel}",
-                message.SessionId.Value, channelId.Value);
             conversation.Forward(message);
         });
     }
@@ -95,50 +71,22 @@ public sealed class MattermostGatewayActor : ReceiveActor
         channelId = default;
         rootPostId = default;
 
-        var value = sessionId.Value;
-        if (string.IsNullOrEmpty(value))
+        if (!SessionIdFormat.TrySplit(sessionId, out var channelPart, out var threadPart))
             return false;
 
-        var slashIdx = value.IndexOf('/', StringComparison.Ordinal);
-        if (slashIdx <= 0 || slashIdx == value.Length - 1)
-            return false;
-
-        channelId = new MattermostChannelId(value[..slashIdx]);
-        rootPostId = new MattermostRootPostId(value[(slashIdx + 1)..]);
+        channelId = new MattermostChannelId(channelPart);
+        rootPostId = new MattermostRootPostId(threadPart);
         return true;
     }
 
-    private IActorRef GetOrCreateConversationActor(MattermostChannelId channelId)
-    {
-        var actorName = Uri.EscapeDataString(channelId.Value);
-        var existing = Context.Child(actorName);
-        if (!existing.IsNobody())
-            return existing;
+    protected override string ChannelIdValue(MattermostChannelId channelId) => channelId.Value;
 
-        var props = _dependencies.ConversationPropsFactory?.Invoke(channelId, _dependencies)
+    protected override Props CreateConversationProps(MattermostChannelId channelId) =>
+        _dependencies.ConversationPropsFactory?.Invoke(channelId, _dependencies)
             ?? MattermostConversationActor.CreateProps(channelId, _dependencies);
-        return Context.ActorOf(props, actorName);
-    }
 
-    private bool TryMarkEventProcessed(MattermostEventId eventId)
-    {
-        if (string.IsNullOrWhiteSpace(eventId.Value))
-        {
-            _log.Warning("Rejecting Mattermost event with empty EventId — cannot deduplicate");
-            return false;
-        }
-
-        if (!_processedEventIds.TryAdd(eventId, 0))
-            return false;
-
-        _processedEventOrder.Enqueue(eventId);
-
-        while (_processedEventIds.Count > MaxProcessedEventIds
-               && _processedEventOrder.TryDequeue(out var oldestEventId))
-            _processedEventIds.Remove(oldestEventId);
-
-        return true;
-    }
+    protected override bool TryParseSessionChannelId(SessionId sessionId, out MattermostChannelId channelId) =>
+        TryParseMattermostSessionId(sessionId, out channelId, out _);
 }
 
 public sealed record MattermostGatewayDependencies(

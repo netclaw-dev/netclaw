@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
-using Netclaw.Configuration;
+using Netclaw.Actors.Protocol;
+using Netclaw.Media;
+using Netclaw.Security;
 using System.Text;
 
 namespace Netclaw.Channels;
@@ -64,26 +66,53 @@ public static class AttachmentIngressFormatting
     }
 
     public static (bool Inlined, string? Note) ResolveInlineDecision(
+        MimeType mimeType,
         AttachmentCategory category,
         bool inlineImages)
+        => AttachmentInlineDecision.Resolve(mimeType, category, inlineImages);
+
+    public static async Task<AttachmentIngressProjection> BuildAcceptedProjectionAsync(
+        string inboxPath,
+        string filename,
+        string mimeType,
+        AttachmentCategory category,
+        bool inlineImages,
+        long size,
+        CancellationToken cancellationToken)
     {
-        return category switch
-        {
-            AttachmentCategory.Image when inlineImages => (true, null),
-            AttachmentCategory.Image => (false, AttachmentNotes.ModelMissingImage),
-            AttachmentCategory.Pdf => (false, AttachmentNotes.ModelMissingPdf),
-            _ => (false, AttachmentNotes.FormatNotInlineable)
-        };
+        var relativePath = $"{SessionDirectoryHelper.InboxSubdirectory}/{Path.GetFileName(inboxPath)}";
+        var (inlined, note) = ResolveInlineDecision(new MimeType(mimeType), category, inlineImages);
+        var line = BuildAttachmentLine(filename, mimeType, size, relativePath, inlined, note);
+
+        if (!inlined)
+            return new AttachmentIngressProjection(line, InlineContent: null, Inlined: false);
+
+        var bytes = await File.ReadAllBytesAsync(inboxPath, cancellationToken);
+        return new AttachmentIngressProjection(line, new DataContent(bytes, mimeType), Inlined: true);
+    }
+
+    public static async Task<IReadOnlyList<AIContent>> BuildAcceptedContentsAsync(
+        string inboxPath,
+        string filename,
+        string mimeType,
+        AttachmentCategory category,
+        bool inlineImages,
+        long size,
+        CancellationToken cancellationToken)
+    {
+        var projection = await BuildAcceptedProjectionAsync(
+            inboxPath, filename, mimeType, category, inlineImages, size, cancellationToken);
+        var line = new TextContent(projection.Line);
+        return projection.InlineContent is null
+            ? [line]
+            : [line, projection.InlineContent];
     }
 
     public static string FormatBytes(long size)
-    {
-        const long Mib = 1024 * 1024;
-        const long Kib = 1024;
-        if (size >= Mib)
-            return $"{size / (double)Mib:F1} MiB";
-        if (size >= Kib)
-            return $"{size / (double)Kib:F1} KiB";
-        return $"{size} bytes";
-    }
+        => ByteSizeFormatter.Format(size);
 }
+
+public readonly record struct AttachmentIngressProjection(
+    string Line,
+    DataContent? InlineContent,
+    bool Inlined);

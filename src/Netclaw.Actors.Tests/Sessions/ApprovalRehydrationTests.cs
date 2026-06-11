@@ -93,7 +93,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // The tool batch is announced (ToolCallOutput) then parks on the
@@ -176,7 +177,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -245,7 +247,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -312,7 +315,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Read and then run git status"
+            Content = "Read and then run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -400,7 +404,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Read the file and run git status"
+            Content = "Read the file and run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -502,7 +507,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -567,6 +573,159 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Recovered_resolved_batch_heals_history_when_next_message_arrives_without_join()
+    {
+        const string callId = "call-shell-crash-no-join";
+        _toolExecutor.GatedTools.Add("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(callId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        var sessionId = new SessionId("test-channel/crash-after-resolve-no-join");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("crash-no-join-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await ColdRespawnAsync(sessionId);
+
+        var subscriberB = CreateTestProbe("crash-no-join-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        _toolExecutor.BlockNextSuccessfulExecution("shell_execute");
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("local-user")
+        }, ActorRefs.Nobody);
+
+        await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await ColdRespawnAsync(sessionId);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Never mind, just say hello"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_fakeChatClient.ReceivedMessages.Count >= 2);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        var lastCall = _fakeChatClient.ReceivedMessages[^1];
+        var healed = lastCall.Any(m => m.Role == Microsoft.Extensions.AI.ChatRole.Tool
+            && m.Contents.OfType<FunctionResultContent>().Any(r => r.CallId == callId));
+        Assert.True(healed, "resolved-but-interrupted tool_use should be closed before direct user ingress");
+    }
+
+    [Fact]
+    public async Task Join_during_live_approved_tool_execution_does_not_abandon_batch()
+    {
+        const string callId = "call-shell-live-join";
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _toolExecutor.BlockNextSuccessfulExecution("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(callId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        var sessionId = new SessionId("test-channel/live-approved-join");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("live-join-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("local-user")
+        }, ActorRefs.Nobody);
+
+        await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var subscriberB = CreateTestProbe("live-join-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        _toolExecutor.ReleaseBlockedExecution();
+
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        var lastCall = _fakeChatClient.ReceivedMessages[^1];
+        var toolResult = lastCall
+            .Where(m => m.Role == Microsoft.Extensions.AI.ChatRole.Tool)
+            .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+            .Single(r => r.CallId == callId)
+            .Result?.ToString();
+        Assert.NotNull(toolResult);
+        Assert.Contains("[executed shell_execute]", toolResult);
+        Assert.DoesNotContain("session restarted", toolResult!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Idle_session_with_pending_interaction_redrives_when_approval_arrives()
     {
         const string callId = "call-shell-idle";
@@ -592,7 +751,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "List the directory"
+            Content = "List the directory",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -792,15 +952,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     public async Task Cold_recovered_continuation_tool_calls_run_at_original_turn_audience()
     {
         // Regression for the 0.21 cold-recovery audience bug (session
-        // D0AC6CKBK5K/1779897736.065949): RedriveToolBatchForApproval correctly
-        // passes pending.Audience as the audienceOverride for the parked batch
-        // itself, but the LLM iteration that follows (the model's NEXT tool call
-        // in the same recovered turn) re-enters DispatchToolBatch with no
-        // override and previously fell through to TrustAudience.Public, silently
-        // blocking shell_execute and any other tool the audience profile
-        // doesn't list for Public. RedriveToolBatchForApproval now rehydrates
-        // _currentTurnSource from the pending record so every subsequent
-        // dispatch in the recovered turn reads the original audience.
+        // D0AC6CKBK5K/1779897736.065949): the parked batch and any continuation
+        // tool calls must execute from the same persisted turn context. A null
+        // recovered source used to fall through to TrustAudience.Public,
+        // silently blocking tools the audience profile doesn't list for Public.
         const string parkedCallId = "call-shell-parked";
         const string continuationCallId = "call-read-continuation";
         _toolExecutor.GatedTools.Add("shell_execute");
@@ -1001,7 +1156,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -1133,7 +1289,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
             SessionId = sessionId,
-            Content = "Run git status"
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await subscriber.ExpectMsgAsync<ToolCallOutput>(
@@ -1371,6 +1528,12 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
     public void FailBlockedExecution()
     {
         _blockedExecutionRelease?.TrySetException(new InvalidOperationException("Simulated actor crash during tool execution."));
+        _blockedExecutionRelease = null;
+    }
+
+    public void ReleaseBlockedExecution()
+    {
+        _blockedExecutionRelease?.TrySetResult(null);
         _blockedExecutionRelease = null;
     }
 }
