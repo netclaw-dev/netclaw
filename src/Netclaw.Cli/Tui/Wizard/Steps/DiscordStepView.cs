@@ -88,6 +88,7 @@ public sealed class DiscordStepView : IWizardStepView
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_botTokenInput, StageFocusedInput, callbacks);
 
         _botTokenInput.Submitted
             .Subscribe(text =>
@@ -134,6 +135,7 @@ public sealed class DiscordStepView : IWizardStepView
         _channelIdsInput.OnFocused();
         _lastFocusedInput = _channelIdsInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_channelIdsInput, StageFocusedInput, callbacks);
 
         _channelIdsInput.Submitted
             .Subscribe(text =>
@@ -198,6 +200,7 @@ public sealed class DiscordStepView : IWizardStepView
         _allowedUserIdsInput.OnFocused();
         _lastFocusedInput = _allowedUserIdsInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_allowedUserIdsInput, StageFocusedInput, callbacks);
 
         _allowedUserIdsInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))

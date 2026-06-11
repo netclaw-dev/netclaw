@@ -169,6 +169,61 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
     }
 
     [Fact]
+    public async Task Channels_SlackAllowedUserIds_AcceptsPasteAfterTyping()
+    {
+        // Regression: Termina auto-routes a bracketed paste straight into the focused
+        // TextInputNode, bypassing the page's PasteEvent handler. Because the node is rebuilt
+        // and re-seeded from the view-model every render, a paste that lands only in the node
+        // was wiped by the next reseed unless it was synced back. After typing one ID by hand,
+        // pasting a second must land in the view-model immediately (via TextChanged sync).
+        WriteEmptyChannelFiles();
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Enable Slack -> bot token substep.
+        input.EnqueuePaste("xoxb-token");
+        input.EnqueueKey(ConsoleKey.Enter); // -> app token substep.
+        input.EnqueuePaste("xapp-token");
+        input.EnqueueKey(ConsoleKey.Enter); // -> channel names substep.
+        input.EnqueueKey(ConsoleKey.Enter); // skip channel names -> DM substep.
+        input.EnqueueKey(ConsoleKey.Enter); // DM default -> user access choice substep.
+        input.EnqueueKey(ConsoleKey.Enter); // "Restrict to specific users" default -> allowed user IDs substep.
+        input.EnqueueString("U044U1S8P,");  // Type the first ID by hand.
+        input.EnqueuePaste("U12345678");    // Then paste a second ID into the non-empty field.
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        var slack = channelsVm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        Assert.Equal("U044U1S8P,U12345678", slack.AllowedUserIdsInput);
+    }
+
+    [Fact]
+    public async Task Channels_SlackBotToken_AcceptsPasteAfterTyping()
+    {
+        // Same auto-routed-paste regression for a credential field, which syncs through the
+        // BotTokenDraft path: type a token prefix, then paste the rest into the non-empty field.
+        WriteEmptyChannelFiles();
+        var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
+        OpenChannels(dashboardVm);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Enable Slack -> bot token substep.
+        input.EnqueueString("xoxb-");        // Type the prefix by hand.
+        input.EnqueuePaste("0123456789");    // Paste the rest into the non-empty field.
+        input.EnqueueKey(ConsoleKey.Enter);  // Submit -> advances, capturing the full token.
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        var slack = channelsVm.Step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
+        Assert.Equal("xoxb-0123456789", slack.BotToken);
+    }
+
+    [Fact]
     public async Task Channels_AddChannel_AcceptsPastedChannelInput()
     {
         var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);

@@ -56,6 +56,18 @@ internal static class WizardStepHelpers
             input.HandleInput(new ConsoleKeyInfo('\0', ConsoleKey.End, shift: false, alt: false, control: false));
     }
 
+    /// <summary>
+    /// Syncs a text input back to its view-model on every text change. Termina auto-routes
+    /// bracketed paste straight into the focused node and consumes the event, so the page's
+    /// <c>PasteEvent</c> handler never sees it; the node is also rebuilt and re-seeded from
+    /// the view-model on every render. Without an immediate sync an auto-routed paste lands
+    /// only in the node and is wiped by the next reseed. Subscribing to <c>TextChanged</c>
+    /// captures keystrokes and pastes alike the instant they happen. Wire this AFTER seeding
+    /// so the seed's own change does not run the staging callback against a half-built view.
+    /// </summary>
+    internal static void SyncInputToViewModel(TextInputBaseNode input, Action stage, StepViewCallbacks callbacks)
+        => input.TextChanged.Subscribe(_ => stage()).DisposeWith(callbacks.Subscriptions);
+
     internal static List<string> ParseUserIds(string? input)
         => string.IsNullOrWhiteSpace(input)
             ? []

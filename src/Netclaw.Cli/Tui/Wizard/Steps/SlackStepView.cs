@@ -90,6 +90,7 @@ public sealed class SlackStepView : IWizardStepView
         _botTokenInput.OnFocused();
         _lastFocusedInput = _botTokenInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_botTokenInput, StageFocusedInput, callbacks);
 
         _botTokenInput.Submitted
             .Subscribe(text =>
@@ -142,6 +143,7 @@ public sealed class SlackStepView : IWizardStepView
         _appTokenInput.OnFocused();
         _lastFocusedInput = _appTokenInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_appTokenInput, StageFocusedInput, callbacks);
 
         _appTokenInput.Submitted
             .Subscribe(text =>
@@ -193,6 +195,7 @@ public sealed class SlackStepView : IWizardStepView
         _channelNamesInput.OnFocused();
         _lastFocusedInput = _channelNamesInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_channelNamesInput, StageFocusedInput, callbacks);
 
         _channelNamesInput.Submitted
             .Subscribe(text =>
@@ -257,6 +260,7 @@ public sealed class SlackStepView : IWizardStepView
         _allowedUserIdsInput.OnFocused();
         _lastFocusedInput = _allowedUserIdsInput;
         _lastFocusedList = null;
+        WizardStepHelpers.SyncInputToViewModel(_allowedUserIdsInput, StageFocusedInput, callbacks);
 
         _allowedUserIdsInput.Submitted
             .Where(text => !string.IsNullOrWhiteSpace(text))
