@@ -106,7 +106,7 @@ internal static class UpdateCommand
                 return 1;
             }
 
-            Console.WriteLine($"Update channel set to '{channel.ToString().ToLowerInvariant()}' ({paths.NetclawConfigPath}).");
+            Console.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
         }
 
         var currentVersion = BuildInfo.FullVersion;
@@ -439,7 +439,7 @@ internal static class UpdateCommand
     {
         var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
         var daemon = ConfigFileHelper.GetOrCreateSection(config, "Daemon");
-        daemon["UpdateChannel"] = channel.ToString().ToLowerInvariant();
+        daemon["UpdateChannel"] = channel.ToWireValue();
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
     }
 

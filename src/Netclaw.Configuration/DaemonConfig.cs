@@ -328,3 +328,22 @@ public enum UpdateChannel
     /// </summary>
     Beta,
 }
+
+/// <summary>
+/// Extension helpers for <see cref="UpdateChannel"/>.
+/// </summary>
+public static class UpdateChannelExtensions
+{
+    /// <summary>
+    /// Returns the lowercase wire value expected by the JSON schema. Defined as an
+    /// explicit mapping rather than <c>ToString().ToLowerInvariant()</c> so the
+    /// persisted config values stay stable even if the enum identifiers are renamed.
+    /// Inverse of <see cref="DaemonConfig.ParseUpdateChannel(string)"/>.
+    /// </summary>
+    public static string ToWireValue(this UpdateChannel channel) => channel switch
+    {
+        UpdateChannel.Stable => "stable",
+        UpdateChannel.Beta => "beta",
+        _ => throw new ArgumentOutOfRangeException(nameof(channel), channel, $"Unknown UpdateChannel value: {channel}")
+    };
+}

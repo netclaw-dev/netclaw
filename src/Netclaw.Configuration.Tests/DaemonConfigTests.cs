@@ -120,6 +120,17 @@ public sealed class DaemonConfigTests
             () => DaemonConfig.ParseUpdateChannel("nightly"));
     }
 
+    [Theory]
+    [InlineData(UpdateChannel.Stable, "stable")]
+    [InlineData(UpdateChannel.Beta, "beta")]
+    public void ToWireValue_returns_schema_value_and_round_trips(UpdateChannel channel, string expected)
+    {
+        // Wire values are pinned independently of enum member names so a future
+        // rename can't silently change the persisted config string.
+        Assert.Equal(expected, channel.ToWireValue());
+        Assert.Equal(channel, DaemonConfig.ParseUpdateChannel(channel.ToWireValue()));
+    }
+
     [Fact]
     public void BindFromConfiguration_reads_DisableSelfUpdate_true()
     {
