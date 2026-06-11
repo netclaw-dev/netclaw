@@ -185,13 +185,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return false;
         }
 
-        var session = new ConfigEditorSession(_paths);
-        session.Apply(_mapper.BuildContribution(
-            Step,
-            _knownProviders,
-            _channelAudiences,
-            _context.SelectedPosture ?? DeploymentPosture.Personal));
-        session.Save();
+        WriteChannelConfigToDisk();
 
         var savedDraft = _mapper.Load(_paths);
         _knownProviders.Clear();
@@ -205,6 +199,20 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         Status.Value = BuildSaveStatus(successMessage, dynamicValidation.Unresolved);
         NotifyContentChanged();
         return true;
+    }
+
+    // Writes the current in-memory Step (tokens + channels + audiences) to disk. The reload
+    // that SaveAsync performs afterward is deliberately NOT done here so callers that only
+    // touch the persisted shape (e.g. label normalization) keep their live resolution state.
+    private void WriteChannelConfigToDisk()
+    {
+        var session = new ConfigEditorSession(_paths);
+        session.Apply(_mapper.BuildContribution(
+            Step,
+            _knownProviders,
+            _channelAudiences,
+            _context.SelectedPosture ?? DeploymentPosture.Personal));
+        session.Save();
     }
 
     // The probe succeeded but some channel names/ids did not resolve. We saved the
@@ -1030,7 +1038,59 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         slack.LastChannelResolution = result;
         ApplyChannelLabelResolutionStatus(ChannelType.Slack, result.ErrorMessage, result.Unresolved);
+
+        // A channel saved as a literal NAME (because it didn't resolve when first saved) stays
+        // inert in the runtime ACL — SlackAclPolicy matches AllowedChannelIds against the Slack
+        // channel ID, not the name. Once the bot can see the channel, rewrite the stored name to
+        // its canonical ID and persist so the ACL actually matches and the row renders #name.
+        var normalized = NormalizeSlackChannelNamesToIds(channelIds, result);
+        if (normalized > 0 && string.IsNullOrWhiteSpace(result.ErrorMessage) && result.Unresolved.Count == 0)
+            Status.Value = new ConfigStatusMessage(
+                $"Updated {Pluralize(normalized, "channel", "channels")} to canonical IDs and saved.",
+                ConfigStatusTone.Neutral);
+
         NotifyContentChanged();
+    }
+
+    /// <summary>
+    /// Rewrites Slack allow-list entries stored as channel NAMES that now resolve to a canonical
+    /// channel ID, then persists. Names only enter the allow-list when a channel could not be
+    /// resolved at save time (the "save all, flag invalid" path); once the bot can see the channel
+    /// the stored name must become its ID or the runtime ACL never matches it. Returns the count
+    /// normalized (0 means nothing changed, so nothing is written).
+    /// </summary>
+    private int NormalizeSlackChannelNamesToIds(IReadOnlyList<string> storedChannels, SlackChannelResolutionResult result)
+    {
+        var resolvedByName = result.Resolved.ToDictionary(
+            static channel => channel.Name,
+            static channel => channel.Id,
+            StringComparer.OrdinalIgnoreCase);
+
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        var normalized = new List<string>(storedChannels.Count);
+        foreach (var channel in storedChannels)
+        {
+            if (!IsSlackChannelId(channel)
+                && resolvedByName.TryGetValue(channel, out var channelId)
+                && !string.Equals(channel, channelId, StringComparison.Ordinal))
+            {
+                normalized.Add(channelId);
+                remap[channel] = channelId;
+            }
+            else
+            {
+                normalized.Add(channel);
+            }
+        }
+
+        if (remap.Count == 0)
+            return 0;
+
+        SetChannelIds(ChannelType.Slack, [.. normalized.Distinct(StringComparer.Ordinal)]);
+        RemapChannelAudiences(ChannelType.Slack, remap);
+        WriteChannelConfigToDisk();
+        IsSaved.Value = true;
+        return remap.Count;
     }
 
     private async Task RefreshDiscordChannelLabelsAsync(IReadOnlyList<string> channelIds, CancellationToken ct)

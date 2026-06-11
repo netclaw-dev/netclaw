@@ -40,6 +40,32 @@ Driver: real terminal via `docker exec -it netclaw-config-poc-local …`.
      only re-stage when the text actually changed. Without these an unreachable open feed could not be
      force-added at all.
 
+9. **(INPUT DATA LOSS — FIXED) Pasting into a non-empty channel text field dropped the paste.**
+   Typing one Slack user ID then pasting a second only kept a single char (or none). **Root cause
+   (confirmed via headless repro + instrumentation):** Termina auto-routes a bracketed paste straight
+   into the focused `TextInputNode` and *consumes* the event, so the page's `PasteEvent` handler never
+   fires. Each adapter input is rebuilt and re-seeded from the view-model on every render, so a paste
+   that landed only in the node was wiped by the next reseed (typed chars survived because each
+   keystroke stages back to the view-model; the auto-routed paste did not). Tokens "worked" only
+   because Enter→`Submitted` reads the node before a reseed. **Fix:** every Slack/Discord/Mattermost
+   text input now subscribes to `TextChanged` (new `WizardStepHelpers.SyncInputToViewModel`, reusing
+   each view's `StageFocusedInput`) so keystrokes *and* pastes sync to the view-model the instant they
+   land — render-independent. Two headless regressions (type-then-paste for the user-IDs field and the
+   token field). NOT a Termina bug — the auto-route is documented behavior `SkillSourcesConfigPage`
+   already works around. Full Cli suite green.
+
+10. **(RUNTIME ACL GAP — FIXED) A channel saved as a name never became runtime-valid after the bot
+    joined it.** Follow-on from #8's "save all, flag invalid": an unresolved Slack channel persists as
+    a literal *name* in `AllowedChannelIds`, but `SlackAclPolicy.IsAllowedChannel` matches incoming
+    messages by channel **ID** (`StringComparer.Ordinal`). So once the bot was added to the channel,
+    the stored name stayed inert — the bot silently would not respond there — until the operator
+    happened to re-save. The missing `#` on the row (the operator's reported symptom) was the visible
+    tell. **Fix (owner decision: normalize on re-open + persist):** when management re-opens and a
+    stored name now resolves, `RefreshSlackChannelLabelsAsync` rewrites it to its canonical ID, moves
+    its audience, and writes the config (`NormalizeSlackChannelNamesToIds` + shared
+    `WriteChannelConfigToDisk`). Slack-only — Discord/Mattermost store canonical IDs already. Guarded
+    against spurious writes (already-canonical configs are not rewritten). Two regression tests.
+
 ## Pending (logged, batch before push)
 
 8. **(DATA LOSS — FIXED) Unresolved channel names blocked the entire adapter save.** Distinct

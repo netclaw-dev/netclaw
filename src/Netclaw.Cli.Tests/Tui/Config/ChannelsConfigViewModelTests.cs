@@ -1015,6 +1015,83 @@ public sealed class ChannelsConfigViewModelTests : IDisposable
     }
 
     [Fact]
+    public void Open_management_normalizes_resolved_slack_channel_name_to_id_and_persists()
+    {
+        // Bug C: a channel saved as a literal NAME (it did not resolve at first save) stays inert
+        // in the runtime ACL, which matches AllowedChannelIds by Slack channel ID. Once the bot can
+        // see the channel, re-opening management must rewrite the stored name to its canonical ID
+        // and persist so the ACL matches — and the audience must travel with it.
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Slack": {
+                "Enabled": true,
+                "SocketMode": true,
+                "AllowedChannelIds": ["C01", "netclaw-test"],
+                "AllowedUserIds": ["U01"],
+                "AllowDirectMessages": true,
+                "ChannelAudiences": { "C01": "team", "netclaw-test": "public", "dm": "personal" }
+              }
+            }
+            """);
+        WriteChannelSecrets();
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [new ResolvedSlackChannel("general", "C01"), new ResolvedSlackChannel("netclaw-test", "C99")],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem();
+
+        // The stored name was rewritten to its ID on disk so the runtime ACL can match it.
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.AllowedChannelIds", out var channelsRaw));
+        Assert.Equal(["C01", "C99"], ToStringArray(channelsRaw));
+        // The audience moved from the name to the ID; the stale name key is gone.
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Slack.ChannelAudiences", out var audiencesRaw));
+        var audiences = ToStringDictionary(audiencesRaw);
+        Assert.Equal("public", audiences["C99"]);
+        Assert.DoesNotContain("netclaw-test", audiences.Keys);
+        // The row now renders the resolved label like any other channel.
+        var row = Assert.Single(vm.GetChannelRows(includeAddAction: false), row => row.Id == "C99");
+        Assert.Equal("#netclaw-test", row.DisplayName);
+    }
+
+    [Fact]
+    public void Open_management_does_not_rewrite_already_canonical_slack_channels()
+    {
+        // Guard against spurious writes: opening management when every channel is already stored
+        // as its canonical ID must not rewrite the config file at all.
+        WriteChannelConfig(); // AllowedChannelIds: ["C01", "C02", "C03"] — all IDs.
+        WriteChannelSecrets();
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var slackProbe = new FakeSlackProbe
+        {
+            NextResolutionResult = new SlackChannelResolutionResult(
+                true,
+                null,
+                [
+                    new ResolvedSlackChannel("general", "C01"),
+                    new ResolvedSlackChannel("dev", "C02"),
+                    new ResolvedSlackChannel("random", "C03")
+                ],
+                [])
+        };
+        using var vm = CreateViewModel(slackProbe: slackProbe);
+
+        vm.OpenAdapterManagement(ChannelType.Slack);
+        vm.ActivateManagementMenuItem();
+
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+    }
+
+    [Fact]
     public void Open_management_resolves_persisted_discord_channel_labels()
     {
         WriteAllChannelConfig();
