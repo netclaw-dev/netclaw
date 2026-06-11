@@ -104,6 +104,9 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
     protected override void SetReplyClientThrows(Exception ex)
         => _replyClient.ThrowOnPost = ex;
 
+    protected override void SetReplyClientThrowsOnce(Exception ex)
+        => _replyClient.ThrowOnceOnPost = ex;
+
     protected override void ClearReplyClientThrows()
         => _replyClient.ThrowOnPost = null;
 

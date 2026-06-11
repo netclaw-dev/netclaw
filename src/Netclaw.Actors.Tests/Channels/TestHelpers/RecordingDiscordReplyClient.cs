@@ -16,6 +16,9 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
     public List<DiscordFileUpload> Uploads { get; } = [];
     public Exception? ThrowOnPost { get; set; }
     public Exception? ThrowOnUpload { get; set; }
+    // Throws on the next post only, then auto-clears. Lets a test fail a content
+    // post while letting a follow-up (e.g. fallback) succeed and be recorded.
+    public Exception? ThrowOnceOnPost { get; set; }
 
     private int _messageCounter;
 
@@ -23,6 +26,12 @@ internal sealed class RecordingDiscordReplyClient : IDiscordReplyClient
     {
         if (ThrowOnPost is { } ex)
             throw ex;
+
+        if (ThrowOnceOnPost is { } onceEx)
+        {
+            ThrowOnceOnPost = null;
+            throw onceEx;
+        }
 
         Posts.Add(message);
 
