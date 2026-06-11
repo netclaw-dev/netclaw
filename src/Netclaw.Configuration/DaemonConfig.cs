@@ -103,16 +103,38 @@ public sealed record DaemonConfig
     /// </summary>
     public static UpdateChannel ParseUpdateChannel(string? value)
     {
+        // Config binding treats null/empty as the default; only a non-empty,
+        // unrecognized value is a typo worth failing on.
         if (string.IsNullOrWhiteSpace(value))
             return UpdateChannel.Stable;
 
-        return value.Trim().ToLowerInvariant() switch
+        if (TryParseUpdateChannel(value, out var channel))
+            return channel;
+
+        throw new InvalidOperationException(
+            $"Unknown UpdateChannel value: '{value.Trim()}'. Valid values: stable, beta.");
+    }
+
+    /// <summary>
+    /// Tries to parse an <see cref="UpdateChannel"/> from a string. Returns false for
+    /// null, whitespace, or any value other than <c>stable</c>/<c>beta</c> so callers
+    /// (e.g. CLI argument parsing) can fail loudly instead of silently defaulting.
+    /// Inverse of <see cref="UpdateChannelExtensions.ToWireValue"/>.
+    /// </summary>
+    public static bool TryParseUpdateChannel(string? value, out UpdateChannel channel)
+    {
+        switch (value?.Trim().ToLowerInvariant())
         {
-            "stable" => UpdateChannel.Stable,
-            "beta" => UpdateChannel.Beta,
-            _ => throw new InvalidOperationException(
-                $"Unknown UpdateChannel value: '{value.Trim()}'. Valid values: stable, beta.")
-        };
+            case "stable":
+                channel = UpdateChannel.Stable;
+                return true;
+            case "beta":
+                channel = UpdateChannel.Beta;
+                return true;
+            default:
+                channel = UpdateChannel.Stable;
+                return false;
+        }
     }
 
     /// <summary>

@@ -71,7 +71,7 @@ internal static class UpdateCommand
                         WriteHelp();
                         return 1;
                     }
-                    if (!TryParseChannelArg(args[++i], out var parsedChannel))
+                    if (!DaemonConfig.TryParseUpdateChannel(args[++i], out var parsedChannel))
                     {
                         Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
                         WriteHelp();
@@ -89,24 +89,33 @@ internal static class UpdateCommand
             }
         }
 
-        // Specifying --channel switches the channel: it applies to this run and
-        // is written back to netclaw.json so the daemon's background check and
-        // future runs follow it.
+        // Specifying --channel selects the channel this run evaluates against.
+        // Outside of --check it also switches the channel: the value is written
+        // back to netclaw.json so the daemon's background check and future runs
+        // follow it. --check is a read-only verb, so it previews the requested
+        // channel without persisting anything.
         if (channelOverride is { } overrideChannel)
         {
             channel = overrideChannel;
 
-            try
+            if (checkOnly)
             {
-                PersistChannel(paths, channel);
+                Console.WriteLine($"Checking '{channel.ToWireValue()}' channel (run without --check to switch).");
             }
-            catch (Exception ex)
+            else
             {
-                Console.Error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
-                return 1;
-            }
+                try
+                {
+                    PersistChannel(paths, channel);
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
+                    return 1;
+                }
 
-            Console.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
+                Console.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
+            }
         }
 
         var currentVersion = BuildInfo.FullVersion;
@@ -404,27 +413,6 @@ internal static class UpdateCommand
         catch (Exception ex)
         {
             Console.Error.WriteLine($"warn: chmod +x failed for {path}: {ex.Message}");
-        }
-    }
-
-    /// <summary>
-    /// Parses a <c>--channel</c> CLI argument. Accepts <c>stable</c> and
-    /// <c>beta</c>. Returns false for any other value so the caller fails
-    /// loudly rather than silently defaulting.
-    /// </summary>
-    private static bool TryParseChannelArg(string value, out UpdateChannel channel)
-    {
-        switch (value.Trim().ToLowerInvariant())
-        {
-            case "stable":
-                channel = UpdateChannel.Stable;
-                return true;
-            case "beta":
-                channel = UpdateChannel.Beta;
-                return true;
-            default:
-                channel = UpdateChannel.Stable;
-                return false;
         }
     }
 

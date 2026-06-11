@@ -80,7 +80,37 @@ public sealed class UpdateCommandTests : IDisposable
     [Theory]
     [InlineData("beta", "beta")]
     [InlineData("stable", "stable")]
-    public async Task RunAsync_PersistsChannel_WhenChannelSpecified(string arg, string expectedWire)
+    public async Task RunAsync_PersistsChannel_WhenSwitched(string arg, string expectedWire)
+    {
+        var manifest = CreateManifest("99.0.0", UpdateCheckService.GetCurrentRid());
+        UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
+
+        using var stdout = new StringWriter();
+        var originalOut = Console.Out;
+        var originalIn = Console.In;
+        Console.SetOut(stdout);
+        // An update is available; decline the install prompt so this exercises
+        // only channel switching + persistence, not the download path.
+        Console.SetIn(new StringReader("n\n"));
+
+        try
+        {
+            var exitCode = await UpdateCommand.RunAsync(
+                ["update", "--channel", arg], _paths);
+
+            Assert.Equal(0, exitCode);
+            Assert.Equal(expectedWire, ReadPersistedChannel());
+            Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetIn(originalIn);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_DoesNotPersistChannel_UnderCheck()
     {
         var manifest = CreateManifest("99.0.0", UpdateCheckService.GetCurrentRid());
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
@@ -91,13 +121,13 @@ public sealed class UpdateCommandTests : IDisposable
 
         try
         {
-            // --check short-circuits before install, so this exercises only parsing + persistence.
             var exitCode = await UpdateCommand.RunAsync(
-                ["update", "--check", "--channel", arg], _paths);
+                ["update", "--check", "--channel", "beta"], _paths);
 
             Assert.Equal(0, exitCode);
-            Assert.Equal(expectedWire, ReadPersistedChannel());
-            Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
+            // --check is read-only: the channel is previewed for this run, not written to disk.
+            Assert.False(File.Exists(_paths.NetclawConfigPath));
+            Assert.Contains("Checking 'beta' channel", stdout.ToString());
         }
         finally
         {
