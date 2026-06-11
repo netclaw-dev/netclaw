@@ -79,7 +79,6 @@ public sealed class UpdateCommandTests : IDisposable
 
     [Theory]
     [InlineData("beta", "beta")]
-    [InlineData("dev", "beta")]
     [InlineData("stable", "stable")]
     public async Task RunAsync_PersistsChannel_WhenChannelSpecified(string arg, string expectedWire)
     {

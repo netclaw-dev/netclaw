@@ -67,13 +67,13 @@ internal static class UpdateCommand
                 case "--channel":
                     if (i + 1 >= args.Length)
                     {
-                        Console.Error.WriteLine("--channel requires a value: stable or beta (alias: dev).");
+                        Console.Error.WriteLine("--channel requires a value: stable or beta.");
                         WriteHelp();
                         return 1;
                     }
                     if (!TryParseChannelArg(args[++i], out var parsedChannel))
                     {
-                        Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta (alias: dev).");
+                        Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
                         WriteHelp();
                         return 1;
                     }
@@ -409,8 +409,7 @@ internal static class UpdateCommand
 
     /// <summary>
     /// Parses a <c>--channel</c> CLI argument. Accepts <c>stable</c> and
-    /// <c>beta</c>; <c>dev</c> is an alias for <c>beta</c> (the dev branch ships
-    /// beta prereleases). Returns false for any other value so the caller fails
+    /// <c>beta</c>. Returns false for any other value so the caller fails
     /// loudly rather than silently defaulting.
     /// </summary>
     private static bool TryParseChannelArg(string value, out UpdateChannel channel)
@@ -420,7 +419,7 @@ internal static class UpdateCommand
             case "stable":
                 channel = UpdateChannel.Stable;
                 return true;
-            case "beta" or "dev":
+            case "beta":
                 channel = UpdateChannel.Beta;
                 return true;
             default:
@@ -432,8 +431,7 @@ internal static class UpdateCommand
     /// <summary>
     /// Persists the chosen update channel to <c>Daemon.UpdateChannel</c> in
     /// netclaw.json, preserving every other field. Writes the canonical wire
-    /// value (<c>stable</c>/<c>beta</c>) so the on-disk config stays
-    /// schema-valid even when the user typed the <c>dev</c> alias.
+    /// value (<c>stable</c>/<c>beta</c>) so the on-disk config stays schema-valid.
     /// </summary>
     private static void PersistChannel(NetclawPaths paths, UpdateChannel channel)
     {
@@ -452,7 +450,7 @@ internal static class UpdateCommand
         Console.WriteLine("Options:");
         Console.WriteLine("  --check              Check for updates without installing");
         Console.WriteLine("  --force              Skip confirmation prompt");
-        Console.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta (alias: dev)");
+        Console.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta");
     }
 
     /// <summary>
